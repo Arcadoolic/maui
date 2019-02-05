@@ -10,7 +10,18 @@ export default class GameCategory {
         this.name = gameCategoryData.name;
     }
 
+    /**
+     * Add a game to the category
+     * @param game
+     */
     public addGame(game: Game) {
         this.games.push(game);
+    }
+
+    /**
+     * @return game[]
+     */
+    public getGames(): Game[] {
+        return this.games;
     }
 }
