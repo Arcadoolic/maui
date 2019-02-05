@@ -1,23 +1,24 @@
-# Projets IPDFramework
-smarty/templates_c/**
-smarty/cache/**
-data/**
-vendor/**
-.sass-cache/**
-.env
-var
-var/**
+.DS_Store
+node_modules
+/dist
 
-# Relicat migration - Juste pour être sur ...
-.svn/**
+# local env files
+.env.local
+.env.*.local
 
-# Eclipse
-.project
-.settings/**
-.buildpath
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# PHPStorm
-.idea/**
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw*
 
-# NetBeans
-/nbproject/
+#Electron-builder output
+/dist_electron
