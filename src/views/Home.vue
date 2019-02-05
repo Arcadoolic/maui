@@ -1,6 +1,5 @@
 <template>
     <div>
-        {{verticalSelect}}
         <div class="categories" :class="{hovered: verticalSelect === 1}">
             <div class="container">
                 <ul>
@@ -55,11 +54,13 @@
                         this.$emit('blockVerticalSelect', false);
                     }
                 } else if (e.code === 'ArrowLeft') {
-                    if (this.verticalSelect === 1) {
+                    if (this.verticalSelect === 1 || (this.verticalSelect === 2 && this.blockVerticalSelect)) {
+                        this.gameSelected = 0;
                         this.categorySelected--;
                     }
                 } else if (e.code === 'ArrowRight') {
-                    if (this.verticalSelect === 1) {
+                    if (this.verticalSelect === 1 || (this.verticalSelect === 2 && this.blockVerticalSelect)) {
+                        this.gameSelected = 0;
                         this.categorySelected++;
                     }
                 } else if (e.code === 'ArrowUp') {
@@ -130,7 +131,7 @@
         color: red;
     }
 
-    .games .selected { color: red }
+    .games .selected { color: black }
 
     .hovered { background: blue }
 </style>
