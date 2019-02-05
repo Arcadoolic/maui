@@ -1,0 +1,15 @@
+{
+    "name": "vendor/package",
+    "license": "proprietary",
+    "description" : "",
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "http://composer.gisi-interactive.net/"
+        }
+    ],
+    "config": {
+        "optimize-autoloader": true,
+        "secure-http": false
+    }
+}
