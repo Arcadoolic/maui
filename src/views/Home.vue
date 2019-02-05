@@ -1,6 +1,7 @@
 <template>
     <div>
-        <div class="categories">
+        {{verticalSelect}}
+        <div class="categories" :class="{hovered: verticalSelect === 1}">
             <div class="container">
                 <ul>
                     <li v-for="(category, index) in gameList.getCategories()"
@@ -11,7 +12,7 @@
             </div>
         </div>
         <hr>
-        <ul>
+        <ul :class="{hovered: verticalSelect === 2}">
             <li v-for="game in gameFromCurrentCategory">{{game.fullname}}</li>
         </ul>
 
@@ -20,7 +21,7 @@
 </template>
 
 <script lang="ts">
-    import {Vue, Component} from 'vue-property-decorator';
+    import {Vue, Component, Prop} from 'vue-property-decorator';
     import GameList from '../class/GameList.class';
 
     @Component
@@ -28,10 +29,27 @@
         protected gameList = new GameList();
         protected categorySelected = 0;
 
+        @Prop({ required: true, default: 0 })
+        protected verticalSelect?: number;
+
         public created() {
             console.log('created');
             this.gameList = this.$store.getters.gameList;
             console.log(this.gameList);
+
+            window.addEventListener('keyup', (e) => {
+                if (e.code === 'Enter') {
+                    console.log('Enter');
+                    if (this.verticalSelect === 2) {
+                        console.log('Enter2');
+                        this.$emit('blockVerticalSelect', true);
+                    }
+                } else if (e.code === 'Escape') {
+                    if (this.verticalSelect === 2) {
+                        this.$emit('blockVerticalSelect', false);
+                    }
+                }
+            });
         }
 
         /**
@@ -46,6 +64,10 @@
          */
         public get gameFromCurrentCategory() {
             return this.gameList.getCategories()[this.categorySelected].getGames();
+        }
+
+        public moveVertical() {
+            console.log('moveVertical');
         }
     }
 </script>
@@ -85,4 +107,6 @@
         font-weight: bold;
         color: red;
     }
+
+    .hovered { background: blue }
 </style>
