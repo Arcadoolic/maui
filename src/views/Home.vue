@@ -12,8 +12,10 @@
             </div>
         </div>
         <hr>
-        <ul :class="{hovered: verticalSelect === 2}">
-            <li v-for="game in gameFromCurrentCategory">{{game.fullname}}</li>
+        <ul :class="{hovered: verticalSelect === 2}" class="games">
+            <li v-for="(game, index) in gameFromCurrentCategory"
+                :class="{selected: gameSelected === index}">{{game.fullname}}
+            </li>
         </ul>
 
         <button @click.prevent="refreshGame()">Refresh game</button>
@@ -26,8 +28,12 @@
 
     @Component
     export default class Home extends Vue {
+        protected blockVerticalSelect = false;
+
         protected gameList = new GameList();
         protected categorySelected = 0;
+
+        protected gameSelected = 0;
 
         @Prop({ required: true, default: 0 })
         protected verticalSelect?: number;
@@ -39,14 +45,30 @@
 
             window.addEventListener('keyup', (e) => {
                 if (e.code === 'Enter') {
-                    console.log('Enter');
                     if (this.verticalSelect === 2) {
-                        console.log('Enter2');
-                        this.$emit('blockVerticalSelect', true);
+                        this.blockVerticalSelect = !this.blockVerticalSelect;
+                        this.$emit('blockVerticalSelect', this.blockVerticalSelect);
                     }
                 } else if (e.code === 'Escape') {
                     if (this.verticalSelect === 2) {
+                        this.blockVerticalSelect = false;
                         this.$emit('blockVerticalSelect', false);
+                    }
+                } else if (e.code === 'ArrowLeft') {
+                    if (this.verticalSelect === 1) {
+                        this.categorySelected--;
+                    }
+                } else if (e.code === 'ArrowRight') {
+                    if (this.verticalSelect === 1) {
+                        this.categorySelected++;
+                    }
+                } else if (e.code === 'ArrowUp') {
+                    if (this.blockVerticalSelect) {
+                        this.gameSelected--;
+                    }
+                } else if (e.code === 'ArrowDown') {
+                    if (this.blockVerticalSelect) {
+                        this.gameSelected++;
                     }
                 }
             });
@@ -107,6 +129,8 @@
         font-weight: bold;
         color: red;
     }
+
+    .games .selected { color: red }
 
     .hovered { background: blue }
 </style>
