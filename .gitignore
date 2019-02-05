@@ -1,0 +1,23 @@
+# Projets IPDFramework
+smarty/templates_c/**
+smarty/cache/**
+data/**
+vendor/**
+.sass-cache/**
+.env
+var
+var/**
+
+# Relicat migration - Juste pour être sur ...
+.svn/**
+
+# Eclipse
+.project
+.settings/**
+.buildpath
+
+# PHPStorm
+.idea/**
+
+# NetBeans
+/nbproject/
