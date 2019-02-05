@@ -1,104 +1,85 @@
 <template>
     <div id="app">
-        <div class="categories">
-            <div class="container">
-                <ul>
-                    <li v-for="(category, index) in gameList.getCategories()"
-                        :class="{selected: categorySelected === index}"
-                    >{{category.name}}</li>
-                </ul>
-            </div>
-        </div>
-        <hr>
-        <ul>
-            <li v-for="game in gameFromCurrentCategory">{{game.fullname}}</li>
-        </ul>
-
-        <button @click.prevent="refreshGame()">Refresh game</button>
+        <nav :class="{hovered: verticalSelect == 0}">
+            <router-link to="/">
+                <p>Home</p>
+            </router-link>
+            <router-link to="/">
+                <p>Search</p>
+            </router-link>
+            <router-link to="/">
+                <p>Options</p>
+            </router-link>
+        </nav>
+        <router-view :verticalSelect="verticalSelect" @blockVerticalSelect="setBlockVerticalSelect"></router-view>
     </div>
 </template>
 
 <script lang="ts">
-    import {Component, Prop, Vue} from 'vue-property-decorator';
-    import fs from 'fs';
-    import GameList from './class/GameList.class';
-    import GameCategory from '@/class/GameCategory.class';
+    import {Component, Vue} from 'vue-property-decorator';
 
     @Component
-    export default class Home extends Vue {
-        protected gameList = new GameList();
-        protected categorySelected = 0;
-
-        @Prop() private msg!: string;
+    export default class App extends Vue {
+        protected verticalSelect: number = 0;
+        protected blockVerticalSelect: boolean = false;
+        protected maxVerticalSelect: number = 2;
 
         public created() {
-            this.refreshGame();
+            this.$store.commit('initGameList');
 
-            window.addEventListener('keydown', (e) => {
-                if (e.code === 'ArrowLeft') {
-                    if (this.categorySelected - 1 >= 0) {
-                        this.categorySelected--;
-                    } else {
-                        this.categorySelected = this.gameList.getCategories().length - 1;
+            window.addEventListener('keyup', (e) => {
+
+                if (e.code === 'ArrowUp') {
+                    if (!this.blockVerticalSelect) {
+                        this.verticalSelect--;
+                        if (this.verticalSelect < 0) {
+                            this.verticalSelect = this.maxVerticalSelect;
+                        }
                     }
-                } else if (e.code === 'ArrowRight') {
-                    this.categorySelected = (this.categorySelected + 1 >= this.gameList.getCategories().length) ? 0 : this.categorySelected + 1;
+                } else if (e.code === 'ArrowDown') {
+                    if (!this.blockVerticalSelect) {
+                        this.verticalSelect++;
+                        if (this.verticalSelect > this.maxVerticalSelect) {
+                            this.verticalSelect = 0;
+                        }
+                    }
                 }
             });
-
         }
 
         /**
-         * Refresh categories and game list
+         *
+         * @param val
          */
-        public refreshGame() {
-            this.gameList.initCategories('./config/categories.json');
-            this.gameList.initGames('./games');
-            this.categorySelected = 0;
-        }
-
-        public get gameFromCurrentCategory()
-        {
-            return this.gameList.getCategories()[this.categorySelected].getGames();
+        protected setBlockVerticalSelect(val: boolean) {
+            this.blockVerticalSelect = val;
         }
     }
 </script>
 
 <style>
-    body { background-image: url(./assets/background.jpg); color: white }
-
-    .categories {
-        display: block;
-    }
-    .categories:after {
-        content: '';
-        display: block;
-        clear: both;
-    }
-    .categories .container {
-        position: relative;
-        text-align: center;
-        overflow: hidden;
-        height: 30px;
-        margin: 0 auto;
-    }
-    .categories ul {
-        width: 10000px;
-        position: absolute;
-        list-style: none;
+    body {
+        background-image: url(./assets/background.jpg);
+        color: white;
         margin: 0;
         padding: 0;
     }
-        .categories ul li {
-            display: inline-block;
-            height: 30px;
-            float: left;
-            margin: 0 10px;
+
+    nav {
+        width: 100%;
+        height: 20px;
+        background: red;
+    }
+    nav.hovered {
+        height: 60px;
+    }
+        nav p {
             padding: 0;
+            margin: 0;
+            display: none;
         }
 
-            .categories ul li.selected {
-                font-weight: bold;
-                color: red;
-            }
+        nav.hovered p {
+            display: inline-block;
+        }
 </style>
