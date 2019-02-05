@@ -14,7 +14,7 @@ export default class GameList {
      */
     public initCategories(categoriesJsonPath: string) {
         this.categories = [];
-        this.categoriesById = {}
+        this.categoriesById = {};
         if (!existsSync(categoriesJsonPath)) {
             throw new Error('`categories.json` file not found');
         }
@@ -53,7 +53,7 @@ export default class GameList {
         const game = new Game(gameJson, './abc.rom');
         // Categories
         for (const categoryId of gameJson.categories) {
-            this.categoriesById['all'].addGame(game);
+            this.categoriesById.all.addGame(game);
             if (this.categoriesById[categoryId]) {
                 game.addCategory(this.categoriesById[categoryId]);
                 this.categoriesById[categoryId].addGame(game);
