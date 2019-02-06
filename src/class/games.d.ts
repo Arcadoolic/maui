@@ -8,6 +8,7 @@ interface GameJSON {
     category: string;
     nplayers: string;
     categories: string[];
+    romPath: string;
 }
 
 interface GameCategoryJSON {
