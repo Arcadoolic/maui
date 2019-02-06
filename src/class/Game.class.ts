@@ -1,5 +1,6 @@
 import {existsSync} from 'fs';
 import GameCategory from './GameCategory.class';
+import {exec} from 'child_process';
 
 export default class Game {
     protected fullname: string;
@@ -20,7 +21,7 @@ export default class Game {
      * @param gameData
      * @param romPath
      */
-    public constructor(gameData: GameJSON, romPath: string) {
+    public constructor(gameData: GameJSON) {
         this.fullname = gameData.fullname;
         this.shortname = gameData.shortname;
         this.subname = gameData.subname;
@@ -29,11 +30,7 @@ export default class Game {
         this.parent = gameData.parent;
         this.category = gameData.category;
         this.nplayers = gameData.nplayers;
-
-        this.romPath = null;
-        if (!existsSync(romPath)) {
-            this.romPath = romPath;
-        }
+        this.romPath = gameData.romPath;
     }
 
     /**
@@ -42,6 +39,10 @@ export default class Game {
      */
     public addCategory(category: GameCategory) {
         this.categories.push(category);
+    }
+
+    public start() {
+        console.log(exec('mame ' + this.romPath + ' -autoboot_delay 0'));
     }
 
 }
