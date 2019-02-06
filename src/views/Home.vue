@@ -1,6 +1,12 @@
 <template>
     <div>
-        <div class="categories" :class="{hovered: verticalSelect === 1}">
+        <ul :class="{hovered: verticalSelect === 1}" class="games">
+            <li v-for="(game, index) in gameFromCurrentCategory"
+                :class="{selected: gameSelected === index}">{{game.fullname}}
+            </li>
+        </ul>
+
+        <div class="categories" :class="{hovered: verticalSelect === 2}">
             <div class="container">
                 <ul>
                     <li v-for="(category, index) in gameList.getCategories()"
@@ -10,14 +16,6 @@
                 </ul>
             </div>
         </div>
-        <hr>
-        <ul :class="{hovered: verticalSelect === 2}" class="games">
-            <li v-for="(game, index) in gameFromCurrentCategory"
-                :class="{selected: gameSelected === index}">{{game.fullname}}
-            </li>
-        </ul>
-
-        <button @click.prevent="refreshGame()">Refresh game</button>
     </div>
 </template>
 
@@ -44,22 +42,27 @@
 
             window.addEventListener('keyup', (e) => {
                 if (e.code === 'Enter') {
-                    if (this.verticalSelect === 2) {
+                    if (this.verticalSelect === 1) {
+                        if (this.blockVerticalSelect) {
+                            if (this.gameFromCurrentCategory[this.gameSelected]) {
+                                this.gameFromCurrentCategory[this.gameSelected].start();
+                            }
+                        }
                         this.blockVerticalSelect = !this.blockVerticalSelect;
                         this.$emit('blockVerticalSelect', this.blockVerticalSelect);
                     }
                 } else if (e.code === 'Escape') {
-                    if (this.verticalSelect === 2) {
+                    if (this.verticalSelect === 1) {
                         this.blockVerticalSelect = false;
                         this.$emit('blockVerticalSelect', false);
                     }
                 } else if (e.code === 'ArrowLeft') {
-                    if (this.verticalSelect === 1 || (this.verticalSelect === 2 && this.blockVerticalSelect)) {
+                    if (this.verticalSelect === 2 || (this.verticalSelect === 1 && this.blockVerticalSelect)) {
                         this.gameSelected = 0;
                         this.categorySelected--;
                     }
                 } else if (e.code === 'ArrowRight') {
-                    if (this.verticalSelect === 1 || (this.verticalSelect === 2 && this.blockVerticalSelect)) {
+                    if (this.verticalSelect === 2 || (this.verticalSelect === 1 && this.blockVerticalSelect)) {
                         this.gameSelected = 0;
                         this.categorySelected++;
                     }
@@ -73,13 +76,6 @@
                     }
                 }
             });
-        }
-
-        /**
-         * Refresh categories and game list
-         */
-        public refreshGame() {
-            this.$store.commit('reloadGameList');
         }
 
         /**
