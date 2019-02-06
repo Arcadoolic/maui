@@ -6,23 +6,20 @@
             </li>
         </ul>
 
-        <div class="categories" :class="{hovered: verticalSelect === 2}">
-            <figure>
-                <div class="category" :class="{selected: categorySelected === index}"
-                     v-for="(category, index) in gameList.getCategories()"
-                >
-                    <p>{{category.name}}</p>
-                </div>
-            </figure>
-        </div>
+        <Categories :class="{hovered: verticalSelect === 2}"></Categories>
     </div>
 </template>
 
 <script lang="ts">
 import {Vue, Component, Prop} from 'vue-property-decorator';
 import GameList from '../class/GameList.class';
+import Categories from '@/components/Categories.vue';
 
-@Component
+@Component({
+    components: {
+        Categories,
+    },
+})
 export default class Home extends Vue {
     protected blockVerticalSelect = false;
 
@@ -35,9 +32,7 @@ export default class Home extends Vue {
     protected verticalSelect?: number;
 
     public created() {
-        console.log('created');
         this.gameList = this.$store.getters.gameList;
-        console.log(this.gameList);
 
         window.addEventListener('keyup', (e) => {
             if (e.code === 'Enter') {
@@ -97,28 +92,6 @@ export default class Home extends Vue {
         width: 100%;
         height: 100%;
     }
-
-    .categories {
-        position: absolute;
-        bottom: 0;
-        right: 40px;
-        display: block;
-        height: 200px;
-        width: 500px;
-        overflow: hidden;
-    }
-        .categories figure {
-            position: relative;
-            width: 500px;
-            height: 200px;
-            margin: 0;
-            padding: 0;
-        }
-            .categories figure .category {
-                width: 200px;
-                float: left;
-                height: 200px;
-            }
 
     .games {
         padding: 0;
