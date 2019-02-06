@@ -50,7 +50,7 @@ export default class GameList {
      * @param gameJson
      */
     public addGame(gameJson: GameJSON) {
-        const game = new Game(gameJson, './abc.rom');
+        const game = new Game(gameJson);
         // Categories
         for (const categoryId of gameJson.categories) {
             this.categoriesById.all.addGame(game);
