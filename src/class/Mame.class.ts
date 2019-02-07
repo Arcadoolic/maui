@@ -16,7 +16,7 @@ export default class Mame {
 
         if (!this.process) {
             console.log('exec');
-            this.process = exec('mame ' + game.romName + ' -autoboot_delay 0', {killSignal: 'SIGKILL'},
+            this.process = exec('mame ' + game.romName + ' -autoboot_delay 0 -nomax -w', {killSignal: 'SIGKILL'},
                 (error, stdout, stderr) => {
                 if (error) {
                     console.error(`exec error: ${error}`);
