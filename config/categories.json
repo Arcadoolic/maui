@@ -1,0 +1,12 @@
+[
+  {"id": "bap", "name": "Ball & Paddle", "icon":  "public/ball-paddle.svg"},
+  {"id" : "dri", "name" : "Driving", "icon":  "category_icons/driving.png"},
+  {"id" : "bea", "name" : "Beat'em All", "icon":  "category_icons/beat-em-all.png"},
+  {"id" : "fig", "name" : "Fight", "icon":  "category_icons/fight.png"},
+  {"id" : "maz", "name" : "Maze", "icon":  "category_icons/maze.png"},
+  {"id" : "muc", "name" : "Multiplay \/ Compilation", "icon":  "category_icons/multuplay.png"},
+  {"id" : "pla", "name" : "Platform", "icon":  "category_icons/plateform.png"},
+  {"id" : "puz", "name" : "Puzzle", "icon":  "category_icons/puzzle.png"},
+  {"id" : "seu", "name" : "Shoot'em Up", "icon":  "category_icons/shoot-em-up.png"},
+  {"id" : "spo", "name" : "Sports", "icon":  "category_icons/sports.png"}
+]
