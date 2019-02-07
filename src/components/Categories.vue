@@ -66,7 +66,7 @@
         height: 200px;
         margin: 0;
         padding: 0;
-        transition: left 0.2s;
+        transition: left 0.3s ease-in-out;
     }
     .categories figure .category {
         text-align: center;
@@ -74,33 +74,28 @@
         width: 150px;
         float: left;
         height: 150px;
-        transition: width 0.2s, height 0.2s;
-        background: yellowgreen;
+        transition: width 0.2s ease-in-out, height 0.2s ease-in-out, margin-top 0.2s ease-in-out, font-size 0.2s ease-in-out;
         bottom: 0;
     }
     .categories figure .category.first {
         margin-left: 150px;
     }
     .categories figure .category.selected {
+        position: relative;
         margin-top: 0;
         width: 250px;
         height: 200px;
         z-index: 2;
-        opacity: 0.2;
+        font-size: 2em;
     }
     .categories figure .category.previous {
+        position: relative;
         margin-right: -40px;
-        background: red;
         z-index: 1;
-        transform: rotateY(40deg);
     }
     .categories figure .category.next {
+        position: relative;
         margin-left: -40px;
         z-index: 1;
-        background: red;
-        transform: rotateY(-40deg);
     }
-    /*.categories figure .category.previous.first {*/
-        /*margin-left: 150px;*/
-    /*}*/
 </style>
