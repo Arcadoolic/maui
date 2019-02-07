@@ -14,6 +14,7 @@
 import {Vue, Component, Prop} from 'vue-property-decorator';
 import GameList from '../class/GameList.class';
 import Categories from '@/components/Categories.vue';
+import Mame from '@/class/Mame.class';
 
 @Component({
     components: {
@@ -32,6 +33,8 @@ export default class Home extends Vue {
     protected verticalSelect?: number;
 
     public created() {
+        const mame = new Mame();
+
         this.gameList = this.$store.getters.gameList;
 
         window.addEventListener('keyup', (e) => {
@@ -39,7 +42,7 @@ export default class Home extends Vue {
                 if (this.verticalSelect === 1) {
                     if (this.blockVerticalSelect) {
                         if (this.gameFromCurrentCategory[this.gameSelected]) {
-                            this.gameFromCurrentCategory[this.gameSelected].start();
+                            mame.start(this.gameFromCurrentCategory[this.gameSelected]);
                         }
                     }
                     this.blockVerticalSelect = !this.blockVerticalSelect;
