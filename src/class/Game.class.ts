@@ -1,6 +1,4 @@
-import {existsSync} from 'fs';
 import GameCategory from './GameCategory.class';
-import {exec} from 'child_process';
 
 export default class Game {
     protected fullname: string;
@@ -41,8 +39,7 @@ export default class Game {
         this.categories.push(category);
     }
 
-    public start() {
-        console.log(exec('mame ' + this.romPath + ' -autoboot_delay 0'));
+    public get romName() {
+        return this.romPath;
     }
-
 }
