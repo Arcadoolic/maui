@@ -6,6 +6,8 @@
             </li>
         </ul>
 
+        <button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>
+
         <Categories :class="{hovered: verticalSelect === 2}"></Categories>
     </div>
 </template>
@@ -32,9 +34,9 @@ export default class Home extends Vue {
     @Prop({required: true, default: 0})
     protected verticalSelect?: number;
 
-    public created() {
-        const mame = new Mame();
+    protected mame = new Mame();
 
+    public created() {
         this.gameList = this.$store.getters.gameList;
 
         window.addEventListener('keyup', (e) => {
@@ -42,7 +44,7 @@ export default class Home extends Vue {
                 if (this.verticalSelect === 1) {
                     if (this.blockVerticalSelect) {
                         if (this.gameFromCurrentCategory[this.gameSelected]) {
-                            mame.start(this.gameFromCurrentCategory[this.gameSelected]);
+                            this.mame.start(this.gameFromCurrentCategory[this.gameSelected]);
                         }
                     }
                     this.blockVerticalSelect = !this.blockVerticalSelect;
