@@ -10,8 +10,9 @@ export default class Mame {
         }
 
         this.stop();
-        if (!this.process) {
-            this.process = execFile('/usr/games/mame', [game.romName, '-nomax', '-w'], {killSignal: 'SIGQUIT'},
+        // FIXME - To improve
+        setTimeout(() => {
+            this.process = execFile('/usr/games/mame', [game.romName!, '-nomax', '-w'], {killSignal: 'SIGQUIT'},
                 (error, stdout, stderr) => {
                     if (error) {
                         console.error(`exec error: ${error}`);
@@ -24,18 +25,18 @@ export default class Mame {
                 console.log('CLOSE');
                 this.process = undefined;
             });
-        }
+        }, 500);
     }
 
     public stop() {
         if (this.process) {
             this.process.kill('SIGQUIT');
-            console.log(this.process);
-            if (this.process.killed) {
-                this.process = undefined;
-            } else {
-                console.error('Not killed');
-            }
+            // console.log(this.process);
+            // if (this.process.killed) {
+            //     this.process = undefined;
+            // } else {
+            //     console.error('Not killed');
+            // }
         }
     }
 
