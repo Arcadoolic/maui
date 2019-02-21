@@ -94,12 +94,14 @@ export default class App extends Vue {
 
     body{
         background-color: #000000;
-        background-image:  url('../img/cpo_background_mfg_1.jpg');
+        background-image:  url('./assets/background.jpg');
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
         font-family: 'Arcade_I', sans-serif;
         transform: translateZ(0);
+        height: 100%;
+        width: 100%;
     }
 
 
@@ -123,14 +125,6 @@ export default class App extends Vue {
     }
 
 
-    body {
-        background-image: url(./assets/background.jpg);
-        height: 100%;
-        width: 100%;
-        color: white;
-        margin: 0;
-        padding: 0;
-    }
 
     #app {
         height: 100%;
