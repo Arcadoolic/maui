@@ -1,15 +1,25 @@
 <template>
-    <div class="main-container">
-        <ul :class="{hovered: verticalSelect === 1}" class="games">
+    <div class="slider-jeux filter-saturate-140">
+        <ul class="slider-jeux__cont">
             <li v-for="(game, index) in gameFromCurrentCategory"
-                :class="{selected: gameSelected === index}">{{game.fullname}}
+                class="slider-jeux__jeu slider-jeux__jeu--non-actif"
+            >
+                <div class="slider-jeux__marquee" style="background-image: url(../assets/default_marquee.jpg)">
+                    <div class="slider-jeux__voile-marquee"></div>
+                </div>
             </li>
         </ul>
-
-        <button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>
-
-        <Categories :class="{hovered: verticalSelect === 2}"></Categories>
     </div>
+
+        <!--<ul :class="{hovered: verticalSelect === 1}" class="games">-->
+            <!--<li v-for="(game, index) in gameFromCurrentCategory"-->
+                <!--:class="{selected: gameSelected === index}">{{game.fullname}}-->
+            <!--</li>-->
+        <!--</ul>-->
+
+        <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
+
+        <!--<Categories :class="{hovered: verticalSelect === 2}"></Categories>-->
 </template>
 
 <script lang="ts">
@@ -91,23 +101,92 @@ export default class Home extends Vue {
 </script>
 
 <style scoped>
-    .main-container {
-        display: block;
+    /**********************************************/
+    /*///////////// SLIDER DES JEUX //////////////*/
+    /**********************************************/
+    .slider-jeux{
+        overflow: hidden;
         position: relative;
         width: 100%;
-        height: 100%;
+        z-index: 12;
     }
 
-    .games {
-        padding: 0;
-        margin: 0;
+    /*_______ Fond de couleur pour mettre en exergue le jeu sélectionné _______*/
+    /*/////////////////////////////////////////////////////////////////////////*/
+    .slider-jeux:before{
+        background: linear-gradient(to right, rgba(0, 30, 255, 0.25) 50%, transparent);
+        content: '';
+        height: 300px;
+        left: 0;
+        position: fixed;
+        top: 350px;
+        width: 740px;
+    }
+    .slider-jeux:after{
+        background: linear-gradient(to right, rgba(0, 148, 214, 0.28) 50%, transparent);
+        content: '';
+        height: 300px;
+        left: 0;
+        position: fixed;
+        top: 350px;
+        width: 500px;
     }
 
-    .games .selected {
-        color: black
+    /*____________ Conteneurs ___________*/
+    /*///////////////////////////////////*/
+    /* Conteneur de l'ensemble des marquees */
+    .slider-jeux__cont{
+        transform: translateX(100px) translateZ(0);
+        position: absolute;
+        z-index: 9;
     }
 
-    .hovered {
-        background: blue
+    /* Conteneur pour chaque jeu */
+    .slider-jeux__jeu{
+        transform: translateX(-1000px) translateZ(0);
+        opacity: 1;
+        padding: 5px 0;
+        position: relative;
+        transition: opacity 0.3s ease, padding 0.1s ease;
+    }
+
+    /*_______ Marquee _______*/
+    /*///////////////////////*/
+    .slider-jeux__marquee{
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        border-radius: 8px;
+        box-shadow: 0 0 30px #000000;
+        display: inline-block;
+        height: 50px;
+        overflow: hidden;
+        position: relative;
+        transition: height 0.3s ease, width 0.3s ease;
+        vertical-align: middle;
+        width: 300px;
+    }
+
+    /* Image du marquee */
+    .slider-jeux__img-marquee{
+        display: block;
+        height: auto;
+        left: 50%;
+        position: relative;
+        transform: translateX(-50%) translateY(-50%);
+        top: 50%;
+        width: 100%;
+        z-index: -1;
+    }
+
+    /* Voile noir opacifiant légérement l'image du marquee */
+    .slider-jeux__voile-marquee {
+        background-color: #000000;
+        height: 300px;
+        opacity: 1;
+        position: absolute;
+        transition: opacity 0.3s ease;
+        top: 0;
+        width: 600px;
     }
 </style>
