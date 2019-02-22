@@ -7,8 +7,7 @@ export default class Game {
     protected year: number;
     protected manufacturer: string;
     protected parent: string;
-    protected category: string;
-    protected nplayers: string;
+    protected nplayers: Nplayers;
 
     protected categories: GameCategory[] = [];
 
@@ -26,7 +25,6 @@ export default class Game {
         this.year = gameData.year;
         this.manufacturer = gameData.manufacturer;
         this.parent = gameData.parent;
-        this.category = gameData.category;
         this.nplayers = gameData.nplayers;
         this.romPath = gameData.romPath;
     }
