@@ -1,17 +1,18 @@
 import GameCategory from './GameCategory.class';
 
 export default class Game {
-    protected fullname: string;
-    protected shortname: string;
-    protected subname: string;
-    protected year: number;
-    protected manufacturer: string;
-    protected parent: string;
-    protected nplayers: Nplayers;
+    protected _f
+    ullname: string;
+    protected _shortname: string;
+    protected _subname: string;
+    protected _year: number;
+    protected _manufacturer: string;
+    protected _parent: string;
+    protected _nplayers: Nplayers;
 
-    protected categories: GameCategory[] = [];
+    protected _categories: GameCategory[] = [];
 
-    protected romPath: string|null;
+    protected _romPath: string|null;
 
     /**
      * Init Game object from GameJSON data type
@@ -19,14 +20,14 @@ export default class Game {
      * @param romPath
      */
     public constructor(gameData: GameJSON) {
-        this.fullname = gameData.fullname;
-        this.shortname = gameData.shortname;
-        this.subname = gameData.subname;
-        this.year = gameData.year;
-        this.manufacturer = gameData.manufacturer;
-        this.parent = gameData.parent;
-        this.nplayers = gameData.nplayers;
-        this.romPath = gameData.romPath;
+        this._fullname = gameData.fullname;
+        this._shortname = gameData.shortname;
+        this._subname = gameData.subname;
+        this._year = gameData.year;
+        this._manufacturer = gameData.manufacturer;
+        this._parent = gameData.parent;
+        this._nplayers = gameData.nplayers;
+        this._romPath = gameData.romPath;
     }
 
     /**
@@ -34,10 +35,38 @@ export default class Game {
      * @param category
      */
     public addCategory(category: GameCategory) {
-        this.categories.push(category);
+        this._categories.push(category);
     }
 
     public get romName() {
-        return this.romPath;
+        return this._romPath;
+    }
+
+    public get fullname() {
+        return this._fullname;
+    }
+
+    public get shortname() {
+        return this._shortname;
+    }
+
+    public get year() {
+        return this._year;
+    }
+
+    public get nplayerString() {
+        let str = null;
+        if (this._nplayers.alt) {
+            str = this._nplayers.alt + ' player' + (this._nplayers.alt > 1 ? 's' : '') + ' alternate';
+        }
+        if (this._nplayers.sim) {
+            str = (str)
+                ? str + this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous'
+                : this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous';
+        }
+        if (!str) {
+            str = '1 player';
+        }
+        return str;
     }
 }
