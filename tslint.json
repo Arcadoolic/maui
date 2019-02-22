@@ -16,6 +16,7 @@
     "ordered-imports": false,
     "object-literal-sort-keys": false,
     "no-consecutive-blank-lines": false,
-    "no-console": false
+    "no-console": false,
+    "variable-name": ["allow-leading-underscore"]
   }
 }
