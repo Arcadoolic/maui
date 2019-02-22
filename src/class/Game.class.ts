@@ -1,8 +1,7 @@
 import GameCategory from './GameCategory.class';
 
 export default class Game {
-    protected _f
-    ullname: string;
+    protected _fullname: string;
     protected _shortname: string;
     protected _subname: string;
     protected _year: number;
