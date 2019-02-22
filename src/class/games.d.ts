@@ -5,10 +5,15 @@ interface GameJSON {
     year: number;
     manufacturer: string;
     parent: string;
-    category: string;
-    nplayers: string;
+    nplayers: Nplayers;
     categories: string[];
     romPath: string;
+    hi: boolean;
+}
+
+interface Nplayers {
+    sim: number;
+    alt: number;
 }
 
 interface GameCategoryJSON {
