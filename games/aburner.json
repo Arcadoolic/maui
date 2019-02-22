@@ -1,0 +1,17 @@
+{
+    "fullname": "After Burner",
+    "shortname": "After Burner",
+    "subname": "",
+    "year": 1987,
+    "manufacturer": "Sega",
+    "parent": "aburner2",
+    "nplayers": {
+        "sim": 0,
+        "alt": 0
+    },
+    "categories": [
+        "seu"
+    ],
+    "romPath": "aburner.zip",
+    "hi": true
+}
