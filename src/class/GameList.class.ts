@@ -2,6 +2,7 @@ import GameCategory from './GameCategory.class';
 import Game from './Game.class';
 import {readFileSync, existsSync, readdirSync} from 'fs';
 import {extname} from 'path';
+import {parse} from 'ini';
 
 export default class GameList {
     protected categories: GameCategory[] = [];
@@ -74,5 +75,10 @@ export default class GameList {
      */
     public getCategories() {
         return this.categories;
+    }
+
+    public static loadGamesFromMameFavorites() {
+        let favorites = parse(readFileSync('/home/tpayen/.mame/ui/favorites.ini', 'utf8'));
+        console.log(favorites);
     }
 }
