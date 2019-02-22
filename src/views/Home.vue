@@ -150,6 +150,7 @@ export default class Home extends Vue {
             0 12px 16px rgba(0, 0, 0, 1),
             6px 12px 9px rgba(0, 0, 0, 1);
         transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
+        filter: saturate(1.3);
     }
         .gameTitle small {
             font-size: .5em;
@@ -170,6 +171,7 @@ export default class Home extends Vue {
         overflow: hidden;
         position: relative;
         /*z-index: 12;*/
+        filter: saturate(2);
     }
 
     .selectedGameBackground {
