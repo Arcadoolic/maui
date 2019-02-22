@@ -1,16 +1,16 @@
 <template>
     <div id="app">
-        <nav :class="{hovered: verticalSelect == 0}">
-            <router-link to="/">
-                <p>Home</p>
-            </router-link>
-            <router-link to="/">
-                <p>Search</p>
-            </router-link>
-            <router-link to="/">
-                <p>Options</p>
-            </router-link>
-        </nav>
+        <!--<nav :class="{hovered: verticalSelect == 0}">-->
+            <!--<router-link to="/">-->
+                <!--<p>Home</p>-->
+            <!--</router-link>-->
+            <!--<router-link to="/">-->
+                <!--<p>Search</p>-->
+            <!--</router-link>-->
+            <!--<router-link to="/">-->
+                <!--<p>Options</p>-->
+            <!--</router-link>-->
+        <!--</nav>-->
         <router-view :verticalSelect="verticalSelect" @blockVerticalSelect="setBlockVerticalSelect"></router-view>
     </div>
 </template>
@@ -89,8 +89,11 @@ export default class App extends Vue {
     table { border-collapse: collapse; border-spacing: 0; }
     * { box-sizing: border-box; }
 
-
-
+    html {
+        height: 100%;
+        width: 100%;
+        overflow: hidden;
+    }
 
     body{
         background-color: #000000;
@@ -100,6 +103,11 @@ export default class App extends Vue {
         background-position: 0 0;
         font-family: 'Arcade_I', sans-serif;
         transform: translateZ(0);
+        height: 100%;
+        width: 100%;
+    }
+
+    #app {
         height: 100%;
         width: 100%;
     }
@@ -122,13 +130,6 @@ export default class App extends Vue {
     @font-face {
         font-family: Arcade_R;
         src: url('./assets/fonts/ARCADE_R.TTF');
-    }
-
-
-
-    #app {
-        height: 100%;
-        width: 100%;
     }
 
     nav {
