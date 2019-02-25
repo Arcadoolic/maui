@@ -11,40 +11,24 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view :verticalSelect="verticalSelect" @blockVerticalSelect="setBlockVerticalSelect"></router-view>
+        <router-view :verticalSelect="1" @blockVerticalSelect="setBlockVerticalSelect"></router-view>
     </div>
 </template>
 
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
 
-@Component
+@Component()
 export default class App extends Vue {
     protected verticalSelect: number = 0;
     protected blockVerticalSelect: boolean = false;
-    protected maxVerticalSelect: number = 2;
 
     public created() {
+        this.$store.commit('initConfig');
+        if (!this.$store.getters.config.isConfigLoaded) {
+            return false;
+        }
         this.$store.commit('initGameList');
-
-        window.addEventListener('keyup', (e) => {
-
-            if (e.code === 'ArrowUp') {
-                if (!this.blockVerticalSelect) {
-                    this.verticalSelect--;
-                    if (this.verticalSelect < 0) {
-                        this.verticalSelect = this.maxVerticalSelect;
-                    }
-                }
-            } else if (e.code === 'ArrowDown') {
-                if (!this.blockVerticalSelect) {
-                    this.verticalSelect++;
-                    if (this.verticalSelect > this.maxVerticalSelect) {
-                        this.verticalSelect = 0;
-                    }
-                }
-            }
-        });
     }
 
     /**
