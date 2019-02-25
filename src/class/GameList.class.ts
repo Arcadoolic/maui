@@ -77,8 +77,8 @@ export default class GameList {
         return this.categories;
     }
 
-    public static loadGamesFromMameFavorites() {
-        let favorites = parse(readFileSync('/home/tpayen/.mame/ui/favorites.ini', 'utf8'));
-        console.log(favorites);
-    }
+    // public static loadGamesFromMameFavorites() {
+    //     let favorites = parse(readFileSync('/home/tpayen/.mame/ui/favorites.ini', 'utf8'));
+    //     console.log(favorites);
+    // }
 }
