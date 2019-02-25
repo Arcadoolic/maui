@@ -45,7 +45,6 @@ import {Vue, Component, Prop, Watch} from 'vue-property-decorator';
 import GameList from '../class/GameList.class';
 import Categories from '@/components/Categories.vue';
 import Mame from '@/class/Mame.class';
-import Game from '@/class/Game.class';
 
 @Component({
     components: {
