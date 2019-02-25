@@ -1,0 +1,4 @@
+{
+  "mameIniPath": "/etc/mame/mame.ini",
+  "gamesJsonPath": "./games"
+}
