@@ -17,19 +17,26 @@
 
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
+import Config from '@/class/Config.class';
 
-@Component()
+@Component
 export default class App extends Vue {
     protected verticalSelect: number = 0;
     protected blockVerticalSelect: boolean = false;
 
     public created() {
-        this.$store.commit('initConfig');
-        if (!this.$store.getters.config.isConfigLoaded) {
-            return false;
+        const config: Config = this.$store.getters.config;
+        const mame = this.$store.getters.mame;
+        try {
+            config.load();
+            mame.init(config.mameIniPath);
+        } catch (e) {
+            console.log(e);
+            // return false;
         }
         this.$store.commit('initGameList');
     }
+
 
     /**
      *
