@@ -5,7 +5,6 @@ export default class Config {
 
     protected _configLoaded: boolean = false;
     protected _mameIniPath?: string;
-    protected _mameIni: {[key: string]: string|number|string[]|number[]} = {};
     protected _gamesJsonPath?: string;
 
     public load(): boolean {
