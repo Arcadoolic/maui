@@ -7,7 +7,7 @@ interface GameJSON {
     parent: string;
     nplayers: Nplayers;
     categories: string[];
-    romPath: string;
+    romName: string;
     hi: boolean;
 }
 
