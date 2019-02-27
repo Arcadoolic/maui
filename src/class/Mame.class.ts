@@ -3,6 +3,7 @@ import Game from '@/class/Game.class';
 import {existsSync, readFileSync} from 'fs';
 import * as os from 'os';
 import {join} from 'path';
+import {execSync} from 'child_process';
 
 export default class Mame {
     protected mameConfig: { [key: string]: any } = {};
@@ -130,4 +131,17 @@ export default class Mame {
         });
         return retArray;
     }
+
+    /**
+     * Check if a rom is valid with mame -verifyroms [romname]
+     * @param romName
+     */
+    public isRomValid(romName: string) {
+        try {
+            execSync('mame -verifyroms ' + romName);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    };
 }
