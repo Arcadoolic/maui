@@ -2,7 +2,6 @@ import GameCategory from './GameCategory.class';
 import Game from './Game.class';
 import {readFileSync, existsSync, readdirSync} from 'fs';
 import {extname} from 'path';
-import {parse} from 'ini';
 
 export default class GameList {
     protected categories: GameCategory[] = [];
@@ -77,8 +76,14 @@ export default class GameList {
         return this.categories;
     }
 
-    // public static loadGamesFromMameFavorites() {
-    //     let favorites = parse(readFileSync('/home/tpayen/.mame/ui/favorites.ini', 'utf8'));
-    //     console.log(favorites);
-    // }
+    public createGamesFromNames(favorites: string[], clean = false) {
+        for (const favorite of favorites) {
+            const game = Game
+            // Check if game.json does not exist si clean = false
+            // Check si rom exist
+            // Recup info avec mame --listxml (manufacturer, years, description => longname)
+            // Recup categories de category.ini si existe
+            // Recup nbplayer de nbplayer.ini si existe
+        }
+    }
 }
