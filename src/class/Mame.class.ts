@@ -2,6 +2,7 @@ import {execFile, ChildProcess} from 'child_process';
 import Game from '@/class/Game.class';
 import {existsSync, readFileSync} from 'fs';
 import * as os from 'os';
+import {join} from 'path';
 
 export default class Mame {
     protected mameConfig: { [key: string]: any } = {};
@@ -28,11 +29,15 @@ export default class Mame {
         if (!this.mameConfig.inipath) {
             throw new Error('ui value is missing in mame.ini');
         }
-        const uiIniPath = (this.mameConfig.inipath.length > 1 ? this.mameConfig.inipath[0] : this.mameConfig.inipath)
-            + '/ui.ini';
-        success = this.parseMameIniFile(uiIniPath, this.mameUiConfig);
+        for (const inipath of  this.mameConfig.inipath) {
+            success = this.parseMameIniFile(inipath + '/ui.ini', this.mameUiConfig);
+            if (success) {
+                this.mameConfig.usedInipath = inipath;
+                break;
+            }
+        }
         if (!success) {
-            throw new Error('File missing or failed parsing ' + uiIniPath);
+            throw new Error('File missing or failed parsing ui.ini');
         }
     }
 
@@ -96,11 +101,33 @@ export default class Mame {
             }
             const data = regex.exec(line);
             if (data) {
-                const value = data[2].split(';');
+                const value = data[2].replace(/^"(.*)"$/, '$1').split(';');
                 TargetObject[data[1]] = (value.length > 1) ? value : value[0];
             }
 
         });
         return true;
+    }
+
+    /**
+     * Return favorites from mame's favorites.ini
+     */
+    public getFavorites() {
+        let favoritePath = join(
+            this.mameConfig.usedInipath,
+            this.mameUiConfig.ui_path.replace(/^.*\/(.*)$/, '$1'),
+            'favorites.ini');
+        favoritePath = favoritePath.replace('$HOME', os.homedir());
+        const regexp = new RegExp(/^(?![0-9]*$)[a-z0-9]+$/, 'gm');
+        const file = readFileSync(favoritePath, 'utf8').split('\n');
+        const retArray: string[] = [];
+        const existing: { [key: string]: boolean } = {};
+        file.forEach((line: string) => {
+            if (regexp.test(line) && !existing[line]) {
+                existing[line] = true;
+                retArray.push(line);
+            }
+        });
+        return retArray;
     }
 }
