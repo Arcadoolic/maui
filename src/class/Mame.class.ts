@@ -138,10 +138,28 @@ export default class Mame {
      */
     public isRomValid(romName: string) {
         try {
-            execSync('mame -verifyroms ' + romName);
+            execSync('mame -verifyroms ' + romName, {encoding: 'utf8'});
             return true;
         } catch (e) {
             return false;
         }
-    };
+    }
+
+    /**
+     * Get game information from mame xml created with -listxml command
+     * @param romName
+     */
+    public getGameInfoFromMameXML(romName: string) {
+        try {
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(execSync('mame -lx ' + romName, {encoding: 'utf8'}), 'text/xml');
+            return {
+                manufacturer: xml.getElementsByTagName('manufacturer')[0].innerHTML,
+                year: parseInt(xml.getElementsByTagName('year')[0].innerHTML),
+                description: xml.getElementsByTagName('description')[0].innerHTML
+            };
+        } catch (e) {
+            console.log('error');
+        }
+    }
 }
