@@ -11,7 +11,7 @@ export default class Game {
 
     protected _categories: GameCategory[] = [];
 
-    protected _romPath: string|null;
+    protected _romName: string|null;
 
     /**
      * Init Game object from GameJSON data type
@@ -26,7 +26,7 @@ export default class Game {
         this._manufacturer = gameData.manufacturer;
         this._parent = gameData.parent;
         this._nplayers = gameData.nplayers;
-        this._romPath = gameData.romPath;
+        this._romName = gameData.romName;
     }
 
     /**
@@ -38,7 +38,7 @@ export default class Game {
     }
 
     public get romName() {
-        return this._romPath;
+        return this._romName;
     }
 
     public get fullname() {
