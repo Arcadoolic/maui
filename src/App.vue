@@ -18,6 +18,7 @@
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
 import Config from '@/class/Config.class';
+import GameService from '@/class/GameService.class';
 
 @Component
 export default class App extends Vue {
@@ -30,6 +31,8 @@ export default class App extends Vue {
         try {
             config.load();
             mame.init(config.mameIniPath);
+            let a = new GameService(config, mame);
+            console.log(a.gameFromRomName('1941'))
         } catch (e) {
             console.log(e);
             // return false;
