@@ -30,7 +30,7 @@ export default class Mame {
             throw new Error('ui value is missing in mame.ini');
         }
         for (const inipath of  this.mameConfig.inipath) {
-            success = this.parseMameIniFile(inipath + '/ui.ini', this.mameUiConfig);
+            success = this.parseMameIniFile(join(inipath, 'ui.ini'), this.mameUiConfig);
             if (success) {
                 this.mameConfig.usedInipath = inipath;
                 break;
