@@ -2,6 +2,7 @@ import {existsSync, readFileSync} from 'fs';
 
 export default class Config {
     protected _defaultMameIni: string = '/etc/mame/mame.ini';
+    protected _defaultGamesJsonPath: string = './games';
 
     protected _configLoaded: boolean = false;
     protected _mameIniPath?: string;
@@ -27,5 +28,9 @@ export default class Config {
      */
     public get mameIniPath(): string {
         return this._mameIniPath!;
+    }
+
+    public get gamesJsonPath(): string {
+        return this._gamesJsonPath || this._defaultGamesJsonPath;
     }
 }
