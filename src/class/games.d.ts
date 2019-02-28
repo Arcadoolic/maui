@@ -4,9 +4,8 @@ interface GameJSON {
     subname: string;
     year: number;
     manufacturer: string;
-    parent: string;
     nplayers: Nplayers;
-    categories: string[];
+    category: string|null;
     romName: string;
     hi: boolean;
 }
