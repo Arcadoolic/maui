@@ -14,8 +14,3 @@ interface Nplayers {
     sim: number;
     alt: number;
 }
-
-interface GameCategoryJSON {
-    id: string;
-    name: string;
-}
