@@ -119,7 +119,7 @@ export default class Mame {
             this.mameUiConfig.ui_path.replace(/^.*\/(.*)$/, '$1'),
             'favorites.ini');
         favoritePath = favoritePath.replace('$HOME', os.homedir());
-        const regexp = new RegExp(/^(?![0-9]*$)[a-z0-9]+$/, 'gm');
+        const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
         const file = readFileSync(favoritePath, 'utf8').split('\n');
         const retArray: string[] = [];
         const existing: { [key: string]: boolean } = {};
