@@ -11,7 +11,8 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view :verticalSelect="1" @blockVerticalSelect="setBlockVerticalSelect"></router-view>
+        <router-view :verticalSelect="1" @blockVerticalSelect="setBlockVerticalSelect" v-if="!loading"></router-view>
+        <p v-if="loading">Chargement</p>
     </div>
 </template>
 
@@ -25,19 +26,28 @@ export default class App extends Vue {
     protected verticalSelect: number = 0;
     protected blockVerticalSelect: boolean = false;
 
+    protected loading = true;
     public created() {
+
         const config: Config = this.$store.getters.config;
         const mame = this.$store.getters.mame;
+        const gameList = this.$store.getters.gameList;
         try {
             config.load();
             mame.init(config.mameIniPath);
-            let a = new GameService(config, mame);
-            console.log(a.gameFromRomName('1941'))
+
+            gameList.init(config.gamesJsonPath);
+
+            let gameService = new GameService(config, mame, gameList);
+            gameService.refreshGameDir().then(errors => {
+                this.loading = false;
+                gameList.init(config.gamesJsonPath);
+            });
+
         } catch (e) {
             console.log(e);
             // return false;
         }
-        this.$store.commit('initGameList');
     }
 
 
