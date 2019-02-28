@@ -1,6 +1,6 @@
 <template>
     <span>
-        <div class="gameTitle">
+        <div class="gameTitle" v-if="selectedGame">
             <h1>{{selectedGame.shortname}}</h1>
             <small>({{selectedGame.year}}, {{selectedGame.nplayerString}})</small>
         </div>
@@ -118,7 +118,7 @@ export default class Home extends Vue {
      *
      */
     public get gameFromCurrentCategory() {
-        return this.gameList.getCategories()[0].getGames();
+        return this.gameList.getCategories().length ? this.gameList.getCategories()[0].getGames() : [];
     }
 
     public get selectedGame() {
