@@ -1,9 +1,10 @@
 import Config from '@/class/Config.class';
 import {join} from 'path';
-import {existsSync, readFileSync} from 'fs';
+import {existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync} from 'fs';
 import Mame from '@/class/Mame.class';
 import Game from '@/class/Game.class';
 import {parse as iniParse} from 'ini';
+import GameList from '@/class/GameList.class';
 
 declare const __static: string;
 
@@ -32,13 +33,19 @@ export default class GameService {
 
     protected config!: Config;
     protected mame!: Mame;
+    protected gameList!: GameList;
 
 
-    public constructor(config: Config, mame: Mame) {
+    public constructor(config: Config, mame: Mame, gameList: GameList) {
         this.config = config;
         this.mame = mame;
+        this.gameList = gameList;
     }
 
+    /**
+     * Get a game genre from genre.ini file
+     * @param romName
+     */
     public getGameGenre(romName: string) {
         if (!GameService.genreIni) {
             GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
@@ -51,6 +58,10 @@ export default class GameService {
         return null;
     }
 
+    /**
+     * Get a game nplayers from nplayers.ini
+     * @param romName
+     */
     public getGameNplayers(romName: string): Nplayers {
         if (!GameService.nplayersIni) {
             GameService.nplayersIni = iniParse(readFileSync(join(__static, 'data/nplayers_206.ini'), 'utf8'));
@@ -71,22 +82,30 @@ export default class GameService {
         };
     }
 
-    public gameFromRomName(romName: string, force: boolean = false) {
-        const fileName = romName + '.json';
-        if (!force && existsSync(join(this.config.gamesJsonPath, fileName))) {
-            console.log('Already exist');
-            return false;
-        }
+    /**
+     * Check if game.xml exist in hi2txt
+     * @param romName
+     */
+    public isGameHaveHiscore(romName: string): boolean {
+        const hi2txtPath = join(process.env.NODE_ENV === 'development'
+            ? './resources' : process.resourcesPath!, 'hi2txt');
+        return existsSync(join(hi2txtPath, 'hi2txt', romName + '.xml'));
+    }
 
+    /**
+     * Create a Game object from a rom name
+     * @param romName
+     * @param force
+     */
+    public gameJsonFromRomName(romName: string): GameJSON {
+        const fileName = romName + '.json';
         if (!this.mame.isRomValid(romName)) {
-            console.log('Rom not valid');
-            return false;
+            throw new Error('Rom not valid');
         }
 
         const infoFromMameXml = this.mame.getGameInfoFromMameXML(romName);
         if (!infoFromMameXml) {
-            console.log('Cant get xml');
-            return false;
+            throw new Error('Cant get xml');
         }
 
         const regexp = /^(.[^\(]+)/g;
@@ -97,15 +116,46 @@ export default class GameService {
             subname: '',
             manufacturer: infoFromMameXml.manufacturer,
             year: infoFromMameXml.year,
-            hi: true,
-            romName: romName,
+            hi: this.isGameHaveHiscore(romName),
+            romName,
             nplayers: this.getGameNplayers(romName),
             category: this.getGameGenre(romName),
         };
-        // Check if game.json does not exist si clean = false - DONE
-        // Check si rom exist - DONE
-        // Recup info avec mame --listxml (manufacturer, years, description => longname) - DONE
-        // Recup categories de category.ini si existe - DONE
-        // Recup nbplayer de nbplayer.ini si existe - DONE
     }
+
+    /**
+     * Delete game.json if no more in favorite and add new ones
+     * @param force
+     */
+    public refreshGameDir(force = false) {
+        return new Promise((resolve) => {
+            if (!existsSync(this.config.gamesJsonPath)) {
+                mkdirSync(this.config.gamesJsonPath);
+            }
+
+            const favoriteList = this.mame.getFavorites();
+
+            const toDelete = this.gameList.getGameNames().filter((i) => {
+                return favoriteList.indexOf(i) < 0;
+            });
+            for (const gameName of toDelete) {
+                unlinkSync(join(this.config.gamesJsonPath, gameName + '.json'));
+            }
+
+            let errors: {[romName: string]: Error} = {};
+            for (const romName of favoriteList) {
+                if (!force && existsSync(join(this.config.gamesJsonPath, romName))) {
+                    continue;
+                }
+                try {
+                    const game = this.gameJsonFromRomName(romName);
+                    writeFileSync(join(this.config.gamesJsonPath, game.romName + '.json'), JSON.stringify(game));
+                } catch (e) {
+                    errors[romName] = e;
+                }
+            }
+            return resolve(errors);
+        });
+    }
+
 }
