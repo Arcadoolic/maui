@@ -14,18 +14,11 @@
                              :style="{marginLeft: Math.max(9 - Math.abs(selectedGameId - index), 0) + '%'}"
                         ></div>
                     </li>
-
-                    <!--<li v-for="(game, index) in gameFromCurrentCategory"-->
-                        <!--class="slider-jeux__jeu slider-jeux__jeu&#45;&#45;non-actif"-->
-                    <!--&gt;-->
-                        <!--<div class="slider-jeux__marquee" style="background-image: url(../assets/default_marquee.jpg)">-->
-                            <!--<div class="slider-jeux__voile-marquee"></div>-->
-                        <!--</div>-->
-                    <!--</li>-->
                 </ul>
             </div>
         </div>
-        <p style="position: absolute; right: 10px; top: 10px; font-size: 30px; color: white">{{selectedGameId}}</p>
+
+        <Categories :class="{hovered: verticalSelect === 2}"></Categories>
     </span>
 
 
@@ -37,7 +30,6 @@
 
         <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
 
-        <!--<Categories :class="{hovered: verticalSelect === 2}"></Categories>-->
 </template>
 
 <script lang="ts">

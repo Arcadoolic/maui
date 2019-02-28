@@ -155,8 +155,8 @@ export default class Mame {
             const xml = parser.parseFromString(execSync('mame -lx ' + romName, {encoding: 'utf8'}), 'text/xml');
             return {
                 manufacturer: xml.getElementsByTagName('manufacturer')[0].innerHTML,
-                year: parseInt(xml.getElementsByTagName('year')[0].innerHTML),
-                description: xml.getElementsByTagName('description')[0].innerHTML
+                year: parseInt(xml.getElementsByTagName('year')[0].innerHTML, 10),
+                description: xml.getElementsByTagName('description')[0].innerHTML,
             };
         } catch (e) {
             console.log('error');

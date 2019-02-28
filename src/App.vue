@@ -38,8 +38,8 @@ export default class App extends Vue {
 
             gameList.init(config.gamesJsonPath);
 
-            let gameService = new GameService(config, mame, gameList);
-            gameService.refreshGameDir().then(errors => {
+            const gameService = new GameService(config, mame, gameList);
+            gameService.refreshGameDir().then((errors) => {
                 this.loading = false;
                 gameList.init(config.gamesJsonPath);
             });

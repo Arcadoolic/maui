@@ -66,7 +66,7 @@ export default class GameService {
         if (!GameService.nplayersIni) {
             GameService.nplayersIni = iniParse(readFileSync(join(__static, 'data/nplayers_206.ini'), 'utf8'));
         }
-        for (let nplayers in GameService.nplayersIni) {
+        for (const nplayers in GameService.nplayersIni) {
             if (GameService.nplayersIni[nplayers][romName]) {
                 if (GameService.nplayersTranslation[nplayers]) {
                     return GameService.nplayersTranslation[nplayers];
@@ -142,7 +142,7 @@ export default class GameService {
                 unlinkSync(join(this.config.gamesJsonPath, gameName + '.json'));
             }
 
-            let errors: {[romName: string]: Error} = {};
+            const errors: {[romName: string]: Error} = {};
             for (const romName of favoriteList) {
                 if (!force && existsSync(join(this.config.gamesJsonPath, romName))) {
                     continue;
