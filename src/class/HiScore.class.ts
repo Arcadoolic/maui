@@ -1,17 +1,22 @@
-import {exec} from 'child_process';
+import {execFile} from 'child_process';
 import parse from 'csv-parse/lib/sync';
+import {join} from 'path';
 
 export default class HiScore {
 
-    public getHiscore(): Promise<void> {
+    public getHiscore(): Promise<any[] | string> {
         return new Promise((resolve, reject) => {
-            exec('java -jar hi2txt.jar -r hi/asteroid.hi', (error, stdout, stderr) => {
-                if (error) {
-                    return reject(error);
-                }
+            const hi2txtPath = join(process.env.NODE_ENV === 'development'
+                ? './resources' : process.resourcesPath!, 'hi2txt');
+            execFile('java',
+                ['-jar', join(hi2txtPath, 'hi2txt.jar'), '-descr', join(hi2txtPath, 'hi2txt'), '-r', 'hi/asteroid.hi'],
+                (error, stdout, stderr) => {
+                    if (error) {
+                        return reject(error);
+                    }
 
-                return resolve(parse(stdout, { delimiter: '|', columns: true, skip_empty_lines: true }));
-            });
+                    return resolve(parse(stdout, {delimiter: '|', columns: true, skip_empty_lines: true}));
+                });
         });
     }
 }
