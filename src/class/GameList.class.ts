@@ -7,24 +7,10 @@ export default class GameList {
     protected categories: GameCategory[] = [];
     protected categoriesById: { [id: string]: GameCategory } = {};
     protected games: Game[] = [];
+    protected gameNames: string[] = [];
 
-    /**
-     * Init game categories
-     * @param categoriesJsonPath
-     */
-    public initCategories(categoriesJsonPath: string) {
-        this.categories = [];
-        this.categoriesById = {};
-        if (!existsSync(categoriesJsonPath)) {
-            throw new Error('`categories.json` file not found');
-        }
-        const categoriesJson: GameCategoryJSON[] = JSON.parse(readFileSync(categoriesJsonPath, 'utf8'));
-        this.categoriesById.all = new GameCategory({ name: 'All', id: 'all'});
-        this.categories.push(this.categoriesById.all);
-        for (const category of categoriesJson) {
-            this.categoriesById[category.id] = new GameCategory(category);
-            this.categories.push(this.categoriesById[category.id]);
-        }
+    public init(gamesPath: string) {
+        this.initGames(gamesPath);
     }
 
     /**
@@ -33,8 +19,14 @@ export default class GameList {
      */
     public initGames(gamesPath: string) {
         this.games = [];
+        this.categories = [];
+        this.categoriesById = {};
+        this.gameNames = [];
+
+        this.categoriesById.all = new GameCategory('All');
+        this.categories.push(this.categoriesById.all);
         if (!existsSync(gamesPath)) {
-            throw new Error(gamesPath + ' not founnd');
+            return false;
         }
         const dir = readdirSync(gamesPath, 'utf8');
         for (const file of dir) {
@@ -51,14 +43,26 @@ export default class GameList {
      */
     public addGame(gameJson: GameJSON) {
         const game = new Game(gameJson);
-        // Categories
-        for (const categoryId of gameJson.categories) {
-            this.categoriesById.all.addGame(game);
-            if (this.categoriesById[categoryId]) {
-                game.addCategory(this.categoriesById[categoryId]);
-                this.categoriesById[categoryId].addGame(game);
-            }
+
+        // Create cat if do not exist
+        if (gameJson.category && !this.categoriesById[gameJson.category]) {
+            const category = new GameCategory(gameJson.category);
+            this.categoriesById[gameJson.category] = category;
+            this.categories.push(category);
         }
+
+        // Add game to his category
+        if (gameJson.category) {
+            this.categoriesById[gameJson.category].addGame(game);
+            game.addCategory(this.categoriesById[gameJson.category]);
+        }
+
+        // Add game to category `all`
+        this.categoriesById.all.addGame(game);
+        game.addCategory(this.categoriesById.all);
+
+        // Add Game to game list
+        this.gameNames.push(game.romName);
         this.games.push(game);
     }
 
@@ -76,14 +80,7 @@ export default class GameList {
         return this.categories;
     }
 
-    public createGamesFromNames(favorites: string[], clean = false) {
-        for (const favorite of favorites) {
-            const game = Game
-            // Check if game.json does not exist si clean = false
-            // Check si rom exist
-            // Recup info avec mame --listxml (manufacturer, years, description => longname)
-            // Recup categories de category.ini si existe
-            // Recup nbplayer de nbplayer.ini si existe
-        }
+    public getGameNames() {
+        return this.gameNames;
     }
 }
