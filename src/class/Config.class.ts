@@ -27,7 +27,7 @@ export default class Config {
      * @return string
      */
     public get mameIniPath(): string {
-        return this._mameIniPath!;
+        return this._mameIniPath || this._defaultMameIni;
     }
 
     public get gamesJsonPath(): string {
