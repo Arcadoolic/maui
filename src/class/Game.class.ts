@@ -6,12 +6,11 @@ export default class Game {
     protected _subname: string;
     protected _year: number;
     protected _manufacturer: string;
-    protected _parent: string;
     protected _nplayers: Nplayers;
 
     protected _categories: GameCategory[] = [];
 
-    protected _romName: string|null;
+    protected _romName: string;
 
     /**
      * Init Game object from GameJSON data type
@@ -24,7 +23,6 @@ export default class Game {
         this._subname = gameData.subname;
         this._year = gameData.year;
         this._manufacturer = gameData.manufacturer;
-        this._parent = gameData.parent;
         this._nplayers = gameData.nplayers;
         this._romName = gameData.romName;
     }
