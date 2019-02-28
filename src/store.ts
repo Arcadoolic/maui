@@ -9,7 +9,7 @@ Vue.use(Vuex);
 export default new Vuex.Store({
     state: {
         config: new Config(),
-        gameList: (null as GameList|null),
+        gameList: new GameList(),
         mame: new Mame(),
     },
     getters: {
@@ -21,21 +21,6 @@ export default new Vuex.Store({
         },
         mame: (state): Mame => {
             return state.mame;
-        },
-    },
-    mutations: {
-        initGameList(state) {
-            if (!state.gameList) {
-                state.gameList = new GameList();
-                state.gameList.initCategories('./config/categories.json');
-                state.gameList.initGames('./games');
-            }
-        },
-        reloadGameList(state) {
-            if (state.gameList) {
-                state.gameList.initCategories('./config/categories.json');
-                state.gameList.initGames('./games');
-            }
         },
     },
     actions: {},
