@@ -49,7 +49,7 @@ export default class Categories extends Vue {
     /**
      * Called on move left
      */
-    public moveLeft() {
+    protected moveLeft() {
         this.categorySelectedId = this.categorySelectedId <= 0 ?
             this.gameList.getCategories().length - 1 : this.categorySelectedId - 1;
         this.emitCategoryChange();
@@ -59,7 +59,7 @@ export default class Categories extends Vue {
     /**
      * Called on move right
      */
-    public moveRight() {
+    protected moveRight() {
         this.categorySelectedId = this.categorySelectedId >= this.gameList.getCategories().length - 1 ?
             0 : this.categorySelectedId + 1;
         this.emitCategoryChange();
@@ -69,14 +69,14 @@ export default class Categories extends Vue {
     /**
      * Calculate category list position
      */
-    public updateCategoriesPosition() {
+    protected updateCategoriesPosition() {
         (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelectedId * 150) + 'px';
     }
 
     /**
      * Emit event to parent when the selected category change
      */
-    public emitCategoryChange() {
+    protected emitCategoryChange() {
         this.$emit('categoryChange', this.categorySelectedId);
     }
 
