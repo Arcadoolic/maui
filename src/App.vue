@@ -42,7 +42,7 @@ export default class App extends Vue {
             });
 
         } catch (e) {
-            console.log(e);
+            console.error(e);
             // return false;
         }
     }

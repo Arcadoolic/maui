@@ -46,7 +46,6 @@ export default class Home extends Vue {
      * @param categoryId
      */
     public categoryChange(categoryId: number) {
-        console.log(categoryId);
         this.selectedCategory = this.gameList.getCategories()[categoryId];
         this.selectedGame = this.selectedCategory.getGames()[0];
     }
@@ -58,7 +57,6 @@ export default class Home extends Vue {
     public gameChange(gameId: number) {
         this.selectedGameId = gameId;
         this.selectedGame = this.selectedCategory!.getGames()[gameId];
-        console.log(this.selectedGame);
     }
 }
 </script>
