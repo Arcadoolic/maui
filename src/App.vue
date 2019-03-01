@@ -11,7 +11,7 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view :verticalSelect="1" @blockVerticalSelect="setBlockVerticalSelect" v-if="!loading"></router-view>
+        <router-view v-if="!loading"></router-view>
         <p v-if="loading">Chargement</p>
     </div>
 </template>
@@ -23,9 +23,6 @@ import GameService from '@/class/GameService.class';
 
 @Component
 export default class App extends Vue {
-    protected verticalSelect: number = 0;
-    protected blockVerticalSelect: boolean = false;
-
     protected loading = true;
     public created() {
 
@@ -48,15 +45,6 @@ export default class App extends Vue {
             console.log(e);
             // return false;
         }
-    }
-
-
-    /**
-     *
-     * @param val
-     */
-    protected setBlockVerticalSelect(val: boolean) {
-        this.blockVerticalSelect = val;
     }
 }
 </script>
