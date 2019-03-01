@@ -55,7 +55,7 @@ export default class Games extends Vue {
     /**
      * Called on move up
      */
-    public moveUp() {
+    protected moveUp() {
         this.selectedGameId = this.selectedGameId <= 0 ?
             this.selectedCategory.getGames().length - 1 : this.selectedGameId - 1;
         this.updateGamesPosition();
@@ -65,7 +65,7 @@ export default class Games extends Vue {
     /**
      * Called on move down
      */
-    public moveDown() {
+    protected moveDown() {
         this.selectedGameId = this.selectedGameId >= this.selectedCategory.getGames().length - 1 ?
             0 : this.selectedGameId + 1;
         this.updateGamesPosition();
@@ -75,21 +75,34 @@ export default class Games extends Vue {
     /**
      * Start a game
      */
-    public startGame() {
+    protected startGame() {
         this.mame.start(this.selectedCategory.getGames()[this.selectedGameId]);
     }
 
     /**
      * Calculate game list top position
      */
-    public updateGamesPosition() {
-        (this.$refs.gameList as HTMLElement).style.top = (-10 * this.selectedGameId) + '%';
+    protected updateGamesPosition() {
+        if (this.$refs.gameList) {
+            (this.$refs.gameList as HTMLElement).style.top = (-10 * this.selectedGameId) + '%';
+        }
+    }
+
+    /**
+     * If selectedCategories change, reset current game to 0 and emit event
+     */
+    @Watch('selectedCategory')
+    protected watchSelectedCategory(val: GameCategory, oldVal: GameCategory) {
+        console.log('Hello');
+        this.selectedGameId = 0;
+        this.emitGameChange();
+        this.updateGamesPosition();
     }
 
     /**
      * Emit event to parent when the selected game change
      */
-    public emitGameChange() {
+    protected emitGameChange() {
         this.$emit('gameChange', this.selectedGameId);
     }
 }
