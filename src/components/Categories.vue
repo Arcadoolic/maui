@@ -1,7 +1,7 @@
 <template>
     <div class="categories">
         <figure ref="categoriesFigure">
-            <div class="category" :class="{selected: categorySelected === index, first: !index, last: index === gameList.getCategories().length, next: index === categorySelected + 1, previous: index === categorySelected - 1}"
+            <div class="category" :class="{selected: categorySelectedId === index, first: !index, last: index === gameList.getCategories().length, next: index === categorySelectedId + 1, previous: index === categorySelectedId - 1}"
                  v-for="(category, index) in gameList.getCategories()"
             >
                 <p>{{category.name}}</p>
@@ -11,47 +11,81 @@
 </template>
 
 <script lang="ts">
-    import {Vue, Component} from 'vue-property-decorator';
-    import GameList from '@/class/GameList.class';
+import {Vue, Component, Prop, Model} from 'vue-property-decorator';
+import GameList from '@/class/GameList.class';
 
-    @Component
-    export default class Categories extends Vue {
-        protected gameList = new GameList();
-        protected categorySelected = 0;
+@Component
+export default class Categories extends Vue {
+    protected categorySelectedId: number = 0;
 
-        protected categoriesFigure!: HTMLElement;
+    protected gameList = new GameList();
+    protected categoriesFigure!: HTMLElement;
 
-        public created() {
-            this.gameList = this.$store.getters.gameList;
+    public created() {
+        /** Init vars */
+        this.gameList = this.$store.getters.gameList;
 
-            window.addEventListener('keydown', (e) => {
-                if (e.code === 'ArrowLeft') {
-                    this.categorySelected--;
-                    if (this.categorySelected < 0) {
-                        this.categorySelected = this.gameList.getCategories().length - 1;
-                    }
-                    (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelected * 150) + 'px';
-                } else if (e.code === 'ArrowRight') {
-                    this.categorySelected++;
-                    if (this.categorySelected >= this.gameList.getCategories().length) {
-                        this.categorySelected = 0;
-                    }
-                    (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelected * 150) + 'px';
-                }
-            });
-        }
-
-        public mounted() {
-            // Category list figure size
-            this.categoriesFigure = this.$refs.categoriesFigure as HTMLElement;
-            this.categoriesFigure.style.width = ((this.gameList.getCategories().length + 1) * 150 + 300) + 'px';
-        }
-
+        /**
+         * Register key events
+         */
+        window.addEventListener('keydown', (e) => {
+            switch (e.key) {
+                case 'ArrowLeft':
+                    this.moveLeft();
+                    break;
+                case 'ArrowRight':
+                    this.moveRight();
+                    break;
+            }
+        });
     }
+
+    public mounted() {
+        // Category list figure size
+        this.categoriesFigure = this.$refs.categoriesFigure as HTMLElement;
+        this.categoriesFigure.style.width = ((this.gameList.getCategories().length + 1) * 150 + 300) + 'px';
+    }
+
+    /**
+     * Called on move left
+     */
+    public moveLeft() {
+        this.categorySelectedId = this.categorySelectedId <= 0 ?
+            this.gameList.getCategories().length - 1 : this.categorySelectedId - 1;
+        this.emitCategoryChange();
+        this.updateCategoriesPosition();
+    }
+
+    /**
+     * Called on move right
+     */
+    public moveRight() {
+        this.categorySelectedId = this.categorySelectedId >= this.gameList.getCategories().length - 1 ?
+            0 : this.categorySelectedId - 1;
+        this.emitCategoryChange();
+        this.updateCategoriesPosition();
+    }
+
+    /**
+     * Calculate category list position
+     */
+    public updateCategoriesPosition() {
+        (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelectedId * 150) + 'px';
+    }
+
+    /**
+     * Emit event to parent when the selected category change
+     */
+    public emitCategoryChange() {
+        this.$emit('categoryChange', this.categorySelectedId);
+    }
+
+}
 </script>
 
 <style scoped>
     .categories {
+        color: green;
         position: absolute;
         bottom: 0;
         right: 40px;
