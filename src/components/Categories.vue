@@ -61,7 +61,7 @@ export default class Categories extends Vue {
      */
     public moveRight() {
         this.categorySelectedId = this.categorySelectedId >= this.gameList.getCategories().length - 1 ?
-            0 : this.categorySelectedId - 1;
+            0 : this.categorySelectedId + 1;
         this.emitCategoryChange();
         this.updateCategoriesPosition();
     }
