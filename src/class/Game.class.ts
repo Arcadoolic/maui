@@ -58,7 +58,7 @@ export default class Game {
         }
         if (this._nplayers.sim) {
             str = (str)
-                ? str + this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous'
+                ? str + '/' + this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous'
                 : this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous';
         }
         if (!str) {
