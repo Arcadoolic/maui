@@ -45,16 +45,15 @@ export default class Home extends Vue {
      * Called when categoryChange event is triggered on Categories component
      * @param categoryId
      */
-    public categoryChange(categoryId: number) {
+    protected categoryChange(categoryId: number) {
         this.selectedCategory = this.gameList.getCategories()[categoryId];
-        this.selectedGame = this.selectedCategory.getGames()[0];
     }
 
     /**
      * Called when gameChange event is triggered on Games component
      * @param gameId
      */
-    public gameChange(gameId: number) {
+    protected gameChange(gameId: number) {
         this.selectedGameId = gameId;
         this.selectedGame = this.selectedCategory!.getGames()[gameId];
     }
