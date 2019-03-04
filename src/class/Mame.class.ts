@@ -6,8 +6,8 @@ import {join} from 'path';
 import {execSync} from 'child_process';
 
 export default class Mame {
-    protected mameConfig: { [key: string]: any } = {};
-    protected mameUiConfig: { [key: string]: any } = {};
+    protected _mameConfig: { [key: string]: any } = {};
+    protected _mameUiConfig: { [key: string]: any } = {};
 
     protected process?: ChildProcess;
 
@@ -16,6 +16,14 @@ export default class Mame {
      */
     public get isGameOn() {
         return this.process;
+    }
+
+    public get mameConfig() {
+        return this._mameConfig;
+    }
+
+    public get mameUiConfig() {
+        return this._mameUiConfig;
     }
 
     /**
