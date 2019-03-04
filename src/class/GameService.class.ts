@@ -128,33 +128,53 @@ export default class GameService {
      * @param force
      */
     public refreshGameDir(force = false) {
-        return new Promise((resolve, reject) => {
-            if (!existsSync(this.config.gamesJsonPath)) {
-                mkdirSync(this.config.gamesJsonPath);
-            }
-            const favoriteList = this.mame.getFavorites();
+        if (!existsSync(this.config.gamesJsonPath)) {
+            mkdirSync(this.config.gamesJsonPath);
+        }
+        const favoriteList = this.mame.getFavorites();
 
-            const toDelete = this.gameList.getGameNames().filter((i) => {
-                return favoriteList.indexOf(i) < 0;
-            });
-            for (const gameName of toDelete) {
-                unlinkSync(join(this.config.gamesJsonPath, gameName + '.json'));
-            }
-
-            const errors: {[romName: string]: Error} = {};
-            for (const romName of favoriteList) {
-                if (!force && existsSync(join(this.config.gamesJsonPath, romName))) {
-                    continue;
-                }
-                try {
-                    const game = this.gameJsonFromRomName(romName);
-                    writeFileSync(join(this.config.gamesJsonPath, game.romName + '.json'), JSON.stringify(game));
-                } catch (e) {
-                    errors[romName] = e;
-                }
-            }
-            return resolve(errors);
+        const toDelete = this.gameList.getGameNames().filter((i) => {
+            return favoriteList.indexOf(i) < 0;
         });
+        for (const gameName of toDelete) {
+            unlinkSync(join(this.config.gamesJsonPath, gameName + '.json'));
+        }
+
+        const errors: {[romName: string]: Error} = {};
+        for (const romName of favoriteList) {
+            if (!force && existsSync(join(this.config.gamesJsonPath, romName))) {
+                continue;
+            }
+            try {
+                const game = this.gameJsonFromRomName(romName);
+                writeFileSync(join(this.config.gamesJsonPath, game.romName + '.json'), JSON.stringify(game));
+            } catch (e) {
+                errors[romName] = e;
+            }
+        }
+        return errors;
+    }
+
+    public loadGamesMarquee() {
+        let marqueesPath;
+        for (const marqueesDirectory of this.mame.mameUiConfig.marquees_directory) {
+            // TODO - Rework - Si commence pas par / il faut concat le iniPath
+            if (existsSync(marqueesDirectory)) {
+                marqueesPath = marqueesDirectory;
+                break;
+            }
+        }
+
+        if (!marqueesPath) {
+            throw new Error('Cannot find marquees directory');
+        }
+
+        for (const game of this.gameList.getGames()) {
+            const marqueePath = join(marqueesPath, game.romName + '.png');
+            if (existsSync(marqueePath)) {
+                game.marquee = marqueePath;
+            }
+        }
     }
 
 }
