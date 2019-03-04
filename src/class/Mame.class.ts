@@ -102,8 +102,7 @@ export default class Mame {
             }
             const data = regex.exec(line);
             if (data) {
-                const value = data[2].replace(/^"(.*)"$/, '$1').split(';');
-                TargetObject[data[1]] = (value.length > 1) ? value : value[0];
+                TargetObject[data[1]] = data[2].replace(/^"(.*)"$/, '$1').split(';');
             }
 
         });
@@ -114,13 +113,25 @@ export default class Mame {
      * Return favorites from mame's favorites.ini
      */
     public getFavorites() {
-        let favoritePath = join(
-            this.mameConfig.usedInipath,
-            this.mameUiConfig.ui_path.replace(/^.*\/(.*)$/, '$1'),
-            'favorites.ini');
-        favoritePath = favoritePath.replace('$HOME', os.homedir());
+        let error = true;
+        let favoritePath: string;
+        for (const uiPath of this.mameUiConfig.ui_path) {
+            if (!uiPath) {
+                continue;
+            }
+            favoritePath = join(this.mameConfig.usedInipath, uiPath.replace(/^.*\/(.*)$/, '$1'), 'favorites.ini')
+                .replace('$HOME', os.homedir());
+            if (existsSync(favoritePath)) {
+                error = false;
+                break;
+            }
+        }
+        if (error) {
+            throw new Error('favorites.ini not found');
+        }
+
         const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
-        const file = readFileSync(favoritePath, 'utf8').split('\n');
+        const file = readFileSync(favoritePath!, 'utf8').split('\n');
         const retArray: string[] = [];
         const existing: { [key: string]: boolean } = {};
         file.forEach((line: string) => {
