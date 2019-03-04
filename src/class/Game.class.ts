@@ -12,6 +12,8 @@ export default class Game {
 
     protected _romName: string;
 
+    protected _marquee: string = '';
+
     /**
      * Init Game object from GameJSON data type
      * @param gameData
@@ -65,5 +67,13 @@ export default class Game {
             str = '1 player';
         }
         return str;
+    }
+
+    public set marquee(marquee: string) {
+        this._marquee = marquee;
+    }
+
+    public get marquee(): string {
+        return this._marquee;
     }
 }
