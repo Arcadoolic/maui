@@ -128,11 +128,10 @@ export default class GameService {
      * @param force
      */
     public refreshGameDir(force = false) {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             if (!existsSync(this.config.gamesJsonPath)) {
                 mkdirSync(this.config.gamesJsonPath);
             }
-
             const favoriteList = this.mame.getFavorites();
 
             const toDelete = this.gameList.getGameNames().filter((i) => {
