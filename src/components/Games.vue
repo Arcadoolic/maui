@@ -5,7 +5,7 @@
             <ul ref="gameList">
                 <li v-for="(game, index) in selectedCategory.getGames()" :class="{selected: selectedGameId === index}">
                     <div class="marquee"
-                         :style="{marginLeft: Math.max(9 - Math.abs(selectedGameId - index), 0) + '%'}"
+                         :style="{marginLeft: Math.max(9 - Math.abs(selectedGameId - index), 0) + '%', backgroundImage: 'url(file://' + game.marquee + ')'}"
                     ></div>
                 </li>
             </ul>
