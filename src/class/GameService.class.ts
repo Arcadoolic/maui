@@ -2,9 +2,9 @@ import Config from '@/class/Config.class';
 import {join} from 'path';
 import {existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync} from 'fs';
 import Mame from '@/class/Mame.class';
-import Game from '@/class/Game.class';
 import {parse as iniParse} from 'ini';
 import GameList from '@/class/GameList.class';
+import {format} from 'url';
 
 declare const __static: string;
 
@@ -171,8 +171,13 @@ export default class GameService {
 
         for (const game of this.gameList.getGames()) {
             const marqueePath = join(marqueesPath, game.romName + '.png');
+
             if (existsSync(marqueePath)) {
-                game.marquee = 'data:image/png;base64,' + readFileSync(marqueePath).toString('base64');
+                game.marquee = format({
+                    pathname: marqueePath,
+                    protocol: 'file',
+                    slashes: true,
+                });
             }
         }
     }
