@@ -142,7 +142,7 @@ export default class GameService {
 
         const errors: {[romName: string]: Error} = {};
         for (const romName of favoriteList) {
-            if (!force && existsSync(join(this.config.gamesJsonPath, romName))) {
+            if (!force && existsSync(join(this.config.gamesJsonPath, romName + '.json'))) {
                 continue;
             }
             try {
