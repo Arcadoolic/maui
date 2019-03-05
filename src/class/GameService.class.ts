@@ -172,7 +172,7 @@ export default class GameService {
         for (const game of this.gameList.getGames()) {
             const marqueePath = join(marqueesPath, game.romName + '.png');
             if (existsSync(marqueePath)) {
-                game.marquee = marqueePath;
+                game.marquee = 'data:image/png;base64,' + readFileSync(marqueePath).toString('base64');
             }
         }
     }
