@@ -4,6 +4,7 @@ import {existsSync, readFileSync} from 'fs';
 import * as os from 'os';
 import {join} from 'path';
 import {execSync} from 'child_process';
+import Helpers from '@/class/Helpers.class';
 
 export default class Mame {
     protected _mameConfig: { [key: string]: any } = {};
@@ -31,23 +32,19 @@ export default class Mame {
      * @param mameIniPath
      */
     public init(mameIniPath: string) {
-        let success = this.parseMameIniFile(mameIniPath, this.mameConfig);
-        if (!success) {
+        if (!this.parseMameIniFile(mameIniPath, this.mameConfig)) {
             throw new Error('File missing or failed parsing ' + mameIniPath);
         }
         if (!this.mameConfig.inipath) {
             throw new Error('ui value is missing in mame.ini');
         }
-        for (const inipath of  this.mameConfig.inipath) {
-            success = this.parseMameIniFile(join(inipath, 'ui.ini'), this.mameUiConfig);
-            if (success) {
-                this.mameConfig.usedInipath = inipath;
-                break;
-            }
-        }
-        if (!success) {
+        console.log(this.mameConfig.inipath);
+        const uipath = Helpers.getFirstExistingDirectory(this.mameConfig.inipath, null);
+        if (!uipath) {
             throw new Error('File missing or failed parsing ui.ini');
         }
+        this.mameConfig.usedInipath = uipath;
+        this.parseMameIniFile(join(uipath, 'ui.ini'), this.mameUiConfig);
     }
 
     /**
@@ -98,10 +95,6 @@ export default class Mame {
      * @param TargetObject
      */
     public parseMameIniFile(filePath: string, TargetObject: { [key: string]: any }) {
-        filePath = filePath.replace('$HOME', os.homedir());
-        if (!existsSync(filePath)) {
-            return false;
-        }
         const regex = new RegExp(/^([a-z_]+)\s+(.+)$/);
         const file = readFileSync(filePath, 'utf8').split('\n');
         file.forEach((line) => {
@@ -121,23 +114,11 @@ export default class Mame {
      * Return favorites from mame's favorites.ini
      */
     public getFavorites() {
-        let error = true;
-        let favoritePath: string;
-        for (const uiPath of this.mameUiConfig.ui_path) {
-            if (!uiPath) {
-                continue;
-            }
-            favoritePath = join(this.mameConfig.usedInipath, uiPath.replace(/^.*\/(.*)$/, '$1'), 'favorites.ini')
-                .replace('$HOME', os.homedir());
-            if (existsSync(favoritePath)) {
-                error = false;
-                break;
-            }
-        }
-        if (error) {
-            throw new Error('favorites.ini not found');
-        }
-
+        const favoritePath = Helpers.getFirstExistingDirectory(
+            this.mameUiConfig.ui_path,
+            this.mameConfig.usedInipath,
+            'favorites.ini',
+        );
         const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
         const file = readFileSync(favoritePath!, 'utf8').split('\n');
         const retArray: string[] = [];
