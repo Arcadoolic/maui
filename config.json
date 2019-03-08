@@ -1,4 +1,4 @@
 {
-  "mameIniPath": "/etc/mame/mame.ini",
+  "mameIniPath": "/home/tpayen/.mame/mame.ini",
   "gamesJsonPath": "./games"
 }
