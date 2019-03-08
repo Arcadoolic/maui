@@ -5,6 +5,7 @@ import Mame from '@/class/Mame.class';
 import {parse as iniParse} from 'ini';
 import GameList from '@/class/GameList.class';
 import {format} from 'url';
+import Helpers from '@/class/Helpers.class';
 
 declare const __static: string;
 
@@ -156,14 +157,9 @@ export default class GameService {
     }
 
     public loadGamesMarquee() {
-        let marqueesPath;
-        for (const marqueesDirectory of this.mame.mameUiConfig.marquees_directory) {
-            // TODO - Rework - Si commence pas par / il faut concat le iniPath
-            if (existsSync(marqueesDirectory)) {
-                marqueesPath = marqueesDirectory;
-                break;
-            }
-        }
+        const marqueesPath = Helpers.getFirstExistingDirectory(
+            this.mame.mameUiConfig.marquees_directory,
+            this.mame.mameUiPath);
 
         if (!marqueesPath) {
             throw new Error('Cannot find marquees directory');
