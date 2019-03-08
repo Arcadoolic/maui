@@ -7,26 +7,31 @@ import {execSync} from 'child_process';
 import Helpers from '@/class/Helpers.class';
 
 export default class Mame {
+    protected process?: ChildProcess;
+
     protected _mameConfig: { [key: string]: any } = {};
+
+    public get mameConfig() {
+        return this._mameConfig;
+    }
+
     protected _mameUiConfig: { [key: string]: any } = {};
+
+    public get mameUiConfig() {
+        return this._mameUiConfig;
+    }
 
     protected _mameUiPath: string = '';
 
-    protected process?: ChildProcess;
+    public get mameUiPath() {
+        return this._mameUiPath;
+    }
 
     /**
      * @return boolean
      */
     public get isGameOn() {
         return this.process;
-    }
-
-    public get mameConfig() {
-        return this._mameConfig;
-    }
-
-    public get mameUiConfig() {
-        return this._mameUiConfig;
     }
 
     /**
@@ -52,7 +57,7 @@ export default class Mame {
      * Start a mame game, if a process is already on, kill it
      * @param game
      */
-    public start(game: Game): Promise<ChildProcess|void> {
+    public start(game: Game): Promise<ChildProcess | void> {
         return new Promise((resolve, reject) => {
             if (!game.romName) {
                 return reject();
@@ -60,7 +65,10 @@ export default class Mame {
 
             this.stop().then(
                 () => {
-                    this.process = execFile('/usr/games/mame', [game.romName!, '-nomax', '-w'], {killSignal: 'SIGQUIT'},
+                    this.process = execFile('mame', [game.romName!, '-nomax', '-w'], {
+                            killSignal: 'SIGQUIT',
+                            cwd: this.mameUiPath,
+                        },
                         (error, stdout, stderr) => {
                             if (error) {
                                 console.error(`exec error: ${error}`);
@@ -70,7 +78,6 @@ export default class Mame {
                             console.log(`stderr: ${stderr}`);
                         });
                     this.process.on('close', (e) => {
-                        console.log('CLOSE');
                         this.process = undefined;
                     });
                     resolve(this.process);
@@ -167,9 +174,5 @@ export default class Mame {
         } catch (e) {
             console.log('error');
         }
-    }
-
-    public get mameUiPath() {
-        return this._mameUiPath;
     }
 }
