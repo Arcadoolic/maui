@@ -11,7 +11,6 @@ export default class Helpers {
      * @param file
      */
     public static getFirstExistingDirectory(paths: string[], parentPath?: string|null, file?: string): string|null {
-        console.log(paths);
         for (let path of paths) {
             path = path.replace('$HOME', os.homedir);
             if (path[0] !== '/' && parentPath) {
