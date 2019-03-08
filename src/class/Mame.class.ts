@@ -10,6 +10,8 @@ export default class Mame {
     protected _mameConfig: { [key: string]: any } = {};
     protected _mameUiConfig: { [key: string]: any } = {};
 
+    protected _mameUiPath: string = '';
+
     protected process?: ChildProcess;
 
     /**
@@ -38,12 +40,11 @@ export default class Mame {
         if (!this.mameConfig.inipath) {
             throw new Error('ui value is missing in mame.ini');
         }
-        console.log(this.mameConfig.inipath);
         const uipath = Helpers.getFirstExistingDirectory(this.mameConfig.inipath, null);
         if (!uipath) {
             throw new Error('File missing or failed parsing ui.ini');
         }
-        this.mameConfig.usedInipath = uipath;
+        this._mameUiPath = uipath;
         this.parseMameIniFile(join(uipath, 'ui.ini'), this.mameUiConfig);
     }
 
@@ -51,27 +52,30 @@ export default class Mame {
      * Start a mame game, if a process is already on, kill it
      * @param game
      */
-    public start(game: Game) {
-        if (!game.romName) {
-            return false;
-        }
+    public start(game: Game): Promise<ChildProcess|void> {
+        return new Promise((resolve, reject) => {
+            if (!game.romName) {
+                return reject();
+            }
 
-        this.stop().then(
-            () => {
-                this.process = execFile('/usr/games/mame', [game.romName!, '-nomax', '-w'], {killSignal: 'SIGQUIT'},
-                    (error, stdout, stderr) => {
-                        if (error) {
-                            console.error(`exec error: ${error}`);
-                            return;
-                        }
-                        console.log(`stdout: ${stdout}`);
-                        console.log(`stderr: ${stderr}`);
+            this.stop().then(
+                () => {
+                    this.process = execFile('/usr/games/mame', [game.romName!, '-nomax', '-w'], {killSignal: 'SIGQUIT'},
+                        (error, stdout, stderr) => {
+                            if (error) {
+                                console.error(`exec error: ${error}`);
+                                return;
+                            }
+                            console.log(`stdout: ${stdout}`);
+                            console.log(`stderr: ${stderr}`);
+                        });
+                    this.process.on('close', (e) => {
+                        console.log('CLOSE');
+                        this.process = undefined;
                     });
-                this.process.on('close', (e) => {
-                    console.log('CLOSE');
-                    this.process = undefined;
+                    resolve(this.process);
                 });
-            });
+        });
     }
 
     /**
@@ -83,7 +87,7 @@ export default class Mame {
                 return resolve();
             }
             this.process.kill('SIGQUIT');
-            this.process.on('exit', (e) => {
+            this.process.on('close', (e) => {
                 return resolve();
             });
         });
@@ -105,7 +109,6 @@ export default class Mame {
             if (data) {
                 TargetObject[data[1]] = data[2].replace(/^"(.*)"$/, '$1').split(';');
             }
-
         });
         return true;
     }
@@ -116,9 +119,12 @@ export default class Mame {
     public getFavorites() {
         const favoritePath = Helpers.getFirstExistingDirectory(
             this.mameUiConfig.ui_path,
-            this.mameConfig.usedInipath,
+            this.mameUiPath,
             'favorites.ini',
         );
+        if (!favoritePath) {
+            throw new Error('Unable to read or parse favorites.ini - ' + favoritePath);
+        }
         const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
         const file = readFileSync(favoritePath!, 'utf8').split('\n');
         const retArray: string[] = [];
@@ -161,5 +167,9 @@ export default class Mame {
         } catch (e) {
             console.log('error');
         }
+    }
+
+    public get mameUiPath() {
+        return this._mameUiPath;
     }
 }
