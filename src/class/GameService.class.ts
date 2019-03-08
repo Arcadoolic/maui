@@ -162,7 +162,7 @@ export default class GameService {
             this.mame.mameUiPath);
 
         if (!marqueesPath) {
-            throw new Error('Cannot find marquees directory');
+            throw new Error('Cannot find marquees directory - ' + marqueesPath);
         }
 
         for (const game of this.gameList.getGames()) {
