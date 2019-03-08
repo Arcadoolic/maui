@@ -11,8 +11,12 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view v-if="!loading"></router-view>
-        <p v-if="loading">Chargement</p>
+        <router-view v-if="!loading && !error"></router-view>
+
+        <div class="info-messages">
+            <p v-if="loading" class="loading">Chargement</p>
+            <p v-if="error" class="error">{{error}}</p>
+        </div>
     </div>
 </template>
 
@@ -24,6 +28,8 @@ import GameService from '@/class/GameService.class';
 @Component
 export default class App extends Vue {
     protected loading = true;
+    protected error: string|null = null;
+
     public created() {
 
         const config: Config = this.$store.getters.config;
@@ -42,7 +48,9 @@ export default class App extends Vue {
             this.loading = false;
         } catch (e) {
             console.error(e);
-            // return false;
+            this.loading = false;
+            this.error = e.toString();
+            return false;
         }
     }
 }
@@ -146,5 +154,27 @@ export default class App extends Vue {
 
     nav.hovered p {
         display: inline-block;
+    }
+
+    .info-messages {
+        width: 100%;
+        height: 100%;
+        display: table;
+    }
+        .info-messages > * {
+            display: table-cell;
+            vertical-align: middle;
+        }
+
+    .loading {
+        font-size: 5vw;
+        color: blue;
+        text-align: center;
+    }
+
+    .error {
+        font-size: 3vw;
+        color: red;
+        text-align: center;
     }
 </style>
