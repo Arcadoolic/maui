@@ -7,6 +7,7 @@ export default class Game {
     protected _year: number;
     protected _manufacturer: string;
     protected _nplayers: Nplayers;
+    protected _hi: boolean;
 
     protected _categories: GameCategory[] = [];
 
@@ -27,6 +28,7 @@ export default class Game {
         this._manufacturer = gameData.manufacturer;
         this._nplayers = gameData.nplayers;
         this._romName = gameData.romName;
+        this._hi = gameData.hi;
     }
 
     /**
@@ -75,5 +77,9 @@ export default class Game {
 
     public get marquee(): string {
         return this._marquee;
+    }
+
+    public get hasHiscore(): boolean {
+        return this._hi;
     }
 }
