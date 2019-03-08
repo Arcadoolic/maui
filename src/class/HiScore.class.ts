@@ -17,7 +17,7 @@ export default class HiScore {
                     '-descr',
                     join(hi2txtPath, 'hi2txt'),
                     '-r',
-                    'hi/' + romName + '.hi',
+                    '/home/tpayen/.mame/hi/' + romName + '.hi',
                 ],
                 (error, stdout, stderr) => {
                     if (error) {
