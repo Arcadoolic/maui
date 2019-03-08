@@ -21,6 +21,8 @@ import {Vue, Component, Prop, Watch} from 'vue-property-decorator';
 import GameList from '@/class/GameList.class';
 import Mame from '@/class/Mame.class';
 import GameCategory from '@/class/GameCategory.class';
+import {ChildProcess} from 'child_process';
+import HiScore from '@/class/HiScore.class';
 
 @Component
 export default class Games extends Vue {
@@ -79,7 +81,22 @@ export default class Games extends Vue {
      * Start a game
      */
     protected startGame() {
-        this.mame.start(this.selectedCategory.getGames()[this.selectedGameId]);
+        const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
+        this.mame.start(selectedGame).then(
+            (process: ChildProcess|void) => {
+                if (process) {
+                    process.on('close', (e) => {
+                        if (selectedGame.hasHiscore) {
+                            (new HiScore()).getHiscore(selectedGame.romName).then(
+                                (hiscore: any) => {
+                                    console.log(hiscore);
+                                },
+                            );
+                        }
+                    });
+                }
+            },
+        );
     }
 
     /**
