@@ -45,7 +45,7 @@ export default class App extends Vue {
         },
     };
 
-    protected gamepadKeyPressed: boolean[] = [];
+    protected gamepadKeyPressed: boolean[][] = [];
 
     public created() {
 
@@ -104,12 +104,15 @@ export default class App extends Vue {
             gamepad.buttons.forEach((button: GamepadButton, index) => {
                 let eventName: string|null = null;
                 if (this.xboxOneMapping.buttons[index]) {
+                    if (!this.gamepadKeyPressed[gamepadsKey]) {
+                        this.gamepadKeyPressed[gamepadsKey] = [];
+                    }
                     if (button.pressed) {
                         eventName = 'gamepadKeydown';
-                        this.gamepadKeyPressed[index] = true;
-                    } else if (this.gamepadKeyPressed[index]) {
+                        this.gamepadKeyPressed[gamepadsKey][index] = true;
+                    } else if (this.gamepadKeyPressed[gamepadsKey][index]) {
                         eventName = 'gamepadKeyup';
-                        this.gamepadKeyPressed[index] = false;
+                        this.gamepadKeyPressed[gamepadsKey][index] = false;
                     }
 
                     if (eventName) {
