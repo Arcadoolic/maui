@@ -182,7 +182,6 @@ export default class Games extends ControllableVue {
         height: 100%;
         overflow: hidden;
         position: relative;
-        /*z-index: 12;*/
         filter: saturate(2);
     }
 
@@ -199,7 +198,6 @@ export default class Games extends ControllableVue {
         position: relative;
         top: 35%;
         height: 65%;
-        /*border: 1px solid red;*/
         width: 50%;
     }
 
@@ -210,16 +208,13 @@ export default class Games extends ControllableVue {
         left: 0;
         width: 100%;
         height: 100%;
-        /*border: 1px solid yellow;*/
         overflow: visible;
-        /*transition: top 0.3s ease;*/
     }
 
     .games ul li {
         display: flex;
         height: 10%;
         width: 100%;
-        /*border: 1px solid green;*/
         position: relative;
         align-items: center;
     }
@@ -240,7 +235,6 @@ export default class Games extends ControllableVue {
         background-position: center;
         border-radius: 5px;
         box-shadow: 0 0 30px #000000;
-        /*transition: height 0.3s ease, width 0.3s ease, margin-left 0.3s ease;*/
     }
 
     .games ul li.selected .marquee {
