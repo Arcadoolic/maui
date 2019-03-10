@@ -13,9 +13,10 @@
 <script lang="ts">
 import {Vue, Component, Prop, Model} from 'vue-property-decorator';
 import GameList from '@/class/GameList.class';
+import ControllableVue from '@/ControllableVue.vue';
 
 @Component
-export default class Categories extends Vue {
+export default class Categories extends ControllableVue {
     protected categorySelectedId: number = 0;
 
     protected gameList = new GameList();
@@ -28,8 +29,9 @@ export default class Categories extends Vue {
         /**
          * Register key events
          */
-        window.addEventListener('keydown', (e) => {
-            switch (e.key) {
+        this.onKeydown((e: Event, isGamepad: boolean) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            switch (key) {
                 case 'ArrowLeft':
                     this.moveLeft();
                     break;
@@ -37,6 +39,10 @@ export default class Categories extends Vue {
                     this.moveRight();
                     break;
             }
+        });
+
+        this.onKeyup((e: Event, isGamepad: boolean) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
         });
     }
 
