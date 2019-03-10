@@ -23,31 +23,35 @@ import Mame from '@/class/Mame.class';
 import GameCategory from '@/class/GameCategory.class';
 import {ChildProcess} from 'child_process';
 import HiScore from '@/class/HiScore.class';
+import ControllableVue from '@/ControllableVue.vue';
 
 @Component
-export default class Games extends Vue {
+export default class Games extends ControllableVue {
     protected gameList = new GameList();
     protected mame = new Mame();
 
     protected selectedGameId = 0;
 
+    protected moveUpTimeout: any = 0;
+    protected moveDownTimeout: any = 0;
+
     @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
+
+
 
     public created() {
         /** Init vars */
         this.gameList = this.$store.getters.gameList;
         this.mame = this.$store.getters.mame;
 
-        /**
-         * Register key events
-         */
-        window.addEventListener('keydown', (e) => {
-            switch (e.key) {
+        this.onKeydown((e: Event, isGamepad: boolean) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            switch (key) {
                 case 'ArrowUp':
-                    this.moveUp();
+                    this.moveUp(500)();
                     break;
                 case 'ArrowDown':
-                    this.moveDown();
+                    this.moveDown(500)();
                     break;
                 case 'Enter':
                     this.startGame();
@@ -55,26 +59,128 @@ export default class Games extends Vue {
 
             }
         });
+
+        this.onKeyup((e: Event, isGamepad: boolean) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            switch (key) {
+                case 'ArrowUp':
+                    clearTimeout(this.moveUpTimeout);
+                    this.moveUpTimeout = 0;
+                    break;
+                case 'ArrowDown':
+                    clearTimeout(this.moveDownTimeout);
+                    this.moveDownTimeout = 0;
+                    break;
+            }
+        });
+
+        /**
+         * Register key events
+         */
+        // window.addEventListener('keydown', (e) => {
+        //     if (!this.keyPressed[e.key]) {
+        //         switch (e.key) {
+        //             case 'ArrowUp':
+        //                 this.moveUp(500)();
+        //                 break;
+        //             case 'ArrowDown':
+        //                 this.moveDown(500)();
+        //                 break;
+        //             case 'Enter':
+        //                 this.startGame();
+        //                 break;
+        //
+        //         }
+        //         this.keyPressed[e.key] = true;
+        //     }
+        // });
+        //
+        // window.addEventListener('keyup', (e) => {
+        //     switch (e.key) {
+        //         case 'ArrowUp':
+        //             clearTimeout(this.moveUpTimeout);
+        //             this.moveUpTimeout = 0;
+        //             break;
+        //         case 'ArrowDown':
+        //             clearTimeout(this.moveDownTimeout);
+        //             this.moveDownTimeout = 0;
+        //             break;
+        //     }
+        //     this.keyPressed[e.key] = false;
+        // });
+        //
+        // window.addEventListener('gamepadKeydown', (e: CustomEvent) => {
+        //     if (!this.gamepadKeyPressed[e.detail.key]) {
+        //         switch (e.detail.key) {
+        //             case 'Up':
+        //                 this.moveUp(400)();
+        //                 break;
+        //             case 'Down':
+        //                 this.moveDown(400)();
+        //                 break;
+        //             case 'StartGame':
+        //                 this.startGame();
+        //                 break;
+        //         }
+        //         this.gamepadKeyPressed[e.detail.key] = true;
+        //     }
+        // });
+        //
+        // window.addEventListener('gamepadKeyup', (e: CustomEvent) => {
+        //     if (this.gamepadKeyPressed[e.detail.key]) {
+        //         switch (e.detail.key) {
+        //             case 'Up':
+        //                 clearTimeout(this.moveUpTimeout);
+        //                 this.moveUpTimeout = 0;
+        //                 break;
+        //             case 'Down':
+        //                 clearTimeout(this.moveDownTimeout);
+        //                 this.moveDownTimeout = 0;
+        //                 break;
+        //         }
+        //         this.gamepadKeyPressed[e.detail.key] = false;
+        //     }
+        // });
     }
 
     /**
      * Called on move up
      */
-    protected moveUp() {
-        this.selectedGameId = this.selectedGameId <= 0 ?
-            this.selectedCategory.getGames().length - 1 : this.selectedGameId - 1;
-        this.updateGamesPosition();
-        this.emitGameChange();
+    protected moveUp(speed: number, incrementer = 1) {
+        let newSpeed = speed;
+        newSpeed = speed - Math.pow(1.5, incrementer);
+        incrementer += 1;
+        if (newSpeed < 200) {
+            newSpeed = 200;
+        }
+        return () => {
+            this.selectedGameId = this.selectedGameId <= 0 ?
+                this.selectedCategory.getGames().length - 1 : this.selectedGameId - 1;
+            this.updateGamesPosition();
+            this.emitGameChange();
+            this.moveUpTimeout = setTimeout(this.moveUp(newSpeed, incrementer), speed);
+            return;
+        };
     }
+
 
     /**
      * Called on move down
      */
-    protected moveDown() {
-        this.selectedGameId = this.selectedGameId >= this.selectedCategory.getGames().length - 1 ?
-            0 : this.selectedGameId + 1;
-        this.updateGamesPosition();
-        this.emitGameChange();
+    protected moveDown(speed: number, incrementer = 1) {
+        let newSpeed = speed;
+        newSpeed = speed - Math.pow(1.5, incrementer);
+        incrementer += 1;
+        if (newSpeed < 200) {
+            newSpeed = 200;
+        }
+        return () => {
+            this.selectedGameId = this.selectedGameId >= this.selectedCategory.getGames().length - 1 ?
+                0 : this.selectedGameId + 1;
+            this.updateGamesPosition();
+            this.emitGameChange();
+            this.moveDownTimeout = setTimeout(this.moveDown(newSpeed, incrementer), speed);
+        };
     }
 
     /**
