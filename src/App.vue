@@ -11,11 +11,12 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view v-if="!loading && !error"></router-view>
+        <router-view v-if="!loading && !error && gamePadCount"></router-view>
 
         <div class="info-messages">
             <p v-if="loading" class="loading">Chargement</p>
             <p v-if="error" class="error">{{error}}</p>
+            <p v-if="!gamePadCount">Waiting for a controller</p>
         </div>
     </div>
 </template>
@@ -29,6 +30,22 @@ import GameService from '@/class/GameService.class';
 export default class App extends Vue {
     protected loading = true;
     protected error: string|null = null;
+
+    protected gamePadCount: number = 0;
+
+    protected animtationFrameRequest: number|null = null;
+
+    protected xboxOneMapping: any = {
+        buttons: {
+            0: 'Enter',
+            12: 'ArrowUp',
+            13: 'ArrowDown',
+            14: 'ArrowLeft',
+            15: 'ArrowRight'
+        },
+    };
+
+    protected gamepadKeyPressed: boolean[] = [];
 
     public created() {
 
@@ -46,12 +63,69 @@ export default class App extends Vue {
             gameList.init(config.gamesJsonPath);
             gameService.loadGamesMarquee();
             this.loading = false;
+
+            this.initGamepads();
         } catch (e) {
             console.error(e);
             this.loading = false;
             this.error = e.toString();
             return false;
         }
+    }
+
+    public initGamepads() {
+        window.addEventListener('gamepadconnected', (e) => {
+            this.gamePadCount++;
+            if (this.gamePadCount === 1) {
+                this.gamepadsButtons();
+            }
+        });
+
+        window.addEventListener('gamepaddisconnected', (e) => {
+            this.gamePadCount--;
+            if (!this.gamePadCount) {
+                if (this.animtationFrameRequest) {
+                    cancelAnimationFrame(this.animtationFrameRequest);
+                }
+            }
+        });
+    }
+
+    public gamepadsButtons() {
+        for (const gamepadsKey in navigator.getGamepads()) {
+            if (!gamepadsKey) {
+                continue;
+            }
+            const gamepad: Gamepad|null = navigator.getGamepads()[gamepadsKey];
+            if (!gamepad || !gamepad.connected || !gamepad.buttons) {
+                continue;
+            }
+
+            gamepad.buttons.forEach((button: GamepadButton, index) => {
+                let eventName: string|null = null;
+                if (this.xboxOneMapping.buttons[index]) {
+                    if (button.pressed) {
+                        eventName = 'gamepadKeydown';
+                        this.gamepadKeyPressed[index] = true;
+                    } else if (this.gamepadKeyPressed[index]) {
+                        eventName = 'gamepadKeyup';
+                        this.gamepadKeyPressed[index] = false;
+                    }
+
+                    if (eventName) {
+                        const event = new CustomEvent(eventName, {
+                            detail: {
+                                key: this.xboxOneMapping.buttons[index],
+                                value: button.value,
+                            },
+                        });
+                        window.dispatchEvent(event);
+                    }
+                }
+            });
+        }
+
+        this.animtationFrameRequest = requestAnimationFrame(this.gamepadsButtons.bind(this));
     }
 }
 </script>
@@ -164,17 +238,17 @@ export default class App extends Vue {
         .info-messages > * {
             display: table-cell;
             vertical-align: middle;
+            text-align: center;
+            color: white;
         }
 
     .loading {
         font-size: 5vw;
         color: blue;
-        text-align: center;
     }
 
     .error {
         font-size: 3vw;
         color: red;
-        text-align: center;
     }
 </style>
