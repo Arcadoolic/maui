@@ -37,8 +37,6 @@ export default class Games extends ControllableVue {
 
     @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
 
-
-
     public created() {
         /** Init vars */
         this.gameList = this.$store.getters.gameList;
@@ -73,74 +71,6 @@ export default class Games extends ControllableVue {
                     break;
             }
         });
-
-        /**
-         * Register key events
-         */
-        // window.addEventListener('keydown', (e) => {
-        //     if (!this.keyPressed[e.key]) {
-        //         switch (e.key) {
-        //             case 'ArrowUp':
-        //                 this.moveUp(500)();
-        //                 break;
-        //             case 'ArrowDown':
-        //                 this.moveDown(500)();
-        //                 break;
-        //             case 'Enter':
-        //                 this.startGame();
-        //                 break;
-        //
-        //         }
-        //         this.keyPressed[e.key] = true;
-        //     }
-        // });
-        //
-        // window.addEventListener('keyup', (e) => {
-        //     switch (e.key) {
-        //         case 'ArrowUp':
-        //             clearTimeout(this.moveUpTimeout);
-        //             this.moveUpTimeout = 0;
-        //             break;
-        //         case 'ArrowDown':
-        //             clearTimeout(this.moveDownTimeout);
-        //             this.moveDownTimeout = 0;
-        //             break;
-        //     }
-        //     this.keyPressed[e.key] = false;
-        // });
-        //
-        // window.addEventListener('gamepadKeydown', (e: CustomEvent) => {
-        //     if (!this.gamepadKeyPressed[e.detail.key]) {
-        //         switch (e.detail.key) {
-        //             case 'Up':
-        //                 this.moveUp(400)();
-        //                 break;
-        //             case 'Down':
-        //                 this.moveDown(400)();
-        //                 break;
-        //             case 'StartGame':
-        //                 this.startGame();
-        //                 break;
-        //         }
-        //         this.gamepadKeyPressed[e.detail.key] = true;
-        //     }
-        // });
-        //
-        // window.addEventListener('gamepadKeyup', (e: CustomEvent) => {
-        //     if (this.gamepadKeyPressed[e.detail.key]) {
-        //         switch (e.detail.key) {
-        //             case 'Up':
-        //                 clearTimeout(this.moveUpTimeout);
-        //                 this.moveUpTimeout = 0;
-        //                 break;
-        //             case 'Down':
-        //                 clearTimeout(this.moveDownTimeout);
-        //                 this.moveDownTimeout = 0;
-        //                 break;
-        //         }
-        //         this.gamepadKeyPressed[e.detail.key] = false;
-        //     }
-        // });
     }
 
     /**
@@ -158,7 +88,7 @@ export default class Games extends ControllableVue {
                 this.selectedCategory.getGames().length - 1 : this.selectedGameId - 1;
             this.updateGamesPosition();
             this.emitGameChange();
-            this.moveUpTimeout = setTimeout(this.moveUp(newSpeed, incrementer), speed);
+            this.moveUpTimeout = setTimeout(this.moveUp(newSpeed, incrementer), newSpeed);
             return;
         };
     }
