@@ -2,10 +2,11 @@
     <div class="gamesContainer">
         <div class="selectedGameBackground"></div>
         <div class="games">
-            <ul ref="gameList">
+            <ul ref="gameList" :style="{transition: 'top ' + transitionTime + 's ease'}">
                 <li v-for="(game, index) in selectedCategory.getGames()" :class="{selected: selectedGameId === index}">
                     <div class="marquee"
                          :style="{
+                            transition: marqueeTransition,
                             marginLeft: Math.max(9 - Math.abs(selectedGameId - index), 0) + '%',
                             backgroundImage: game.marquee ? 'url('+game.marquee+')' : false
                         }"
@@ -35,6 +36,8 @@ export default class Games extends ControllableVue {
     protected moveUpTimeout: any = 0;
     protected moveDownTimeout: any = 0;
 
+    protected transitionTime = 0.3;
+
     @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
 
     public created() {
@@ -46,9 +49,11 @@ export default class Games extends ControllableVue {
             const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
             switch (key) {
                 case 'ArrowUp':
+                    this.transitionTime = 0.5;
                     this.moveUp(500)();
                     break;
                 case 'ArrowDown':
+                    this.transitionTime = 0.5;
                     this.moveDown(500)();
                     break;
                 case 'Enter':
@@ -83,6 +88,7 @@ export default class Games extends ControllableVue {
         if (newSpeed < 200) {
             newSpeed = 200;
         }
+        this.transitionTime = speed / 1000;
         return () => {
             this.selectedGameId = this.selectedGameId <= 0 ?
                 this.selectedCategory.getGames().length - 1 : this.selectedGameId - 1;
@@ -104,6 +110,7 @@ export default class Games extends ControllableVue {
         if (newSpeed < 200) {
             newSpeed = 200;
         }
+        this.transitionTime = speed / 1000;
         return () => {
             this.selectedGameId = this.selectedGameId >= this.selectedCategory.getGames().length - 1 ?
                 0 : this.selectedGameId + 1;
@@ -161,6 +168,11 @@ export default class Games extends ControllableVue {
     protected emitGameChange() {
         this.$emit('gameChange', this.selectedGameId);
     }
+
+    protected get marqueeTransition() {
+        return 'height ' + this.transitionTime + 's ease, width ' + this.transitionTime + 's ease, margin-left '
+            + this.transitionTime + 's ease'
+    }
 }
 </script>
 
@@ -200,7 +212,7 @@ export default class Games extends ControllableVue {
         height: 100%;
         /*border: 1px solid yellow;*/
         overflow: visible;
-        transition: top 0.3s ease;
+        /*transition: top 0.3s ease;*/
     }
 
     .games ul li {
@@ -228,7 +240,7 @@ export default class Games extends ControllableVue {
         background-position: center;
         border-radius: 5px;
         box-shadow: 0 0 30px #000000;
-        transition: height 0.3s ease, width 0.3s ease, margin-left 0.3s ease;
+        /*transition: height 0.3s ease, width 0.3s ease, margin-left 0.3s ease;*/
     }
 
     .games ul li.selected .marquee {
