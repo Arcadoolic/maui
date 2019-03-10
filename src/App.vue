@@ -11,12 +11,21 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view v-if="!loading && !error && gamePadCount"></router-view>
+        <router-view v-if="!loading && !error"></router-view>
+
+        <div v-if="!loading && !error" class="controllers">
+            <template v-if="!gamepadCount">
+                No controller
+                <small>Press a button on your controller</small>
+            </template>
+            <template v-else>
+                {{gamepadCount}} controller<template v-if="gamepadCount > 1">s</template>
+            </template>
+        </div>
 
         <div class="info-messages">
             <p v-if="loading" class="loading">Chargement</p>
             <p v-if="error" class="error">{{error}}</p>
-            <p v-if="!gamePadCount">Waiting for a controller</p>
         </div>
     </div>
 </template>
@@ -31,7 +40,7 @@ export default class App extends Vue {
     protected loading = true;
     protected error: string|null = null;
 
-    protected gamePadCount: number = 0;
+    protected gamepadCount: number = 0;
 
     protected animtationFrameRequest: number|null = null;
 
@@ -48,7 +57,6 @@ export default class App extends Vue {
     protected gamepadKeyPressed: boolean[][] = [];
 
     public created() {
-
         const config: Config = this.$store.getters.config;
         const mame = this.$store.getters.mame;
         const gameList = this.$store.getters.gameList;
@@ -75,15 +83,15 @@ export default class App extends Vue {
 
     public initGamepads() {
         window.addEventListener('gamepadconnected', (e) => {
-            this.gamePadCount++;
-            if (this.gamePadCount === 1) {
+            this.gamepadCount++;
+            if (this.gamepadCount === 1) {
                 this.gamepadsButtons();
             }
         });
 
         window.addEventListener('gamepaddisconnected', (e) => {
-            this.gamePadCount--;
-            if (!this.gamePadCount) {
+            this.gamepadCount--;
+            if (!this.gamepadCount) {
                 if (this.animtationFrameRequest) {
                     cancelAnimationFrame(this.animtationFrameRequest);
                 }
@@ -254,4 +262,33 @@ export default class App extends Vue {
         font-size: 3vw;
         color: red;
     }
+
+    .controllers {
+        display: block;
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        color: #fff513;
+        font-size: 0.6vw;
+        text-align: center;
+        padding: 1% 2%;
+        background: linear-gradient(to top, rgba(0, 30, 255, 0.25) 50%, transparent);
+        width: 15%;
+        perspective: 460px; /** TODO : Perspective not workinmg */
+        perspective-origin: 50% 50%;
+        text-shadow:
+                0 0 30px rgba(237, 106, 10, 0.8),
+                0 3px 0 rgb(255, 81, 0),
+                0 5px 20px rgba(255, 81, 0, 0.5),
+                0 6px 5px rgba(242, 0, 10, 0.7),
+                0 12px 16px rgba(0, 0, 0, 1),
+                6px 12px 9px rgba(0, 0, 0, 1);
+        transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
+        filter: saturate(1.3);
+    }
+        .controllers small {
+            display: block;
+            padding: 10%;
+            line-height: 150%;
+        }
 </style>
