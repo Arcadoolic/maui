@@ -34,6 +34,7 @@
 import {Component, Vue} from 'vue-property-decorator';
 import Config from '@/class/Config.class';
 import GameService from '@/class/GameService.class';
+import ControllerMappingJson from './assets/controllers.json';
 
 @Component
 export default class App extends Vue {
@@ -44,25 +45,7 @@ export default class App extends Vue {
 
     protected animtationFrameRequest: number|null = null;
 
-    protected xboxOneMapping: any = {
-        buttons: {
-            0: 'Enter',
-            12: 'ArrowUp',
-            13: 'ArrowDown',
-            14: 'ArrowLeft',
-            15: 'ArrowRight',
-        },
-        axes: {
-            0: {
-                0: 'ArrowLeft',
-                1: 'ArrowRight',
-            },
-            1: {
-                0: 'ArrowUp',
-                1: 'ArrowDown',
-            },
-        },
-    };
+    protected controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
 
     protected gamepadKeyPressed:
         Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
@@ -124,10 +107,15 @@ export default class App extends Vue {
                 this.gamepadKeyPressed[gamepadsKey] = {axes: [], buttons: []};
             }
 
+            const mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
+            if (!mapping) {
+                continue;
+            }
+
             // Joysticks
             gamepad.axes.forEach((value: number, index: number) => {
                 let eventName: string|null = null;
-                if (this.xboxOneMapping.axes[index]) {
+                if (mapping.axes[index]) {
                     if (!this.gamepadKeyPressed[gamepadsKey].axes[index]) {
                         this.gamepadKeyPressed[gamepadsKey].axes[index] = {
                             wasPressed: false as boolean,
@@ -139,7 +127,7 @@ export default class App extends Vue {
                         eventName = 'gamepadKeydown';
                         axe.wasPressed = true;
                         axe.lastPressedKey = value > 0 ?
-                            this.xboxOneMapping.axes[index][1] : this.xboxOneMapping.axes[index][0];
+                            mapping.axes[index][1] : mapping.axes[index][0];
                     } else if (value === 0 && axe.wasPressed) {
                         eventName = 'gamepadKeyup';
                         axe.wasPressed = false;
@@ -159,7 +147,7 @@ export default class App extends Vue {
 
             gamepad.buttons.forEach((button: GamepadButton, index: number) => {
                 let eventName: string|null = null;
-                if (this.xboxOneMapping.buttons[index]) {
+                if (mapping.buttons[index]) {
                     if (button.pressed) {
                         eventName = 'gamepadKeydown';
                         this.gamepadKeyPressed[gamepadsKey].buttons[index] = true;
@@ -171,7 +159,7 @@ export default class App extends Vue {
                     if (eventName) {
                         const event = new CustomEvent(eventName, {
                             detail: {
-                                key: this.xboxOneMapping.buttons[index],
+                                key: mapping.buttons[index],
                                 value: button.value,
                             },
                         });
