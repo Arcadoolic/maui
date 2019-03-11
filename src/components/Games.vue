@@ -116,7 +116,8 @@ export default class Games extends ControllableVue {
                 0 : this.selectedGameId + 1;
             this.updateGamesPosition();
             this.emitGameChange();
-            this.moveDownTimeout = setTimeout(this.moveDown(newSpeed, incrementer), speed);
+            this.moveDownTimeout = setTimeout(this.moveDown(newSpeed, incrementer), newSpeed);
+            return;
         };
     }
 
@@ -171,7 +172,7 @@ export default class Games extends ControllableVue {
 
     protected get marqueeTransition() {
         return 'height ' + this.transitionTime + 's ease, width ' + this.transitionTime + 's ease, margin-left '
-            + this.transitionTime + 's ease'
+            + this.transitionTime + 's ease';
     }
 }
 </script>
