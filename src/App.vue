@@ -50,11 +50,22 @@ export default class App extends Vue {
             12: 'ArrowUp',
             13: 'ArrowDown',
             14: 'ArrowLeft',
-            15: 'ArrowRight'
+            15: 'ArrowRight',
+        },
+        axes: {
+            0: {
+                0: 'ArrowLeft',
+                1: 'ArrowRight',
+            },
+            1: {
+                0: 'ArrowUp',
+                1: 'ArrowDown',
+            },
         },
     };
 
-    protected gamepadKeyPressed: boolean[][] = [];
+    protected gamepadKeyPressed:
+        Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
 
     public created() {
         const config: Config = this.$store.getters.config;
@@ -109,18 +120,52 @@ export default class App extends Vue {
                 continue;
             }
 
-            gamepad.buttons.forEach((button: GamepadButton, index) => {
+            if (!this.gamepadKeyPressed[gamepadsKey]) {
+                this.gamepadKeyPressed[gamepadsKey] = {axes: [], buttons: []};
+            }
+
+            // Joysticks
+            gamepad.axes.forEach((value: number, index: number) => {
+                let eventName: string|null = null;
+                if (this.xboxOneMapping.axes[index]) {
+                    if (!this.gamepadKeyPressed[gamepadsKey].axes[index]) {
+                        this.gamepadKeyPressed[gamepadsKey].axes[index] = {
+                            wasPressed: false as boolean,
+                            lastPressedKey: null as string|null,
+                        };
+                    }
+                    const axe = this.gamepadKeyPressed[gamepadsKey].axes[index];
+                    if (value !== 0 && !axe.wasPressed) {
+                        eventName = 'gamepadKeydown';
+                        axe.wasPressed = true;
+                        axe.lastPressedKey = value > 0 ?
+                            this.xboxOneMapping.axes[index][1] : this.xboxOneMapping.axes[index][0];
+                    } else if (value === 0 && axe.wasPressed) {
+                        eventName = 'gamepadKeyup';
+                        axe.wasPressed = false;
+                    }
+
+                    if (eventName) {
+                        const event = new CustomEvent(eventName, {
+                            detail: {
+                                key: axe.lastPressedKey,
+                                value,
+                            },
+                        });
+                        window.dispatchEvent(event);
+                    }
+                }
+            });
+
+            gamepad.buttons.forEach((button: GamepadButton, index: number) => {
                 let eventName: string|null = null;
                 if (this.xboxOneMapping.buttons[index]) {
-                    if (!this.gamepadKeyPressed[gamepadsKey]) {
-                        this.gamepadKeyPressed[gamepadsKey] = [];
-                    }
                     if (button.pressed) {
                         eventName = 'gamepadKeydown';
-                        this.gamepadKeyPressed[gamepadsKey][index] = true;
-                    } else if (this.gamepadKeyPressed[gamepadsKey][index]) {
+                        this.gamepadKeyPressed[gamepadsKey].buttons[index] = true;
+                    } else if (this.gamepadKeyPressed[gamepadsKey].buttons[index]) {
                         eventName = 'gamepadKeyup';
-                        this.gamepadKeyPressed[gamepadsKey][index] = false;
+                        this.gamepadKeyPressed[gamepadsKey].buttons[index] = false;
                     }
 
                     if (eventName) {
