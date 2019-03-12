@@ -11,166 +11,16 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view v-if="!loading && !error"></router-view>
-
-        <div v-if="!loading && !error" class="controllers">
-            <template v-if="!gamepadCount">
-                No controller
-                <small>Press a button on your controller</small>
-            </template>
-            <template v-else>
-                {{gamepadCount}} controller<template v-if="gamepadCount > 1">s</template>
-            </template>
-        </div>
-
-        <div class="info-messages">
-            <p v-if="loading" class="loading">Chargement</p>
-            <p v-if="error" class="error">{{error}}</p>
-        </div>
+        <router-view></router-view>
     </div>
 </template>
 
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
-import Config from '@/class/Config.class';
-import GameService from '@/class/GameService.class';
-import ControllerMappingJson from './assets/controllers.json';
 
 @Component
 export default class App extends Vue {
-    protected loading = true;
-    protected error: string|null = null;
 
-    protected gamepadCount: number = 0;
-
-    protected animtationFrameRequest: number|null = null;
-
-    protected controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
-
-    protected gamepadKeyPressed:
-        Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
-
-    public created() {
-        const config: Config = this.$store.getters.config;
-        const mame = this.$store.getters.mame;
-        const gameList = this.$store.getters.gameList;
-        try {
-            config.load();
-            mame.init(config.mameIniPath);
-
-            gameList.init(config.gamesJsonPath);
-
-            const gameService = new GameService(config, mame, gameList);
-            gameService.refreshGameDir();
-            gameList.init(config.gamesJsonPath);
-            gameService.loadGamesMarquee();
-            this.loading = false;
-
-            this.initGamepads();
-        } catch (e) {
-            console.error(e);
-            this.loading = false;
-            this.error = e.toString();
-            return false;
-        }
-    }
-
-    public initGamepads() {
-        window.addEventListener('gamepadconnected', (e) => {
-            this.gamepadCount++;
-            if (this.gamepadCount === 1) {
-                this.gamepadsButtons();
-            }
-        });
-
-        window.addEventListener('gamepaddisconnected', (e) => {
-            this.gamepadCount--;
-            if (!this.gamepadCount) {
-                if (this.animtationFrameRequest) {
-                    cancelAnimationFrame(this.animtationFrameRequest);
-                }
-            }
-        });
-    }
-
-    public gamepadsButtons() {
-        for (const gamepadsKey in navigator.getGamepads()) {
-            if (!gamepadsKey) {
-                continue;
-            }
-            const gamepad: Gamepad|null = navigator.getGamepads()[gamepadsKey];
-            if (!gamepad || !gamepad.connected || !gamepad.buttons) {
-                continue;
-            }
-
-            if (!this.gamepadKeyPressed[gamepadsKey]) {
-                this.gamepadKeyPressed[gamepadsKey] = {axes: [], buttons: []};
-            }
-
-            const mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
-            if (!mapping) {
-                continue;
-            }
-
-            // Joysticks
-            gamepad.axes.forEach((value: number, index: number) => {
-                let eventName: string|null = null;
-                if (mapping.axes[index]) {
-                    if (!this.gamepadKeyPressed[gamepadsKey].axes[index]) {
-                        this.gamepadKeyPressed[gamepadsKey].axes[index] = {
-                            wasPressed: false as boolean,
-                            lastPressedKey: null as string|null,
-                        };
-                    }
-                    const axe = this.gamepadKeyPressed[gamepadsKey].axes[index];
-                    if (value !== 0 && !axe.wasPressed) {
-                        eventName = 'gamepadKeydown';
-                        axe.wasPressed = true;
-                        axe.lastPressedKey = value > 0 ?
-                            mapping.axes[index][1] : mapping.axes[index][0];
-                    } else if (value === 0 && axe.wasPressed) {
-                        eventName = 'gamepadKeyup';
-                        axe.wasPressed = false;
-                    }
-
-                    if (eventName) {
-                        const event = new CustomEvent(eventName, {
-                            detail: {
-                                key: axe.lastPressedKey,
-                                value,
-                            },
-                        });
-                        window.dispatchEvent(event);
-                    }
-                }
-            });
-
-            gamepad.buttons.forEach((button: GamepadButton, index: number) => {
-                let eventName: string|null = null;
-                if (mapping.buttons[index]) {
-                    if (button.pressed) {
-                        eventName = 'gamepadKeydown';
-                        this.gamepadKeyPressed[gamepadsKey].buttons[index] = true;
-                    } else if (this.gamepadKeyPressed[gamepadsKey].buttons[index]) {
-                        eventName = 'gamepadKeyup';
-                        this.gamepadKeyPressed[gamepadsKey].buttons[index] = false;
-                    }
-
-                    if (eventName) {
-                        const event = new CustomEvent(eventName, {
-                            detail: {
-                                key: mapping.buttons[index],
-                                value: button.value,
-                            },
-                        });
-                        window.dispatchEvent(event);
-                    }
-                }
-            });
-        }
-
-        this.animtationFrameRequest = requestAnimationFrame(this.gamepadsButtons.bind(this));
-    }
 }
 </script>
 
