@@ -27,6 +27,7 @@
         "no-console": false,
         "variable-name": [
             "allow-leading-underscore"
-        ]
+        ],
+        "prefer-for-of": false
     }
 }
