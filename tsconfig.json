@@ -1,5 +1,7 @@
 {
     "compilerOptions": {
+        "noEmitOnError": false,
+        "noImplicitAny": false,
         "target": "es5",
         "module": "esnext",
         "strict": true,
@@ -32,9 +34,9 @@
         "src/**/*.tsx",
         "src/**/*.vue",
         "tests/**/*.ts",
-        "tests/**/*.tsx"
+        "tests/**/*.tsx",
     ],
     "exclude": [
         "node_modules"
-    ]
+    ],
 }
