@@ -31,6 +31,8 @@ export default class Init extends Vue {
                 gameList.init(config.gamesJsonPath);
                 this.msg = 'Loading marquees';
                 gameService.loadGamesMarquee();
+                this.msg = 'Loading flyers';
+                gameService.loadGamesFlyers();
                 resolve();
             } catch (e) {
                 reject(e.toString());
