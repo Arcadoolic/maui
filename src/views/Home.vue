@@ -29,7 +29,7 @@ import GamepadsComponent from '@/components/Gamepads.vue';
     components: {
         Categories,
         Games,
-        GamepadsComponent
+        GamepadsComponent,
     },
 })
 export default class Home extends Vue {
@@ -38,9 +38,6 @@ export default class Home extends Vue {
     protected selectedCategory: GameCategory|null = null;
     protected selectedGameId: number = 0;
     protected selectedGame: Game|null = null;
-
-    /** Gamepads **/
-    protected gamepadCount: number = Gamepads.gamepadCount;
 
     public created() {
         this.gameList = this.$store.getters.gameList;
