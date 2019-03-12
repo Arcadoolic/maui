@@ -12,7 +12,7 @@ export default new Router({
             path: '/',
             name: 'init',
             component: Init,
-            beforeEnter(to: Route, from: Route, next: Function) {
+            beforeEnter(to: Route, from: Route, next) {
                 if (!store.getters.isInit) {
                     return next();
                 }
@@ -23,7 +23,7 @@ export default new Router({
             path: '/home',
             name: 'home',
             component: Home,
-            beforeEnter(to: Route, from: Route, next: Function) {
+            beforeEnter(to: Route, from: Route, next) {
                 if (store.getters.isInit) {
                     return next();
                 }
