@@ -3,7 +3,7 @@
 </template>
 
 <script lang="ts">
-import {Component, Vue} from "vue-property-decorator";
+import {Component, Vue} from 'vue-property-decorator';
 import {remote} from 'electron';
 import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
@@ -44,9 +44,9 @@ export default class Init extends Vue {
                     remote.getCurrentWindow().setFullScreen(true);
                 }
                 this.$store.commit('isInit');
-                this.$router.push({name: 'home'})
+                this.$router.push({name: 'home'});
             },
-            error => {
+            (error) => {
                 this.msg = error;
             },
         );
