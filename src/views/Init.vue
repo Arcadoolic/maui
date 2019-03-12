@@ -37,8 +37,13 @@ export default class Init extends Vue {
             }
         }).then(
             () => {
-                remote.getCurrentWindow().setSize(screen.width, screen.height);
-                remote.getCurrentWindow().setFullScreen(true);
+                if (process.env.NODE_ENV !== 'production' && !process.env.IS_TEST) {
+                    remote.getCurrentWindow().setSize(800, 600);
+                } else {
+                    remote.getCurrentWindow().setSize(screen.width, screen.height);
+                    remote.getCurrentWindow().setFullScreen(true);
+                }
+                this.$store.commit('isInit');
                 this.$router.push({name: 'home'})
             },
             error => {
