@@ -11,6 +11,7 @@ export default new Vuex.Store({
         config: new Config(),
         gameList: new GameList(),
         mame: new Mame(),
+        isInit: false,
     },
     getters: {
         gameList: (state) => {
@@ -21,6 +22,14 @@ export default new Vuex.Store({
         },
         mame: (state): Mame => {
             return state.mame;
+        },
+        isInit: (state): boolean => {
+            return state.isInit;
+        },
+    },
+    mutations: {
+        isInit: (state) => {
+            state.isInit = true;
         },
     },
 });
