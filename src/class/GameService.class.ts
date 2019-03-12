@@ -178,4 +178,24 @@ export default class GameService {
         }
     }
 
+    public loadGamesFlyers() {
+        const flyersPath = Helpers.getFirstExistingDirectory(
+            this.mame.mameUiConfig.flyers_directory,
+            this.mame.mameUiPath);
+        if (!flyersPath) {
+            throw new Error('Cannot find flyers directory ' + this.mame.mameUiConfig.flyers_directory.join('|'));
+        }
+
+        for (const game of this.gameList.getGames()) {
+            const flyerPath = join(flyersPath, game.romName + '.png');
+            if (existsSync(flyersPath)) {
+                game.flyer = format({
+                    pathname: flyerPath,
+                    protocol: 'file',
+                    slashes: true,
+                });
+            }
+        }
+    }
+
 }
