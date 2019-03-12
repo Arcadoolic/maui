@@ -14,6 +14,10 @@
                 </li>
             </ul>
         </div>
+
+        <div class="flyer"
+             v-if="selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer"
+             :style="{backgroundImage: 'url(' + selectedCategory.getGames()[selectedGameId].flyer + ')'}"></div>
     </div>
 </template>
 
@@ -241,5 +245,14 @@ export default class Games extends ControllableVue {
     .games ul li.selected .marquee {
         width: 100%;
         height: 80%;
+    }
+
+    .flyer {
+        position: absolute;
+        right: -3%;
+        top: -5%;
+        bottom: -5%;
+        width: 40%;
+        transform: rotateZ(-4deg);
     }
 </style>
