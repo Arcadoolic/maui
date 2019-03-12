@@ -14,6 +14,7 @@ export default class Game {
     protected _romName: string;
 
     protected _marquee: string = '';
+    protected _flyer: string = '';
 
     /**
      * Init Game object from GameJSON data type
@@ -77,6 +78,14 @@ export default class Game {
 
     public get marquee(): string {
         return this._marquee;
+    }
+
+    public set flyer(flyer: string) {
+        this._flyer = flyer;
+    }
+
+    public get flyer(): string {
+        return this._flyer;
     }
 
     public get hasHiscore(): boolean {
