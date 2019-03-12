@@ -3,15 +3,16 @@
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList" :style="{transition: 'top ' + transitionTime + 's ease'}">
-                <li v-for="(game, index) in selectedCategory.getGames()" :class="{selected: selectedGameId === index}">
-                    <div class="marquee"
-                         :style="{
-                            transition: marqueeTransition,
-                            marginLeft: Math.max(9 - Math.abs(selectedGameId - index), 0) + '%',
-                            backgroundImage: game.marquee ? 'url('+game.marquee+')' : false
-                        }"
-                    ></div>
-                </li>
+                <transition v-for="(game, index) in selectedCategory.getGames()"
+                            @before-enter="animationBeforeEnter"
+                            @enter="animationEnter"
+                >
+                    <li  :class="{selected: selectedGameId === index}" v-if="displayGame">
+                        <div class="marquee"
+                             :style="marqueeStyle(game, index)"
+                        ></div>
+                    </li>
+                </transition>
             </ul>
         </div>
 
@@ -29,9 +30,27 @@ import GameCategory from '@/class/GameCategory.class';
 import {ChildProcess} from 'child_process';
 import HiScore from '@/class/HiScore.class';
 import ControllableVue from '@/ControllableVue.vue';
+import Game from '@/class/Game.class';
+import Velocity from 'velocity-animate';
+import {remote} from 'electron'
 
 @Component
 export default class Games extends ControllableVue {
+
+    protected get marqueeTransition() {
+        return 'height ' + this.transitionTime + 's ease, width ' + this.transitionTime + 's ease, margin-left '
+            + this.transitionTime + 's ease, margin-left 0.3s ease';
+    }
+
+    protected get marqueeStyle() {
+        return (game: Game, index: number) => {
+            return {
+                transition: this.marqueeTransition,
+                marginLeft: Math.max(9 - Math.abs(this.selectedGameId - index), 0) + '%',
+                backgroundImage: game.marquee ? 'url( ' +game.marquee +')' : false,
+            };
+        };
+    }
     protected gameList = new GameList();
     protected mame = new Mame();
 
@@ -41,6 +60,8 @@ export default class Games extends ControllableVue {
     protected moveDownTimeout: any = 0;
 
     protected transitionTime = 0.3;
+
+    protected displayGame = false;
 
     @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
 
@@ -79,6 +100,22 @@ export default class Games extends ControllableVue {
                     this.moveDownTimeout = 0;
                     break;
             }
+        });
+    }
+
+    public mounted() {
+        this.displayGame = true;
+    }
+
+    public animationBeforeEnter(el: HTMLElement) {
+        el.style.marginLeft = '-100%';
+    }
+
+    public animationEnter(el: HTMLElement, done: () => void) {
+        Velocity(el, {marginLeft: 0}, {
+            duration: Math.random() * (400 - 600) + 400,
+            complete: done,
+            easing: 'ease-in'
         });
     }
 
@@ -173,11 +210,6 @@ export default class Games extends ControllableVue {
     protected emitGameChange() {
         this.$emit('gameChange', this.selectedGameId);
     }
-
-    protected get marqueeTransition() {
-        return 'height ' + this.transitionTime + 's ease, width ' + this.transitionTime + 's ease, margin-left '
-            + this.transitionTime + 's ease';
-    }
 }
 </script>
 
@@ -230,7 +262,7 @@ export default class Games extends ControllableVue {
     }
 
     .games .marquee {
-        margin-left: 10%;
+        /*margin-left: 10%;*/
         display: inline-block;
         width: 35%;
         height: 90%;
@@ -240,6 +272,7 @@ export default class Games extends ControllableVue {
         background-position: center;
         border-radius: 5px;
         box-shadow: 0 0 30px #000000;
+        margin-left: -100%;
     }
 
     .games ul li.selected .marquee {
