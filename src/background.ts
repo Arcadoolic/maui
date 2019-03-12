@@ -10,7 +10,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
-let win: any;
+let win: BrowserWindow|null;
 
 // Standard scheme must be registered before the app is ready
 protocol.registerStandardSchemes(['app'], {secure: true});
@@ -18,12 +18,13 @@ protocol.registerStandardSchemes(['app'], {secure: true});
 function createWindow() {
     // Create the browser window.
     win = new BrowserWindow({
-        width: 800,
-        height: 600,
-        webPreferences:
-            {
-                webSecurity: false
-            }
+        width: 300,
+        height: 400,
+        webPreferences: {
+            webSecurity: false
+        },
+        show: false,
+        backgroundColor: '#000000'
     });
 
     if (process.env.WEBPACK_DEV_SERVER_URL) {
@@ -37,6 +38,10 @@ function createWindow() {
         // Load the index.html when not in development
         win.loadURL('app://./index.html');
     }
+
+    win.once('ready-to-show', () =>{
+        win!.show();
+    });
 
     win.on('closed', () => {
         win = null;
