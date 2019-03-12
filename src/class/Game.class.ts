@@ -57,7 +57,7 @@ export default class Game {
     }
 
     public get nplayerString() {
-        let str = null;
+        let str: string|null = null;
         if (this._nplayers.alt) {
             str = this._nplayers.alt + ' player' + (this._nplayers.alt > 1 ? 's' : '') + ' alternate';
         }
