@@ -91,10 +91,12 @@ export default class Games extends ControllableVue {
                 case 'ArrowUp':
                     clearTimeout(this.timeouts.moveUp);
                     this.timeouts.moveUp = 0;
+                    this.animateFlyers();
                     break;
                 case 'ArrowDown':
                     clearTimeout(this.timeouts.moveDown);
                     this.timeouts.moveDown = 0;
+                    this.animateFlyers();
                     break;
             }
         });
@@ -151,7 +153,7 @@ export default class Games extends ControllableVue {
             return {
                 transition: this.marqueeTransition,
                 marginLeft: Math.max(9 - Math.abs(this.selectedGameId - index), 0) + '%',
-                backgroundImage: game.marquee ? 'url( ' + game.marquee + ')' : false,
+                backgroundImage: game.marquee ? 'url( ' + game.marquee + ')' : '',
             };
         };
     }
@@ -256,6 +258,7 @@ export default class Games extends ControllableVue {
         this.selectedGameId = 0;
         this.emitGameChange();
         this.updateGamesPosition();
+        this.animateFlyers();
     }
 
     /**
