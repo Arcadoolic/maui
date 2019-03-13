@@ -3,11 +3,11 @@
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList" :style="{transition: 'top ' + transitionTime + 's ease'}">
-                <transition v-for="(game, index) in selectedCategory.getGames()"
-                            @before-enter="animationBeforeEnter"
-                            @enter="animationEnter"
+                <transition v-for="(game, index) in selectedCategory.getGames()" :key="index"
+                            @before-enter="gamesAnimationBeforeEnter"
+                            @enter="gamesAnimationEnter"
                 >
-                    <li  :class="{selected: selectedGameId === index}" v-if="displayGame">
+                    <li  :class="{selected: selectedGameId === index}" v-if="showGames">
                         <div class="marquee"
                              :style="marqueeStyle(game, index)"
                         ></div>
@@ -16,9 +16,11 @@
             </ul>
         </div>
 
-        <div class="flyer"
-             v-if="selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer"
-             :style="{backgroundImage: 'url(' + selectedCategory.getGames()[selectedGameId].flyer + ')'}"></div>
+        <transition @before-enter="flyerAnimationBeforeEnter" @enter="flyerAnimationEnter" @leave="flyerAnimationLeave">
+            <div class="flyer" v-if="showFlyer
+                && selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer"
+                :style="{backgroundImage: 'url(' + selectedCategory.getGames()[selectedGameId].flyer + ')'}"></div>
+        </transition>
     </div>
 </template>
 
@@ -61,7 +63,8 @@ export default class Games extends ControllableVue {
 
     protected transitionTime = 0.3;
 
-    protected displayGame = false;
+    protected showGames = false;
+    protected showFlyer = true;
 
     @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
 
@@ -94,28 +97,50 @@ export default class Games extends ControllableVue {
                 case 'ArrowUp':
                     clearTimeout(this.moveUpTimeout);
                     this.moveUpTimeout = 0;
+                    this.showFlyer = true;
                     break;
                 case 'ArrowDown':
                     clearTimeout(this.moveDownTimeout);
                     this.moveDownTimeout = 0;
+                    this.showFlyer = true;
                     break;
             }
         });
     }
 
     public mounted() {
-        this.displayGame = true;
+        this.showGames = true;
     }
 
-    public animationBeforeEnter(el: HTMLElement) {
+    public gamesAnimationBeforeEnter(el: HTMLElement) {
         el.style.marginLeft = '-100%';
     }
 
-    public animationEnter(el: HTMLElement, done: () => void) {
+    public gamesAnimationEnter(el: HTMLElement, done: () => void) {
         Velocity(el, {marginLeft: 0}, {
             duration: Math.random() * (400 - 600) + 400,
             complete: done,
             easing: 'ease-in'
+        });
+    }
+
+    public flyerAnimationBeforeEnter(el: HTMLElement) {
+        el.style.right = '-100%';
+    }
+
+    public flyerAnimationEnter(el: HTMLElement, done: () => void) {
+        Velocity(el, {right: 0}, {
+            duration: 300,
+            complete: done,
+            easing: 'ease-out'
+        });
+    }
+
+    public flyerAnimationLeave(el: HTMLElement, done: () => void) {
+        Velocity(el, {right: '-100%'}, {
+            duration: 300,
+            complete: done,
+            easing: 'ease-out'
         });
     }
 
@@ -128,6 +153,9 @@ export default class Games extends ControllableVue {
         incrementer += 1;
         if (newSpeed < 200) {
             newSpeed = 200;
+        }
+        if (speed < 300) {
+            this.showFlyer = false;
         }
         this.transitionTime = speed / 1000;
         return () => {
@@ -150,6 +178,9 @@ export default class Games extends ControllableVue {
         incrementer += 1;
         if (newSpeed < 200) {
             newSpeed = 200;
+        }
+        if (speed < 300) {
+            this.showFlyer = false;
         }
         this.transitionTime = speed / 1000;
         return () => {
