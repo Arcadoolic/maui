@@ -44,7 +44,7 @@ export default class Gamepads {
                         };
                     }
                     const axe = this.gamepadKeyPressed[gamepadsKey].axes[index];
-                    if (value !== 0 && !axe.wasPressed) {
+                    if (Math.abs(value) > 0.4 && !axe.wasPressed) {
                         eventName = 'gamepadKeydown';
                         axe.wasPressed = true;
                         axe.lastPressedKey = value > 0 ?
