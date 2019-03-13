@@ -39,6 +39,7 @@ import ControllableVue from '@/ControllableVue.vue';
 import Game from '@/class/Game.class';
 import Velocity from 'velocity-animate';
 import {remote} from 'electron';
+import Gamepads from '@/class/Gamepads.class';
 
 @Component
 export default class Games extends ControllableVue {
@@ -83,7 +84,6 @@ export default class Games extends ControllableVue {
                 case 'Enter':
                     this.startGame();
                     break;
-
             }
         });
 
@@ -169,6 +169,36 @@ export default class Games extends ControllableVue {
         };
     }
 
+    protected getGameAnimationSpeed(previousSpeed: number, incrementer: number) {
+        let newSpeed = previousSpeed - Math.pow(1.5, incrementer);
+        if (newSpeed < 200) {
+            newSpeed = 200;
+        }
+        return newSpeed;
+    }
+
+    protected animateFlyers() {
+        this.showFlyer = false;
+        clearTimeout(this.timeouts.showFlyer);
+        this.timeouts.showFlyer = setTimeout(() => {
+            if (this.selectedCategory.getGames()[this.selectedGameId]) {
+                this.flyerImage = this.selectedCategory.getGames()[this.selectedGameId].flyer;
+            this.showFlyer = true;
+            }
+        }, 300);
+    }
+
+    protected animateGames() {
+        return new Promise((resolve, reject) => {
+            this.showGames = false;
+            clearTimeout(this.timeouts.showGames);
+            this.timeouts.showGames = setTimeout(() => {
+                this.showGames = true;
+                resolve();
+            }, 300);
+        });
+    }
+
     /**
      * Called on move up
      */
@@ -213,43 +243,17 @@ export default class Games extends ControllableVue {
         };
     }
 
-    protected getGameAnimationSpeed(previousSpeed: number, incrementer: number) {
-        let newSpeed = previousSpeed - Math.pow(1.5, incrementer);
-        if (newSpeed < 200) {
-            newSpeed = 200;
-        }
-        return newSpeed;
-    }
-
-    protected animateFlyers() {
-        this.showFlyer = false;
-        clearTimeout(this.timeouts.showFlyer);
-        this.timeouts.showFlyer = setTimeout(() => {
-            this.flyerImage = this.selectedCategory.getGames()[this.selectedGameId].flyer;
-            this.showFlyer = true;
-        }, 300);
-    }
-
-    protected animateGames() {
-        return new Promise((resolve, reject) => {
-            this.showGames = false;
-            clearTimeout(this.timeouts.showGames);
-            this.timeouts.showGames = setTimeout(() => {
-                this.showGames = true;
-                resolve();
-            }, 300);
-        });
-    }
-
     /**
      * Start a game
      */
     protected startGame() {
         const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
+        Gamepads.stopGamepadsListeners();
         this.mame.start(selectedGame).then(
             (process: ChildProcess|void) => {
                 if (process) {
                     process.on('close', () => {
+                        Gamepads.startGamepadListeners();
                         if (selectedGame.hasHiscore) {
                             (new HiScore()).getHiscore(selectedGame.romName).then(
                                 (hiscore: any) => {
