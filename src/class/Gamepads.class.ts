@@ -2,7 +2,7 @@ import ControllerMappingJson from '../assets/controllers.json';
 
 export default class Gamepads {
     public static gamepadsIndex: number[] = [];
-    public static animationFrameRequest: number|null = null;
+    public static animationFrameRequest: number = 0;
     public static controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
     public static gamepadKeyPressed:
         Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
@@ -100,9 +100,7 @@ export default class Gamepads {
         window.removeEventListener('gamepadconnected', this.onGamepadconnected);
         window.removeEventListener('gamepaddisconnected', this.onGamepaddisconnected);
 
-        if (this.animationFrameRequest) {
-            cancelAnimationFrame(this.animationFrameRequest);
-        }
+        cancelAnimationFrame(this.animationFrameRequest);
         if (!navigator.getGamepads()) {
             return;
         }
@@ -154,7 +152,7 @@ export default class Gamepads {
         this.gamepadsIndex.push(event.gamepad.index);
         this.emitGamepadCountUpdate();
         if (this.gamepadsIndex.length === 1) {
-            this.startGamepadListeners();
+            this.startGamepadListeners.bind(this);
         }
     }
 
