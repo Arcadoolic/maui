@@ -1,37 +1,16 @@
 import ControllerMappingJson from '../assets/controllers.json';
 
 export default class Gamepads {
-    public static gamepadCount: number = 0;
+    public static gamepadsIndex: number[] = [];
     public static animationFrameRequest: number|null = null;
     public static controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
     public static gamepadKeyPressed:
         Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
 
     public static init() {
-        window.addEventListener('gamepadconnected', (e) => {
-            this.gamepadCount++;
-            if (this.gamepadCount === 1) {
-                this.startGamepadListeners();
-            }
-            this.emitGamepadCountUpdate();
-        });
-
-        window.addEventListener('gamepaddisconnected', (e) => {
-            this.gamepadCount--;
-            this.stopGamepadListeners((e as GamepadEvent).gamepad, (e as GamepadEvent).gamepad.index);
-            if (!this.gamepadCount) {
-                this.stopGamepadsListeners();
-            }
-            this.emitGamepadCountUpdate();
-        });
-
-    }
-
-    public static emitGamepadCountUpdate() {
-        window.dispatchEvent(new CustomEvent(
-            'gamepadCountUpdate',
-            { detail: {gamepadCount: this.gamepadCount }},
-        ));
+        window.addEventListener('gamepadconnected', this.onGamepadconnected.bind(this));
+        window.addEventListener('gamepaddisconnected', this.onGamepaddisconnected.bind(this));
+        this.startGamepadListeners();
     }
 
     public static startGamepadListeners() {
@@ -118,6 +97,9 @@ export default class Gamepads {
      * Stop gamepads loop
      */
     public static stopGamepadsListeners() {
+        window.removeEventListener('gamepadconnected', this.onGamepadconnected);
+        window.removeEventListener('gamepaddisconnected', this.onGamepaddisconnected);
+
         if (this.animationFrameRequest) {
             cancelAnimationFrame(this.animationFrameRequest);
         }
@@ -161,5 +143,40 @@ export default class Gamepads {
             }
         }
         delete this.gamepadKeyPressed[gamepadIndex];
+    }
+
+    protected static onGamepadconnected(e: Event) {
+        let event: GamepadEvent = e as GamepadEvent;
+        if (this.gamepadsIndex.indexOf(event.gamepad.index) >= 0) {
+            this.emitGamepadCountUpdate();
+            return;
+        }
+        this.gamepadsIndex.push(event.gamepad.index);
+        this.emitGamepadCountUpdate();
+        if (this.gamepadsIndex.length === 1) {
+            this.startGamepadListeners();
+        }
+    }
+
+    protected static onGamepaddisconnected(e: Event) {
+        let event: GamepadEvent = e as GamepadEvent;
+        if (this.gamepadsIndex.indexOf(event.gamepad.index) === -1) {
+            this.emitGamepadCountUpdate();
+            return;
+        }
+        this.gamepadsIndex.splice(this.gamepadsIndex.indexOf(event.gamepad.index), 1);
+        this.emitGamepadCountUpdate();
+        this.stopGamepadListeners((e as GamepadEvent).gamepad, (e as GamepadEvent).gamepad.index);
+        if (!this.gamepadsIndex.length) {
+            this.stopGamepadsListeners();
+        }
+        this.emitGamepadCountUpdate();
+    }
+
+    protected static emitGamepadCountUpdate() {
+        window.dispatchEvent(new CustomEvent(
+            'gamepadCountUpdate',
+            { detail: {gamepadCount: this.gamepadsIndex.length }},
+        ));
     }
 }
