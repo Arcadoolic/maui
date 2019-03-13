@@ -102,6 +102,16 @@ export default class Games extends ControllableVue {
                     break;
             }
         });
+
+        // Electorn event
+        remote.getCurrentWindow().on('blur', () => {
+            console.log('Blur');
+            Gamepads.stopGamepadsListeners();
+        });
+        remote.getCurrentWindow().on('focus', () => {
+            console.log('Focus');
+            Gamepads.startGamepadListeners();
+        });
     }
 
     public mounted() {
@@ -181,7 +191,7 @@ export default class Games extends ControllableVue {
         this.showFlyer = false;
         clearTimeout(this.timeouts.showFlyer);
         this.timeouts.showFlyer = setTimeout(() => {
-            if (this.selectedCategory.getGames()[this.selectedGameId]) {
+            if (this.selectedCategory.getGames()[this.selectedGameId].flyer) {
                 this.flyerImage = this.selectedCategory.getGames()[this.selectedGameId].flyer;
             this.showFlyer = true;
             }
@@ -248,12 +258,10 @@ export default class Games extends ControllableVue {
      */
     protected startGame() {
         const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
-        Gamepads.stopGamepadsListeners();
         this.mame.start(selectedGame).then(
             (process: ChildProcess|void) => {
                 if (process) {
                     process.on('close', () => {
-                        Gamepads.startGamepadListeners();
                         if (selectedGame.hasHiscore) {
                             (new HiScore()).getHiscore(selectedGame.romName).then(
                                 (hiscore: any) => {
