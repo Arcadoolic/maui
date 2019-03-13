@@ -12,7 +12,8 @@
                         <div class="marquee"
                              :style="marqueeStyle(game, index)"
                         ></div>
-                        <img :src="game.flyer" style="display: none"> <!-- To cache flyers without displaying them -->
+                        {{game.flyer}}
+                        <img :src="game.flyer" style="display: none" v-if="game.flyer.length"> <!-- To cache flyers without displaying them -->
                     </li>
                 </transition>
             </ul>
@@ -22,7 +23,7 @@
             <transition @before-enter="flyerAnimationBeforeEnter" @enter="flyerAnimationEnter" @leave="flyerAnimationLeave">
                 <div class="flyer" v-if="showFlyer
                     && selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer"
-                    :style="{backgroundImage: 'url(' + this.flyerImage + ')'}"></div>
+                    :style="{backgroundImage: this.flyerImage.length ? 'url(' + this.flyerImage + ')' : false}"></div>
             </transition>
         </div>
     </div>
@@ -191,7 +192,7 @@ export default class Games extends ControllableVue {
         this.showFlyer = false;
         clearTimeout(this.timeouts.showFlyer);
         this.timeouts.showFlyer = setTimeout(() => {
-            if (this.selectedCategory.getGames()[this.selectedGameId].flyer) {
+            if (this.selectedCategory.getGames()[this.selectedGameId]) {
                 this.flyerImage = this.selectedCategory.getGames()[this.selectedGameId].flyer;
             this.showFlyer = true;
             }
