@@ -6,11 +6,13 @@
                 <transition v-for="(game, index) in selectedCategory.getGames()" :key="index"
                             @before-enter="gamesAnimationBeforeEnter"
                             @enter="gamesAnimationEnter"
+                            @leave="gameLeaveAnimation"
                 >
                     <li  :class="{selected: selectedGameId === index}" v-if="showGames">
                         <div class="marquee"
                              :style="marqueeStyle(game, index)"
                         ></div>
+                        <img :src="game.flyer" style="display: none"> <!-- To cache flyers without displaying them -->
                     </li>
                 </transition>
             </ul>
@@ -122,12 +124,21 @@ export default class Games extends ControllableVue {
         });
     }
 
+    public gameLeaveAnimation(el: HTMLElement, done: () => void) {
+        setTimeout(() => {
+            Velocity(el, {marginLeft: '-100%'}, {
+                duration: 400,
+                easing: 'ease',
+                complete: done,
+            });
+        }, Math.random() * (100 - 300) + 100)
+    }
+
     public flyerAnimationBeforeEnter(el: HTMLElement) {
         el.style.marginLeft = '100%';
     }
 
     public flyerAnimationEnter(el: HTMLElement, done: () => void) {
-        console.log(el);
         Velocity(el, {marginLeft: 0}, {
             duration: 300,
             easing: 'ease-out',
@@ -219,6 +230,17 @@ export default class Games extends ControllableVue {
         }, 300);
     }
 
+    protected animateGames() {
+        return new Promise((resolve, reject) => {
+            this.showGames = false;
+            clearTimeout(this.timeouts.showGames);
+            this.timeouts.showGames = setTimeout(() => {
+                this.showGames = true;
+                resolve();
+            }, 300);
+        });
+    }
+
     /**
      * Start a game
      */
@@ -244,7 +266,7 @@ export default class Games extends ControllableVue {
     /**
      * Calculate game list top position
      */
-    protected updateGamesPosition() {
+    protected updateGamesPosition(transition: boolean = true) {
         if (this.$refs.gameList) {
             (this.$refs.gameList as HTMLElement).style.top = (-10 * this.selectedGameId) + '%';
         }
@@ -255,10 +277,12 @@ export default class Games extends ControllableVue {
      */
     @Watch('selectedCategory')
     protected watchSelectedCategory() {
-        this.selectedGameId = 0;
-        this.emitGameChange();
-        this.updateGamesPosition();
         this.animateFlyers();
+        this.animateGames().then(() => {
+            this.selectedGameId = 0;
+            this.emitGameChange();
+            this.updateGamesPosition();
+        });
     }
 
     /**
