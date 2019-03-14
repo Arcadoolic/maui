@@ -101,7 +101,7 @@ export default class Categories extends ControllableVue {
                 previous = index === catLen - 1;
                 previous2 = index === catLen - 2;
             } else if (this.categorySelectedId === 1) {
-                previous2 = catLen - 1;
+                previous2 = catLen - 1 === index;
             }
 
             let next = this.categorySelectedId + 1 === index;
