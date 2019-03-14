@@ -28,6 +28,7 @@
         "variable-name": [
             "allow-leading-underscore"
         ],
-        "prefer-for-of": false
+        "prefer-for-of": false,
+        "member-ordering": [true, {"order": "fields-first"}]
     }
 }
