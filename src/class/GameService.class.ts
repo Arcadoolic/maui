@@ -113,9 +113,10 @@ export default class GameService {
         let shortname: string|null = null;
         let subname: string|null = null;
         if (shortnameRegexp) {
-            const subnameRegexp = /^([^\/\-:]+)\s*[\/\-:]*\s*(.*)/.exec(shortnameRegexp[0].trim());
+            shortname = shortnameRegexp[0].trim().replace(/&amp;/g, '&');
+            const subnameRegexp = /^([^\-\/]*)(:\s+|\s+\-\s+|\s+\/\s+)(.*)$/.exec(shortname);
             if (subnameRegexp) {
-                shortname = subnameRegexp.splice(0, 2)[1];
+                shortname = subnameRegexp.splice(0, 3)[1];
                 subname = subnameRegexp[0];
             }
         }
