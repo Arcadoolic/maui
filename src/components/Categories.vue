@@ -1,12 +1,17 @@
 <template>
     <div class="categories">
-        <figure ref="categoriesFigure">
-            <div class="category" :class="{selected: categorySelectedId === index, first: !index, last: index === gameList.getCategories().length, next: index === categorySelectedId + 1, previous: index === categorySelectedId - 1}"
-                 v-for="(category, index) in gameList.getCategories()"
-            >
-                <p>{{category.name}}</p>
-            </div>
-        </figure>
+        <div class="category" v-for="(category, index) in gameList.getCategories()"
+             :data-pos="Math.abs(categorySelectedId - index) + 1 === gameList.getCategories().length ? 1 : categorySelectedId - index"
+             :class="getCategoryClasses(index)">
+            <img src="../assets/categories/_default.svg" alt="">
+        </div>
+        <!--<figure ref="categoriesFigure">-->
+            <!--<div class="category" :class="{selected: categorySelectedId === index, first: !index, last: index === gameList.getCategories().length, next: index === categorySelectedId + 1, previous: index === categorySelectedId - 1}"-->
+                 <!--v-for="(category, index) in gameList.getCategories()"-->
+            <!--&gt;-->
+                <!--<p>{{category.name}}</p>-->
+            <!--</div>-->
+        <!--</figure>-->
     </div>
 </template>
 
@@ -17,7 +22,7 @@ import ControllableVue from '@/ControllableVue.vue';
 
 @Component
 export default class Categories extends ControllableVue {
-    protected categorySelectedId: number = 0;
+    protected categorySelectedId: number = 2;
 
     protected gameList = new GameList();
     protected categoriesFigure!: HTMLElement;
@@ -86,56 +91,151 @@ export default class Categories extends ControllableVue {
         this.$emit('categoryChange', this.categorySelectedId);
     }
 
+    protected get getCategoryClasses() {
+        return (index: number) => {
+            const catLen = this.gameList.getCategories().length;
+            let previous = this.categorySelectedId - 1 === index;
+            let previous2 = this.categorySelectedId - 2 === index;
+            let next2 = this.categorySelectedId + 2 === index;
+            if (this.categorySelectedId === 0)  {
+                previous = index === catLen - 1;
+                previous2 = index === catLen - 2;
+            } else if (this.categorySelectedId === 1) {
+                previous2 = catLen - 1;
+            }
+
+            let next = this.categorySelectedId + 1 === index;
+            if (this.categorySelectedId === catLen - 1) {
+                next = 0 === index;
+                next2 = 1 === index;
+            }
+            return {
+                selected: this.categorySelectedId === index,
+                previous: previous,
+                next: next,
+                previous2: previous2,
+                next2: next2,
+            }
+        }
+    }
+
 }
 </script>
 
 <style scoped>
     .categories {
-        color: green;
+        width: 25%;
+        height: 0;
+        padding-bottom: 25%;
         position: absolute;
-        bottom: 0;
-        right: 40px;
         display: block;
-        height: 200px;
-        width: 470px;
-        overflow: hidden;
+        right: -12%;
+        bottom: -25%;
     }
+        .categories .category {
+            position: absolute;
+            display: none;
+            width: 30%;
+            height: 30%;
+            transition: all .3s ease;
+        }
+            .categories .category img {
+                max-width: 100%;
+            }
+            .categories .category.next2 {
+                display: block;
+                transform: translate3d(200%, -50%, 0);
+            }
+            .categories .category.next {
+                display: block;
+                transform: translate3d(100%, -50%, 0);
+            }
+            .categories .category.selected {
+                display: block;
+                transform: translate3d(0, 0, 0);
+            }
+            .categories .category.previous {
+                display: block;
+                transform: translate3d(-50%, 100%, 0);
+            }
+            .categories .category.previous2 {
+                display: block;
+                transform: translate3d(-50%, 200%, 0);
+            }
 
-    .categories figure {
-        position: relative;
-        height: 200px;
-        margin: 0;
-        padding: 0;
-        transition: left 0.3s ease-in-out;
-    }
-    .categories figure .category {
-        text-align: center;
-        margin-top: 50px;
-        width: 150px;
-        float: left;
-        height: 150px;
-        transition: width 0.2s ease-in-out, height 0.2s ease-in-out, margin-top 0.2s ease-in-out, font-size 0.2s ease-in-out;
-        bottom: 0;
-    }
-    .categories figure .category.first {
-        margin-left: 150px;
-    }
-    .categories figure .category.selected {
-        position: relative;
-        margin-top: 0;
-        width: 250px;
-        height: 200px;
-        z-index: 2;
-        font-size: 2em;
-    }
-    .categories figure .category.previous {
-        position: relative;
-        margin-right: -40px;
-        z-index: 1;
-    }
-    .categories figure .category.next {
-        position: relative;
-        margin-left: -40px;
-        z-index: 1;
-    }
+
+
+
+
+            /* Selected one */
+            /*.categories .category[data-pos='0'] {*/
+                /*display: block;*/
+                /*transform: translateX(100%) translateY(100%);*/
+                /*animation: xAxis 2.5s infinite, yAxis 2.5s infinite;*/
+                /*top: 30%;*/
+                /*left: 30%;*/
+            /*}*/
+
+            /*.categories .category[data-pos='-1'] {*/
+                /*top: 10%;*/
+                /*right: 0;*/
+                /*display: block;*/
+            /*}*/
+
+            /*.categories .category[data-pos='-2'] {*/
+                /*top: 10%;*/
+                /*right: -30%;*/
+                /*display: block;*/
+            /*}*/
+
+            /*.categories .category[data-pos='1'] {*/
+                /*bottom: 0;*/
+                /*left: 10%;*/
+                /*display: block;*/
+            /*}*/
+            /*.categories .category[data-pos='2'] {*/
+                /*bottom: -30%;*/
+                /*left: 10%;*/
+                /*display: block;*/
+            /*}*/
+
+
+
+    /*.categories figure {*/
+        /*position: relative;*/
+        /*height: 200px;*/
+        /*margin: 0;*/
+        /*padding: 0;*/
+        /*transition: left 0.3s ease-in-out;*/
+    /*}*/
+    /*.categories figure .category {*/
+        /*text-align: center;*/
+        /*margin-top: 50px;*/
+        /*width: 150px;*/
+        /*float: left;*/
+        /*height: 150px;*/
+        /*transition: width 0.2s ease-in-out, height 0.2s ease-in-out, margin-top 0.2s ease-in-out, font-size 0.2s ease-in-out;*/
+        /*bottom: 0;*/
+    /*}*/
+    /*.categories figure .category.first {*/
+        /*margin-left: 150px;*/
+    /*}*/
+    /*.categories figure .category.selected {*/
+        /*position: relative;*/
+        /*margin-top: 0;*/
+        /*width: 250px;*/
+        /*height: 200px;*/
+        /*z-index: 2;*/
+        /*font-size: 2em;*/
+    /*}*/
+    /*.categories figure .category.previous {*/
+        /*position: relative;*/
+        /*margin-right: -40px;*/
+        /*z-index: 1;*/
+    /*}*/
+    /*.categories figure .category.next {*/
+        /*position: relative;*/
+        /*margin-left: -40px;*/
+        /*z-index: 1;*/
+    /*}*/
 </style>
