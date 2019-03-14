@@ -6,14 +6,21 @@ export default class Gamepads {
     public static controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
     public static gamepadKeyPressed:
         Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
+    protected static stop: boolean = false;
 
     public static init() {
+        this.stop = false;
         window.addEventListener('gamepadconnected', this.onGamepadconnected.bind(this));
         window.addEventListener('gamepaddisconnected', this.onGamepaddisconnected.bind(this));
-        this.startGamepadListeners();
+        this.startGamepadListeners.bind(this)();
     }
 
+
     public static startGamepadListeners() {
+        if (this.stop) {
+            return;
+        }
+
         for (const navigatorGamepadsKey in navigator.getGamepads()) {
             if (!navigatorGamepadsKey) {
                 continue;
@@ -100,6 +107,7 @@ export default class Gamepads {
         window.removeEventListener('gamepadconnected', this.onGamepadconnected);
         window.removeEventListener('gamepaddisconnected', this.onGamepaddisconnected);
 
+        this.stop = true;
         cancelAnimationFrame(this.animationFrameRequest);
         if (!navigator.getGamepads()) {
             return;
