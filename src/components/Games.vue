@@ -134,7 +134,6 @@ export default class Games extends ControllableVue {
 
     public gameLeaveAnimation(el: HTMLElement, done: () => void) {
         setTimeout(() => {
-            console.log(el);
             Velocity(el, {marginLeft: el.classList.contains('selected') ? '-200%' : '-100%'}, {
                 duration: 400,
                 easing: 'ease',
