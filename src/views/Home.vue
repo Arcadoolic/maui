@@ -2,7 +2,7 @@
     <span>
         <div class="gameTitle" v-if="selectedGame">
             <h1>{{selectedGame.shortname}}</h1>
-            <small>({{selectedGame.year}}, {{selectedGame.nplayerString}})</small>
+            <p>({{selectedGame.year}}, {{selectedGame.nplayerString}})</p>
         </div>
 
         <Games :selectedCategory="selectedCategory" @gameChange="gameChange"></Games>
@@ -74,9 +74,8 @@ export default class Home extends Vue {
         text-align: center;
         background: linear-gradient(to bottom, rgb(35, 10, 0) -30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
         color: #fff513;
-        font-size: 45px;
+        font-size: 2.5vw;/*45px;*/
         padding: 26px;
-        line-height: 1.2;
         font-family: 'Arcade_I', sans-serif;
         perspective: 460px;
         perspective-origin: 50% 50%;
@@ -87,11 +86,14 @@ export default class Home extends Vue {
             0 6px 5px rgba(242, 0, 10, 0.7),
             0 12px 16px rgba(0, 0, 0, 1),
             6px 12px 9px rgba(0, 0, 0, 1);
-        transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
         filter: saturate(1.3);
     }
-        .gameTitle small {
-            font-size: .5em;
+        .gameTitle h1 {
+            transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
+        }
+        .gameTitle p {
+            line-height: 3em;
+            font-size: 1vw;
             color: #fff513;
             text-shadow:
                 0 0 30px rgba(237, 106, 10, 0.8),
