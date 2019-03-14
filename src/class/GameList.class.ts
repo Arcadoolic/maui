@@ -11,6 +11,7 @@ export default class GameList {
 
     public init(gamesPath: string) {
         this.initGames(gamesPath);
+        this.sortGames();
     }
 
     /**
@@ -64,6 +65,22 @@ export default class GameList {
         // Add Game to game list
         this.gameNames.push(game.romName);
         this.games.push(game);
+    }
+
+    public sortGames() {
+        const sortFn = (a: Game, b: Game) => {
+            if (a.shortname < b.shortname) {
+                return -1;
+            } else if (a.shortname > b.shortname) {
+                return 1;
+            } else {
+                return 0;
+            }
+        };
+
+        this.categories.forEach((category: GameCategory) => {
+            category.getGames().sort(sortFn);
+        });
     }
 
     /**
