@@ -109,12 +109,20 @@ export default class GameService {
             throw new Error('Cant get xml');
         }
 
-        const regexp = /^(.[^\(]+)/g;
-        const shortname = regexp.exec(infoFromMameXml.description);
+        const shortnameRegexp = /^(.[^\(]*)/g.exec(infoFromMameXml.description);
+        let shortname: string|null = null;
+        let subname: string|null = null;
+        if (shortnameRegexp) {
+            const subnameRegexp = /^([^\/\-:]+)\s*[\/\-:]*\s*(.*)/.exec(shortnameRegexp[0].trim());
+            if (subnameRegexp) {
+                shortname = subnameRegexp.splice(0, 2)[1];
+                subname = subnameRegexp[0];
+            }
+        }
         return {
             fullname: infoFromMameXml.description,
-            shortname: shortname ? shortname[0].trim() : infoFromMameXml.description,
-            subname: '',
+            shortname: shortname || '',
+            subname: subname || '',
             manufacturer: infoFromMameXml.manufacturer,
             year: infoFromMameXml.year,
             hi: this.isGameHaveHiscore(romName),
