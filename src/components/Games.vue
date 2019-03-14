@@ -6,13 +6,12 @@
                 <transition v-for="(game, index) in selectedCategory.getGames()" :key="index"
                             @before-enter="gamesAnimationBeforeEnter"
                             @enter="gamesAnimationEnter"
-                            @leave="gameLeaveAnimation"
+                            @leave="gameLeaveAnimation(selectedGameId === index)"
                 >
                     <li  :class="{selected: selectedGameId === index}" v-if="showGames">
                         <div class="marquee"
                              :style="marqueeStyle(game, index)"
                         ></div>
-                        {{game.flyer}}
                         <img :src="game.flyer" style="display: none" v-if="game.flyer.length"> <!-- To cache flyers without displaying them -->
                     </li>
                 </transition>
@@ -103,20 +102,18 @@ export default class Games extends ControllableVue {
                     break;
             }
         });
-
-        // Electorn event
-        remote.getCurrentWindow().on('blur', () => {
-            console.log('Blur');
-            Gamepads.stopGamepadsListeners();
-        });
-        remote.getCurrentWindow().on('focus', () => {
-            console.log('Focus');
-            Gamepads.startGamepadListeners();
-        });
     }
 
     public mounted() {
         this.showGames = true;
+
+        // Electorn event
+        remote.getCurrentWindow().on('blur', () => {
+            Gamepads.stopGamepadsListeners();
+        });
+        remote.getCurrentWindow().on('focus', () => {
+            Gamepads.init();
+        });
     }
 
     /***
@@ -135,14 +132,16 @@ export default class Games extends ControllableVue {
         });
     }
 
-    public gameLeaveAnimation(el: HTMLElement, done: () => void) {
-        setTimeout(() => {
-            Velocity(el, {marginLeft: '-100%'}, {
-                duration: 400,
-                easing: 'ease',
-                complete: done,
-            });
-        }, Math.random() * (100 - 300) + 100)
+    public gameLeaveAnimation(selected: boolean) {
+        return (el: HTMLElement, done: () => void) => {
+            setTimeout(() => {
+                Velocity(el, {marginLeft: selected ? '-150%' : '-100%'}, {
+                    duration: 400,
+                    easing: 'ease',
+                    complete: done,
+                });
+            }, Math.random() * (100 - 300) + 100)
+        }
     }
 
     public flyerAnimationBeforeEnter(el: HTMLElement) {
@@ -385,5 +384,7 @@ export default class Games extends ControllableVue {
             width: 100%;
             height: 100%;
             transform: rotateZ(-4deg);
+            background-repeat: no-repeat;
+            background-size: cover;
         }
 </style>
