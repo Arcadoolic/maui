@@ -21,7 +21,6 @@ import Mame from '@/class/Mame.class';
 import GameCategory from '@/class/GameCategory.class';
 import Games from '@/components/Games.vue';
 import Game from '@/class/Game.class';
-import ControllerMappingJson from '../assets/controllers.json';
 import Gamepads from '@/class/Gamepads.class';
 import GamepadsComponent from '@/components/Gamepads.vue';
 
@@ -88,20 +87,11 @@ export default class Home extends Vue {
             6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
-        .gameTitle h1 {
+        .gameTitle > * {
             transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
         }
         .gameTitle p {
             line-height: 3em;
             font-size: 1vw;
-            color: #fff513;
-            text-shadow:
-                0 0 30px rgba(237, 106, 10, 0.8),
-                0 2px 0 rgb(255, 81, 0),
-                0 4px 20px rgba(255, 81, 0, 0.5),
-                0 6px 3px rgba(242, 0, 10, 0.7),
-                0 12px 16px rgba(0, 0, 0, 1),
-                6px 12px 9px rgba(0, 0, 0, 1);
-            transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
         }
 </style>
