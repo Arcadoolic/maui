@@ -152,7 +152,7 @@ export default class Gamepads {
     }
 
     protected static onGamepadconnected(e: Event) {
-        let event: GamepadEvent = e as GamepadEvent;
+        const event: GamepadEvent = e as GamepadEvent;
         if (this.gamepadsIndex.indexOf(event.gamepad.index) >= 0) {
             this.emitGamepadCountUpdate();
             return;
@@ -165,7 +165,7 @@ export default class Gamepads {
     }
 
     protected static onGamepaddisconnected(e: Event) {
-        let event: GamepadEvent = e as GamepadEvent;
+        const event: GamepadEvent = e as GamepadEvent;
         if (this.gamepadsIndex.indexOf(event.gamepad.index) === -1) {
             this.emitGamepadCountUpdate();
             return;

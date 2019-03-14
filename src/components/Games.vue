@@ -140,8 +140,8 @@ export default class Games extends ControllableVue {
                     easing: 'ease',
                     complete: done,
                 });
-            }, Math.random() * (100 - 300) + 100)
-        }
+            }, Math.random() * (100 - 300) + 100);
+        };
     }
 
     public flyerAnimationBeforeEnter(el: HTMLElement) {
@@ -193,7 +193,7 @@ export default class Games extends ControllableVue {
         this.timeouts.showFlyer = setTimeout(() => {
             if (this.selectedCategory.getGames()[this.selectedGameId]) {
                 this.flyerImage = this.selectedCategory.getGames()[this.selectedGameId].flyer;
-            this.showFlyer = true;
+                this.showFlyer = true;
             }
         }, 300);
     }
