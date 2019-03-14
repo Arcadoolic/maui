@@ -6,7 +6,7 @@
                 <transition v-for="(game, index) in selectedCategory.getGames()" :key="index"
                             @before-enter="gamesAnimationBeforeEnter"
                             @enter="gamesAnimationEnter"
-                            @leave="gameLeaveAnimation(selectedGameId === index)"
+                            @leave="gameLeaveAnimation"
                 >
                     <li  :class="{selected: selectedGameId === index}" v-if="showGames">
                         <div class="marquee"
@@ -132,16 +132,15 @@ export default class Games extends ControllableVue {
         });
     }
 
-    public gameLeaveAnimation(selected: boolean) {
-        return (el: HTMLElement, done: () => void) => {
-            setTimeout(() => {
-                Velocity(el, {marginLeft: selected ? '-150%' : '-100%'}, {
-                    duration: 400,
-                    easing: 'ease',
-                    complete: done,
-                });
-            }, Math.random() * (100 - 300) + 100);
-        };
+    public gameLeaveAnimation(el: HTMLElement, done: () => void) {
+        setTimeout(() => {
+            console.log(el);
+            Velocity(el, {marginLeft: el.classList.contains('selected') ? '-200%' : '-100%'}, {
+                duration: 400,
+                easing: 'ease',
+                complete: done,
+            });
+        }, Math.random() * (100 - 300) + 100);
     }
 
     public flyerAnimationBeforeEnter(el: HTMLElement) {
