@@ -1,8 +1,6 @@
 <template>
     <div class="categories">
-        <div class="category" v-for="(category, index) in gameList.getCategories()"
-             :data-pos="Math.abs(categorySelectedId - index) + 1 === gameList.getCategories().length ? 1 : categorySelectedId - index"
-             :class="getCategoryClasses(index)">
+        <div class="category" v-for="(category, index) in gameList.getCategories()" :class="getCategoryClasses(index)">
             <img src="../assets/categories/_default.svg" alt="">
         </div>
         <!--<figure ref="categoriesFigure">-->
@@ -108,6 +106,8 @@ export default class Categories extends ControllableVue {
             if (this.categorySelectedId === catLen - 1) {
                 next = 0 === index;
                 next2 = 1 === index;
+            } else if (this.categorySelectedId === catLen - 2) {
+                next2 = 0 === index;
             }
             return {
                 selected: this.categorySelectedId === index,
@@ -130,7 +130,10 @@ export default class Categories extends ControllableVue {
         position: absolute;
         display: block;
         right: -12%;
+        /*right: 0;*/
         bottom: -25%;
+        /*bottom: 0;*/
+        /*bottom: ;*/
     }
         .categories .category {
             position: absolute;
