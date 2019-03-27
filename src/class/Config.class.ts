@@ -3,16 +3,19 @@ import {existsSync, readFileSync} from 'fs';
 export default class Config {
     protected _defaultMameIni: string = '/etc/mame/mame.ini';
     protected _defaultGamesJsonPath: string = './games';
+    protected _defaultHiscoresJsonPath: string = './hiscores';
 
     protected _configLoaded: boolean = false;
     protected _mameIniPath?: string;
     protected _gamesJsonPath?: string;
+    protected _hiscoresJsonPath?: string;
 
     public load(): boolean {
         if (existsSync('./config.json')) {
             const configFile = JSON.parse(readFileSync('./config.json', 'utf8'));
             this._mameIniPath = configFile.mameIniPath;
             this._gamesJsonPath = configFile.gamesJsonPath;
+            this._hiscoresJsonPath = configFile.hiscoresJsonPath;
             this._configLoaded = true;
             return true;
         }
@@ -30,7 +33,17 @@ export default class Config {
         return this._mameIniPath || this._defaultMameIni;
     }
 
+    /**
+     * @return string
+     */
     public get gamesJsonPath(): string {
         return this._gamesJsonPath || this._defaultGamesJsonPath;
+    }
+
+    /**
+     * @return string
+     */
+    public get hiscoresJsonPath(): string {
+        return this._hiscoresJsonPath = this._defaultHiscoresJsonPath;
     }
 }
