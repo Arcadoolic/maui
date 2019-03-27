@@ -1,4 +1,5 @@
 {
-  "mameIniPath": "/home/tpayen/.mame/mame.ini",
-  "gamesJsonPath": "./games"
+    "mameIniPath": "/home/tpayen/.mame/mame.ini",
+    "gamesJsonPath": "./games",
+    "hiscoresJsonPath": "./hiscores"
 }
