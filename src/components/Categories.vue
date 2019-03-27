@@ -1,7 +1,7 @@
 <template>
     <div class="categories">
         <div class="category" v-for="(category, index) in gameList.getCategories()" :class="getCategoryClasses(index)">
-            <img src="../assets/categories/_default.svg" alt="">
+            <img :src="category.iconPath" alt="">
         </div>
         <!--<figure ref="categoriesFigure">-->
             <!--<div class="category" :class="{selected: categorySelectedId === index, first: !index, last: index === gameList.getCategories().length, next: index === categorySelectedId + 1, previous: index === categorySelectedId - 1}"-->
