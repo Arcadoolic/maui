@@ -134,10 +134,7 @@ export default class Categories extends ControllableVue {
         position: absolute;
         display: block;
         right: -12%;
-        /*right: 0;*/
         bottom: -25%;
-        /*bottom: 0;*/
-        /*bottom: ;*/
     }
         .categories .category {
             position: absolute;
@@ -151,23 +148,23 @@ export default class Categories extends ControllableVue {
             }
             .categories .category.next2 {
                 display: block;
-                transform: translate3d(200%, -50%, 0);
+                transform: translate3d(200%, -50%, 0) scale(0.4);
             }
             .categories .category.next {
                 display: block;
-                transform: translate3d(100%, -50%, 0);
+                transform: translate3d(100%, -50%, 0) scale(0.7);
             }
             .categories .category.selected {
                 display: block;
-                transform: translate3d(0, 0, 0);
+                transform: translate3d(0, 0, 0) scale(1.2);
             }
             .categories .category.previous {
                 display: block;
-                transform: translate3d(-50%, 100%, 0);
+                transform: translate3d(-50%, 100%, 0) scale(0.7);
             }
             .categories .category.previous2 {
                 display: block;
-                transform: translate3d(-50%, 200%, 0);
+                transform: translate3d(-50%, 200%, 0) scale(0.4);
             }
 
 
