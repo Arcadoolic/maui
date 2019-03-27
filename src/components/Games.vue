@@ -49,8 +49,10 @@ export default class Games extends ControllableVue {
         showFlyer: 0 as any,
     };
 
+
     protected gameList = new GameList();
     protected mame = new Mame();
+    protected hiscores!: HiScore;
 
     protected selectedGameId = 0;
 
@@ -67,6 +69,7 @@ export default class Games extends ControllableVue {
         /** Init vars */
         this.gameList = this.$store.getters.gameList;
         this.mame = this.$store.getters.mame;
+        this.hiscores = new HiScore(this.$store.getters.config);
 
         this.flyerImage = this.selectedCategory.getGames()[0].flyer;
 
@@ -107,7 +110,7 @@ export default class Games extends ControllableVue {
     public mounted() {
         this.showGames = true;
 
-        // Electorn event
+        // Electron event
         remote.getCurrentWindow().on('blur', () => {
             Gamepads.stopGamepadsListeners();
         });
@@ -261,10 +264,14 @@ export default class Games extends ControllableVue {
                 if (process) {
                     process.on('close', () => {
                         if (selectedGame.hasHiscore) {
-                            (new HiScore()).getHiscore(selectedGame.romName).then(
-                                (hiscore: any) => {
-                                    console.log(hiscore);
+                            this.hiscores.saveHiscore(selectedGame.romName).then(
+                                (hiscore: string) => {
+                                    console.log('Hiscores saved !');
                                 },
+                                (error: string) => {
+                                    console.log('Error Hiscore');
+                                    console.error(error);
+                                }
                             );
                         }
                     });
