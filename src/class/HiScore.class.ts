@@ -15,7 +15,7 @@ export default class HiScore {
      * Get hiscores with hi2txt
      * @param romName
      */
-    public getHiscore(romName: string): Promise<any[] | string> {
+    public getHiscore(romName: string): Promise<{classic: any[], advanced: any[]} | string> {
         return new Promise((resolve, reject) => {
             const hi2txtPath = join(process.env.NODE_ENV === 'development'
                 ? './resources' : process.resourcesPath!, 'hi2txt');
@@ -26,7 +26,7 @@ export default class HiScore {
                     join(hi2txtPath, 'hi2txt.jar'),
                     '-descr',
                     join(hi2txtPath, 'hi2txt'),
-                    '-r',
+                    '-ra',
                     '/home/tpayen/.mame/hi/' + romName + '.hi', // TODO : Replace by ui.ini config
                 ],
                 (error, stdout, stderr) => {
@@ -34,7 +34,19 @@ export default class HiScore {
                         return reject(error);
                     }
 
-                    return resolve(parse(stdout, {delimiter: '|', columns: true, skip_empty_lines: true}));
+                    const splitedStdout = stdout.split(/\n{2,}/);
+                    console.log(splitedStdout);
+                    const ret = {classic: [] as any[], advanced: [] as any[]};
+                    splitedStdout.forEach((hiscores: string, index) => {
+                        if (hiscores.trim() === '') return true;
+                        hiscores = parse(hiscores, {delimiter: '|', columns: true, skip_empty_lines: true})
+                        if (index) {
+                            ret.advanced.push(hiscores);
+                        } else {
+                            ret.classic.push(hiscores);
+                        }
+                    });
+                    return resolve(ret);
                 });
         });
     }
