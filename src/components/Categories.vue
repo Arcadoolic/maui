@@ -52,7 +52,9 @@ export default class Categories extends ControllableVue {
     public mounted() {
         // Category list figure size
         this.categoriesFigure = this.$refs.categoriesFigure as HTMLElement;
-        this.categoriesFigure.style.width = ((this.gameList.getCategories().length + 1) * 150 + 300) + 'px';
+        if (this.categoriesFigure) {
+            this.categoriesFigure.style.width = ((this.gameList.getCategories().length + 1) * 150 + 300) + 'px';
+        }
     }
 
     /**
@@ -79,7 +81,9 @@ export default class Categories extends ControllableVue {
      * Calculate category list position
      */
     protected updateCategoriesPosition() {
-        (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelectedId * 150) + 'px';
+        if (this.$refs.categoriesFigure) {
+            (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelectedId * 150) + 'px';
+        }
     }
 
     /**
