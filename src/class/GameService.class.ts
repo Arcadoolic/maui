@@ -6,8 +6,8 @@ import {parse as iniParse} from 'ini';
 import GameList from '@/class/GameList.class';
 import {format} from 'url';
 import Helpers from '@/class/Helpers.class';
-import Hiscores from '@/components/Hiscores.vue';
-import HiScore from '@/class/HiScore.class';
+import HiScore from '@/class/HiscoreService.class';
+import HiscoreService from '@/class/HiscoreService.class';
 
 declare const __static: string;
 
@@ -37,10 +37,10 @@ export default class GameService {
     protected config!: Config;
     protected mame!: Mame;
     protected gameList!: GameList;
-    protected hiscores!: HiScore;
+    protected hiscores!: HiscoreService;
 
 
-    public constructor(config: Config, mame: Mame, gameList: GameList, hiscores: HiScore) {
+    public constructor(config: Config, mame: Mame, gameList: GameList, hiscores: HiscoreService) {
         this.config = config;
         this.mame = mame;
         this.gameList = gameList;
