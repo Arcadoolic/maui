@@ -7,6 +7,7 @@ import {Component, Vue} from 'vue-property-decorator';
 import {remote} from 'electron';
 import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
+import HiScore from '@/class/HiScore.class';
 
 @Component
 export default class Init extends Vue {
@@ -43,7 +44,7 @@ export default class Init extends Vue {
                 mame.init(config.mameIniPath);
                 this.msg = 'Loading games';
                 gameList.init(config.gamesJsonPath);
-                const gameService = new GameService(config, mame, gameList);
+                const gameService = new GameService(config, mame, gameList, new HiScore(config));
                 this.msg = 'Updating games';
                 gameService.refreshGameDir();
                 gameList.init(config.gamesJsonPath);
@@ -51,6 +52,8 @@ export default class Init extends Vue {
                 gameService.loadGamesMarquee();
                 this.msg = 'Loading flyers';
                 gameService.loadGamesFlyers();
+                this.msg = 'Load Hiscores';
+                gameService.loadHiscores();
                 resolve();
             } catch (e) {
                 reject(e.toString());
