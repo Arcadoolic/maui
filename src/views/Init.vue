@@ -44,7 +44,11 @@ export default class Init extends Vue {
                 mame.init(config.mameIniPath);
                 this.msg = 'Loading games';
                 gameList.init(config.gamesJsonPath);
-                const gameService = new GameService(config, mame, gameList, new HiScore(config));
+
+                const hiscore = new HiScore(config, mame.mameUiPath);
+                this.$store.commit('setHiscore', hiscore);
+
+                const gameService = new GameService(config, mame, gameList, hiscore);
                 this.msg = 'Updating games';
                 gameService.refreshGameDir();
                 gameList.init(config.gamesJsonPath);
