@@ -2,7 +2,7 @@
     <div>
         <ul>
             <li v-for="hiscore of game.hiscores.classic[0]">
-                {{hiscore.RANK}} - {{hiscore.NAME.trim() != '' ? hiscore.NAME : '???'}} - {{hiscore.SCORE}}
+                {{hiscore.RANK}} - {{hiscore.NAME && hiscore.NAME.trim() !== '' ? hiscore.NAME : '???'}} - {{hiscore.SCORE}}
             </li>
         </ul>
     </div>
