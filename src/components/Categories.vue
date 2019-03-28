@@ -115,12 +115,12 @@ export default class Categories extends ControllableVue {
             }
             return {
                 selected: this.categorySelectedId === index,
-                previous: previous,
-                next: next,
-                previous2: previous2,
-                next2: next2,
-            }
-        }
+                previous,
+                next,
+                previous2,
+                next2,
+            };
+        };
     }
 
 }
