@@ -7,7 +7,7 @@ import {Component, Vue} from 'vue-property-decorator';
 import {remote} from 'electron';
 import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
-import HiScore from '@/class/HiScore.class';
+import HiscoreService from '@/class/HiscoreService.class';
 
 @Component
 export default class Init extends Vue {
@@ -45,7 +45,7 @@ export default class Init extends Vue {
                 this.msg = 'Loading games';
                 gameList.init(config.gamesJsonPath);
 
-                const hiscore = new HiScore(config, mame.mameUiPath);
+                const hiscore = new HiscoreService(config, mame.mameUiPath);
                 this.$store.commit('setHiscore', hiscore);
 
                 const gameService = new GameService(config, mame, gameList, hiscore);
