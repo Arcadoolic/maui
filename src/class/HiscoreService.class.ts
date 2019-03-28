@@ -4,7 +4,7 @@ import {join} from 'path';
 import Config from '@/class/Config.class';
 import {writeFileSync, readFileSync} from 'fs';
 
-export default class HiScore {
+export default class HiscoreService {
     protected config!: Config;
     protected hiPath!: string;
 
