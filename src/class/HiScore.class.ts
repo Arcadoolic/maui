@@ -6,9 +6,11 @@ import {writeFileSync, readFileSync} from 'fs';
 
 export default class HiScore {
     protected config!: Config;
+    protected hiPath!: string;
 
-    public constructor(config: Config) {
+    public constructor(config: Config, hiPath: string) {
         this.config = config;
+        this.hiPath = hiPath;
     }
 
     /**
@@ -27,7 +29,7 @@ export default class HiScore {
                     '-descr',
                     join(hi2txtPath, 'hi2txt'),
                     '-ra',
-                    '/home/tpayen/.mame/hi/' + romName + '.hi', // TODO : Replace by ui.ini config
+                    join(this.hiPath, 'hi', romName + '.hi'),
                 ],
                 (error, stdout, stderr) => {
                     if (error) {
