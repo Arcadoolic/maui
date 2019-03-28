@@ -2,7 +2,7 @@ import {execFile} from 'child_process';
 import parse from 'csv-parse/lib/sync';
 import {join} from 'path';
 import Config from '@/class/Config.class';
-import {writeFileSync} from 'fs';
+import {writeFileSync, readFileSync} from 'fs';
 
 export default class HiScore {
     protected config!: Config;
@@ -15,7 +15,7 @@ export default class HiScore {
      * Get hiscores with hi2txt
      * @param romName
      */
-    public getHiscore(romName: string): Promise<{classic: any[], advanced: any[]} | string> {
+    public getHiscore(romName: string): Promise<{ classic: any[], advanced: any[] } | string> {
         return new Promise((resolve, reject) => {
             const hi2txtPath = join(process.env.NODE_ENV === 'development'
                 ? './resources' : process.resourcesPath!, 'hi2txt');
@@ -35,11 +35,12 @@ export default class HiScore {
                     }
 
                     const splitedStdout = stdout.split(/\n{2,}/);
-                    console.log(splitedStdout);
                     const ret = {classic: [] as any[], advanced: [] as any[]};
                     splitedStdout.forEach((hiscores: string, index) => {
-                        if (hiscores.trim() === '') return true;
-                        hiscores = parse(hiscores, {delimiter: '|', columns: true, skip_empty_lines: true})
+                        if (hiscores.trim() === '') {
+                            return true;
+                        }
+                        hiscores = parse(hiscores, {delimiter: '|', columns: true, skip_empty_lines: true});
                         if (index) {
                             ret.advanced.push(hiscores);
                         } else {
@@ -55,17 +56,26 @@ export default class HiScore {
      * Save hiscores in a json file
      * @param romName
      */
-    public saveHiscore(romName: string): Promise<string> {
+    public saveHiscore(romName: string): Promise<string|{classic: unknown[], advanced: unknown[]}> {
         return new Promise((resolve, reject) => {
             this.getHiscore(romName).then(
                 (hiscores) => {
                     writeFileSync(join(this.config.hiscoresJsonPath, romName + '.json'), JSON.stringify(hiscores));
-                    resolve('');
+                    resolve(hiscores);
                 },
                 (error) => {
                     reject(error);
                 },
             );
         });
+    }
+
+    public loadHiscore(romName: string): {classic: unknown[], advanced: unknown[]}|null {
+        try {
+            const hiscores = readFileSync(join(this.config.hiscoresJsonPath, romName + '.json'), 'utf8');
+            return JSON.parse(hiscores);
+        } catch (e) {
+            return null;
+        }
     }
 }
