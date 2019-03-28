@@ -212,24 +212,22 @@ export default class GameService {
     }
 
     public loadHiscores() {
+        if (!existsSync(this.config.hiscoresJsonPath)) {
+            mkdirSync(this.config.hiscoresJsonPath);
+        }
+
         for (const game of this.gameList.getGames()) {
             if (!game.hasHiscore) {
                 continue;
             }
-            let hiscores = this.hiscores.loadHiscore(game.romName);
-            if (hiscores) {
-                game.hiscores = hiscores;
-                continue;
-            }
             this.hiscores.saveHiscore(game.romName).then(
                 (hiscores) => {
-                    game.hiscores = hiscores as {classic: unknown[], advanced: unknown[]};
+                    game.hiscores = hiscores as {classic: Array<unknown>, advanced: Array<unknown>};
                 },
                 (error) => {
                     console.error('Error : hiscores on rom ' + game.romName);
                 },
             );
-            // Si pas de fichier hiscore.json on va le creer
         }
     }
 
