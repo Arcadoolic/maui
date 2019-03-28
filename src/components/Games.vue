@@ -13,6 +13,10 @@
                              :style="marqueeStyle(game, index)"
                         ></div>
                         <img :src="game.flyer" style="display: none" v-if="game.flyer.length"> <!-- To cache flyers without displaying them -->
+
+                        <ul>
+                            <li style="background: red" v-for="champion of game.champions">{{champion}}</li>
+                        </ul>
                     </li>
                 </transition>
             </ul>
@@ -265,7 +269,8 @@ export default class Games extends ControllableVue {
                     process.on('close', () => {
                         if (selectedGame.hasHiscore) {
                             this.hiscores.saveHiscore(selectedGame.romName).then(
-                                (hiscore: string) => {
+                                (hiscores) => {
+                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores = hiscores;
                                     console.log('Hiscores saved !');
                                 },
                                 (error: string) => {
