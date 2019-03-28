@@ -29,7 +29,7 @@ export default class GameCategory {
     }
 
     public get iconPath(): string {
-        const path = join(__static, 'categories', this.name.replace(/\W+/, '_').toLowerCase() + '.svg')
+        const path = join(__static, 'categories', this.name.replace(/\W+/, '_').toLowerCase() + '.svg');
         const url = format({
             pathname: path,
             protocol: 'file',
