@@ -8,6 +8,7 @@
         <Games :selectedCategory="selectedCategory" @gameChange="gameChange"></Games>
         <Categories @categoryChange="categoryChange"></Categories>
         <GamepadsComponent></GamepadsComponent>
+        <Hiscores :game="selectedGame" v-if="selectedGame.hasHiscore"></Hiscores>
     </span>
     <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
 
@@ -23,12 +24,14 @@ import Games from '@/components/Games.vue';
 import Game from '@/class/Game.class';
 import Gamepads from '@/class/Gamepads.class';
 import GamepadsComponent from '@/components/Gamepads.vue';
+import Hiscores from '@/components/Hiscores.vue';
 
 @Component({
     components: {
         Categories,
         Games,
         GamepadsComponent,
+        Hiscores,
     },
 })
 export default class Home extends Vue {
