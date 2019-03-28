@@ -20,7 +20,7 @@ import ControllableVue from '@/ControllableVue.vue';
 
 @Component
 export default class Categories extends ControllableVue {
-    protected categorySelectedId: number = 2;
+    protected categorySelectedId: number = 0;
 
     protected gameList = new GameList();
     protected categoriesFigure!: HTMLElement;
