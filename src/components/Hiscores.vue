@@ -9,18 +9,14 @@
 </template>
 
 <script lang="ts">
-    import ControllableVue from "@/ControllableVue.vue";
-    import {Component, Prop} from "vue-property-decorator";
-    import Game from "@/class/Game.class";
+import ControllableVue from '@/ControllableVue.vue';
+import {Component, Prop} from 'vue-property-decorator';
+import Game from '@/class/Game.class';
 
-    @Component
-    export default class Hiscores extends ControllableVue {
-        @Prop({required: true, type: Game}) protected game!: Game;
-
-        public mounted() {
-            console.log(this.game.shortname);
-        }
-    }
+@Component
+export default class Hiscores extends ControllableVue {
+    @Prop({required: true, type: Game}) protected game!: Game;
+}
 </script>
 
 <style scoped>
