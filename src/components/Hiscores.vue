@@ -1,10 +1,8 @@
 <template>
     <div>
-        <ul>
-            <li v-for="hiscore of game.hiscores.classic[0]">
-                {{hiscore.RANK}} - {{hiscore.NAME && hiscore.NAME.trim() !== '' ? hiscore.NAME : '???'}} - {{hiscore.SCORE}}
-            </li>
-        </ul>
+        <span v-for="hiscore of game.hiscores.classic[0]">
+            {{hiscore.RANK}} - {{hiscore.NAME && hiscore.NAME.trim() !== '' ? hiscore.NAME : '???'}} - {{hiscore.SCORE}}
+        </span>
     </div>
 </template>
 
@@ -22,11 +20,20 @@ export default class Hiscores extends ControllableVue {
 <style scoped>
     div {
         position: absolute;
-        background-color: red;
-        color: white;
         right: 10%;
         bottom: 0;
-        width: 30%;
+        width: 40%;
         height: 30%;
+        background-color: rgba(6,24,36,0.9);
+        box-shadow: 0 0 65px rgb(0, 0, 0);
+        color: #fff513;
+        font-family: 'Arcade_I', sans-serif;
+        text-shadow:
+            0 0 30px rgba(237, 106, 10, 0.8),
+            0 3px 0 rgb(255, 81, 0),
+            0 5px 20px rgba(255, 81, 0, 0.5),
+            0 6px 5px rgba(242, 0, 10, 0.7),
+            0 8px 5px rgba(0, 0, 0, 1);
+
     }
 </style>
