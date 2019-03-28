@@ -6,7 +6,7 @@ import {format} from 'url';
 declare const __static: string;
 
 export default class GameCategory {
-        protected name: string;
+    protected name: string;
     protected games: Game[] = [];
 
     public constructor(name: string) {
