@@ -104,11 +104,11 @@ export default class Game {
 
     public get champions() {
         if (!this.hasHiscore || !this.hiscores.classic[0]) return null;
-        let knowUser = ['SNO', 'NOB', 'PYV', 'AAA', 'BAB', 'BAA'];
+        const knownUsers = ["NOB", "ALN", "PHP", "ZEL", "GRE", "GUS", "GEO", "BEN", "NIP", "PBU", "MJO", "LOY", "TIB", "DID", "SEB", "SKI", "AKO", "LOL", "RAZ", "RIF", "ROM", "SAJ", "NSP", "FM", "TIP", "MYK", "LOI", "EG", "FRN", "MCH", "JUL", "JOE", "PYV", "SNO", "MAN", "FLO", "BGE", "MEH", "MAY"];
         const ret: string[] = [];
         for (const player of this.hiscores.classic[0] as []) {
             if (ret.length >= 3) break;
-            if (ret.indexOf((player as any).NAME) < 0 && knowUser.indexOf((player as any).NAME) >= 0) {
+            if (ret.indexOf((player as any).NAME) < 0 && knownUsers.indexOf((player as any).NAME) >= 0) {
                 ret.push((player as any).NAME);
             }
         }
