@@ -16,6 +16,8 @@ export default class Game {
     protected _marquee: string = '';
     protected _flyer: string = '';
 
+    protected _hiscores: {classic: unknown[], advanced: unknown[]} = {classic: [], advanced: []};
+
     /**
      * Init Game object from GameJSON data type
      * @param gameData
@@ -90,5 +92,26 @@ export default class Game {
 
     public get hasHiscore(): boolean {
         return this._hi;
+    }
+
+    public set hiscores(hiscores) {
+        this._hiscores = hiscores;
+    }
+
+    public get hiscores() {
+        return this._hiscores;
+    }
+
+    public get champions() {
+        if (!this.hasHiscore || !this.hiscores.classic[0]) return null;
+        let knowUser = ['SNO', 'NOB', 'PYV', 'AAA', 'BAB', 'BAA'];
+        const ret: string[] = [];
+        for (const player of this.hiscores.classic[0] as []) {
+            if (ret.length >= 3) break;
+            if (ret.indexOf((player as any).NAME) < 0 && knowUser.indexOf((player as any).NAME) >= 0) {
+                ret.push((player as any).NAME);
+            }
+        }
+        return ret;
     }
 }
