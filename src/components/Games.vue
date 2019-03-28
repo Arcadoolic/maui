@@ -73,7 +73,7 @@ export default class Games extends ControllableVue {
         /** Init vars */
         this.gameList = this.$store.getters.gameList;
         this.mame = this.$store.getters.mame;
-        this.hiscores = new HiScore(this.$store.getters.config);
+        this.hiscores = this.$store.getters.hiscore;
 
         this.flyerImage = this.selectedCategory.getGames()[0].flyer;
 
@@ -276,7 +276,7 @@ export default class Games extends ControllableVue {
                                 (error: string) => {
                                     console.log('Error Hiscore');
                                     console.error(error);
-                                }
+                                },
                             );
                         }
                     });
