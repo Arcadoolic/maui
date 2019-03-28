@@ -6,6 +6,8 @@ import {parse as iniParse} from 'ini';
 import GameList from '@/class/GameList.class';
 import {format} from 'url';
 import Helpers from '@/class/Helpers.class';
+import Hiscores from '@/components/Hiscores.vue';
+import HiScore from '@/class/HiScore.class';
 
 declare const __static: string;
 
@@ -35,12 +37,14 @@ export default class GameService {
     protected config!: Config;
     protected mame!: Mame;
     protected gameList!: GameList;
+    protected hiscores!: HiScore;
 
 
-    public constructor(config: Config, mame: Mame, gameList: GameList) {
+    public constructor(config: Config, mame: Mame, gameList: GameList, hiscores: HiScore) {
         this.config = config;
         this.mame = mame;
         this.gameList = gameList;
+        this.hiscores = hiscores;
     }
 
     /**
@@ -204,6 +208,28 @@ export default class GameService {
                     slashes: true,
                 });
             }
+        }
+    }
+
+    public loadHiscores() {
+        for (const game of this.gameList.getGames()) {
+            if (!game.hasHiscore) {
+                continue;
+            }
+            let hiscores = this.hiscores.loadHiscore(game.romName);
+            if (hiscores) {
+                game.hiscores = hiscores;
+                continue;
+            }
+            this.hiscores.saveHiscore(game.romName).then(
+                (hiscores) => {
+                    game.hiscores = hiscores as {classic: unknown[], advanced: unknown[]};
+                },
+                (error) => {
+                    console.error('Error : hiscores on rom ' + game.romName);
+                },
+            );
+            // Si pas de fichier hiscore.json on va le creer
         }
     }
 
