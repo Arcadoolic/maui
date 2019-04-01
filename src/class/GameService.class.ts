@@ -216,19 +216,25 @@ export default class GameService {
             mkdirSync(this.config.hiscoresJsonPath);
         }
 
+        const promises: any[] = [];
         for (const game of this.gameList.getGames()) {
             if (!game.hasHiscore) {
                 continue;
             }
-            this.hiscores.saveHiscore(game.romName).then(
-                (hiscores) => {
-                    game.hiscores = hiscores as {classic: Array<unknown>, advanced: Array<unknown>};
-                },
-                (error) => {
-                    console.error('Error : hiscores on rom ' + game.romName);
-                },
-            );
+            promises.push(new Promise((resolve, reject) => {
+                this.hiscores.saveHiscore(game.romName).then(
+                    (hiscores) => {
+                        game.hiscores = hiscores as {classic: Array<unknown>, advanced: Array<unknown>};
+                        resolve();
+                    },
+                    (error) => {
+                        console.error('Error : hiscores on rom ' + game.romName);
+                        resolve();
+                    },
+                );
+            }));
         }
+        return Promise.all(promises);
     }
 
 }
