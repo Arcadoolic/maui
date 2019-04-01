@@ -3,7 +3,8 @@ import Vuex from 'vuex';
 import GameList from '@/class/GameList.class';
 import Config from '@/class/Config.class';
 import Mame from '@/class/Mame.class';
-import HiScore from '@/class/HiScore.class';
+import HiscoreService from '@/class/HiscoreService.class';
+import Players from '@/class/Players.class';
 
 Vue.use(Vuex);
 
@@ -12,8 +13,9 @@ export default new Vuex.Store({
         config: new Config(),
         gameList: new GameList(),
         mame: new Mame(),
-        hiscore: null as HiScore|null,
+        hiscore: null as HiscoreService|null,
         isInit: false,
+        players: null as Players|null
     },
     getters: {
         gameList: (state) => {
@@ -25,19 +27,25 @@ export default new Vuex.Store({
         mame: (state): Mame => {
             return state.mame;
         },
-        hiscore: (state): HiScore => {
+        hiscore: (state): HiscoreService => {
             return state.hiscore!;
         },
         isInit: (state): boolean => {
             return state.isInit;
+        },
+        players: (state): Players => {
+            return state.players!;
         },
     },
     mutations: {
         isInit: (state) => {
             state.isInit = true;
         },
-        setHiscore: (state, hiscore: HiScore) => {
+        setHiscore: (state, hiscore: HiscoreService) => {
             state.hiscore = hiscore;
+        },
+        setPlayers: (state, players: Players) => {
+            state.players = players;
         },
     },
 });
