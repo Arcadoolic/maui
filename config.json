@@ -1,5 +1,6 @@
 {
     "mameIniPath": "/home/tpayen/.mame/mame.ini",
     "gamesJsonPath": "./games",
-    "hiscoresJsonPath": "./hiscores"
+    "hiscoresJsonPath": "./hiscores",
+    "faceyourmangaPath": "/home/tpayen/.mame/mamebox/faceyourmanga"
 }
