@@ -4,11 +4,13 @@ export default class Config {
     protected _defaultMameIni: string = '/etc/mame/mame.ini';
     protected _defaultGamesJsonPath: string = './games';
     protected _defaultHiscoresJsonPath: string = './hiscores';
+    protected _defaultFaceyourmangaPath: string = './faceyourmanga';
 
     protected _configLoaded: boolean = false;
     protected _mameIniPath?: string;
     protected _gamesJsonPath?: string;
     protected _hiscoresJsonPath?: string;
+    protected _faceyourmangaPath?: string;
 
     public load(): boolean {
         if (existsSync('./config.json')) {
@@ -16,6 +18,7 @@ export default class Config {
             this._mameIniPath = configFile.mameIniPath;
             this._gamesJsonPath = configFile.gamesJsonPath;
             this._hiscoresJsonPath = configFile.hiscoresJsonPath;
+            this._faceyourmangaPath = configFile.faceyourmangaPath;
             this._configLoaded = true;
             return true;
         }
@@ -44,6 +47,13 @@ export default class Config {
      * @return string
      */
     public get hiscoresJsonPath(): string {
-        return this._hiscoresJsonPath = this._defaultHiscoresJsonPath;
+        return this._hiscoresJsonPath || this._defaultHiscoresJsonPath;
+    }
+
+    /**
+     * @return string
+     */
+    public get faceyourmangaPath(): string {
+        return this._faceyourmangaPath || this._defaultFaceyourmangaPath;
     }
 }
