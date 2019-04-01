@@ -9,14 +9,10 @@
                             @leave="gameLeaveAnimation"
                 >
                     <li  :class="{selected: selectedGameId === index}" v-if="showGames">
-                        <div class="marquee"
-                             :style="marqueeStyle(game, index)"
-                        ></div>
+                        <div class="marquee" :style="marqueeStyle(game, index)">
+                            <Champions v-if="game.hasHiscore" :game="game"></Champions>
+                        </div>
                         <img :src="game.flyer" style="display: none" v-if="game.flyer.length"> <!-- To cache flyers without displaying them -->
-
-                        <ul>
-                            <li style="background: red" v-for="champion of game.champions">{{champion}}</li>
-                        </ul>
                     </li>
                 </transition>
             </ul>
@@ -38,14 +34,17 @@ import GameList from '@/class/GameList.class';
 import Mame from '@/class/Mame.class';
 import GameCategory from '@/class/GameCategory.class';
 import {ChildProcess} from 'child_process';
-import HiScore from '@/class/HiScore.class';
+import HiscoreService from '@/class/HiscoreService.class';
 import ControllableVue from '@/ControllableVue.vue';
 import Game from '@/class/Game.class';
 import Velocity from 'velocity-animate';
 import {remote} from 'electron';
 import Gamepads from '@/class/Gamepads.class';
+import Champions from '@/components/Champions.vue';
 
-@Component
+@Component({
+    components: {Champions},
+})
 export default class Games extends ControllableVue {
     protected timeouts: {[key: string]: any} = {
         moveUp: 0 as any,
@@ -56,7 +55,7 @@ export default class Games extends ControllableVue {
 
     protected gameList = new GameList();
     protected mame = new Mame();
-    protected hiscores!: HiScore;
+    protected hiscores!: HiscoreService;
 
     protected selectedGameId = 0;
 
@@ -376,6 +375,7 @@ export default class Games extends ControllableVue {
         border-radius: 5px;
         box-shadow: 0 0 30px #000000;
         margin-left: -100%;
+        position: relative;
     }
 
     .games ul li.selected .marquee {
@@ -397,4 +397,13 @@ export default class Games extends ControllableVue {
             background-repeat: no-repeat;
             background-size: cover;
         }
+
+
+    .champions {
+        position: absolute;
+        right: -10%;
+        height: 100%;
+        width: 100%;
+        /*transition: all 0.3s;*/
+    }
 </style>
