@@ -8,6 +8,7 @@ import {remote} from 'electron';
 import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
 import HiscoreService from '@/class/HiscoreService.class';
+import Players from '@/class/Players.class';
 
 @Component
 export default class Init extends Vue {
@@ -58,6 +59,12 @@ export default class Init extends Vue {
                 gameService.loadGamesFlyers();
                 this.msg = 'Load Hiscores';
                 gameService.loadHiscores();
+
+                this.msg = 'Load players';
+                const players = new Players(config.faceyourmangaPath);
+                this.$store.commit('setPlayers', players);
+                players.init();
+
                 resolve();
             } catch (e) {
                 reject(e.toString());
