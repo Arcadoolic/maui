@@ -58,14 +58,16 @@ export default class Init extends Vue {
                 this.msg = 'Loading flyers';
                 gameService.loadGamesFlyers();
                 this.msg = 'Load Hiscores';
-                gameService.loadHiscores();
+                gameService.loadHiscores().then(
+                    () => {
+                        this.msg = 'Load players';
+                        const players = new Players(config.faceyourmangaPath);
+                        this.$store.commit('setPlayers', players);
+                        players.init();
 
-                this.msg = 'Load players';
-                const players = new Players(config.faceyourmangaPath);
-                this.$store.commit('setPlayers', players);
-                players.init();
-
-                resolve();
+                        resolve();
+                    }
+                );
             } catch (e) {
                 reject(e.toString());
             }
