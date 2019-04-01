@@ -1,19 +1,19 @@
 <template>
     <div class="hiscores">
-        <div class="hiscore" :class="{first: hiscore.RANK === '1'}" v-for="hiscore of game.hiscores.classic[0]">
-            <div class="icon" v-if="hiscore.RANK !== '1'">
-                <img :src="players.getPlayerIcon(hiscore.NAME)" :alt="hiscore.NAME" v-if="players.playerExist(hiscore.NAME)">
+        <div class="hiscore" :class="{first: score.rank === '1'}" v-for="score of scores">
+            <div class="icon" v-if="score.rank !== '1'">
+                <img :src="score.icon" :alt="score.name" v-if="score.icon">
                 <img src="../assets/defaultPlayer.png" v-else>
             </div>
             <div class="info">
-                <span class="place">{{hiscore.RANK}}</span>
+                <span class="place">{{score.rank}}</span>
                 <div class="score_name">
-                    <p class="name">{{hiscore.NAME && hiscore.NAME.trim() !== '' ? hiscore.NAME : '???'}}</p>
-                    <p class="score">{{hiscore.SCORE}}</p>
+                    <p class="name">{{score.name}}</p>
+                    <p class="score">{{score.score}}</p>
                 </div>
             </div>
-            <div class="icon" v-if="hiscore.RANK === '1'">
-                <img :src="players.getPlayerIcon(hiscore.NAME)" :alt="hiscore.NAME" v-if="players.playerExist(hiscore.NAME)">
+            <div class="icon" v-if="score.rank === '1'">
+                <img :src="score.icon" :alt="score.name" v-if="score.icon">
                 <img src="../assets/defaultPlayer.png" v-else>
             </div>
         </div>
@@ -22,16 +22,36 @@
 
 <script lang="ts">
 import ControllableVue from '@/ControllableVue.vue';
-import {Component, Prop} from 'vue-property-decorator';
+import {Component, Prop, Watch} from "vue-property-decorator";
 import Game from '@/class/Game.class';
 
 @Component
 export default class Hiscores extends ControllableVue {
     @Prop({required: true, type: Game}) protected game!: Game;
-    protected players = {};
+    protected scores: any[] = [];
 
     public mounted() {
-        this.players = this.$store.getters.players;
+        this.onGameChange();
+    }
+
+    @Watch('game')
+    public onGameChange() {
+        console.log('Change');
+        const playersService = this.$store.getters.players;
+        this.scores = [];
+
+        if (this.game.hiscores.classic[0]) {
+            for (const score of this.game.hiscores.classic[0]) {
+                let isKnow = playersService.playerExist(score.NAME);
+                let name = score.NAME && score.NAME.trim() !== '' ? score.NAME : '???';
+                this.scores.push({
+                    name: isKnow ? name : '???',
+                    rank: score.RANK,
+                    score: isKnow ? score.SCORE : '???',
+                    icon: playersService.getPlayerIcon(score.NAME),
+                })
+            }
+        }
     }
 }
 </script>
