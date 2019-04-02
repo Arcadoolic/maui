@@ -8,6 +8,7 @@ interface GameJSON {
     category: string|null;
     romName: string;
     hi: boolean;
+    parent: string;
 }
 
 interface Nplayers {
