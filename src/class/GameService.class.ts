@@ -181,10 +181,18 @@ export default class GameService {
 
         for (const game of this.gameList.getGames()) {
             const marqueePath = join(marqueesPath, game.romName + '.png');
+            const parentMarqueePath = join(marqueesPath, game.parent + '.png');
 
+            let path: string|null = null;
             if (existsSync(marqueePath)) {
+                path = marqueePath;
+            } else if (existsSync(parentMarqueePath)) {
+                path = parentMarqueePath;
+            }
+
+            if (path) {
                 game.marquee = format({
-                    pathname: marqueePath,
+                    pathname: path,
                     protocol: 'file',
                     slashes: true,
                 });
