@@ -181,4 +181,16 @@ export default class Mame {
             console.log('error');
         }
     }
+
+    public getRomParent(romName: string) {
+        const cmdRet = execSync('mame -lc ' + romName + ' | grep \'^' + romName + '\'', {encoding: 'utf8'});
+        if (!cmdRet) {
+            return null;
+        }
+        const cmdRetSplit = cmdRet.split(/\s+/);
+        if (cmdRetSplit && cmdRetSplit[1]) {
+            return cmdRetSplit[1];
+        }
+        return null;
+    }
 }
