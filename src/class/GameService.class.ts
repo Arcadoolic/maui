@@ -134,6 +134,7 @@ export default class GameService {
             romName,
             nplayers: this.getGameNplayers(romName),
             category: this.getGameGenre(romName),
+            parent: this.mame.getRomParent(romName),
         };
     }
 
