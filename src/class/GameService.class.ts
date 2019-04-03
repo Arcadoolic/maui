@@ -221,7 +221,7 @@ export default class GameService {
 
             if (path) {
                 game.flyer = format({
-                    pathname: flyerPath,
+                    pathname: path,
                     protocol: 'file',
                     slashes: true,
                 });
