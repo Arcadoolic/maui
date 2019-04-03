@@ -33,7 +33,7 @@ export default class Categories extends ControllableVue {
          * Register key events
          */
         this.onKeydown((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
             switch (key) {
                 case 'ArrowLeft':
                     this.moveLeft();
@@ -45,7 +45,7 @@ export default class Categories extends ControllableVue {
         });
 
         this.onKeyup((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
         });
     }
 
