@@ -9,6 +9,7 @@ import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
 import HiscoreService from '@/class/HiscoreService.class';
 import Players from '@/class/Players.class';
+import IPDDatabase from '@/class/IPDDatabase.class';
 
 @Component
 export default class Init extends Vue {
@@ -58,16 +59,25 @@ export default class Init extends Vue {
                 this.msg = 'Loading flyers';
                 gameService.loadGamesFlyers();
                 this.msg = 'Load Hiscores';
-                gameService.loadHiscores().then(
-                    () => {
+                gameService.loadHiscores().then(() => {
                         this.msg = 'Load players';
                         const players = new Players(config.faceyourmangaPath);
                         this.$store.commit('setPlayers', players);
                         players.init();
 
-                        resolve();
-                    }
-                );
+                        // DB
+                        //TODO : Refacto
+                        const db = new IPDDatabase(config);
+                        this.$store.commit('setDb', db);
+                        db.connect().then(
+                            () => {
+                                resolve();
+                            },
+                            (err) => {
+                                throw new Error(err);
+                            }
+                        );
+                });
             } catch (e) {
                 reject(e.toString());
             }
