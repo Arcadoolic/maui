@@ -75,6 +75,7 @@ export default class Home extends ControllableVue {
      */
     protected categoryChange(categoryId: number) {
         this.selectedCategory = this.gameList.getCategories()[categoryId];
+        this.showHiscores = false;
     }
 
     /**
