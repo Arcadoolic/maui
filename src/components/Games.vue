@@ -265,11 +265,31 @@ export default class Games extends ControllableVue {
         this.mame.start(selectedGame).then(
             (process: ChildProcess|void) => {
                 if (process) {
+                    this.$store.getters.db.logGameStart(selectedGame.romName).then(
+                        (success) => {
+                            console.log('Start logged');
+                        },
+                        (error) => {
+                            console.log(error);
+                        }
+                    );
+
                     process.on('close', () => {
                         if (selectedGame.hasHiscore) {
                             this.hiscores.saveHiscore(selectedGame.romName).then(
                                 (hiscores) => {
-                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores = hiscores;
+                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores = hiscores as Hiscores;
+
+                                    this.$store.getters.db.saveHiscores(
+                                        selectedGame.romName, (hiscores as Hiscores).classic[0])
+                                        .then(
+                                            (success) => {
+                                                console.log('HISCORE DB');
+                                            },
+                                            (error) => {
+                                                console.error(error);
+                                            }
+                                        );
                                     console.log('Hiscores saved !');
                                 },
                                 (error: string) => {
