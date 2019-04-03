@@ -54,7 +54,6 @@ export default class Home extends ControllableVue {
 
         this.onKeydown((e: Event, isGamepad: boolean) => {
             const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-            console.log(key);
             switch (key) {
                 case 'Space':
                     this.showHiscores = !this.showHiscores;
