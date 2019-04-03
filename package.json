@@ -2,7 +2,7 @@
     "name": "arcade2",
     "description": "Frontend for Mame",
     "author": "IPD",
-    "version": "0.1.0",
+    "version": "0.9.1",
     "private": true,
     "scripts": {
         "serve": "vue-cli-service serve",
