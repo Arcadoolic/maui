@@ -5,6 +5,7 @@ import Config from '@/class/Config.class';
 import Mame from '@/class/Mame.class';
 import HiscoreService from '@/class/HiscoreService.class';
 import Players from '@/class/Players.class';
+import IPDDatabase from '@/class/IPDDatabase.class';
 
 Vue.use(Vuex);
 
@@ -15,7 +16,8 @@ export default new Vuex.Store({
         mame: new Mame(),
         hiscore: null as HiscoreService|null,
         isInit: false,
-        players: null as Players|null
+        players: null as Players|null,
+        db: null as IPDDatabase|null,
     },
     getters: {
         gameList: (state) => {
@@ -36,6 +38,9 @@ export default new Vuex.Store({
         players: (state): Players => {
             return state.players!;
         },
+        db: (state): IPDDatabase => {
+            return state.db!;
+        },
     },
     mutations: {
         isInit: (state) => {
@@ -46,6 +51,9 @@ export default new Vuex.Store({
         },
         setPlayers: (state, players: Players) => {
             state.players = players;
+        },
+        setDb: (state, db: IPDDatabase) => {
+            state.db = db;
         },
     },
 });
