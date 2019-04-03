@@ -10,7 +10,7 @@
 </template>
 
 <script lang="ts">
-import {Component, Prop, Vue} from 'vue-property-decorator';
+import {Component, Prop, Vue, Watch} from 'vue-property-decorator';
 import Game from '../class/Game.class';
 
 @Component
@@ -19,6 +19,11 @@ export default class Champions extends Vue {
     protected champions: {name: string, icon: string}[] = [];
 
     public mounted() {
+        this.onGameChange();
+    }
+
+    @Watch('game.hiscore')
+    public onGameChange() {
         if (!this.game.hiscores || !this.game.hiscores.classic || !this.game.hiscores.classic[0]) {
             return;
         }
