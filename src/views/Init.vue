@@ -69,6 +69,7 @@ export default class Init extends Vue {
                         //TODO : Refacto
                         const db = new IPDDatabase(config);
                         this.$store.commit('setDb', db);
+                        this.msg = 'Init database';
                         db.connect().then(
                             () => {
                                 resolve();
