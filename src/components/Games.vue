@@ -77,7 +77,7 @@ export default class Games extends ControllableVue {
         this.flyerImage = this.selectedCategory.getGames()[0].flyer;
 
         this.onKeydown((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
             switch (key) {
                 case 'ArrowUp':
                     this.transitionTime = 0.5;
@@ -94,7 +94,7 @@ export default class Games extends ControllableVue {
         });
 
         this.onKeyup((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).key;
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
             switch (key) {
                 case 'ArrowUp':
                     clearTimeout(this.timeouts.moveUp);
