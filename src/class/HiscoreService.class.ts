@@ -17,7 +17,7 @@ export default class HiscoreService {
      * Get hiscores with hi2txt
      * @param romName
      */
-    public getHiscore(romName: string): Promise<{ classic: any[], advanced: any[] } | string> {
+    public getHiscore(romName: string): Promise<Hiscores | string> {
         return new Promise((resolve, reject) => {
             const hi2txtPath = join(process.env.NODE_ENV === 'development'
                 ? './resources' : process.resourcesPath!, 'hi2txt');
@@ -58,7 +58,7 @@ export default class HiscoreService {
      * Save hiscores in a json file
      * @param romName
      */
-    public saveHiscore(romName: string): Promise<string|{classic: unknown[], advanced: unknown[]}> {
+    public saveHiscore(romName: string): Promise<string|Hiscores> {
         return new Promise((resolve, reject) => {
             this.getHiscore(romName).then(
                 (hiscores) => {
