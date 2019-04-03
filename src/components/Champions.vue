@@ -24,6 +24,7 @@ export default class Champions extends Vue {
 
     @Watch('game.hiscores')
     public onGameChange() {
+        this.champions = [];
         if (!this.game.hiscores || !this.game.hiscores.classic || !this.game.hiscores.classic[0]) {
             return;
         }
