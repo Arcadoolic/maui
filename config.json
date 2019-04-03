@@ -2,5 +2,11 @@
     "mameIniPath": "/home/tpayen/.mame/mame.ini",
     "gamesJsonPath": "./games",
     "hiscoresJsonPath": "./hiscores",
-    "faceyourmangaPath": "/home/tpayen/.mame/mamebox/faceyourmanga"
+    "faceyourmangaPath": "/home/tpayen/.mame/mamebox/faceyourmanga",
+    "db": {
+        "host": "arcade.gisi-interactive.net",
+        "user": "arcade",
+        "password": "k40aJZtkJPiwAw1P",
+        "database": "arcade"
+    }
 }

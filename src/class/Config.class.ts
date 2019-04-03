@@ -1,16 +1,19 @@
 import {existsSync, readFileSync} from 'fs';
+import {ConnectionConfig} from 'mysql';
 
 export default class Config {
     protected _defaultMameIni: string = '/etc/mame/mame.ini';
     protected _defaultGamesJsonPath: string = './games';
     protected _defaultHiscoresJsonPath: string = './hiscores';
     protected _defaultFaceyourmangaPath: string = './faceyourmanga';
+    protected _defaultDb: ConnectionConfig = {host: 'localhost', user: 'root', password: '', database: 'mame'};
 
     protected _configLoaded: boolean = false;
     protected _mameIniPath?: string;
     protected _gamesJsonPath?: string;
     protected _hiscoresJsonPath?: string;
     protected _faceyourmangaPath?: string;
+    protected _db?: ConnectionConfig;
 
     public load(): boolean {
         if (existsSync('./config.json')) {
@@ -19,6 +22,7 @@ export default class Config {
             this._gamesJsonPath = configFile.gamesJsonPath;
             this._hiscoresJsonPath = configFile.hiscoresJsonPath;
             this._faceyourmangaPath = configFile.faceyourmangaPath;
+            this._db = configFile.db;
             this._configLoaded = true;
             return true;
         }
@@ -55,5 +59,9 @@ export default class Config {
      */
     public get faceyourmangaPath(): string {
         return this._faceyourmangaPath || this._defaultFaceyourmangaPath;
+    }
+
+    public get db(): ConnectionConfig {
+        return this._db || this._defaultDb;
     }
 }
