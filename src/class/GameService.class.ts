@@ -210,7 +210,16 @@ export default class GameService {
 
         for (const game of this.gameList.getGames()) {
             const flyerPath = join(flyersPath, game.romName + '.png');
+            const parentFlyerPath = join(flyersPath, game.parent + '.png');
+
+            let path: string|null = null;
             if (existsSync(flyerPath)) {
+                path = flyersPath;
+            } else if (existsSync(parentFlyerPath)) {
+                path = parentFlyerPath;
+            }
+
+            if (path) {
                 game.flyer = format({
                     pathname: flyerPath,
                     protocol: 'file',
