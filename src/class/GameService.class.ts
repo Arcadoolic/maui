@@ -214,7 +214,7 @@ export default class GameService {
 
             let path: string|null = null;
             if (existsSync(flyerPath)) {
-                path = flyersPath;
+                path = flyerPath;
             } else if (existsSync(parentFlyerPath)) {
                 path = parentFlyerPath;
             }
