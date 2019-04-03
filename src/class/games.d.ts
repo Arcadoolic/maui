@@ -15,3 +15,14 @@ interface Nplayers {
     sim: number;
     alt: number;
 }
+
+interface Hiscore {
+    RANK: number;
+    NAME: string;
+    SCORE: number;
+}
+
+interface Hiscores {
+    classic: Hiscore[][];
+    advanced: Hiscore[][];
+}

@@ -17,7 +17,7 @@ export default class Game {
     protected _marquee: string = '';
     protected _flyer: string = '';
 
-    protected _hiscores: {classic: unknown[], advanced: unknown[]} = {classic: [], advanced: []};
+    protected _hiscores: Hiscores = {classic: [], advanced: []};
 
     /**
      * Init Game object from GameJSON data type
@@ -99,7 +99,7 @@ export default class Game {
         this._hiscores = hiscores;
     }
 
-    public get hiscores() {
+    public get hiscores(): Hiscores {
         return this._hiscores;
     }
 
