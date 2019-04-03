@@ -63,15 +63,9 @@ export default class Mame {
                 return reject();
             }
 
-            const args = [game.romName!];
-            if (process.env.NODE_ENV === 'development') {
-                args.push('-w');
-                args.push('-nomax');
-            }
-
             this.stop().then(
                 () => {
-                    this.process = execFile('mame', args, {
+                    this.process = execFile('mame', [game.romName!], {
                             killSignal: 'SIGQUIT',
                             cwd: this.mameUiPath,
                         },
