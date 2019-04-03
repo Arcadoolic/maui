@@ -36,7 +36,6 @@ export default class Hiscores extends ControllableVue {
 
     @Watch('game.hiscores')
     public onGameChange() {
-        console.log('Change');
         const playersService = this.$store.getters.players;
         this.scores = [];
 
