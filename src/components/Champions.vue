@@ -22,7 +22,7 @@ export default class Champions extends Vue {
         this.onGameChange();
     }
 
-    @Watch('game.hiscore')
+    @Watch('game.hiscores')
     public onGameChange() {
         if (!this.game.hiscores || !this.game.hiscores.classic || !this.game.hiscores.classic[0]) {
             return;
