@@ -233,7 +233,7 @@ export default class GameService {
             promises.push(new Promise((resolve, reject) => {
                 this.hiscores.saveHiscore(game.romName).then(
                     (hiscores) => {
-                        game.hiscores = hiscores as {classic: Array<unknown>, advanced: Array<unknown>};
+                        game.hiscores = hiscores as Hiscores;
                         resolve();
                     },
                     (error) => {
