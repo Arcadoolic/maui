@@ -1,51 +1,46 @@
 'use strict';
 
-import {app, protocol, BrowserWindow} from 'electron';
+import {app, protocol, BrowserWindow, ipcMain} from 'electron';
 import {
     createProtocol,
     installVueDevtools
 } from 'vue-cli-plugin-electron-builder/lib';
+import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
+let createdAppProtocol = false;
 let win: BrowserWindow|null;
 
 // Standard scheme must be registered before the app is ready
 protocol.registerStandardSchemes(['app'], {secure: true});
 
-function createWindow() {
+function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
     // Create the browser window.
-    win = new BrowserWindow({
-        width: 300,
-        height: 400,
-        webPreferences: {
-            webSecurity: false
-        },
-        show: false,
-        backgroundColor: '#000000'
-    });
+    let winVar: BrowserWindow|null = new BrowserWindow(options);
 
     if (process.env.WEBPACK_DEV_SERVER_URL) {
         // Load the url of the dev server if in development mode
-        win.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string);
+        console.log(process.env.WEBPACK_DEV_SERVER_URL as string + path);
+        winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + path);
         if (!process.env.IS_TEST) {
-            win.webContents.openDevTools();
+            winVar.webContents.openDevTools();
         }
     } else {
-        createProtocol('app');
+        if (!createdAppProtocol) {
+            createProtocol('app');
+            createdAppProtocol = true;
+        }
         // Load the index.html when not in development
-        win.loadURL('app://./index.html');
+        winVar.loadURL('app://./index.html/' + path);
     }
 
-    win.once('ready-to-show', () =>{
-        win!.show();
+    winVar.on('closed', () => {
+        winVar = null;
     });
-
-    win.on('closed', () => {
-        win = null;
-    });
+    return winVar;
 }
 
 // Quit when all windows are closed.
@@ -60,9 +55,9 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
-    if (win === null) {
-        createWindow();
-    }
+    // if (win === null) {
+    //     win = createMainWin();
+    // }
 });
 
 // This method will be called when Electron has finished
@@ -73,7 +68,14 @@ app.on('ready', async () => {
         // Install Vue Devtools
         await installVueDevtools();
     }
-    createWindow();
+    win = createSplashWin();
+    ipcMain.on('init-end', () => {
+        win!.hide();
+        updateToMain(win!);
+        win!.once('ready-to-show', () => {
+            win!.show();
+        });
+    })
 });
 
 // Exit cleanly on request from parent process in development mode.
@@ -89,4 +91,20 @@ if (isDevelopment) {
             app.quit()
         })
     }
+}
+
+function updateToMain(win: BrowserWindow) {
+    win.setFullScreen(true);
+}
+
+function createSplashWin() {
+    return createWindow({
+        width: 300,
+        height: 400,
+        webPreferences: {
+            webSecurity: false
+        },
+        backgroundColor: '#000000',
+        frame: false
+    }, 'init');
 }

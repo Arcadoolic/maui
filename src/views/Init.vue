@@ -1,36 +1,36 @@
 <template>
-    <p>{{msg}}</p>
+    <div>
+        <p>Starting Arcade !</p>
+        <p>{{msg}}</p>
+    </div>
 </template>
 
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
-import {remote} from 'electron';
 import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
 import HiscoreService from '@/class/HiscoreService.class';
 import Players from '@/class/Players.class';
 import IPDDatabase from '@/class/IPDDatabase.class';
+import {ipcRenderer} from 'electron';
 
 @Component
 export default class Init extends Vue {
     protected msg: string = 'Chargement';
 
     public mounted() {
-        this.init().then(
-            () => {
-                if (process.env.NODE_ENV !== 'production' && !process.env.IS_TEST) {
-                    remote.getCurrentWindow().setSize(800, 600);
-                } else {
-                    remote.getCurrentWindow().setSize(screen.width, screen.height);
-                    remote.getCurrentWindow().setFullScreen(true);
-                }
-                this.$store.commit('isInit');
-                this.$router.push({name: 'home'});
-            },
-            (error) => {
-                this.msg = error;
-            },
-        );
+        setTimeout(() => {
+            this.init().then(
+                () => {
+                    this.$store.commit('isInit');
+                    ipcRenderer.send('init-end');
+                    this.$router.push({name: 'home'});
+                },
+                (error) => {
+                    console.error(error);
+                },
+            );
+        }, 100);
     }
 
     protected init() {
@@ -75,7 +75,7 @@ export default class Init extends Vue {
                                 resolve();
                             },
                             (err) => {
-                                throw new Error(err);
+                                reject(err);
                             },
                         );
                 });
