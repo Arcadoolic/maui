@@ -271,14 +271,15 @@ export default class Games extends ControllableVue {
                         },
                         (error) => {
                             console.log(error);
-                        }
+                        },
                     );
 
                     process.on('close', () => {
                         if (selectedGame.hasHiscore) {
                             this.hiscores.saveHiscore(selectedGame.romName).then(
                                 (hiscores) => {
-                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores = hiscores as Hiscores;
+                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores
+                                        = hiscores as Hiscores;
 
                                     this.$store.getters.db.saveHiscores(
                                         selectedGame.romName, (hiscores as Hiscores).classic[0])
@@ -288,7 +289,7 @@ export default class Games extends ControllableVue {
                                             },
                                             (error) => {
                                                 console.error(error);
-                                            }
+                                            },
                                         );
                                     console.log('Hiscores saved !');
                                 },

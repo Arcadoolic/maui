@@ -66,7 +66,7 @@ export default class Init extends Vue {
                         players.init();
 
                         // DB
-                        //TODO : Refacto
+                        // TODO : Refacto
                         const db = new IPDDatabase(config);
                         this.$store.commit('setDb', db);
                         this.msg = 'Init database';
@@ -76,7 +76,7 @@ export default class Init extends Vue {
                             },
                             (err) => {
                                 throw new Error(err);
-                            }
+                            },
                         );
                 });
             } catch (e) {

@@ -72,7 +72,7 @@ export default class HiscoreService {
         });
     }
 
-    public loadHiscore(romName: string): {classic: unknown[], advanced: unknown[]}|null {
+    public loadHiscore(romName: string): Hiscores|null {
         try {
             const hiscores = readFileSync(join(this.config.hiscoresJsonPath, romName + '.json'), 'utf8');
             return JSON.parse(hiscores);

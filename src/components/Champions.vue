@@ -16,7 +16,7 @@ import Game from '../class/Game.class';
 @Component
 export default class Champions extends Vue {
     @Prop({required: true, type: Game}) protected game!: Game;
-    protected champions: {name: string, icon: string}[] = [];
+    protected champions: Array<{name: string, icon: string}> = [];
 
     public mounted() {
         this.onGameChange();
@@ -29,14 +29,14 @@ export default class Champions extends Vue {
             return;
         }
         const players = this.$store.getters.players;
-        let championsName: string[] = [];
+        const championsName: string[] = [];
         for (const player of this.game.hiscores.classic[0] as any[]) {
             if (this.champions.length >= 3) { break; }
             if (players.playerExist(player.NAME) && championsName.indexOf(player.NAME) < 0) {
                 championsName.push(player.NAME);
                 this.champions.push({
                     name: player.NAME,
-                    icon: players.getPlayerIcon(player.NAME)
+                    icon: players.getPlayerIcon(player.NAME),
                 });
             }
         }

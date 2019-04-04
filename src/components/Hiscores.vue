@@ -22,7 +22,7 @@
 
 <script lang="ts">
 import ControllableVue from '@/ControllableVue.vue';
-import {Component, Prop, Watch} from "vue-property-decorator";
+import {Component, Prop, Watch} from 'vue-property-decorator';
 import Game from '@/class/Game.class';
 
 @Component
@@ -41,14 +41,14 @@ export default class Hiscores extends ControllableVue {
 
         if (this.game.hiscores.classic[0]) {
             for (const score of this.game.hiscores.classic[0]) {
-                let isKnow = playersService.playerExist(score.NAME);
-                let name = score.NAME && score.NAME.trim() !== '' ? score.NAME : '???';
+                const isKnow = playersService.playerExist(score.NAME);
+                const name = score.NAME && score.NAME.trim() !== '' ? score.NAME : '???';
                 this.scores.push({
                     name: isKnow ? name : '???',
                     rank: score.RANK,
                     score: isKnow ? score.SCORE : '???',
                     icon: playersService.getPlayerIcon(score.NAME),
-                })
+                });
             }
         }
     }
