@@ -1,5 +1,5 @@
 <template>
-    <span>
+    <span class="home">
         <div class="gameTitle" v-if="selectedGame">
             <h1>{{selectedGame.shortname}}</h1>
             <p>({{selectedGame.year}}, {{selectedGame.nplayerString}})</p>
@@ -89,6 +89,17 @@ export default class Home extends ControllableVue {
 </script>
 
 <style scoped>
+    .home {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background-color: #000000;
+        background-image:  url(../assets/background.jpg);
+        background-size: cover;
+        background-repeat: repeat;
+        background-position: 0 0;
+    }
+
     .gameTitle {
         position: absolute;
         width: 100%;
