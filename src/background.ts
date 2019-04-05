@@ -23,8 +23,7 @@ function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWi
 
     if (process.env.WEBPACK_DEV_SERVER_URL) {
         // Load the url of the dev server if in development mode
-        console.log(process.env.WEBPACK_DEV_SERVER_URL as string + path);
-        winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + path);
+        winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + '#/' + path);
         if (!process.env.IS_TEST) {
             winVar.webContents.openDevTools();
         }
@@ -34,7 +33,7 @@ function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWi
             createdAppProtocol = true;
         }
         // Load the index.html when not in development
-        winVar.loadURL('app://./index.html/' + path);
+        winVar.loadURL('app://./index.html');
     }
 
     winVar.on('closed', () => {
