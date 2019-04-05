@@ -33,11 +33,10 @@ export default class GameCategory {
         if (!existsSync(path)) {
             path = join(__static, 'categories', '_default.svg');
         }
-        const url = format({
+        return format({
             pathname: path,
             protocol: 'file',
             slashes: true,
         });
-        return url;
     }
 }
