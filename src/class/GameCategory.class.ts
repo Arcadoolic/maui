@@ -29,15 +29,15 @@ export default class GameCategory {
     }
 
     public get iconPath(): string {
-        const path = join(__static, 'categories', this.name.replace(/\W+/, '_').toLowerCase() + '.svg');
+        let path = join(__static, 'categories', this.name.replace(/\W+/, '_').toLowerCase() + '.svg');
+        if (!existsSync(path)) {
+            path = join(process.env.BASE_URL!, 'categories', '_default.svg');
+        }
         const url = format({
             pathname: path,
             protocol: 'file',
             slashes: true,
         });
-        if (existsSync(path)) {
-            return url;
-        }
-        return join(process.env.BASE_URL!, 'categories', '_default.svg');
+        return url;
     }
 }
