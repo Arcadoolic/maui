@@ -62,24 +62,17 @@ export default class App extends Vue {
         overflow: hidden;
     }
 
-    body{
-        background-color: #000000;
-        background-image:  url('./assets/background.jpg');
-        background-size: cover;
-        background-repeat: repeat;
-        background-position: 0 0;
-        font-family: 'Arcade_I', sans-serif;
-        transform: translateZ(0);
+    body {
         height: 100%;
         width: 100%;
+        font-family: 'Arcade_I', sans-serif;
+        transform: translateZ(0);
     }
 
     #app {
         height: 100%;
         width: 100%;
     }
-
-
 
     /******************************************/
     /*/////////////// POLICES ////////////////*/
@@ -97,52 +90,5 @@ export default class App extends Vue {
     @font-face {
         font-family: Arcade_R;
         src: url('./assets/fonts/ARCADE_R.TTF');
-    }
-
-    nav {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 2;
-        height: 5px;
-        background: red;
-        transition: height 0.2s;
-    }
-
-    nav.hovered {
-        height: 60px;
-    }
-
-    nav p {
-        padding: 0;
-        margin: 0;
-        display: none;
-    }
-
-    nav.hovered p {
-        display: inline-block;
-    }
-
-    .info-messages {
-        width: 100%;
-        height: 100%;
-        display: table;
-    }
-        .info-messages > * {
-            display: table-cell;
-            vertical-align: middle;
-            text-align: center;
-            color: white;
-        }
-
-    .loading {
-        font-size: 5vw;
-        color: blue;
-    }
-
-    .error {
-        font-size: 3vw;
-        color: red;
     }
 </style>
