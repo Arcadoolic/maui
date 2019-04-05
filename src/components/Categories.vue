@@ -3,13 +3,6 @@
         <div class="category" v-for="(category, index) in gameList.getCategories()" :class="getCategoryClasses(index)">
             <img :src="category.iconPath" alt="">
         </div>
-        <!--<figure ref="categoriesFigure">-->
-            <!--<div class="category" :class="{selected: categorySelectedId === index, first: !index, last: index === gameList.getCategories().length, next: index === categorySelectedId + 1, previous: index === categorySelectedId - 1}"-->
-                 <!--v-for="(category, index) in gameList.getCategories()"-->
-            <!--&gt;-->
-                <!--<p>{{category.name}}</p>-->
-            <!--</div>-->
-        <!--</figure>-->
     </div>
 </template>
 
