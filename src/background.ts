@@ -98,8 +98,8 @@ function updateToMain(win: BrowserWindow) {
 
 function createSplashWin() {
     return createWindow({
-        width: 300,
-        height: 400,
+        width: 692,
+        height: 708,
         webPreferences: {
             webSecurity: false
         },
