@@ -41,6 +41,7 @@ import Velocity from 'velocity-animate';
 import {remote} from 'electron';
 import Gamepads from '@/class/Gamepads.class';
 import Champions from '@/components/Champions.vue';
+import {appendFileSync} from 'fs';
 
 @Component({
     components: {Champions},
@@ -288,6 +289,7 @@ export default class Games extends ControllableVue {
                                                 console.log('HISCORE DB');
                                             },
                                             (error) => {
+                                                appendFileSync('~/arcade_error.log', '[' + Date.now() +' ][' + selectedGame.romName + ']' + error);
                                                 console.error(error);
                                             },
                                         );

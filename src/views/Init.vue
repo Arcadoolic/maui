@@ -10,6 +10,7 @@ import HiscoreService from '@/class/HiscoreService.class';
 import Players from '@/class/Players.class';
 import IPDDatabase from '@/class/IPDDatabase.class';
 import {ipcRenderer} from 'electron';
+import {appendFileSync} from 'fs';
 
 @Component
 export default class Init extends Vue {
@@ -52,7 +53,7 @@ export default class Init extends Vue {
 
                     // DB
                     // TODO : Refacto
-                    const db = new IPDDatabase(config);
+                    const db = new IPDDatabase(config, players);
                     this.$store.commit('setDb', db);
                     console.log('Init database');
                     db.connect().then(
@@ -63,6 +64,7 @@ export default class Init extends Vue {
                             this.$router.push({name: 'home'});
                         },
                         (err) => {
+                            appendFileSync('~/arcade_error.log', '[' + Date.now() +' ]' + err);
                             console.error(err);
                         },
                     );
