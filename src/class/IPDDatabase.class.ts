@@ -1,12 +1,15 @@
 import Config from '@/class/Config.class';
 import {createConnection, Connection} from 'mysql';
+import Players from '@/class/Players.class';
 
 export default class IPDDatabase {
     protected config!: Config;
     protected db?: Connection;
+    protected players!: Players;
 
-    public constructor(config: Config) {
+    public constructor(config: Config, players: Players) {
         this.config = config;
+        this.players = players;
     }
 
     public connect() {
@@ -46,6 +49,9 @@ export default class IPDDatabase {
             }
             let query = 'INSERT IGNORE INTO hiscores_history (id, rank, player_name, score) VALUES';
             for (const hiscore of hiscores) {
+                if (!this.players.playerExist(hiscore.NAME)) {
+                    continue;
+                }
                 query = query.concat(
                     ' ("',
                     romName,
@@ -59,7 +65,6 @@ export default class IPDDatabase {
                 );
             }
             query = query.slice(0, -1);
-            console.log(query);
             this.db.query(query, (err) => {
                 if (err) {
                     return reject(err);
