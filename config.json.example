@@ -4,9 +4,9 @@
     "hiscoresJsonPath": "./hiscores",
     "faceyourmangaPath": "/home/tpayen/.mame/mamebox/faceyourmanga",
     "db": {
-        "host": "arcade.gisi-interactive.net",
-        "user": "arcade",
-        "password": "k40aJZtkJPiwAw1P",
+        "host": "gluten",
+        "user": "dev",
+        "password": "d3v",
         "database": "arcade"
     }
 }
