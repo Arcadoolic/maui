@@ -46,7 +46,7 @@ export default class Hiscores extends ControllableVue {
                 this.scores.push({
                     name: isKnow ? name : '???',
                     rank: score.RANK,
-                    score: isKnow ? score.SCORE : '???',
+                    score: score.SCORE,
                     icon: playersService.getPlayerIcon(score.NAME),
                 });
             }
