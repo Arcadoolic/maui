@@ -29,6 +29,7 @@ import Gamepads from '@/class/Gamepads.class';
 import GamepadsComponent from '@/components/Gamepads.vue';
 import Hiscores from '@/components/Hiscores.vue';
 import ControllableVue from '@/ControllableVue.vue';
+import {remote} from 'electron';
 
 @Component({
     components: {
@@ -45,6 +46,7 @@ export default class Home extends ControllableVue {
     protected selectedGameId: number = 0;
     protected selectedGame: Game|null = null;
     protected showHiscores: boolean = false;
+    protected closeTimeout: any = 0;
 
     public created() {
         this.gameList = this.$store.getters.gameList;
@@ -57,12 +59,20 @@ export default class Home extends ControllableVue {
             switch (key) {
                 case 'Space':
                     this.showHiscores = !this.showHiscores;
+                    this.closeTimeout = setTimeout(() => {
+                        remote.getCurrentWindow().close();
+                    }, 3000);
                     break;
             }
         });
 
         this.onKeyup((e: Event, isGamepad: boolean) => {
             const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+            switch (key) {
+                case 'Space':
+                    clearTimeout(this.closeTimeout);
+                    break;
+            }
         });
 
         Gamepads.init();
