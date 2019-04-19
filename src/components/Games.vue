@@ -38,7 +38,6 @@ import HiscoreService from '@/class/HiscoreService.class';
 import ControllableVue from '@/ControllableVue.vue';
 import Game from '@/class/Game.class';
 import Velocity from 'velocity-animate';
-import {remote} from 'electron';
 import Gamepads from '@/class/Gamepads.class';
 import Champions from '@/components/Champions.vue';
 import {appendFileSync} from 'fs';
@@ -52,7 +51,6 @@ export default class Games extends ControllableVue {
         moveDown: 0 as any,
         showFlyer: 0 as any,
     };
-
 
     protected gameList = new GameList();
     protected mame = new Mame();
@@ -68,6 +66,7 @@ export default class Games extends ControllableVue {
     protected flyerImage: string|null = null;
 
     @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
+    @Prop({type: Boolean, default: true}) protected focused!: boolean;
 
     public created() {
         /** Init vars */
@@ -79,6 +78,7 @@ export default class Games extends ControllableVue {
 
         this.onKeydown((e: Event, isGamepad: boolean) => {
             const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+            console.log(key);
             switch (key) {
                 case 'ArrowUp':
                     this.transitionTime = 0.5;
@@ -113,14 +113,6 @@ export default class Games extends ControllableVue {
 
     public mounted() {
         this.showGames = true;
-
-        // Electron event
-        remote.getCurrentWindow().on('blur', () => {
-            Gamepads.stopGamepadsListeners();
-        });
-        remote.getCurrentWindow().on('focus', () => {
-            Gamepads.init();
-        });
     }
 
     /***
@@ -218,6 +210,7 @@ export default class Games extends ControllableVue {
      * Called on move up
      */
     protected moveUp(speed: number, incrementer = 1) {
+        if (!this.focused) return;
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -239,6 +232,7 @@ export default class Games extends ControllableVue {
      * Called on move down
      */
     protected moveDown(speed: number, incrementer = 1) {
+        if (!this.focused) return;
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -262,6 +256,7 @@ export default class Games extends ControllableVue {
      * Start a game
      */
     protected startGame() {
+        if (!this.focused) return;
         const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
         this.mame.start(selectedGame).then(
             (process: ChildProcess|void) => {
