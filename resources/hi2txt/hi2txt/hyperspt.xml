@@ -49,60 +49,60 @@
     </loop>
     <elt size="6" type="raw"  id="PADDING"/>
     <loop count="3">
-      <elt size="3" type="int"  id="TODAYS SCORE" nibble-skip="odd" base="16"/>
+      <elt size="3" type="int"  id="TODAYS SCORE" base="16"/>
       <elt size="3" type="text" id="TODAYS NAME" charset="hyperspt" ascii-offset="48"/>
     </loop>
     <loop count="20">
-      <elt size="3" type="int"  id="SCORE" nibble-skip="odd" base="16"/>
+      <elt size="3" type="int"  id="SCORE" base="16"/>
       <elt size="3" type="text" id="NAME" charset="hyperspt" ascii-offset="48"/>
     </loop>
   </structure>
     
   <output>
-    <table id="TOP SCORES">
-      <column id="RANK" src="index" format="+1"/>
-      <column id="SCORE"/>
-      <column id="NAME"/>
-    </table>
-    <table id="TODAYS TOP SCORES">
+    <table id="HYPER MEDALIST">
       <column id="RANK" src="index" format="+1" display="extra"/>
-      <column id="TODAYS SCORE"                 display="extra"/>
+      <column id="TODAYS SCORE" format="*10" display="extra"/>
       <column id="TODAYS NAME"                  display="extra"/>
     </table>
-    <table id="TRIPLE JUMP TOP SCORES">
-      <column id="RANK" src="index" format="+1"        display="extra"/>
-      <column id="TRIPLE JUMP SCORE" format="distance" display="extra"/>
-      <column id="TRIPLE JUMP NAME"                    display="extra"/>
-    </table>
-    <table id="SKEET SHOOTING TOP SCORES">
-      <column id="RANK" src="index" format="+1"        display="extra"/>
-      <column id="SKEET SHOOTING SCORE"                display="extra"/>
-      <column id="SKEET SHOOTING NAME"                 display="extra"/>
-    </table>
-    <table id="POLE VAULT TOP SCORES">
-      <column id="RANK" src="index" format="+1"       display="extra"/>
-      <column id="POLE VAULT SCORE" format="distance" display="extra"/>
-      <column id="POLE VAULT NAME"                    display="extra"/>
+    <table id="TOP SCORES">
+      <column id="RANK" src="index" format="+1"/>
+	  <column id="SCORE" format="*10" display="extra"/>
+      <column id="NAME"/>
     </table>
     <table id="FREE STYLE TOP SCORES">
       <column id="RANK" src="index" format="+1"       display="extra"/>
       <column id="FREE STYLE SCORE" format="time"     display="extra"/>
       <column id="FREE STYLE NAME"                    display="extra"/>
     </table>
-    <table id="WEIGHT LIFTING TOP SCORES">
-      <column id="RANK" src="index" format="+1"         display="extra"/>
-      <column id="WEIGHT LIFTING SCORE" format="weight" display="extra"/>
-      <column id="WEIGHT LIFTING NAME"                  display="extra"/>
+    <table id="SKEET SHOOTING TOP SCORES">
+      <column id="RANK" src="index" format="+1"        display="extra"/>
+      <column id="SKEET SHOOTING SCORE"                display="extra"/>
+      <column id="SKEET SHOOTING NAME"                 display="extra"/>
+    </table>
+    <table id="LONG HORSE TOP SCORES">
+      <column id="RANK" src="index" format="+1"  display="extra"/>
+      <column id="LONG HORSE SCORE" format=".00" display="extra"/>
+      <column id="LONG HORSE NAME"               display="extra"/>
     </table>
     <table id="ARCHERY TOP SCORES">
       <column id="RANK" src="index" format="+1" display="extra"/>
       <column id="ARCHERY SCORE"                display="extra"/>
       <column id="ARCHERY NAME"                 display="extra"/>
     </table>
-    <table id="LONG HORSE TOP SCORES">
-      <column id="RANK" src="index" format="+1"  display="extra"/>
-      <column id="LONG HORSE SCORE" format=".00" display="extra"/>
-      <column id="LONG HORSE NAME"               display="extra"/>
+    <table id="TRIPLE JUMP TOP SCORES">
+      <column id="RANK" src="index" format="+1"        display="extra"/>
+      <column id="TRIPLE JUMP SCORE" format="distance" display="extra"/>
+      <column id="TRIPLE JUMP NAME"                    display="extra"/>
+    </table>
+    <table id="POLE VAULT TOP SCORES">
+      <column id="RANK" src="index" format="+1"       display="extra"/>
+      <column id="POLE VAULT SCORE" format="distance" display="extra"/>
+      <column id="POLE VAULT NAME"                    display="extra"/>
+    </table>
+    <table id="WEIGHT LIFTING TOP SCORES">
+      <column id="RANK" src="index" format="+1"         display="extra"/>
+      <column id="WEIGHT LIFTING SCORE" format="weight" display="extra"/>
+      <column id="WEIGHT LIFTING NAME"                  display="extra"/>
     </table>
   </output>
   
