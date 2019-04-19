@@ -11,15 +11,30 @@
                 <!--<p>Options</p>-->
             <!--</router-link>-->
         <!--</nav>-->
-        <router-view></router-view>
+        <router-view :focused="focused"></router-view>
     </div>
 </template>
 
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
+import {remote} from 'electron';
+import Gamepads from '@/class/Gamepads.class';
 
 @Component
 export default class App extends Vue {
+    protected focused = true;
+
+    public mounted() {
+        // Electron event
+        remote.getCurrentWindow().on('blur', () => {
+            Gamepads.stopGamepadsListeners();
+            this.focused = false;
+        });
+        remote.getCurrentWindow().on('focus', () => {
+            this.focused = true;
+            Gamepads.init();
+        });
+    }
 
 }
 </script>
