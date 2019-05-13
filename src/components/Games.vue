@@ -210,7 +210,7 @@ export default class Games extends ControllableVue {
      * Called on move up
      */
     protected moveUp(speed: number, incrementer = 1) {
-        if (!this.focused) return;
+        if (!this.focused) return () => {};
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -232,7 +232,7 @@ export default class Games extends ControllableVue {
      * Called on move down
      */
     protected moveDown(speed: number, incrementer = 1) {
-        if (!this.focused) return;
+        if (!this.focused) return () => {};
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
