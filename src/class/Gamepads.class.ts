@@ -104,11 +104,11 @@ export default class Gamepads {
      * Stop gamepads loop
      */
     public static stopGamepadsListeners() {
-        // window.removeEventListener('gamepadconnected', this.onGamepadconnected);
-        // window.removeEventListener('gamepaddisconnected', this.onGamepaddisconnected);
+        window.removeEventListener('gamepadconnected', this.onGamepadconnected);
+        window.removeEventListener('gamepaddisconnected', this.onGamepaddisconnected);
 
-        // this.stop = true;
-        // cancelAnimationFrame(this.animationFrameRequest);
+        this.stop = true;
+        cancelAnimationFrame(this.animationFrameRequest);
         if (!navigator.getGamepads()) {
             return;
         }
