@@ -8,12 +8,12 @@
   <structure file=".hi">
     <loop count="5">
       <elt size="1" type="raw"  id="UNUSED"/>
-      <elt size="3" type="raw"  id="TOUR SCORE"/>
+      <elt size="3" type="raw"  id="SCORE"/>
       <elt size="1" type="raw"  id="UNUSED"/>
-      <elt size="6" type="text" id="TOUR NAME" byte-skip="even" charset="spang"/>
+      <elt size="6" type="text" id="NAME" byte-skip="even" charset="spang"/>
       <elt size="1" type="raw"  id="UNUSED"/>
-      <elt size="1" type="int"  id="TOUR STAGE1"/>
-      <elt size="1" type="int"  id="TOUR STAGE2"/>
+      <elt size="1" type="int"  id="STAGE1"/>
+      <elt size="1" type="int"  id="STAGE2"/>
       <elt size="2" type="raw"  id="UNUSED"/>
     </loop>
     <loop count="5">
@@ -29,10 +29,10 @@
 
   <output>
     <table sort-order="desc" sort="TOP TOUR SCORE" id="TOUR MODE">
-      <column id="TOUR RANK" src="index" format="+1"/>
-      <column id="TOUR SCORE"/>
-      <column id="TOUR NAME"/>
-      <column id="TOUR STAGE" format="tour_stage"/>
+      <column id="RANK" src="index" format="+1"/>
+      <column id="SCORE"/>
+      <column id="NAME"/>
+      <column id="STAGE" format="tour_stage"/>
     </table>
     <table sort-order="desc" sort="TOP PANIC SCORE" id="PANIC MODE">
       <column id="PANIC RANK" src="index" format="+1"/>
@@ -44,9 +44,11 @@
 
       <format id="tour_stage">
     <concat>
-      <column id="TOUR STAGE1"/>
+      <txt>TOUR MODE (</txt>
+      <column id="STAGE1"/>
       <txt>-</txt>
-      <column id="TOUR STAGE2"/>
+      <column id="STAGE2"/>
+      <txt>)</txt>
     </concat>
   </format>
   <charset id="spang">
@@ -79,4 +81,3 @@
     <char src="E2" dst="Z"/>
   </charset>
 </hi2txt>
-
