@@ -73,4 +73,28 @@ export default class IPDDatabase {
             });
         });
     }
+
+    public getAllTime(romName: string) {
+        return new Promise((resolve, reject) => {
+            if (!this.db) {
+                return reject('No database connection');
+            }
+            const query = 'SELECT player_name as NAME, score * 1 as SCORE FROM hiscores_history ' +
+                'WHERE id=\'asteroid\' GROUP BY player_name, score ORDER BY score DESC LIMIT 100';
+            this.db.query(query, (err, results) => {
+                if (err) {
+                    return reject(err);
+                }
+                const hiscores: Hiscores = {classic: [], advanced: []};
+                for (let i = 0; i < results.length; i++) {
+                    hiscores.classic[0].push({
+                        RANK: i + 1,
+                        SCORE: results[i].SCORE,
+                        NAME: results[i].NAME,
+                    });
+                }
+                return resolve(results);
+            });
+        });
+    }
 }
