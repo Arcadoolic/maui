@@ -255,51 +255,33 @@ export default class Games extends ControllableVue {
     /**
      * Start a game
      */
-    protected startGame() {
+    protected async startGame() {
         if (!this.focused) return;
         const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
-        this.mame.start(selectedGame).then(
-            (process: ChildProcess|void) => {
-                if (process) {
-                    this.$store.getters.db.logGameStart(selectedGame.romName).then(
-                        (success) => {
-                            console.log('Start logged');
-                        },
-                        (error) => {
-                            console.log(error);
-                        },
-                    );
+        const db = this.$store.getters.db;
 
-                    process.on('close', () => {
-                        if (selectedGame.hasHiscore) {
-                            this.hiscores.saveHiscore(selectedGame.romName).then(
-                                (hiscores) => {
-                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores
-                                        = hiscores as Hiscores;
+        const mameProcess = await this.mame.start(selectedGame);
+        if (!mameProcess) {
+            console.error('Failed start rom ' + selectedGame.romName);
+            return;
+        }
 
-                                    this.$store.getters.db.saveHiscores(
-                                        selectedGame.romName, (hiscores as Hiscores).classic[0])
-                                        .then(
-                                            (success) => {
-                                                console.log('HISCORE DB');
-                                            },
-                                            (error) => {
-                                                appendFileSync('~/arcade_error.log', '[' + Date.now() +' ][' + selectedGame.romName + ']' + error);
-                                                console.error(error);
-                                            },
-                                        );
-                                    console.log('Hiscores saved !');
-                                },
-                                (error: string) => {
-                                    console.log('Error Hiscore');
-                                    console.error(error);
-                                },
-                            );
-                        }
-                    });
-                }
-            },
-        );
+        // Log game start
+        await db.logGameStart(selectedGame.romName);
+
+        mameProcess.on('close', async () => {
+            try {
+                const hiscores: HiscoresJson = { season: {classic: [], advanced: []}, allTime: {classic: [], advanced: []}};
+                hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
+                await db.saveHiscores(selectedGame.romName, hiscores.season.classic[0]);
+                hiscores.allTime = await db.loadAllTime(selectedGame.romName);
+                await this.hiscores.saveHiscore(selectedGame.romName, hiscores);
+                console.log('Score saved');
+            } catch (e) {
+                appendFileSync('~/arcade_error.log', '[' + Date.now() +' ][' + selectedGame.romName + ']' + e);
+                return;
+            }
+        });
     }
 
     /**
