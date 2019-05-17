@@ -74,7 +74,7 @@ export default class IPDDatabase {
         });
     }
 
-    public getAllTime(romName: string) {
+    public getAllTime(romName: string): Promise<Hiscores> {
         return new Promise((resolve, reject) => {
             if (!this.db) {
                 return reject('No database connection');
@@ -93,7 +93,7 @@ export default class IPDDatabase {
                         NAME: results[i].NAME,
                     });
                 }
-                return resolve(results);
+                return resolve(hiscores);
             });
         });
     }
