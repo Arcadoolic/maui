@@ -26,3 +26,8 @@ interface Hiscores {
     classic: Hiscore[][];
     advanced: Hiscore[][];
 }
+
+interface HiscoresJson {
+    allTime: Hiscores;
+    season: Hiscores;
+}
