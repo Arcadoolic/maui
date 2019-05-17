@@ -6,8 +6,9 @@ import {parse as iniParse} from 'ini';
 import GameList from '@/class/GameList.class';
 import {format} from 'url';
 import Helpers from '@/class/Helpers.class';
-import HiScore from '@/class/HiscoreService.class';
 import HiscoreService from '@/class/HiscoreService.class';
+import IPDDatabase from '@/class/IPDDatabase.class';
+import {appendFileSync} from 'fs';
 
 declare const __static: string;
 
@@ -38,13 +39,15 @@ export default class GameService {
     protected mame!: Mame;
     protected gameList!: GameList;
     protected hiscores!: HiscoreService;
+    protected db!: IPDDatabase;
 
 
-    public constructor(config: Config, mame: Mame, gameList: GameList, hiscores: HiscoreService) {
+    public constructor(config: Config, mame: Mame, gameList: GameList, hiscores: HiscoreService, db: IPDDatabase) {
         this.config = config;
         this.mame = mame;
         this.gameList = gameList;
         this.hiscores = hiscores;
+        this.db = db;
     }
 
     /**
@@ -239,17 +242,33 @@ export default class GameService {
             if (!game.hasHiscore) {
                 continue;
             }
-            promises.push(new Promise((resolve, reject) => {
-                this.hiscores.saveHiscore(game.romName).then(
-                    (hiscores) => {
-                        game.hiscores = hiscores as Hiscores;
-                        resolve();
-                    },
-                    (error) => {
-                        console.error('Error : hiscores on rom ' + game.romName);
-                        resolve();
-                    },
-                );
+            promises.push(new Promise(async (resolve, reject) => {
+                try {
+                    const hiscores: HiscoresJson =
+                        { season: {classic: [], advanced: []}, allTime: {classic: [], advanced: []}};
+                    hiscores.season = await this.hiscores.getHiscore(game.romName);
+                    await this.db.saveHiscores(game.romName, hiscores.season.classic[0]);
+                    hiscores.allTime = await this.db.getAllTime(game.romName);
+                    await this.hiscores.saveHiscore(game.romName, hiscores);
+                } catch (e) {
+                    appendFileSync('~/arcade_error.log', '[' + Date.now() + ' ][' + game.romName + ']' + e);
+                }
+                resolve();
+
+
+                // const hiscores: HiscoresJson = { season: {classic: [], advanced: []}, allTime: {classic: [], advanced: []}};
+                // hiscores.season = await this.hiscores.getHiscore(game.romName);
+                // hiscores.allTime = await this.db.getAllTime(game.romName);
+                // this.hiscores.saveHiscore(game.romName, hiscores).then(
+                //     (hiscores) => {
+                //         game.hiscores = hiscores as Hiscores;
+                //         resolve();
+                //     },
+                //     (error) => {
+                //         console.error('Error : hiscores on rom ' + game.romName);
+                //         resolve();
+                //     },
+                // );
             }));
         }
         return Promise.all(promises);
