@@ -6,6 +6,8 @@ import Mame from '@/class/Mame.class';
 import HiscoreService from '@/class/HiscoreService.class';
 import Players from '@/class/Players.class';
 import IPDDatabase from '@/class/IPDDatabase.class';
+import FileLogger from '@/class/FileLogger.class';
+import GameService from '@/class/GameService.class';
 
 Vue.use(Vuex);
 
@@ -18,6 +20,8 @@ export default new Vuex.Store({
         isInit: false,
         players: null as Players|null,
         db: null as IPDDatabase|null,
+        logger: null as FileLogger|null,
+        gameService: null as GameService|null,
     },
     getters: {
         gameList: (state) => {
@@ -41,19 +45,38 @@ export default new Vuex.Store({
         db: (state): IPDDatabase => {
             return state.db!;
         },
+        logger: (state): FileLogger => {
+            return state.logger!;
+        },
+        gameService: (state): GameService => {
+            return state.gameService!;
+        },
     },
     mutations: {
         isInit: (state) => {
             state.isInit = true;
         },
-        setHiscore: (state, hiscore: HiscoreService) => {
-            state.hiscore = hiscore;
+        initHiscores: (state) => {
+            state.hiscore = new HiscoreService(state.config, state.mame.mameUiPath);
         },
-        setPlayers: (state, players: Players) => {
-            state.players = players;
+        initPlayers: (state) => {
+            console.log(state.config.faceyourmangaPath);
+            state.players = new Players(state.config.faceyourmangaPath);
         },
-        setDb: (state, db: IPDDatabase) => {
-            state.db = db;
+        initDatabase: (state) => {
+            state.db = new IPDDatabase(state.config, state.players!);
+        },
+        initLogger: (state, path: string) => {
+            state.logger = new FileLogger(path);
+        },
+        initGameService: (state) => {
+            state.gameService = new GameService(
+                state.config,
+                state.mame,
+                state.gameList,
+                state.hiscore!,
+                state.db!,
+                state.logger!);
         },
     },
 });
