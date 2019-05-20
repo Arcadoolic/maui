@@ -25,12 +25,12 @@ export default class Champions extends Vue {
     @Watch('game.hiscores')
     public onGameChange() {
         this.champions = [];
-        if (!this.game.hiscores || !this.game.hiscores.classic || !this.game.hiscores.classic[0]) {
+        if (!this.game.hiscores || !this.game.hiscores.season.classic || !this.game.hiscores.season.classic[0]) {
             return;
         }
         const players = this.$store.getters.players;
         const championsName: string[] = [];
-        for (const player of this.game.hiscores.classic[0] as any[]) {
+        for (const player of this.game.hiscores.season.classic[0] as any[]) {
             if (this.champions.length >= 3) { break; }
             if (players.playerExist(player.NAME) && championsName.indexOf(player.NAME) < 0) {
                 championsName.push(player.NAME);
