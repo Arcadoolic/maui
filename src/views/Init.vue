@@ -21,55 +21,36 @@ export default class Init extends Vue {
     }
 
     protected async init() {
+        this.$store.commit('initLogger', './arcade.log');
+        const logger = this.$store.getters.logger;
+
         try {
             const config: Config = this.$store.getters.config;
             const mame = this.$store.getters.mame;
             const gameList = this.$store.getters.gameList;
 
-            console.log('Loading configuration file');
-            config.load();
-            console.log('Loading MAME configuration files');
-            mame.init(config.mameIniPath);
-            console.log('Loading games');
-            gameList.init(config.gamesJsonPath);
+            config.load(); // Loading config
+            this.$store.commit('initPlayers'); // Loading players
+            this.$store.commit('initDatabase'); // Init database
+            mame.init(config.mameIniPath); // Init mame config
+            gameList.init(config.gamesJsonPath); // Init gameList
 
-            const hiscore = new HiscoreService(config, mame.mameUiPath);
-            this.$store.commit('setHiscore', hiscore);
-
-            const gameService = new GameService(config, mame, gameList, hiscore);
-            console.log('Updating games');
-            gameService.refreshGameDir();
-            gameList.init(config.gamesJsonPath);
-            console.log('Loading marquees');
+            this.$store.commit('initHiscores'); // Init Hiscores
+            this.$store.commit('initGameService');
+            const gameService = this.$store.getters.gameService;
+            gameService.refreshGameDir(); // Refresh gameList
             gameService.loadGamesMarquee();
-            console.log('Loading flyers');
             gameService.loadGamesFlyers();
-            console.log('Load Hiscores');
-            gameService.loadHiscores().then(() => {
-                    console.log('Load players');
-                    const players = new Players(config.faceyourmangaPath);
-                    this.$store.commit('setPlayers', players);
-                    players.init();
 
-                    // DB
-                    // TODO : Refacto
-                    const db = new IPDDatabase(config, players);
-                    this.$store.commit('setDb', db);
-                    console.log('Init database');
-                    db.connect().then(
-                        () => {
-                            console.log('Initialisation done');
-                            this.$store.commit('isInit');
-                            ipcRenderer.send('init-end');
-                            this.$router.push({name: 'home'});
-                        },
-                        (err) => {
-                            appendFileSync('~/arcade_error.log', '[' + Date.now() +' ]' + err);
-                            console.error(err);
-                        },
-                    );
-            });
+            await this.$store.getters.db.connect();
+            await gameService.loadHiscores();
+            this.$store.getters.db.end();
+
+            this.$store.commit('isInit');
+            ipcRenderer.send('init-end');
+            this.$router.push({name: 'home'});
         } catch (e) {
+            logger.logError('[Init] ' + e.toString());
             console.error(e.toString());
         }
     }
