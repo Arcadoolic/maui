@@ -210,7 +210,9 @@ export default class Games extends ControllableVue {
      * Called on move up
      */
     protected moveUp(speed: number, incrementer = 1) {
-        if (!this.focused) return () => {};
+        if (!this.focused) {
+            return () => { return; };
+        }
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -232,7 +234,9 @@ export default class Games extends ControllableVue {
      * Called on move down
      */
     protected moveDown(speed: number, incrementer = 1) {
-        if (!this.focused) return () => {};
+        if (!this.focused) {
+            return () => { return; };
+        }
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -256,7 +260,9 @@ export default class Games extends ControllableVue {
      * Start a game
      */
     protected async startGame() {
-        if (!this.focused) return;
+        if (!this.focused) {
+            return;
+        }
         const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
         const db = this.$store.getters.db;
 
@@ -267,19 +273,21 @@ export default class Games extends ControllableVue {
         }
 
         // Log game start
+        await db.connect();
         await db.logGameStart(selectedGame.romName);
+        db.end();
 
         mameProcess.on('close', async () => {
             try {
-                const hiscores: HiscoresJson =
-                    { season: {classic: [], advanced: []}, allTime: {classic: [], advanced: []}};
-                hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
-                await db.saveHiscores(selectedGame.romName, hiscores.season.classic[0]);
-                hiscores.allTime = await db.getAllTime(selectedGame.romName);
-                await this.hiscores.saveHiscore(selectedGame.romName, hiscores);
+                selectedGame.hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
+                if (selectedGame.hiscores.season.classic[0]) {
+                    await db.saveHiscores(selectedGame.romName, selectedGame.hiscores.season.classic[0]);
+                }
+                selectedGame.hiscores.allTime = await db.getAllTime(selectedGame.romName);
+                await this.hiscores.saveHiscore(selectedGame.romName, selectedGame.hiscores);
                 console.log('Score saved');
             } catch (e) {
-                appendFileSync('~/arcade_error.log', '[' + Date.now() + ' ][' + selectedGame.romName + ']' + e);
+                this.$store.getters.logger.logError('[' + selectedGame.romName + ']' + e);
                 return;
             }
         });
