@@ -24,6 +24,12 @@ export default class IPDDatabase {
         });
     }
 
+    public end() {
+        if (this.db) {
+            this.db.end();
+        }
+    }
+
     public logGameStart(romName: string) {
         return new Promise((resolve, reject) => {
             if (!this.db) {
@@ -44,14 +50,15 @@ export default class IPDDatabase {
             if (!this.db) {
                 return reject('No database connection');
             }
+            // Filter hiscores on only know players
+            hiscores = hiscores.filter((hiscore) => {
+                return this.players.playerExist(hiscore.NAME);
+            });
             if (!hiscores.length) {
-                return reject('No hiscores to save');
+                return resolve('No hiscores to save');
             }
             let query = 'INSERT IGNORE INTO hiscores_history (id, rank, player_name, score) VALUES';
             for (const hiscore of hiscores) {
-                if (!this.players.playerExist(hiscore.NAME)) {
-                    continue;
-                }
                 query = query.concat(
                     ' ("',
                     romName,
@@ -79,13 +86,20 @@ export default class IPDDatabase {
             if (!this.db) {
                 return reject('No database connection');
             }
-            const query = 'SELECT player_name as NAME, score * 1 as SCORE FROM hiscores_history ' +
-                'WHERE id=\'asteroid\' GROUP BY player_name, score ORDER BY score DESC LIMIT 100';
+            const query = `SELECT
+                score as SCORE,
+                player_name as NAME
+            FROM arcade.hiscores_history
+            JOIN players ON player_name = initials AND is_active = 1
+            WHERE id = '${romName}'
+            GROUP BY SCORE,NAME
+            ORDER BY CAST(SCORE AS DECIMAL) DESC
+            LIMIT 100`;
             this.db.query(query, (err, results) => {
                 if (err) {
                     return reject(err);
                 }
-                const hiscores: Hiscores = {classic: [], advanced: []};
+                const hiscores: Hiscores = {classic: [[]], advanced: [[]]};
                 for (let i = 0; i < results.length; i++) {
                     hiscores.classic[0].push({
                         RANK: i + 1,
