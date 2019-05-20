@@ -9,14 +9,15 @@ import Helpers from '@/class/Helpers.class';
 import HiscoreService from '@/class/HiscoreService.class';
 import IPDDatabase from '@/class/IPDDatabase.class';
 import {appendFileSync} from 'fs';
+import FileLogger from '@/class/FileLogger.class';
 
 declare const __static: string;
 
 export default class GameService {
-    protected static genreIni?: {[genre: string]: {[romName: string]: boolean}};
-    protected static nplayersIni?: {[romName: string]: {[romName: string]: boolean}};
+    protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
+    protected static nplayersIni?: { [romName: string]: { [romName: string]: boolean } };
 
-    protected static nplayersTranslation: {[k: string]: Nplayers} = {
+    protected static nplayersTranslation: { [k: string]: Nplayers } = {
         '12P sim': {sim: 12, alt: 0},
         '1P': {sim: 0, alt: 0},
         '2P alt': {sim: 0, alt: 2},
@@ -40,14 +41,23 @@ export default class GameService {
     protected gameList!: GameList;
     protected hiscores!: HiscoreService;
     protected db!: IPDDatabase;
+    protected logger!: FileLogger;
 
 
-    public constructor(config: Config, mame: Mame, gameList: GameList, hiscores: HiscoreService, db: IPDDatabase) {
+    public constructor(
+        config: Config,
+        mame: Mame,
+        gameList: GameList,
+        hiscores: HiscoreService,
+        db: IPDDatabase,
+        logger: FileLogger,
+    ) {
         this.config = config;
         this.mame = mame;
         this.gameList = gameList;
         this.hiscores = hiscores;
         this.db = db;
+        this.logger = logger;
     }
 
     /**
@@ -117,8 +127,8 @@ export default class GameService {
         }
 
         const shortnameRegexp = /^(.[^\(]*)/g.exec(infoFromMameXml.description);
-        let shortname: string|null = null;
-        let subname: string|null = null;
+        let shortname: string | null = null;
+        let subname: string | null = null;
         if (shortnameRegexp) {
             shortname = shortnameRegexp[0].trim().replace(/&amp;/g, '&');
             const subnameRegexp = /^([^\-\/]*)(:\s+|\s+\-\s+|\s+\/\s+)(.*)$/.exec(shortname);
@@ -158,7 +168,7 @@ export default class GameService {
             unlinkSync(join(this.config.gamesJsonPath, gameName + '.json'));
         }
 
-        const errors: {[romName: string]: Error} = {};
+        const errors: { [romName: string]: Error } = {};
         for (const romName of favoriteList) {
             if (!force && existsSync(join(this.config.gamesJsonPath, romName + '.json'))) {
                 continue;
@@ -186,7 +196,7 @@ export default class GameService {
             const marqueePath = join(marqueesPath, game.romName + '.png');
             const parentMarqueePath = join(marqueesPath, game.parent + '.png');
 
-            let path: string|null = null;
+            let path: string | null = null;
             if (existsSync(marqueePath)) {
                 path = marqueePath;
             } else if (existsSync(parentMarqueePath)) {
@@ -215,7 +225,7 @@ export default class GameService {
             const flyerPath = join(flyersPath, game.romName + '.png');
             const parentFlyerPath = join(flyersPath, game.parent + '.png');
 
-            let path: string|null = null;
+            let path: string | null = null;
             if (existsSync(flyerPath)) {
                 path = flyerPath;
             } else if (existsSync(parentFlyerPath)) {
@@ -232,7 +242,7 @@ export default class GameService {
         }
     }
 
-    public loadHiscores() {
+    public async loadHiscores() {
         if (!existsSync(this.config.hiscoresJsonPath)) {
             mkdirSync(this.config.hiscoresJsonPath);
         }
@@ -244,31 +254,16 @@ export default class GameService {
             }
             promises.push(new Promise(async (resolve, reject) => {
                 try {
-                    const hiscores: HiscoresJson =
-                        { season: {classic: [], advanced: []}, allTime: {classic: [], advanced: []}};
-                    hiscores.season = await this.hiscores.getHiscore(game.romName);
-                    await this.db.saveHiscores(game.romName, hiscores.season.classic[0]);
-                    hiscores.allTime = await this.db.getAllTime(game.romName);
-                    await this.hiscores.saveHiscore(game.romName, hiscores);
+                    game.hiscores.season = await this.hiscores.getHiscore(game.romName);
+                    if (game.hiscores.season.classic[0]) {
+                        await this.db.saveHiscores(game.romName, game.hiscores.season.classic[0]);
+                    }
+                    game.hiscores.allTime = await this.db.getAllTime(game.romName);
+                    await this.hiscores.saveHiscore(game.romName, game.hiscores);
                 } catch (e) {
-                    appendFileSync('~/arcade_error.log', '[' + Date.now() + ' ][' + game.romName + ']' + e);
+                    this.logger.logError('[' + game.romName + ']' + e);
                 }
                 resolve();
-
-
-                // const hiscores: HiscoresJson = { season: {classic: [], advanced: []}, allTime: {classic: [], advanced: []}};
-                // hiscores.season = await this.hiscores.getHiscore(game.romName);
-                // hiscores.allTime = await this.db.getAllTime(game.romName);
-                // this.hiscores.saveHiscore(game.romName, hiscores).then(
-                //     (hiscores) => {
-                //         game.hiscores = hiscores as Hiscores;
-                //         resolve();
-                //     },
-                //     (error) => {
-                //         console.error('Error : hiscores on rom ' + game.romName);
-                //         resolve();
-                //     },
-                // );
             }));
         }
         return Promise.all(promises);
