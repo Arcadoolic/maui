@@ -1,39 +1,41 @@
-import {existsSync} from 'fs';
 import GameCategory from './GameCategory.class';
 
 export default class Game {
-    protected fullname: string;
-    protected shortname: string;
-    protected subname: string;
-    protected year: number;
-    protected manufacturer: string;
-    protected parent: string;
-    protected category: string;
-    protected nplayers: string;
+    protected _fullname: string;
+    protected _shortname: string;
+    protected _subname: string;
+    protected _year: number;
+    protected _manufacturer: string;
+    protected _nplayers: Nplayers;
+    protected _hi: boolean;
+    protected _parent: string|null;
 
-    protected categories: GameCategory[] = [];
+    protected _categories: GameCategory[] = [];
 
-    protected romPath: string|null;
+    protected _romName: string;
+
+    protected _marquee: string = '';
+    protected _flyer: string = '';
+
+    protected _hiscores: HiscoresJson = {
+        season: {classic: [[]], advanced: [[]]},
+        allTime: {classic: [[]], advanced: [[]]},
+    };
 
     /**
      * Init Game object from GameJSON data type
      * @param gameData
-     * @param romPath
      */
-    public constructor(gameData: GameJSON, romPath: string) {
-        this.fullname = gameData.fullname;
-        this.shortname = gameData.shortname;
-        this.subname = gameData.subname;
-        this.year = gameData.year;
-        this.manufacturer = gameData.manufacturer;
-        this.parent = gameData.parent;
-        this.category = gameData.category;
-        this.nplayers = gameData.nplayers;
-
-        this.romPath = null;
-        if (!existsSync(romPath)) {
-            this.romPath = romPath;
-        }
+    public constructor(gameData: GameJSON) {
+        this._fullname = gameData.fullname;
+        this._shortname = gameData.shortname;
+        this._subname = gameData.subname;
+        this._year = gameData.year;
+        this._manufacturer = gameData.manufacturer;
+        this._nplayers = gameData.nplayers;
+        this._romName = gameData.romName;
+        this._hi = gameData.hi;
+        this._parent = gameData.parent;
     }
 
     /**
@@ -41,7 +43,70 @@ export default class Game {
      * @param category
      */
     public addCategory(category: GameCategory) {
-        this.categories.push(category);
+        this._categories.push(category);
     }
 
+    public get romName() {
+        return this._romName;
+    }
+
+    public get fullname() {
+        return this._fullname;
+    }
+
+    public get shortname() {
+        return this._shortname;
+    }
+
+    public get year() {
+        return this._year;
+    }
+
+    public get nplayerString() {
+        let str: string|null = null;
+        if (this._nplayers.alt) {
+            str = this._nplayers.alt + ' player' + (this._nplayers.alt > 1 ? 's' : '') + ' alternate';
+        }
+        if (this._nplayers.sim) {
+            str = (str)
+                ? str + '/' + this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous'
+                : this._nplayers.sim + ' player' + (this._nplayers.sim > 1 ? 's' : '') + ' simultaneous';
+        }
+        if (!str) {
+            str = '1 player';
+        }
+        return str;
+    }
+
+    public set marquee(marquee: string) {
+        this._marquee = marquee;
+    }
+
+    public get marquee(): string {
+        return this._marquee;
+    }
+
+    public set flyer(flyer: string) {
+        this._flyer = flyer;
+    }
+
+    public get flyer(): string {
+        return this._flyer;
+    }
+
+    public get hasHiscore(): boolean {
+        return this._hi;
+    }
+
+    public set hiscores(hiscores) {
+        this._hiscores = hiscores;
+    }
+
+    public get hiscores(): HiscoresJson {
+        return this._hiscores;
+    }
+
+    public get parent() {
+        return this._parent;
+    }
 }

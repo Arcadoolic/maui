@@ -1,5 +1,7 @@
 # arcade2
 
+[![Build Status](https://travis-ci.com/Snosky/arcade.svg?token=u9494uQ6rfYdCEmu8L8Z&branch=develop)](https://travis-ci.com/Snosky/arcade)
+
 Use [Vue CLI Plugin Electron Builder](https://nklayman.github.io/vue-cli-plugin-electron-builder/)
 
 ## Project setup

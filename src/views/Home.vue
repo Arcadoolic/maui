@@ -1,112 +1,152 @@
 <template>
-    <div>
-        {{verticalSelect}}
-        <div class="categories" :class="{hovered: verticalSelect === 1}">
-            <div class="container">
-                <ul>
-                    <li v-for="(category, index) in gameList.getCategories()"
-                        :class="{selected: categorySelected === index}"
-                    >{{category.name}}
-                    </li>
-                </ul>
-            </div>
+    <span class="home">
+        <div class="gameTitle" v-if="selectedGame">
+            <h1>{{selectedGame.shortname}}</h1>
+            <p>({{selectedGame.year}}, {{selectedGame.nplayerString}})</p>
         </div>
-        <hr>
-        <ul :class="{hovered: verticalSelect === 2}">
-            <li v-for="game in gameFromCurrentCategory">{{game.fullname}}</li>
-        </ul>
 
-        <button @click.prevent="refreshGame()">Refresh game</button>
-    </div>
+        <Games :selectedCategory="selectedCategory" @gameChange="gameChange"></Games>
+        <Categories @categoryChange="categoryChange"></Categories>
+        <GamepadsComponent></GamepadsComponent>
+
+        <transition name="slide">
+            <Hiscores :game="selectedGame" v-if="selectedGame.hasHiscore && showHiscores"></Hiscores>
+        </transition>
+    </span>
+    <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
+
 </template>
 
 <script lang="ts">
-    import {Vue, Component, Prop} from 'vue-property-decorator';
-    import GameList from '../class/GameList.class';
+import {Component} from 'vue-property-decorator';
+import GameList from '@/class/GameList.class';
+import Categories from '@/components/Categories.vue';
+import Mame from '@/class/Mame.class';
+import GameCategory from '@/class/GameCategory.class';
+import Games from '@/components/Games.vue';
+import Game from '@/class/Game.class';
+import Gamepads from '@/class/Gamepads.class';
+import GamepadsComponent from '@/components/Gamepads.vue';
+import Hiscores from '@/components/Hiscores.vue';
+import ControllableVue from '@/ControllableVue.vue';
+import {remote} from 'electron';
 
-    @Component
-    export default class Home extends Vue {
-        protected gameList = new GameList();
-        protected categorySelected = 0;
+@Component({
+    components: {
+        Categories,
+        Games,
+        GamepadsComponent,
+        Hiscores,
+    },
+})
+export default class Home extends ControllableVue {
+    protected gameList = new GameList();
+    protected mame = new Mame();
+    protected selectedCategory: GameCategory|null = null;
+    protected selectedGameId: number = 0;
+    protected selectedGame: Game|null = null;
+    protected showHiscores: boolean = false;
+    protected closeTimeout: any = 0;
 
-        @Prop({ required: true, default: 0 })
-        protected verticalSelect?: number;
+    public created() {
+        this.gameList = this.$store.getters.gameList;
+        this.mame = this.$store.getters.mame;
+        this.selectedCategory = this.gameList.getCategories()[0]; // Category ALL
+        this.selectedGame = this.selectedCategory.getGames()[0];
 
-        public created() {
-            console.log('created');
-            this.gameList = this.$store.getters.gameList;
-            console.log(this.gameList);
+        this.onKeydown((e: Event, isGamepad: boolean) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+            switch (key) {
+                case 'Space':
+                    this.showHiscores = !this.showHiscores;
+                    this.closeTimeout = setTimeout(() => {
+                        remote.getCurrentWindow().close();
+                    }, 3000);
+                    break;
+            }
+        });
 
-            window.addEventListener('keyup', (e) => {
-                if (e.code === 'Enter') {
-                    console.log('Enter');
-                    if (this.verticalSelect === 2) {
-                        console.log('Enter2');
-                        this.$emit('blockVerticalSelect', true);
-                    }
-                } else if (e.code === 'Escape') {
-                    if (this.verticalSelect === 2) {
-                        this.$emit('blockVerticalSelect', false);
-                    }
-                }
-            });
-        }
+        this.onKeyup((e: Event, isGamepad: boolean) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+            switch (key) {
+                case 'Space':
+                    clearTimeout(this.closeTimeout);
+                    break;
+            }
+        });
 
-        /**
-         * Refresh categories and game list
-         */
-        public refreshGame() {
-            this.$store.commit('reloadGameList');
-        }
-
-        /**
-         *
-         */
-        public get gameFromCurrentCategory() {
-            return this.gameList.getCategories()[this.categorySelected].getGames();
-        }
-
-        public moveVertical() {
-            console.log('moveVertical');
-        }
+        Gamepads.init();
     }
+
+    /**
+     * Called when categoryChange event is triggered on Categories component
+     * @param categoryId
+     */
+    protected categoryChange(categoryId: number) {
+        this.selectedCategory = this.gameList.getCategories()[categoryId];
+        this.showHiscores = false;
+    }
+
+    /**
+     * Called when gameChange event is triggered on Games component
+     * @param gameId
+     */
+    protected gameChange(gameId: number) {
+        this.selectedGameId = gameId;
+        this.selectedGame = this.selectedCategory!.getGames()[gameId];
+    }
+}
 </script>
 
 <style scoped>
-    .categories {
+    .home {
         display: block;
+        width: 100%;
+        height: 100%;
+        background-color: #000000;
+        background-image:  url(../assets/background.jpg);
+        background-size: cover;
+        background-repeat: repeat;
+        background-position: 0 0;
     }
-    .categories:after {
-        content: '';
-        display: block;
-        clear: both;
-    }
-    .categories .container {
-        position: relative;
-        text-align: center;
-        overflow: hidden;
-        height: 30px;
-        margin: 0 auto;
-    }
-    .categories ul {
-        width: 10000px;
+
+    .gameTitle {
         position: absolute;
-        list-style: none;
-        margin: 0;
-        padding: 0;
+        width: 100%;
+        z-index: 2;
+        text-align: center;
+        background: linear-gradient(to bottom, rgb(35, 10, 0) -30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
+        color: #fff513;
+        font-size: 2.5vw;/*45px;*/
+        padding: 26px;
+        font-family: 'Arcade_I', sans-serif;
+        perspective: 460px;
+        perspective-origin: 50% 50%;
+        text-shadow:
+            0 0 30px rgba(237, 106, 10, 0.8),
+            0 3px 0 rgb(255, 81, 0),
+            0 5px 20px rgba(255, 81, 0, 0.5),
+            0 6px 5px rgba(242, 0, 10, 0.7),
+            0 12px 16px rgba(0, 0, 0, 1),
+            6px 12px 9px rgba(0, 0, 0, 1);
+        filter: saturate(1.3);
     }
-    .categories ul li {
-        display: inline-block;
-        height: 30px;
-        float: left;
-        margin: 0 10px;
-        padding: 0;
+        .gameTitle > * {
+            transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
+        }
+        .gameTitle p {
+            line-height: 3em;
+            font-size: 1vw;
+        }
+
+    .slide-leave-active {
+        transition: margin-bottom .3s ease-in 0s;
+    }
+    .slide-enter-active {
+        transition: margin-bottom .3s ease-out 0s;
     }
 
-    .categories ul li.selected {
-        font-weight: bold;
-        color: red;
+    .slide-enter, .slide-leave-to{
+        margin-bottom: -100%;
     }
-
-    .hovered { background: blue }
 </style>

@@ -1,85 +1,109 @@
 <template>
     <div id="app">
-        <nav :class="{hovered: verticalSelect == 0}">
-            <router-link to="/">
-                <p>Home</p>
-            </router-link>
-            <router-link to="/">
-                <p>Search</p>
-            </router-link>
-            <router-link to="/">
-                <p>Options</p>
-            </router-link>
-        </nav>
-        <router-view :verticalSelect="verticalSelect" @blockVerticalSelect="setBlockVerticalSelect"></router-view>
+        <!--<nav :class="{hovered: verticalSelect == 0}">-->
+            <!--<router-link to="/">-->
+                <!--<p>Home</p>-->
+            <!--</router-link>-->
+            <!--<router-link to="/">-->
+                <!--<p>Search</p>-->
+            <!--</router-link>-->
+            <!--<router-link to="/">-->
+                <!--<p>Options</p>-->
+            <!--</router-link>-->
+        <!--</nav>-->
+        <router-view :focused="focused"></router-view>
     </div>
 </template>
 
 <script lang="ts">
-    import {Component, Vue} from 'vue-property-decorator';
+import {Component, Vue} from 'vue-property-decorator';
+import {remote} from 'electron';
+import Gamepads from '@/class/Gamepads.class';
 
-    @Component
-    export default class App extends Vue {
-        protected verticalSelect: number = 0;
-        protected blockVerticalSelect: boolean = false;
-        protected maxVerticalSelect: number = 2;
+@Component
+export default class App extends Vue {
+    protected focused = true;
 
-        public created() {
-            this.$store.commit('initGameList');
-
-            window.addEventListener('keyup', (e) => {
-
-                if (e.code === 'ArrowUp') {
-                    if (!this.blockVerticalSelect) {
-                        this.verticalSelect--;
-                        if (this.verticalSelect < 0) {
-                            this.verticalSelect = this.maxVerticalSelect;
-                        }
-                    }
-                } else if (e.code === 'ArrowDown') {
-                    if (!this.blockVerticalSelect) {
-                        this.verticalSelect++;
-                        if (this.verticalSelect > this.maxVerticalSelect) {
-                            this.verticalSelect = 0;
-                        }
-                    }
-                }
-            });
-        }
-
-        /**
-         *
-         * @param val
-         */
-        protected setBlockVerticalSelect(val: boolean) {
-            this.blockVerticalSelect = val;
-        }
+    public mounted() {
+        // Electron event
+        remote.getCurrentWindow().on('blur', () => {
+            Gamepads.stopGamepadsListeners();
+            this.focused = false;
+        });
+        remote.getCurrentWindow().on('focus', () => {
+            this.focused = true;
+            Gamepads.init();
+        });
     }
+
+}
 </script>
 
 <style>
-    body {
-        background-image: url(./assets/background.jpg);
-        color: white;
+    /***************************************/
+    /*/////////////// BASE ////////////////*/
+    /***************************************/
+    html, body, div, span, applet, object, iframe,
+    h1, h2, h3, h4, h5, h6, p, blockquote, pre,
+    a, abbr, acronym, address, big, cite, code,
+    del, dfn, em, img, ins, kbd, q, s, samp,
+    small, strike, strong, sub, sup, tt, var,
+    b, u, i, center,
+    dl, dt, dd, ol, ul, li,
+    fieldset, form, label, legend,
+    table, caption, tbody, tfoot, thead, tr, th, td,
+    article, aside, canvas, details, embed,
+    figure, figcaption, footer, header,
+    menu, nav, output, ruby, section, summary,
+    time, mark, audio, video {
         margin: 0;
         padding: 0;
+        border: 0;
+        font-size: inherit;
+        font-weight: normal;
+        vertical-align: baseline;
     }
+    html{ font-size: 100%; }
+    article, aside, details, figcaption, figure,
+    footer, header, menu, nav, section { display: block; }
+    body{ line-height: 1; }
+    ol, ul{ list-style: none; }
+    table { border-collapse: collapse; border-spacing: 0; }
+    * { box-sizing: border-box; }
 
-    nav {
+    html {
+        height: 100%;
         width: 100%;
-        height: 20px;
-        background: red;
+        overflow: hidden;
     }
-    nav.hovered {
-        height: 60px;
-    }
-        nav p {
-            padding: 0;
-            margin: 0;
-            display: none;
-        }
 
-        nav.hovered p {
-            display: inline-block;
-        }
+    body {
+        height: 100%;
+        width: 100%;
+        font-family: 'Arcade_I', sans-serif;
+        transform: translateZ(0);
+    }
+
+    #app {
+        height: 100%;
+        width: 100%;
+    }
+
+    /******************************************/
+    /*/////////////// POLICES ////////////////*/
+    /******************************************/
+    @font-face {
+        font-family: Arcade_I;
+        src: url('./assets/fonts/ARCADE_I.TTF');
+    }
+
+    @font-face {
+        font-family: Arcade_N;
+        src: url('./assets/fonts/ARCADE_N.TTF');
+    }
+
+    @font-face {
+        font-family: Arcade_R;
+        src: url('./assets/fonts/ARCADE_R.TTF');
+    }
 </style>

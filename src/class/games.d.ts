@@ -4,13 +4,30 @@ interface GameJSON {
     subname: string;
     year: number;
     manufacturer: string;
-    parent: string;
-    category: string;
-    nplayers: string;
-    categories: string[];
+    nplayers: Nplayers;
+    category: string|null;
+    romName: string;
+    hi: boolean;
+    parent: string|null;
 }
 
-interface GameCategoryJSON {
-    id: string;
-    name: string;
+interface Nplayers {
+    sim: number;
+    alt: number;
+}
+
+interface Hiscore {
+    RANK: number;
+    NAME: string;
+    SCORE: number;
+}
+
+interface Hiscores {
+    classic: Hiscore[][];
+    advanced: Hiscore[][];
+}
+
+interface HiscoresJson {
+    allTime: Hiscores;
+    season: Hiscores;
 }

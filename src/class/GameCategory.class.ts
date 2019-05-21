@@ -1,13 +1,16 @@
 import Game from './Game.class';
+import {existsSync} from 'fs';
+import {join} from 'path';
+import {format} from 'url';
+
+declare const __static: string;
 
 export default class GameCategory {
-    protected id: string;
     protected name: string;
     protected games: Game[] = [];
 
-    public constructor(gameCategoryData: GameCategoryJSON) {
-        this.id = gameCategoryData.id;
-        this.name = gameCategoryData.name;
+    public constructor(name: string) {
+        this.name = name;
     }
 
     /**
@@ -23,5 +26,17 @@ export default class GameCategory {
      */
     public getGames(): Game[] {
         return this.games;
+    }
+
+    public get iconPath(): string {
+        let path = join(__static, 'categories', this.name.replace(/\W+/, '_').toLowerCase() + '.svg');
+        if (!existsSync(path)) {
+            path = join(__static, 'categories', '_default.svg');
+        }
+        return format({
+            pathname: path,
+            protocol: 'file',
+            slashes: true,
+        });
     }
 }

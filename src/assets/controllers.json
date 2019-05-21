@@ -1,0 +1,56 @@
+{
+    "standard": {
+        "buttons": {
+            "0": "Enter",
+            "1": "",
+            "2": "",
+            "3": "",
+            "4": "",
+            "5": "",
+            "6": "",
+            "7": "",
+            "8": "",
+            "9": "",
+            "10": "",
+            "11": "",
+            "12": "ArrowUp",
+            "13": "ArrowDown",
+            "14": "ArrowLeft",
+            "15": "ArrowRight",
+            "16": ""
+        },
+        "axes": {
+            "0": {
+                "0": "ArrowLeft",
+                "1": "ArrowRight"
+            },
+            "1": {
+                "0": "ArrowUp",
+                "1": "ArrowDown"
+            }
+        }
+    },
+    "Xin-Mo Xin-Mo Dual Arcade (Vendor: 16c0 Product: 05e1)": {
+        "buttons": {
+            "0": "Enter",
+            "1": "",
+            "2": "Enter",
+            "3": "",
+            "4": "",
+            "5": "",
+            "6": "",
+            "7": "",
+            "8": "Space"
+        },
+        "axes": {
+            "0": {
+                "0": "ArrowLeft",
+                "1": "ArrowRight"
+            },
+            "1": {
+                "0": "ArrowUp",
+                "1": "ArrowDown"
+            }
+        }
+    }
+}
