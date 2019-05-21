@@ -8,6 +8,7 @@ export default class Players {
 
     public constructor(faceyourmangaPath: string) {
         this.faceyourmangaPath = faceyourmangaPath;
+        this.init();
     }
 
     public init() {

@@ -210,7 +210,9 @@ export default class Games extends ControllableVue {
      * Called on move up
      */
     protected moveUp(speed: number, incrementer = 1) {
-        if (!this.focused) return () => {};
+        if (!this.focused) {
+            return () => { return; };
+        }
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -232,7 +234,9 @@ export default class Games extends ControllableVue {
      * Called on move down
      */
     protected moveDown(speed: number, incrementer = 1) {
-        if (!this.focused) return () => {};
+        if (!this.focused) {
+            return () => { return; };
+        }
         const newSpeed = this.getGameAnimationSpeed(speed, incrementer);
         incrementer += 1;
         this.showFlyer = false;
@@ -255,51 +259,38 @@ export default class Games extends ControllableVue {
     /**
      * Start a game
      */
-    protected startGame() {
-        if (!this.focused) return;
+    protected async startGame() {
+        if (!this.focused) {
+            return;
+        }
         const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
-        this.mame.start(selectedGame).then(
-            (process: ChildProcess|void) => {
-                if (process) {
-                    this.$store.getters.db.logGameStart(selectedGame.romName).then(
-                        (success) => {
-                            console.log('Start logged');
-                        },
-                        (error) => {
-                            console.log(error);
-                        },
-                    );
+        const db = this.$store.getters.db;
 
-                    process.on('close', () => {
-                        if (selectedGame.hasHiscore) {
-                            this.hiscores.saveHiscore(selectedGame.romName).then(
-                                (hiscores) => {
-                                    this.selectedCategory.getGames()[this.selectedGameId].hiscores
-                                        = hiscores as Hiscores;
+        const mameProcess = await this.mame.start(selectedGame);
+        if (!mameProcess) {
+            console.error('Failed start rom ' + selectedGame.romName);
+            return;
+        }
 
-                                    this.$store.getters.db.saveHiscores(
-                                        selectedGame.romName, (hiscores as Hiscores).classic[0])
-                                        .then(
-                                            (success) => {
-                                                console.log('HISCORE DB');
-                                            },
-                                            (error) => {
-                                                appendFileSync('~/arcade_error.log', '[' + Date.now() +' ][' + selectedGame.romName + ']' + error);
-                                                console.error(error);
-                                            },
-                                        );
-                                    console.log('Hiscores saved !');
-                                },
-                                (error: string) => {
-                                    console.log('Error Hiscore');
-                                    console.error(error);
-                                },
-                            );
-                        }
-                    });
+        // Log game start
+        await db.connect();
+        await db.logGameStart(selectedGame.romName);
+        db.end();
+
+        mameProcess.on('close', async () => {
+            try {
+                selectedGame.hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
+                if (selectedGame.hiscores.season.classic[0]) {
+                    await db.saveHiscores(selectedGame.romName, selectedGame.hiscores.season.classic[0]);
                 }
-            },
-        );
+                selectedGame.hiscores.allTime = await db.getAllTime(selectedGame.romName);
+                await this.hiscores.saveHiscore(selectedGame.romName, selectedGame.hiscores);
+                console.log('Score saved');
+            } catch (e) {
+                this.$store.getters.logger.logError('[' + selectedGame.romName + ']' + e);
+                return;
+            }
+        });
     }
 
     /**

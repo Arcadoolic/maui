@@ -39,8 +39,8 @@ export default class Hiscores extends ControllableVue {
         const playersService = this.$store.getters.players;
         this.scores = [];
 
-        if (this.game.hiscores.classic[0]) {
-            for (const score of this.game.hiscores.classic[0]) {
+        if (this.game.hiscores.season.classic[0]) {
+            for (const score of this.game.hiscores.season.classic[0]) {
                 const isKnow = playersService.playerExist(score.NAME);
                 const name = score.NAME && score.NAME.trim() !== '' ? score.NAME : '???';
                 this.scores.push({

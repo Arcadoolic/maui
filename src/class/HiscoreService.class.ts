@@ -17,7 +17,7 @@ export default class HiscoreService {
      * Get hiscores with hi2txt
      * @param romName
      */
-    public getHiscore(romName: string): Promise<Hiscores | string> {
+    public getHiscore(romName: string): Promise<Hiscores> {
         return new Promise((resolve, reject) => {
             const hi2txtPath = join(process.env.NODE_ENV === 'development'
                 ? './resources' : process.resourcesPath!, 'hi2txt');
@@ -57,22 +57,17 @@ export default class HiscoreService {
     /**
      * Save hiscores in a json file
      * @param romName
+     * @param hiscores
      */
-    public saveHiscore(romName: string): Promise<string|Hiscores> {
-        return new Promise((resolve, reject) => {
-            this.getHiscore(romName).then(
-                (hiscores) => {
-                    writeFileSync(join(this.config.hiscoresJsonPath, romName + '.json'), JSON.stringify(hiscores));
-                    resolve(hiscores);
-                },
-                (error) => {
-                    reject(error);
-                },
-            );
-        });
+    public saveHiscore(romName: string, hiscoresJson: HiscoresJson): void {
+        writeFileSync(join(this.config.hiscoresJsonPath, romName + '.json'), JSON.stringify(hiscoresJson));
     }
 
-    public loadHiscore(romName: string): Hiscores|null {
+    /**
+     *
+     * @param romName
+     */
+    public loadHiscore(romName: string): HiscoresJson|null {
         try {
             const hiscores = readFileSync(join(this.config.hiscoresJsonPath, romName + '.json'), 'utf8');
             return JSON.parse(hiscores);
