@@ -1,4 +1,4 @@
-import {BelongsTo, Column, Model, Table} from 'sequelize-typescript';
+import {BelongsTo, Column, ForeignKey, Model, Table} from 'sequelize-typescript';
 import Category from './Category.model';
 
 @Table({
@@ -13,6 +13,10 @@ export default class Game extends Model {
         autoIncrement: true,
     })
     public id_game!: number;
+
+    @ForeignKey(() => Category)
+    @Column
+    public id_category!: number;
 
     @BelongsTo(() => Category)
     public category!: Category;
