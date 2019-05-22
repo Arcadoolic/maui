@@ -279,9 +279,12 @@ export default class Games extends ControllableVue {
 
         mameProcess.on('close', async () => {
             try {
+
                 selectedGame.hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
                 if (selectedGame.hiscores.season.classic[0]) {
+                    await db.connect();
                     await db.saveHiscores(selectedGame.romName, selectedGame.hiscores.season.classic[0]);
+                    db.end();
                 }
                 selectedGame.hiscores.allTime = await db.getAllTime(selectedGame.romName);
                 await this.hiscores.saveHiscore(selectedGame.romName, selectedGame.hiscores);
