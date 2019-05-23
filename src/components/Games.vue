@@ -280,13 +280,15 @@ export default class Games extends ControllableVue {
         mameProcess.on('close', async () => {
             try {
                 await db.connect();
-                selectedGame.hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
+                const hiscores: HiscoresJson = {season: selectedGame.hiscores.season, allTime: selectedGame.hiscores.allTime};
+                hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
                 if (selectedGame.hiscores.season.classic[0]) {
                     await db.saveHiscores(selectedGame.romName, selectedGame.hiscores.season.classic[0]);
                 }
-                selectedGame.hiscores.allTime = await db.getAllTime(selectedGame.romName);
+                hiscores.allTime = await db.getAllTime(selectedGame.romName);
                 await this.hiscores.saveHiscore(selectedGame.romName, selectedGame.hiscores);
                 db.end();
+                selectedGame.hiscores = hiscores;
             } catch (e) {
                 this.$store.getters.logger.logError('[' + selectedGame.romName + ']' + e);
                 return;
