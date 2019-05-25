@@ -25,6 +25,7 @@ export default class User extends Model<User> {
     @Column({
         type: DataType.TEXT,
         comment: 'User 3 characters pseudonyme',
+        allowNull: false,
         validate: {
             len: [1, 3],
             notNull: true,

@@ -1,4 +1,4 @@
-import {BelongsTo, Column, ForeignKey, Model, Table} from 'sequelize-typescript';
+import {BelongsTo, Column, DataType, ForeignKey, Model, Table} from 'sequelize-typescript';
 import Category from './Category.model';
 
 @Table({
@@ -7,7 +7,7 @@ import Category from './Category.model';
     tableName: 'game',
     engine: 'MYISAM',
 })
-export default class Game extends Model {
+export default class Game extends Model<Game> {
     @Column({
         primaryKey: true,
         autoIncrement: true,
@@ -20,4 +20,9 @@ export default class Game extends Model {
 
     @BelongsTo(() => Category)
     public category!: Category;
+
+    @Column({
+        type: DataType.STRING,
+    })
+    public name!: string;
 }

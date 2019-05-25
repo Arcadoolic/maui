@@ -1,4 +1,4 @@
-import {Column, CreatedAt, ForeignKey, HasOne, Model, Table, UpdatedAt} from 'sequelize-typescript';
+import {BelongsTo, Column, CreatedAt, ForeignKey, HasOne, Model, Table, UpdatedAt} from 'sequelize-typescript';
 import Game from '@/model/Game.model';
 
 @Table({
@@ -7,7 +7,7 @@ import Game from '@/model/Game.model';
     tableName: 'game_history',
     engine: 'MYISAM',
 })
-export default class GameHistoryModel extends Model {
+export default class GameHistoryModel extends Model<GameHistoryModel> {
     @Column({
         primaryKey: true,
         autoIncrement: true,
@@ -18,7 +18,7 @@ export default class GameHistoryModel extends Model {
     @Column
     public id_game!: number;
 
-    @HasOne(() => Game)
+    @BelongsTo(() => Game)
     public game!: Game;
 
     @CreatedAt

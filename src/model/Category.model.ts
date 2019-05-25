@@ -6,7 +6,7 @@ import {Column, CreatedAt, DataType, DeletedAt, Model, Table, UpdatedAt} from 's
     tableName: 'category',
     engine: 'MYISAM',
 })
-export default class Category extends Model {
+export default class Category extends Model<Category> {
     @Column({
         primaryKey: true,
         autoIncrement: true,
@@ -15,6 +15,7 @@ export default class Category extends Model {
 
     @Column({
         type: DataType.TEXT,
+        allowNull: false,
         validate: {
             notNull: true,
         },

@@ -29,6 +29,13 @@ export default class Init extends Vue {
             (process.env.NODE_ENV === "development" ? '.' : userData),
             'mame-awesome-ui.sqlite'
         );
+        const configPath = join(
+            (process.env.NODE_ENV === "development" ? '.' : userData),
+            'mame-awesome-ui-config.json'
+        );
+
+        remote.dialog.showOpenDialog({ properties: ['openDirectory'] });
+
         this.$store.commit('initLogger', join(
             (process.env.NODE_ENV === "development" ? '.' : userData),
             'mame-awesome-ui.log'
@@ -43,8 +50,11 @@ export default class Init extends Vue {
         }));
 
         if (!existsSync(databasePath)) {
-            await this.install();
+            await this.installDatabase();
         }
+        // if (!existsSync(configPath)) {
+        //     await this.installConfig();
+        // }
 
         // Load games
     }
@@ -52,7 +62,7 @@ export default class Init extends Vue {
     /**
      * Init database
      */
-    protected async install() {
+    protected async installDatabase() {
         const db = this.$store.getters.database;
         await db.sync();
 
@@ -91,6 +101,15 @@ export default class Init extends Vue {
             {name: 'Utilities'},
             {name: 'Whac-A-Mole'},
         ]);
+    }
+
+    protected installConfig() {
+        const config = this.$store.getters.configuration;
+
+        if (!config.mameIniPath) {
+            remote.dialog.showOpenDialog({ properties: ['openDirectory'] })
+        }
+
     }
 
     protected async init() {
