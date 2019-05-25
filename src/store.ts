@@ -8,6 +8,7 @@ import Players from '@/class/Players.class';
 import IPDDatabase from '@/class/IPDDatabase.class';
 import FileLogger from '@/class/FileLogger.class';
 import GameService from '@/class/GameService.class';
+import {Sequelize} from 'sequelize-typescript';
 
 Vue.use(Vuex);
 
@@ -22,6 +23,7 @@ export default new Vuex.Store({
         db: null as IPDDatabase|null,
         logger: null as FileLogger|null,
         gameService: null as GameService|null,
+        database: null as Sequelize|null,
     },
     getters: {
         gameList: (state) => {
@@ -51,6 +53,9 @@ export default new Vuex.Store({
         gameService: (state): GameService => {
             return state.gameService!;
         },
+        database: (state): Sequelize => {
+            return state.database!;
+        },
     },
     mutations: {
         isInit: (state) => {
@@ -77,6 +82,9 @@ export default new Vuex.Store({
                 state.hiscore!,
                 state.db!,
                 state.logger!);
+        },
+        setDatabase: (state, database: Sequelize) => {
+            state.database = database;
         },
     },
 });
