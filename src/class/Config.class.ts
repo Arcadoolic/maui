@@ -1,8 +1,11 @@
-import {existsSync, readFileSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {join} from 'path';
 import {ConnectionConfig} from 'mysql';
+import {remote} from 'electron';
 
 export default class Config {
-    protected _defaultMameIni: string = '/etc/mame/mame.ini';
+    protected configPath!: string;
+
     protected _defaultGamesJsonPath: string = './games';
     protected _defaultHiscoresJsonPath: string = './hiscores';
     protected _defaultFaceyourmangaPath: string = './faceyourmanga';
@@ -14,6 +17,17 @@ export default class Config {
     protected _hiscoresJsonPath?: string;
     protected _faceyourmangaPath?: string;
     protected _db?: ConnectionConfig;
+
+    public constructor() {
+        this.configPath = join(
+            (process.env.NODE_ENV === "development" ? '.' : remote.app.getPath('userData')),
+            'mame-awesome-ui-config.json',
+        );
+    }
+
+    public exist(): boolean {
+        return existsSync(this.configPath);
+    }
 
     public load(): boolean {
         if (existsSync('./config.json')) {
@@ -30,14 +44,27 @@ export default class Config {
     }
 
     public save() {
-        // Ici on ecrit le ficher de config
+        const userData = remote.app.getPath('userData');
+        writeFileSync(
+            join(
+                (process.env.NODE_ENV === "development" ? '.' : userData),
+                'mame-awesome-ui-config.json',
+            ),
+            JSON.stringify({
+                mameIniPath: this._mameIniPath,
+            }),
+        );
     }
 
     /**
      * @return string
      */
-    public get mameIniPath(): string {
-        return this._mameIniPath || this._defaultMameIni;
+    public get mameIniPath(): string|undefined {
+        return this._mameIniPath;
+    }
+
+    public set mameIniPath(val: string|undefined) {
+        this._mameIniPath = val;
     }
 
     /**
