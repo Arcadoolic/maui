@@ -8,13 +8,14 @@ import Players from '@/class/Players.class';
 import IPDDatabase from '@/class/IPDDatabase.class';
 import FileLogger from '@/class/FileLogger.class';
 import GameService from '@/class/GameService.class';
-import {Sequelize} from 'sequelize-typescript';
+import Database from '@/class/Database.class';
 
 Vue.use(Vuex);
 
 export default new Vuex.Store({
     state: {
-        config: new Config(),
+        test: '',
+        configuration: new Config(),
         gameList: new GameList(),
         mame: new Mame(),
         hiscore: null as HiscoreService|null,
@@ -23,14 +24,14 @@ export default new Vuex.Store({
         db: null as IPDDatabase|null,
         logger: null as FileLogger|null,
         gameService: null as GameService|null,
-        database: null as Sequelize|null,
+        database: new Database(),
     },
     getters: {
         gameList: (state) => {
             return state.gameList;
         },
-        config: (state): Config => {
-            return state.config;
+        configuration: (state): Config => {
+            return state.configuration;
         },
         mame: (state): Mame => {
             return state.mame;
@@ -53,8 +54,11 @@ export default new Vuex.Store({
         gameService: (state): GameService => {
             return state.gameService!;
         },
-        database: (state): Sequelize => {
+        database: (state): Database => {
             return state.database!;
+        },
+        test: (state) => {
+            return state.test;
         },
     },
     mutations: {
@@ -62,29 +66,26 @@ export default new Vuex.Store({
             state.isInit = true;
         },
         initHiscores: (state) => {
-            state.hiscore = new HiscoreService(state.config, state.mame.mameUiPath);
+            state.hiscore = new HiscoreService(state.configuration, state.mame.mameUiPath);
         },
         initPlayers: (state) => {
-            console.log(state.config.faceyourmangaPath);
-            state.players = new Players(state.config.faceyourmangaPath);
+            console.log(state.configuration.faceyourmangaPath);
+            state.players = new Players(state.configuration.faceyourmangaPath);
         },
         initDatabase: (state) => {
-            state.db = new IPDDatabase(state.config, state.players!);
+            state.db = new IPDDatabase(state.configuration, state.players!);
         },
         initLogger: (state, path: string) => {
             state.logger = new FileLogger(path);
         },
         initGameService: (state) => {
             state.gameService = new GameService(
-                state.config,
+                state.configuration,
                 state.mame,
                 state.gameList,
                 state.hiscore!,
                 state.db!,
                 state.logger!);
-        },
-        setDatabase: (state, database: Sequelize) => {
-            state.database = database;
         },
     },
 });
