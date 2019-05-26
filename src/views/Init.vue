@@ -8,15 +8,6 @@ import {ipcRenderer, remote} from 'electron';
 import {existsSync} from 'fs';
 import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
-import HiscoreService from '@/class/HiscoreService.class';
-import Players from '@/class/Players.class';
-import IPDDatabase from '@/class/IPDDatabase.class';
-import {appendFileSync} from 'fs';
-import {Sequelize} from 'sequelize-typescript';
-import Category from '@/model/Category.model';
-import Game from '@/model/Game.model';
-import GameHistoryModel from '@/model/GameHistory.model';
-import User from '@/model/User.model';
 import {join} from 'path';
 
 @Component
@@ -25,72 +16,50 @@ export default class Init extends Vue {
 
     public async mounted() {
         const userData = remote.app.getPath('userData');
-        const databasePath = join(
-            (process.env.NODE_ENV === "development" ? '.' : userData),
-            'mame-awesome-ui.sqlite'
-        );
+        const config = this.$store.getters.configuration;
+        const database = this.$store.getters.database;
+
         this.$store.commit('initLogger', join(
             (process.env.NODE_ENV === "development" ? '.' : userData),
             'mame-awesome-ui.log'
         ));
         const logger = this.$store.getters.logger;
 
-        // Database connexion
-        this.$store.commit('setDatabase', new Sequelize({
-            dialect: 'sqlite',
-            storage: databasePath,
-            models: [Category],
-        }));
-
-        if (!existsSync(databasePath)) {
-            await this.install();
+        // Create and fill database file if not existing
+        if (!database.exist()) {
+            await database.install();
         }
+
+        // Create and fill configuration file if not existing
+        if (!config.exist()) {
+            await this.installConfig();
+        } else {
+            config.load();
+        }
+
+        console.log('YEAH !');
 
         // Load games
     }
 
-    /**
-     * Init database
-     */
-    protected async install() {
-        const db = this.$store.getters.database;
-        await db.sync();
-
-        // Create categories
-        await Category.bulkCreate([
-            {name: 'Ball & Paddle'},
-            {name: 'Board Game'},
-            {name: 'Calculator'},
-            {name: 'Casino'},
-            {name: 'Climbing'},
-            {name: 'Coin Pusher'},
-            {name: 'Computer'},
-            {name: 'Driving'},
-            {name: 'Electromechanical'},
-            {name: 'Fighter'},
-            {name: 'Game Console'},
-            {name: 'Handheld'},
-            {name: 'Maze'},
-            {name: 'Medal Game'},
-            {name: 'Medical Equipment'},
-            {name: 'Misc.'},
-            {name: 'MultiGame'},
-            {name: 'Multiplay'},
-            {name: 'Music'},
-            {name: 'Platform'},
-            {name: 'Printer'},
-            {name: 'Puzzle'},
-            {name: 'Quiz'},
-            {name: 'Rhythm'},
-            {name: 'Shooter'},
-            {name: 'Slot Machine'},
-            {name: 'Sports'},
-            {name: 'System'},
-            {name: 'Tabletop'},
-            {name: 'Telephone'},
-            {name: 'Utilities'},
-            {name: 'Whac-A-Mole'},
-        ]);
+    protected async installConfig() {
+        const config = this.$store.getters.configuration;
+        if (!config.mameIniPath) {
+            let mameIniDirPath: string[]|null = null;
+            let mameIniPath = 'mame.ini';
+            while (!mameIniDirPath || !mameIniDirPath.length || !existsSync(mameIniPath)) {
+                await remote.dialog.showErrorBox('mame.ini not found !', 'mame.ini not found. Please select mame path.');
+                mameIniDirPath = await remote.dialog.showOpenDialog({
+                    title: 'Select mame.ini path',
+                    properties: ['openDirectory', 'showHiddenFiles'],
+                });
+                if (mameIniDirPath[0]) {
+                    mameIniPath = join(mameIniDirPath[0], 'mame.ini');
+                }
+            }
+            config.mameIniPath = mameIniPath;
+            config.save();
+        }
     }
 
     protected async init() {
