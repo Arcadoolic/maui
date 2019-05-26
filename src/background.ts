@@ -104,6 +104,8 @@ function createSplashWin() {
             webSecurity: false
         },
         backgroundColor: '#000000',
-        frame: false
+        frame: false,
+        resizable: false,
+        movable: true
     }, 'init');
 }
