@@ -25,4 +25,40 @@ export default class Game extends Model<Game> {
         type: DataType.STRING,
     })
     public name!: string;
+
+    @Column({
+        type: DataType.TEXT,
+    })
+    public fullname!: string;
+
+    @Column({
+        type: DataType.TEXT,
+    })
+    public shortname!: string;
+
+    @Column({
+        type: DataType.TEXT,
+    })
+    public subname!: string;
+
+    @Column({
+        type: DataType.TEXT,
+    })
+    public manufacturer!: string;
+
+    @Column({
+        type: DataType.TINYINT,
+    })
+    public year!: number;
+
+    @Column({
+        type: DataType.BOOLEAN,
+    })
+    public hi!: boolean;
+
+    @Column({
+        type: DataType.TEXT,
+        unique: true,
+    })
+    public romName!: string;
 }
