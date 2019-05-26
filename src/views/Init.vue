@@ -5,61 +5,47 @@
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
 import {ipcRenderer, remote} from 'electron';
-import {existsSync} from 'fs';
-import GameService from '@/class/GameService.class';
 import Config from '@/class/Config.class';
 import {join} from 'path';
+import MameService from "@/class/MameService.class";
 
 @Component
 export default class Init extends Vue {
     protected msg: string = 'Chargement';
 
+    public created() {
+        remote.getCurrentWindow().setSize(346, 354);
+        remote.getCurrentWindow().center();
+    }
+
     public async mounted() {
-        const userData = remote.app.getPath('userData');
-        const config = this.$store.getters.configuration;
+        let config = this.$store.getters.configuration;
         const database = this.$store.getters.database;
 
-        this.$store.commit('initLogger', join(
-            (process.env.NODE_ENV === "development" ? '.' : userData),
-            'mame-awesome-ui.log'
-        ));
-        const logger = this.$store.getters.logger;
+        config.load();
+        if (!config.loaded()) {
+            // If no config or not valid, redirect to config page
+            return this.$router.push({name: 'config'});
+        }
 
-        // Create and fill database file if not existing
         if (!database.exist()) {
+            // Create and fill database file if not existing
             await database.install();
         }
 
-        // Create and fill configuration file if not existing
-        if (!config.exist()) {
-            await this.installConfig();
-        } else {
-            config.load();
-        }
+        let mameService = new MameService(config.mamePath);
+        console.log(mameService.getRomListFromFavorites());
 
-        console.log('YEAH !');
+        // TODO : Check if mame installed first
+        // If can't execute command mame ask for mame binary path
+        // Once ok,  execute commande `mame -showconfig` and extract needed information like "home", "inipath" and "rompath"
+        // Attention : Multiple bin names (mame.exe, mame64.exe, ...)
+
+        // Toujours executer mame depuis son homepath ! si "." utiliser le path du binaire
+        const regex = /^(homepath|rompath|inipath)\s*(.*)$/;
 
         // Load games
-    }
 
-    protected async installConfig() {
-        const config = this.$store.getters.configuration;
-        if (!config.mameIniPath) {
-            let mameIniDirPath: string[]|null = null;
-            let mameIniPath = 'mame.ini';
-            while (!mameIniDirPath || !mameIniDirPath.length || !existsSync(mameIniPath)) {
-                await remote.dialog.showErrorBox('mame.ini not found !', 'mame.ini not found. Please select mame path.');
-                mameIniDirPath = await remote.dialog.showOpenDialog({
-                    title: 'Select mame.ini path',
-                    properties: ['openDirectory', 'showHiddenFiles'],
-                });
-                if (mameIniDirPath[0]) {
-                    mameIniPath = join(mameIniDirPath[0], 'mame.ini');
-                }
-            }
-            config.mameIniPath = mameIniPath;
-            config.save();
-        }
     }
 
     protected async init() {
