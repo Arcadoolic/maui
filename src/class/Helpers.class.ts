@@ -12,7 +12,7 @@ export default class Helpers {
      */
     public static getFirstExistingDirectory(paths: string[], parentPath?: string|null, file?: string): string|null {
         for (let path of paths) {
-            path = path.replace('$HOME', os.homedir);
+            path = path.replace(/\$HOME|~/, os.homedir);
             if (path[0] !== '/' && parentPath) {
                 parentPath = parentPath.replace('$HOME', os.homedir);
                 const parentPathArray = parentPath.split(sep);
