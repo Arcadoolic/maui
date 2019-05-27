@@ -1,6 +1,8 @@
 import {readFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
+import {execFileSync} from 'child_process';
+import os from 'os';
 
 export default class MameService {
     protected mamePath!: string;
@@ -11,10 +13,13 @@ export default class MameService {
     /**
      * Load and parse mame.ini and ui.ini file
      * @param mamePath
+     * @param mameBinary
+     * @throws
      */
-    public constructor(mamePath) {
+    public constructor(mamePath: string, mameBinary: string) {
         this.mamePath = mamePath;
-        if (!MameService.parseMameIniFile(join(mamePath, 'mame.ini'), this.mameIni)) {
+        const mameIniContent = execFileSync(join(mamePath, mameBinary), ['-showconfig']);
+        if (!MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni)) {
             throw new Error('File missing or failed parsing ' + join(mamePath, 'mame.ini'));
         }
         if (!this.mameIni.inipath) {
@@ -25,18 +30,20 @@ export default class MameService {
             throw new Error('File missing or failed parsing ui.ini');
         }
         this.iniPath = iniPath;
-        if (!MameService.parseMameIniFile(join(this.iniPath, 'ui.ini'), this.uiIni)) {
+        const uiIniContent = readFileSync(join(this.iniPath, 'ui.ini'), 'utf8');
+        if (!MameService.parseMameIniFile(uiIniContent, this.uiIni)) {
             throw new Error('File missing or failed parsing ' + join(this.iniPath, 'ui.ini'));
         }
     }
+
     /**
      * Parse a mame ini file
      * @param filePath
      * @param TargetObject
      */
-    protected static parseMameIniFile(filePath: string, TargetObject: { [key: string]: any }) {
+    protected static parseMameIniFile(fileContent: string, TargetObject: { [key: string]: any }) {
         const regex = new RegExp(/^([a-z_]+)\s+(.+)$/);
-        const file = readFileSync(filePath, 'utf8').split('\n');
+        const file = fileContent.split('\n');
         file.forEach((line) => {
             if (line[0] === '#') { // Skip comments
                 return true;
