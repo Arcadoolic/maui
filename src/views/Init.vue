@@ -33,7 +33,7 @@ export default class Init extends Vue {
             await database.install();
         }
 
-        let mameService = new MameService(config.mamePath);
+        let mameService = new MameService(config.mamePath, config.mameBinaryName);
         console.log(mameService.getRomListFromFavorites());
 
         // TODO : Check if mame installed first
