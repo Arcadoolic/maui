@@ -71,7 +71,6 @@ export default class MameService {
         const existing: { [key: string]: boolean } = {};
         file.forEach((line: string) => {
             line = line.trim(); // FIXME : Do not take first favorite !
-            console.log(line);
             if (regexp.test(line) && !existing[line]) {
                 existing[line] = true;
                 retArray.push(line);
