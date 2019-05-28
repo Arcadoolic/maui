@@ -8,6 +8,8 @@ import {ipcRenderer, remote} from 'electron';
 import Config from '@/class/Config.class';
 import {join} from 'path';
 import MameService from "@/class/MameService.class";
+import GameService from '@/class/GameService.class';
+import Database from '@/class/Database.class';
 
 @Component
 export default class Init extends Vue {
@@ -20,7 +22,7 @@ export default class Init extends Vue {
 
     public async mounted() {
         let config = this.$store.getters.configuration;
-        const database = this.$store.getters.database;
+        const database = this.$store.getters.database as Database;
 
         config.load();
         if (!config.loaded()) {
@@ -28,23 +30,16 @@ export default class Init extends Vue {
             return this.$router.push({name: 'config'});
         }
 
+        let mameService = new MameService(config);
+        let gameService = new GameService(config, mameService);
+
         if (!database.exist()) {
             // Create and fill database file if not existing
-            await database.install();
+            await database.install(gameService);
         }
 
-        let mameService = new MameService(config.mamePath, config.mameBinaryName);
-        console.log(mameService.getRomListFromFavorites());
-
-        // TODO : Check if mame installed first
-        // If can't execute command mame ask for mame binary path
-        // Once ok,  execute commande `mame -showconfig` and extract needed information like "home", "inipath" and "rompath"
-        // Attention : Multiple bin names (mame.exe, mame64.exe, ...)
-
-        // Toujours executer mame depuis son homepath ! si "." utiliser le path du binaire
-        const regex = /^(homepath|rompath|inipath)\s*(.*)$/;
-
-        // Load games
+        // Save new games
+        await gameService.saveGamesFromRomNames(mameService.getRomListFromFavorites());
 
     }
 
