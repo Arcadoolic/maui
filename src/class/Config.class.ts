@@ -8,8 +8,8 @@ export default class Config {
     protected configPath!: string;
     protected _configLoaded: boolean = false;
 
-    protected _mamePath?: string;
-    protected _mameBinaryName?: string;
+    protected _mamePath: string = '';
+    protected _mameBinaryName: string =  '';
 
     protected _defaultGamesJsonPath: string = './games';
     protected _defaultHiscoresJsonPath: string = './hiscores';
@@ -69,17 +69,17 @@ export default class Config {
         return this._configLoaded;
     }
 
-    public get mamePath(): string|undefined {
+    public get mamePath(): string {
         return this._mamePath;
     }
-    public set mamePath(val) {
+    public set mamePath(val: string) {
         this._mamePath = val;
     }
 
-    public get mameBinaryName(): string|undefined {
+    public get mameBinaryName(): string {
         return this._mameBinaryName;
     }
-    public set mameBinaryName(val) {
+    public set mameBinaryName(val: string) {
         this._mameBinaryName = val;
     }
 
