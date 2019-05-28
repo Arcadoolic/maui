@@ -69,4 +69,20 @@ export default class Game extends Model<Game> {
         defaultValue: 0,
     })
     public player_sim!: number;
+
+    public get players() {
+        let str: string|null = null;
+        if (this.player_alt) {
+            str = this.player_alt + ' player' + (this.player_alt > 1 ? 's' : '') + ' alternate';
+        }
+        if (this.player_sim) {
+            str = (str)
+                ? str + '/' + this.player_sim + ' player' + (this.player_sim > 1 ? 's' : '') + ' simultaneous'
+                : this.player_sim + ' player' + (this.player_sim > 1 ? 's' : '') + ' simultaneous';
+        }
+        if (!str) {
+            str = '1 player';
+        }
+        return str;
+    }
 }
