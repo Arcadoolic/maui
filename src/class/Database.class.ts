@@ -3,6 +3,8 @@ import {join} from 'path';
 import {remote} from 'electron';
 import {Sequelize} from 'sequelize-typescript';
 import Category from '@/model/Category.model';
+import GameService from '@/class/GameService.class';
+import Game from '@/model/Game.model';
 
 export default class Database {
     protected databasePath!: string;
@@ -16,7 +18,7 @@ export default class Database {
         this._sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: this.databasePath,
-            models: [Category],
+            models: [Category, Game],
         });
     }
 
@@ -24,44 +26,17 @@ export default class Database {
         return existsSync(this.databasePath);
     }
 
-    public async install() {
-        this.sequelize.sync();
+    public async install(gameService: GameService) {
+        await this.sequelize.sync();
 
+        const records: Array<{id_category: number, name: string}> = [];
+        console.log(records);
+        const categories = Object.keys(gameService.getGameCategories());
+        for (let i = 0; i < categories.length; i++) {
+            records.push({id_category: i, name: categories[i]});
+        }
         // Create categories
-        await Category.bulkCreate([
-            {name: 'Ball & Paddle'},
-            {name: 'Board Game'},
-            {name: 'Calculator'},
-            {name: 'Casino'},
-            {name: 'Climbing'},
-            {name: 'Coin Pusher'},
-            {name: 'Computer'},
-            {name: 'Driving'},
-            {name: 'Electromechanical'},
-            {name: 'Fighter'},
-            {name: 'Game Console'},
-            {name: 'Handheld'},
-            {name: 'Maze'},
-            {name: 'Medal Game'},
-            {name: 'Medical Equipment'},
-            {name: 'Misc.'},
-            {name: 'MultiGame'},
-            {name: 'Multiplay'},
-            {name: 'Music'},
-            {name: 'Platform'},
-            {name: 'Printer'},
-            {name: 'Puzzle'},
-            {name: 'Quiz'},
-            {name: 'Rhythm'},
-            {name: 'Shooter'},
-            {name: 'Slot Machine'},
-            {name: 'Sports'},
-            {name: 'System'},
-            {name: 'Tabletop'},
-            {name: 'Telephone'},
-            {name: 'Utilities'},
-            {name: 'Whac-A-Mole'},
-        ]);
+        await Category.bulkCreate(records);
     }
 
     public get sequelize(): Sequelize {
