@@ -3,29 +3,29 @@ import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import {execFileSync} from 'child_process';
 import os from 'os';
+import Config from '@/class/Config.class';
 
 export default class MameService {
-    protected mamePath!: string;
+    protected config!: Config;
     protected iniPath!: string;
     protected mameIni: { [key: string]: any } = {} = {};
     protected uiIni: any = {};
 
     /**
      * Load and parse mame.ini and ui.ini file
-     * @param mamePath
-     * @param mameBinary
+     * @param config
      * @throws
      */
-    public constructor(mamePath: string, mameBinary: string) {
-        this.mamePath = mamePath;
-        const mameIniContent = execFileSync(join(mamePath, mameBinary), ['-showconfig']);
+    public constructor(config: Config) {
+        this.config = config;
+        const mameIniContent = execFileSync(this.mameBinary, ['-showconfig']);
         if (!MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni)) {
-            throw new Error('File missing or failed parsing ' + join(mamePath, 'mame.ini'));
+            throw new Error('File missing or failed parsing ' + join(this.config.mamePath, 'mame.ini'));
         }
         if (!this.mameIni.inipath) {
             throw new Error('ui value is missing in mame.ini');
         }
-        const iniPath = Helpers.getFirstExistingDirectory(this.mameIni.inipath, this.mamePath) || '';
+        const iniPath = Helpers.getFirstExistingDirectory(this.mameIni.inipath, this.config.mamePath) || '';
         if (!iniPath) {
             throw new Error('File missing or failed parsing ui.ini');
         }
@@ -36,9 +36,13 @@ export default class MameService {
         }
     }
 
+    public get mameBinary() {
+        return join(this.config.mamePath, this.config.mameBinaryName);
+    }
+
     /**
      * Parse a mame ini file
-     * @param filePath
+     * @param fileContent
      * @param TargetObject
      */
     protected static parseMameIniFile(fileContent: string, TargetObject: { [key: string]: any }) {
@@ -77,5 +81,20 @@ export default class MameService {
             }
         });
         return retArray;
+    }
+
+    public getGameInformation(romName: string) {
+        console.log('Game information ' + romName);
+        console.log(this.mameBinary);
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(
+            execFileSync(this.mameBinary, ['-lx', romName], {encoding: 'utf8'}),
+            'text/xml',
+        );
+        return {
+            manufacturer: xml.getElementsByTagName('manufacturer')[0].innerHTML,
+            year: parseInt(xml.getElementsByTagName('year')[0].innerHTML, 10),
+            description: xml.getElementsByTagName('description')[0].innerHTML,
+        };
     }
 }
