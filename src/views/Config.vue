@@ -24,8 +24,10 @@
         protected mameBinaryName: string = '';
 
         public created() {
+            remote.getCurrentWindow().setResizable(true);
             remote.getCurrentWindow().setSize(640, 360);
             remote.getCurrentWindow().center();
+            remote.getCurrentWindow().setResizable(false);
 
             this.mamePath = this.config.mamePath;
             this.mameBinaryName = this.config.mameBinaryName;
