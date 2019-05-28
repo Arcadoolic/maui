@@ -21,7 +21,7 @@
 </template>
 
 <script lang="ts">
-import ControllableVue from '@/ControllableVue.vue';
+import ControllableVue from '@/ControllableVue';
 import {Component, Prop, Watch} from 'vue-property-decorator';
 import Game from '@/class/Game.class';
 
