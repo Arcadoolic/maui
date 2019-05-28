@@ -16,8 +16,11 @@ export default class Init extends Vue {
     protected msg: string = 'Chargement';
 
     public created() {
+        remote.getCurrentWindow().setResizable(true);
+        remote.getCurrentWindow().setFullScreen(false);
         remote.getCurrentWindow().setSize(346, 354);
         remote.getCurrentWindow().center();
+        remote.getCurrentWindow().setResizable(false);
     }
 
     public async mounted() {
@@ -29,9 +32,9 @@ export default class Init extends Vue {
             // If no config or not valid, redirect to config page
             return this.$router.push({name: 'config'});
         }
-
-        let mameService = new MameService(config);
-        let gameService = new GameService(config, mameService);
+        this.$store.commit('initServices');
+        const mameService = this.$store.getters.mameService;
+        const gameService = this.$store.getters.gameService;
 
         if (!database.exist()) {
             // Create and fill database file if not existing
@@ -40,7 +43,7 @@ export default class Init extends Vue {
 
         // Save new games
         await gameService.saveGamesFromRomNames(mameService.getRomListFromFavorites());
-
+        this.$router.push({name: 'home'});
     }
 
     protected async init() {
