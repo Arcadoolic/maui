@@ -1,118 +1,54 @@
 <template>
     <div class="categories">
-        <div class="category" v-for="(category, index) in gameList.getCategories()" :class="getCategoryClasses(index)">
-            <img :src="category.iconPath" alt="">
+        <div class="category" v-for="(category, index) in categories" :class="getCategoryClasses(index)">
+            <img :src="a" :alt="category.name">
         </div>
     </div>
 </template>
 
 <script lang="ts">
-import {Vue, Component, Prop, Model} from 'vue-property-decorator';
-import GameList from '@/class/GameList.class';
-import ControllableVue from '@/ControllableVue.vue';
+import {Component, Prop} from 'vue-property-decorator';
+import {join} from 'path';
+import ControllableVue from '@/ControllableVue';
+import Category from '@/model/Category.model';
+
+declare const __static: string;
 
 @Component
 export default class Categories extends ControllableVue {
-    protected categorySelectedId: number = 0;
+    @Prop({ required: true })
+    protected readonly categories!: Category[];
 
-    protected gameList = new GameList();
-    protected categoriesFigure!: HTMLElement;
+    @Prop({ required: true, type: Number, default: 0})
+    protected readonly selectedCategoryIndex!: number;
 
-    public created() {
-        /** Init vars */
-        this.gameList = this.$store.getters.gameList;
+    protected a = join(__static, 'categories', '_default.svg'); // TODO : Method to get image or CHANGE THIS DESIGN !
 
-        /**
-         * Register key events
-         */
-        this.onKeydown((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-            switch (key) {
-                case 'ArrowLeft':
-                    this.moveLeft();
-                    break;
-                case 'ArrowRight':
-                    this.moveRight();
-                    break;
-            }
-        });
-
-        this.onKeyup((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-        });
-    }
-
-    public mounted() {
-        // Category list figure size
-        this.categoriesFigure = this.$refs.categoriesFigure as HTMLElement;
-        if (this.categoriesFigure) {
-            this.categoriesFigure.style.width = ((this.gameList.getCategories().length + 1) * 150 + 300) + 'px';
+    protected getCategoryClasses(index: number) {
+        const catLen = this.categories.length;
+        let previous = this.selectedCategoryIndex - 1 === index;
+        let previous2 = this.selectedCategoryIndex - 2 === index;
+        let next2 = this.selectedCategoryIndex + 2 === index;
+        if (this.selectedCategoryIndex === 0)  {
+            previous = index === catLen - 1;
+            previous2 = index === catLen - 2;
+        } else if (this.selectedCategoryIndex === 1) {
+            previous2 = catLen - 1 === index;
         }
-    }
 
-    /**
-     * Called on move left
-     */
-    protected moveLeft() {
-        this.categorySelectedId = this.categorySelectedId <= 0 ?
-            this.gameList.getCategories().length - 1 : this.categorySelectedId - 1;
-        this.emitCategoryChange();
-        this.updateCategoriesPosition();
-    }
-
-    /**
-     * Called on move right
-     */
-    protected moveRight() {
-        this.categorySelectedId = this.categorySelectedId >= this.gameList.getCategories().length - 1 ?
-            0 : this.categorySelectedId + 1;
-        this.emitCategoryChange();
-        this.updateCategoriesPosition();
-    }
-
-    /**
-     * Calculate category list position
-     */
-    protected updateCategoriesPosition() {
-        if (this.$refs.categoriesFigure) {
-            (this.$refs.categoriesFigure as HTMLElement).style.left = '-' + (this.categorySelectedId * 150) + 'px';
+        let next = this.selectedCategoryIndex + 1 === index;
+        if (this.selectedCategoryIndex === catLen - 1) {
+            next = 0 === index;
+            next2 = 1 === index;
+        } else if (this.selectedCategoryIndex === catLen - 2) {
+            next2 = 0 === index;
         }
-    }
-
-    /**
-     * Emit event to parent when the selected category change
-     */
-    protected emitCategoryChange() {
-        this.$emit('categoryChange', this.categorySelectedId);
-    }
-
-    protected get getCategoryClasses() {
-        return (index: number) => {
-            const catLen = this.gameList.getCategories().length;
-            let previous = this.categorySelectedId - 1 === index;
-            let previous2 = this.categorySelectedId - 2 === index;
-            let next2 = this.categorySelectedId + 2 === index;
-            if (this.categorySelectedId === 0)  {
-                previous = index === catLen - 1;
-                previous2 = index === catLen - 2;
-            } else if (this.categorySelectedId === 1) {
-                previous2 = catLen - 1 === index;
-            }
-
-            let next = this.categorySelectedId + 1 === index;
-            if (this.categorySelectedId === catLen - 1) {
-                next = 0 === index;
-                next2 = 1 === index;
-            } else if (this.categorySelectedId === catLen - 2) {
-                next2 = 0 === index;
-            }
-            return {
-                selected: this.categorySelectedId === index,
-                previous,
-                next,
-                previous2,
-                next2,
-            };
+        return {
+            selected: this.selectedCategoryIndex === index,
+            previous,
+            next,
+            previous2,
+            next2,
         };
     }
 
