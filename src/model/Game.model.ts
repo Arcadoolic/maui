@@ -6,6 +6,7 @@ import Category from './Category.model';
     paranoid: true,
     tableName: 'game',
     engine: 'MYISAM',
+
 })
 export default class Game extends Model<Game> {
     @Column({
@@ -22,9 +23,10 @@ export default class Game extends Model<Game> {
     public category!: Category;
 
     @Column({
-        type: DataType.STRING,
+        type: DataType.TEXT,
+        unique: true,
     })
-    public name!: string;
+    public romName!: string;
 
     @Column({
         type: DataType.TEXT,
@@ -57,8 +59,14 @@ export default class Game extends Model<Game> {
     public hi!: boolean;
 
     @Column({
-        type: DataType.TEXT,
-        unique: true,
+        type: DataType.TINYINT,
+        defaultValue: 0,
     })
-    public romName!: string;
+    public player_alt!: number;
+
+    @Column({
+        type: DataType.TINYINT,
+        defaultValue: 0,
+    })
+    public player_sim!: number;
 }
