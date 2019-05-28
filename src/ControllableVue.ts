@@ -1,4 +1,3 @@
-<script lang="ts">
 import {Vue} from 'vue-property-decorator';
 
 export default abstract class ControllableVue extends Vue {
@@ -35,4 +34,3 @@ export default abstract class ControllableVue extends Vue {
     }
 
 }
-</script>
