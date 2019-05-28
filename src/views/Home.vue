@@ -1,18 +1,17 @@
 <template>
-    <span class="home">
+    <div class="home">
         <div class="gameTitle" v-if="selectedGame">
             <h1>{{selectedGame.shortname}}</h1>
-            <p>({{selectedGame.year}}, {{selectedGame.nplayerString}})</p>
+            <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
         </div>
+        <Games :games="games" :selectedGameIndex="selectedGameIndex"></Games>
+        <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
+<!--        <GamepadsComponent></GamepadsComponent>-->
 
-        <Games :selectedCategory="selectedCategory" @gameChange="gameChange"></Games>
-        <Categories @categoryChange="categoryChange"></Categories>
-        <GamepadsComponent></GamepadsComponent>
-
-        <transition name="slide">
-            <Hiscores :game="selectedGame" v-if="selectedGame.hasHiscore && showHiscores"></Hiscores>
-        </transition>
-    </span>
+<!--        <transition name="slide">-->
+<!--            <Hiscores :game="selectedGame" v-if="selectedGame.hasHiscore && showHiscores"></Hiscores>-->
+<!--        </transition>-->
+    </div>
     <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
 
 </template>
@@ -24,77 +23,126 @@ import Categories from '@/components/Categories.vue';
 import Mame from '@/class/Mame.class';
 import GameCategory from '@/class/GameCategory.class';
 import Games from '@/components/Games.vue';
-import Game from '@/class/Game.class';
 import Gamepads from '@/class/Gamepads.class';
 import GamepadsComponent from '@/components/Gamepads.vue';
 import Hiscores from '@/components/Hiscores.vue';
-import ControllableVue from '@/ControllableVue.vue';
+import ControllableVue from '@/ControllableVue';
 import {remote} from 'electron';
+import Game from '@/model/Game.model';
+import Category from "@/model/Category.model";
 
 @Component({
     components: {
         Categories,
         Games,
-        GamepadsComponent,
-        Hiscores,
     },
 })
 export default class Home extends ControllableVue {
-    protected gameList = new GameList();
-    protected mame = new Mame();
-    protected selectedCategory: GameCategory|null = null;
-    protected selectedGameId: number = 0;
-    protected selectedGame: Game|null = null;
-    protected showHiscores: boolean = false;
-    protected closeTimeout: any = 0;
+    protected games: Game[] = [];
+    protected selectedGameIndex: number = 0;
 
-    public created() {
-        this.gameList = this.$store.getters.gameList;
-        this.mame = this.$store.getters.mame;
-        this.selectedCategory = this.gameList.getCategories()[0]; // Category ALL
-        this.selectedGame = this.selectedCategory.getGames()[0];
+    protected categories: Category[] = [];
+    protected selectedCategoryIndex: number = 0;
 
-        this.onKeydown((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-            switch (key) {
-                case 'Space':
-                    this.showHiscores = !this.showHiscores;
-                    this.closeTimeout = setTimeout(() => {
-                        remote.getCurrentWindow().close();
-                    }, 3000);
-                    break;
-            }
-        });
+    protected timeouts: {
+        quit?: number
+    } = {};
+    // protected gameList = new GameList();
+    // protected mame = new Mame();
+    // protected selectedCategory: GameCategory|null = null;
+    // protected selectedGameId: number = 0;
+    // protected showHiscores: boolean = false;
+    // protected closeTimeout: any = 0;
 
-        this.onKeyup((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-            switch (key) {
-                case 'Space':
-                    clearTimeout(this.closeTimeout);
-                    break;
-            }
-        });
+    public async created() {
+        if (!this.$store.getters.isInit) {
+            return this.$router.push({name: 'init'});
+        }
+
+        // remote.getCurrentWindow().setFullScreen(true);
+        remote.getCurrentWindow().setResizable(true);
+
+        const gameService = this.$store.getters.gameService;
+        this.games = await gameService.loadGames();
+        this.categories = await gameService.loadCategories();
 
         Gamepads.init();
+        this.registerKeyMapping();
+
+        // this.gameList = this.$store.getters.gameList;
+        // this.mame = this.$store.getters.mame;
+        // this.selectedCategory = this.gameList.getCategories()[0]; // Category ALL
+        // this.selectedGame = this.selectedCategory.getGames()[0];
+    }
+
+    protected registerKeyMapping() {
+        this.onKeydown((e, isGamepad) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+            switch (key) {
+                case 'ArrowUp':
+                    this.selectPreviousGame();
+                    break;
+                case 'ArrowDown':
+                    this.selectNextGame();
+                    break;
+                case 'ArrowLeft':
+                    this.selectPreviousCategory();
+                    break;
+                case 'ArrowRight':
+                    this.selectNextCategory();
+                    break;
+                case 'Space':
+                    this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
+                    break;
+
+            }
+        });
+
+        this.onKeyup((e, isGamepad) => {
+            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+            switch (key) {
+                case 'Space':
+                    clearTimeout(this.timeouts.quit);
+                    break
+            }
+        })
+    }
+
+    protected selectPreviousGame() {
+        this.selectedGameIndex = (this.selectedGameIndex <= 0) ? this.games.length - 1 : this.selectedGameIndex - 1;
+    }
+    protected selectNextGame() {
+        this.selectedGameIndex = (this.selectedGameIndex >= this.games.length -1) ? 0 : this.selectedGameIndex + 1;
+    }
+
+    protected selectPreviousCategory() {
+        this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ? this.categories.length - 1 : this.selectedCategoryIndex - 1;
+    }
+    protected selectNextCategory() {
+        this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length -1) ? 0 : this.selectedCategoryIndex + 1;
+    }
+
+    protected get selectedGame() {
+        return this.games[this.selectedGameIndex] || null;
     }
 
     /**
      * Called when categoryChange event is triggered on Categories component
      * @param categoryId
      */
-    protected categoryChange(categoryId: number) {
-        this.selectedCategory = this.gameList.getCategories()[categoryId];
-        this.showHiscores = false;
-    }
+    // protected categoryChange(categoryId: number) {
+    //     this.selectedCategory = this.gameList.getCategories()[categoryId];
+    //     this.showHiscores = false;
+    // }
 
     /**
      * Called when gameChange event is triggered on Games component
      * @param gameId
      */
-    protected gameChange(gameId: number) {
-        this.selectedGameId = gameId;
-        this.selectedGame = this.selectedCategory!.getGames()[gameId];
-    }
+    // protected gameChange(gameId: number) {
+    //     this.selectedGameId = gameId;
+    //     this.selectedGame = this.selectedCategory!.getGames()[gameId];
+    // }
 }
 </script>
 
