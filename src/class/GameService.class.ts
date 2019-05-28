@@ -1,9 +1,11 @@
 import Config from '@/class/Config.class';
 import {join} from 'path';
-import {existsSync, readFileSync} from 'fs';
+import {existsSync, readFileSync, readdirSync} from 'fs';
 import {parse as iniParse} from 'ini';
 import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
+import Helpers from '@/class/Helpers.class';
+import Category from '@/model/Category.model';
 
 declare const __static: string;
 
@@ -46,7 +48,6 @@ export default class GameService {
         const games: any[] = [];
         for (const romName of romNames) {
             if (existingGames.indexOf(romName) >= 0) {
-                console.log('existing', existingGames.indexOf(romName));
                 continue;
             }
 
@@ -81,7 +82,6 @@ export default class GameService {
                 player_sim: players.sim,
             });
         }
-        console.log('Game Insert');
         await Game.bulkCreate(games);
     }
 
@@ -136,6 +136,29 @@ export default class GameService {
         const hi2txtPath = join(process.env.NODE_ENV === 'development'
             ? './resources' : process.resourcesPath!, 'hi2txt');
         return existsSync(join(hi2txtPath, 'hi2txt', romName + '.xml'));
+    }
+
+    public async loadGames() {
+        return await Game.findAll({
+            order: ['romName'],
+        });
+    }
+
+    public async loadCategories() {
+        return await Category.findAll({
+            order: ['name'],
+        });
+    }
+
+    public loadMarquees() {
+        if (this.mameService.uiIni && this.mameService.uiIni.marquees_directory) {
+            let marqueesDirectory = Helpers.getFirstExistingDirectory(
+                this.mameService.uiIni.marquees_directory,
+                this.mameService.iniPath,
+            );
+            return marqueesDirectory ? readdirSync(marqueesDirectory) : [];
+        }
+        return [];
     }
 
     // public gameJsonFromRomName(romName: string): GameJSON {
