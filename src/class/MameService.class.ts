@@ -6,10 +6,11 @@ import os from 'os';
 import Config from '@/class/Config.class';
 
 export default class MameService {
+    public mameIni: { [key: string]: any } = {} = {};
+    public uiIni: any = {};
+    public iniPath!: string;
+
     protected config!: Config;
-    protected iniPath!: string;
-    protected mameIni: { [key: string]: any } = {} = {};
-    protected uiIni: any = {};
 
     /**
      * Load and parse mame.ini and ui.ini file
