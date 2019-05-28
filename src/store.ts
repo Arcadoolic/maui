@@ -9,6 +9,9 @@ import Config from '@/class/Config.class';
 // import FileLogger from '@/class/FileLogger.class';
 // import GameService from '@/class/GameService.class';
 import Database from '@/class/Database.class';
+import GameService from '@/class/GameService.class';
+import MameService from '@/class/MameService.class';
+
 
 Vue.use(Vuex);
 
@@ -16,6 +19,9 @@ export default new Vuex.Store({
     state: {
         test: '',
         configuration: new Config(),
+        database: new Database(),
+        mameService: null as MameService|null,
+        gameService: null as GameService|null,
         // gameList: new GameList(),
         // mame: new Mame(),
         // hiscore: null as HiscoreService|null,
@@ -24,15 +30,13 @@ export default new Vuex.Store({
         // db: null as IPDDatabase|null,
         // logger: null as FileLogger|null,
         // gameService: null as GameService|null,
-        database: new Database(),
     },
     getters: {
-        configuration: (state): Config => {
-            return state.configuration;
-        },
-        database: (state): Database => {
-            return state.database!;
-        },
+        isInit: (state): boolean =>  state.isInit,
+        configuration: (state): Config => state.configuration,
+        database: (state): Database => state.database!,
+        mameService: (state): MameService => state.mameService!,
+        gameService: (state): GameService => state.gameService!,
 
         // gameList: (state) => {
         //     return state.gameList;
@@ -61,6 +65,13 @@ export default new Vuex.Store({
 
     },
     mutations: {
+        initServices: (state) => {
+            if (!state.isInit) {
+                state.mameService = new MameService(state.configuration);
+                state.gameService = new GameService(state.configuration, state.mameService);
+                state.isInit = true;
+            }
+        },
         // initHiscores: (state) => {
         //     state.hiscore = new HiscoreService(state.configuration, state.mame.mameUiPath);
         // },
