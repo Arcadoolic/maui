@@ -152,10 +152,7 @@ export default class GameService {
 
     public loadMarquees() {
         if (this.mameService.uiIni && this.mameService.uiIni.marquees_directory) {
-            let marqueesDirectory = Helpers.getFirstExistingDirectory(
-                this.mameService.uiIni.marquees_directory,
-                this.mameService.iniPath,
-            );
+            const marqueesDirectory = this.mameService.marqueePath;
             return marqueesDirectory ? readdirSync(marqueesDirectory) : [];
         }
         return [];
