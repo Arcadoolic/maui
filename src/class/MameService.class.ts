@@ -98,4 +98,14 @@ export default class MameService {
             description: xml.getElementsByTagName('description')[0].innerHTML,
         };
     }
+
+    /**
+     * Return marquee path
+     */
+    public get marqueePath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.marquees_directory,
+            this.iniPath,
+        );
+    }
 }
