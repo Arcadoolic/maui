@@ -84,7 +84,6 @@
             if (!path) {
                 return '';
             }
-            console.log(path);
             return 'url(' + format({
                 pathname: path,
                 protocol: 'file',
