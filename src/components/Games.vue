@@ -60,19 +60,6 @@
         protected marqueesPath: string = '';
         protected marquees: string[] = [];
 
-        protected timeouts: { [key: string]: any } = {
-            moveUp: 0 as any,
-            moveDown: 0 as any,
-            showFlyer: 0 as any,
-        };
-
-        protected transitionTime = 0.3;
-
-        protected showGames = false;
-        protected showFlyer = true;
-
-        protected flyerImage: string | null = null;
-
         // @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
         @Prop({type: Boolean, default: true}) protected focused!: boolean;
 
