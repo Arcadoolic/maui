@@ -4,44 +4,48 @@
         <div class="games">
             <ul ref="gameList">
                 <li v-for="(game, index) in games" :class="{selected: selectedGameIndex === index}">
-                    <div class="marquee" :style="{
-                        transition: marqueeTransition,
-                        marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
-                    }"></div>
+                    <div class="marquee"
+                         :style="{
+                            marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
+                            backgroundImage: getMarquee(game.romName)
+                        }"
+                    ></div>
                 </li>
             </ul>
-            <!--            <ul ref="gameList" :style="{transition: 'top ' + transitionTime + 's ease'}">-->
-            <!--                <transition v-for="(game, index) in selectedCategory.getGames()" :key="index"-->
-            <!--                            @before-enter="gamesAnimationBeforeEnter"-->
-            <!--                            @enter="gamesAnimationEnter"-->
-            <!--                            @leave="gameLeaveAnimation"-->
+            <!--            <ul ref='gameList' :style='{transition: 'top ' + transitionTime + 's ease'}'>-->
+            <!--                <transition v-for='(game, index) in selectedCategory.getGames()' :key='index'-->
+            <!--                            @before-enter='gamesAnimationBeforeEnter'-->
+            <!--                            @enter='gamesAnimationEnter'-->
+            <!--                            @leave='gameLeaveAnimation'-->
             <!--                >-->
-            <!--                    <li  :class="{selected: selectedGameId === index}" v-if="showGames">-->
-            <!--                        <div class="marquee" :style="marqueeStyle(game, index)">-->
-            <!--                            <Champions v-if="game.hasHiscore" :game="game"></Champions>-->
+            <!--                    <li  :class='{selected: selectedGameId === index}' v-if='showGames'>-->
+            <!--                        <div class='marquee' :style='marqueeStyle(game, index)'>-->
+            <!--                            <Champions v-if='game.hasHiscore' :game='game'></Champions>-->
             <!--                        </div>-->
-            <!--                        <img :src="game.flyer" style="display: none" v-if="game.flyer.length"> &lt;!&ndash; To cache flyers without displaying them &ndash;&gt;-->
+            <!--                        <img :src='game.flyer' style='display: none' v-if='game.flyer.length'> &lt;!&ndash; To cache flyers without displaying them &ndash;&gt;-->
             <!--                    </li>-->
             <!--                </transition>-->
             <!--            </ul>-->
         </div>
 
-        <!--        <div class="flyer-container">-->
-        <!--            <transition @before-enter="flyerAnimationBeforeEnter" @enter="flyerAnimationEnter" @leave="flyerAnimationLeave">-->
-        <!--                <div class="flyer" v-if="showFlyer-->
-        <!--                    && selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer"-->
-        <!--                    :style="{backgroundImage: this.flyerImage.length ? 'url(' + this.flyerImage + ')' : false}"></div>-->
+        <!--        <div class='flyer-container'>-->
+        <!--            <transition @before-enter='flyerAnimationBeforeEnter' @enter='flyerAnimationEnter' @leave='flyerAnimationLeave'>-->
+        <!--                <div class='flyer' v-if='showFlyer-->
+        <!--                    && selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer'-->
+        <!--                    :style='{backgroundImage: this.flyerImage.length ? 'url(' + this.flyerImage + ')' : false}'></div>-->
         <!--            </transition>-->
         <!--        </div>-->
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Prop, Watch, Model} from "vue-property-decorator";
-    import ControllableVue from "@/ControllableVue";
-    import Velocity from "velocity-animate";
-    import Champions from "@/components/Champions.vue";
-    import Game from "@/model/Game.model";
+<script lang='ts'>
+    import {Component, Prop, Watch, Model} from 'vue-property-decorator';
+    import ControllableVue from '@/ControllableVue';
+    import Velocity from 'velocity-animate';
+    import Champions from '@/components/Champions.vue';
+    import Game from '@/model/Game.model';
+    import {join} from 'path';
+    import {format} from 'url';
 
     @Component({
         components: {Champions},
@@ -52,6 +56,9 @@
 
         @Prop({required: true, type: Number, default: 0})
         protected readonly selectedGameIndex!: number;
+
+        protected marqueesPath: string = '';
+        protected marquees: string[] = [];
 
         protected timeouts: { [key: string]: any } = {
             moveUp: 0 as any,
@@ -70,15 +77,32 @@
         @Prop({type: Boolean, default: true}) protected focused!: boolean;
 
         public created() {
+            const mameService = this.$store.getters.mameService;
             const gameService = this.$store.getters.gameService;
-            // console.log(gameService.loadMarquees());
+
+            this.marqueesPath = mameService.marqueePath;
+            this.marquees = gameService.loadMarquees();
         }
 
         @Watch('selectedGameIndex')
         protected updateGamesPosition(val: number, prevValue: number) {
             if (this.$refs.gameList) {
-                (this.$refs.gameList as HTMLElement).style.top = (-10 * val) + "%";
+                (this.$refs.gameList as HTMLElement).style.top = (-10 * val) + '%';
             }
+        }
+
+        protected getMarquee(romName: string) {
+            const i = this.marquees.indexOf(romName + '.png');
+            const path = i < 0 ? null : join(this.marqueesPath, this.marquees[i]);
+            if (!path) {
+                return '';
+            }
+            console.log(path);
+            return 'url(' + format({
+                pathname: path,
+                protocol: 'file',
+                slashes: true,
+            })  + ')';
         }
 
         /***
@@ -86,50 +110,45 @@
          ***/
 
         // public gamesAnimationBeforeEnter(el: HTMLElement) {
-        //     el.style.marginLeft = "-100%";
+        //     el.style.marginLeft = '-100%';
         // }
         //
         // public gamesAnimationEnter(el: HTMLElement, done: () => void) {
         //     Velocity(el, {marginLeft: 0}, {
         //         duration: Math.random() * (400 - 600) + 400,
-        //         easing: "ease-in",
+        //         easing: 'ease-in',
         //         complete: done,
         //     });
         // }
         //
         // public gameLeaveAnimation(el: HTMLElement, done: () => void) {
         //     setTimeout(() => {
-        //         Velocity(el, {marginLeft: el.classList.contains("selected") ? "-200%" : "-100%"}, {
+        //         Velocity(el, {marginLeft: el.classList.contains('selected') ? '-200%' : '-100%'}, {
         //             duration: 400,
-        //             easing: "ease",
+        //             easing: 'ease',
         //             complete: done,
         //         });
         //     }, Math.random() * (100 - 300) + 100);
         // }
         //
         // public flyerAnimationBeforeEnter(el: HTMLElement) {
-        //     el.style.marginLeft = "100%";
+        //     el.style.marginLeft = '100%';
         // }
         //
         // public flyerAnimationEnter(el: HTMLElement, done: () => void) {
         //     Velocity(el, {marginLeft: 0}, {
         //         duration: 300,
-        //         easing: "ease-out",
+        //         easing: 'ease-out',
         //         complete: done,
         //     });
         // }
         //
         // public flyerAnimationLeave(el: HTMLElement, done: () => void) {
-        //     Velocity(el, {marginLeft: "100%"}, {
+        //     Velocity(el, {marginLeft: '100%'}, {
         //         duration: 300,
-        //         easing: "ease-out",
+        //         easing: 'ease-out',
         //         complete: done,
         //     });
-        // }
-        //
-        // protected get marqueeTransition() {
-        //     return "height " + this.transitionTime + "s ease, width " + this.transitionTime + "s ease, margin-left "
-        //         + this.transitionTime + "s ease, margin-left 0.3s ease";
         // }
         //
         // protected getGameAnimationSpeed(previousSpeed: number, incrementer: number) {
@@ -228,7 +247,7 @@
         //
         //     const mameProcess = await this.mame.start(selectedGame);
         //     if (!mameProcess) {
-        //         console.error("Failed start rom " + selectedGame.romName);
+        //         console.error('Failed start rom ' + selectedGame.romName);
         //         return;
         //     }
         //
@@ -237,7 +256,7 @@
         //     await db.logGameStart(selectedGame.romName);
         //     db.end();
         //
-        //     mameProcess.on("close", async () => {
+        //     mameProcess.on('close', async () => {
         //         try {
         //             await db.connect();
         //             const hiscores: HiscoresJson = {
@@ -253,7 +272,7 @@
         //             db.end();
         //             selectedGame.hiscores = hiscores;
         //         } catch (e) {
-        //             this.$store.getters.logger.logError("[" + selectedGame.romName + "]" + e);
+        //             this.$store.getters.logger.logError('[' + selectedGame.romName + ']' + e);
         //             return;
         //         }
         //     });
@@ -294,6 +313,7 @@
         width: 100%;
         height: 100%;
         overflow: visible;
+        transition: top 0.3s ease
     }
 
     .games ul li {
@@ -322,6 +342,7 @@
         box-shadow: 0 0 30px #000000;
         margin-left: -100%;
         position: relative;
+        transition: height 0.3s ease, width 0.3s ease, margin-left 0.3s ease, margin-left 0.3s ease
     }
 
     .games ul li.selected .marquee {
