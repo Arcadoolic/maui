@@ -10,6 +10,7 @@ import {join} from 'path';
 import MameService from "@/class/MameService.class";
 import GameService from '@/class/GameService.class';
 import Database from '@/class/Database.class';
+import User from '@/model/User.model';
 
 @Component
 export default class Init extends Vue {
@@ -43,6 +44,17 @@ export default class Init extends Vue {
 
         // Save new games
         await gameService.saveGamesFromRomNames(mameService.getRomListFromFavorites());
+
+        // Create user for tests
+        try {
+            await User.bulkCreate([
+                {pseudo_3: 'SNO', realname: 'Tristan'},
+                {pseudo_3: 'NOB', realname: 'Bruno'}
+            ]);
+        } catch (e) {
+
+        }
+
         this.$router.push({name: 'home'});
     }
 
