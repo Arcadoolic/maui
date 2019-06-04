@@ -1,4 +1,5 @@
-import {Column, CreatedAt, DataType, DeletedAt, Model, Table, UpdatedAt} from 'sequelize-typescript';
+import {Column, CreatedAt, DataType, DeletedAt, HasMany, Model, Table, UpdatedAt} from 'sequelize-typescript';
+import Hiscore from '@/model/Hiscore.model';
 
 @Table({
     timestamps: true,
@@ -16,6 +17,7 @@ export default class User extends Model<User> {
     @Column({
         type: DataType.TEXT,
         comment: 'User 2 characters pseudonyme',
+        unique: true,
         validate: {
             len: [1, 2],
         },
@@ -26,6 +28,7 @@ export default class User extends Model<User> {
         type: DataType.TEXT,
         comment: 'User 3 characters pseudonyme',
         allowNull: false,
+        unique: true,
         validate: {
             len: [1, 3],
             notNull: true,
@@ -47,4 +50,7 @@ export default class User extends Model<User> {
 
     @DeletedAt
     public deletionDate!: Date;
+
+    // @HasMany(() => Hiscore, 'id_user')
+    // public hiscores!: Hiscore[];
 }

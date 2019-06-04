@@ -1,4 +1,5 @@
-import {Column, CreatedAt, DataType, DeletedAt, Model, Table, UpdatedAt} from 'sequelize-typescript';
+import {Column, CreatedAt, DataType, DeletedAt, HasMany, Model, Table, UpdatedAt} from 'sequelize-typescript';
+import Game from '@/model/Game.model';
 
 @Table({
     timestamps: true,
@@ -30,4 +31,7 @@ export default class Category extends Model<Category> {
 
     @DeletedAt
     public deletionDate!: Date;
+
+    @HasMany(() => Game)
+    public games!: Game[];
 }

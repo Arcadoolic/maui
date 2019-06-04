@@ -1,5 +1,7 @@
-import {BelongsTo, Column, DataType, ForeignKey, Model, Table} from 'sequelize-typescript';
+import {BelongsTo, Column, DataType, ForeignKey, HasMany, HasOne, Model, Table} from 'sequelize-typescript';
 import Category from './Category.model';
+import Hiscores from '@/components/Hiscores.vue';
+import Hiscore from '@/model/Hiscore.model';
 
 @Table({
     timestamps: true,
@@ -19,7 +21,7 @@ export default class Game extends Model<Game> {
     @Column
     public id_category!: number;
 
-    @BelongsTo(() => Category)
+    @BelongsTo(() => Category, 'id_category')
     public category!: Category;
 
     @Column({
@@ -69,6 +71,9 @@ export default class Game extends Model<Game> {
         defaultValue: 0,
     })
     public player_sim!: number;
+
+    // @HasMany(() => Hiscore)
+    // public hiscores!: Hiscore[];
 
     public get players() {
         let str: string|null = null;
