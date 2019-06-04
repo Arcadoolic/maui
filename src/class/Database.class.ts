@@ -5,6 +5,8 @@ import {Sequelize} from 'sequelize-typescript';
 import Category from '@/model/Category.model';
 import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
+import User from '@/model/User.model';
+import Hiscore from '@/model/Hiscore.model';
 
 export default class Database {
     protected databasePath!: string;
@@ -18,7 +20,7 @@ export default class Database {
         this._sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: this.databasePath,
-            models: [Category, Game],
+            models: [Category, Game, User, Hiscore],
         });
     }
 
