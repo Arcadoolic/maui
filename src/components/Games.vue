@@ -288,6 +288,7 @@ export default class Games extends ControllableVue {
                 hiscores.allTime = await db.getAllTime(selectedGame.romName);
                 await this.hiscores.saveHiscore(selectedGame.romName, selectedGame.hiscores);
                 db.end();
+                this.$forceUpdate();
                 selectedGame.hiscores = hiscores;
             } catch (e) {
                 this.$store.getters.logger.logError('[' + selectedGame.romName + ']' + e);
