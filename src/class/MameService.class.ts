@@ -85,8 +85,6 @@ export default class MameService {
     }
 
     public getGameInformation(romName: string) {
-        console.log('Game information ' + romName);
-        console.log(this.mameBinary);
         const parser = new DOMParser();
         const xml = parser.parseFromString(
             execFileSync(this.mameBinary, ['-lx', romName], {encoding: 'utf8'}),
