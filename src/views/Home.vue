@@ -8,9 +8,9 @@
         <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 <!--        <GamepadsComponent></GamepadsComponent>-->
 
-<!--        <transition name="slide">-->
-            <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi"></Hiscores>
-<!--        </transition>-->
+        <transition name="slide">
+            <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
+        </transition>
     </div>
     <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
 
@@ -49,6 +49,8 @@ export default class Home extends ControllableVue {
     protected timeouts: {
         quit?: number
     } = {};
+
+    protected showHiscores:boolean = false;
     // protected gameList = new GameList();
     // protected mame = new Mame();
     // protected selectedCategory: GameCategory|null = null;
@@ -91,6 +93,7 @@ export default class Home extends ControllableVue {
                     this.selectNextCategory().then();
                     break;
                 case 'Space':
+                    this.showHiscores = !this.showHiscores;
                     this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
                     break;
 
