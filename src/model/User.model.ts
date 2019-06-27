@@ -1,5 +1,6 @@
 import {Column, CreatedAt, DataType, DeletedAt, HasMany, Model, Table, UpdatedAt} from 'sequelize-typescript';
 import Hiscore from '@/model/Hiscore.model';
+import Data = Electron.Data;
 
 @Table({
     timestamps: true,
@@ -41,6 +42,14 @@ export default class User extends Model<User> {
         comment: 'User real name',
     })
     public realname!: string;
+
+    @Column({
+        type: DataType.TEXT,
+    })
+    public email?: string;
+
+    @HasMany(() => Hiscore)
+    public hiscores!: Hiscore[];
 
     @CreatedAt
     public creationDate!: Date;
