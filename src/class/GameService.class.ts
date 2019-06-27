@@ -6,6 +6,9 @@ import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
 import Helpers from '@/class/Helpers.class';
 import Category from '@/model/Category.model';
+import {Sequelize} from 'sequelize-typescript';
+import {Op} from 'sequelize';
+
 
 declare const __static: string;
 
@@ -152,6 +155,7 @@ export default class GameService {
     public async loadCategories() {
         return await Category.findAll({
             order: ['name'],
+            include: [{model: Game, required: true}],
         });
     }
 
