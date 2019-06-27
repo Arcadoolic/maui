@@ -9,7 +9,7 @@
 <!--        <GamepadsComponent></GamepadsComponent>-->
 
 <!--        <transition name="slide">-->
-<!--            <Hiscores :game="selectedGame" v-if="selectedGame.hasHiscore && showHiscores"></Hiscores>-->
+            <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi"></Hiscores>
 <!--        </transition>-->
     </div>
     <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
@@ -35,6 +35,7 @@ import Category from "@/model/Category.model";
     components: {
         Categories,
         Games,
+        Hiscores
     },
 })
 export default class Home extends ControllableVue {
