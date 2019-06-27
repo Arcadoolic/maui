@@ -20,7 +20,7 @@
         "os": "^0.1.1",
         "pg-hstore": "^2.3.2",
         "reflect-metadata": "^0.1.13",
-        "sequelize": "^5.8.6",
+        "sequelize": "^5.8.12",
         "sequelize-typescript": "^1.0.0-beta.3",
         "sqlite3": "^4.0.8",
         "velocity-animate": "^2.0.5",
@@ -39,6 +39,7 @@
         "@vue/cli-service": "^3.4.0",
         "electron": "^3.0.0",
         "electron-rebuild": "^1.8.4",
+        "mame-hi-extractor": "^1.0.2",
         "typescript": "^3.3.3333",
         "vue-cli-plugin-electron-builder": "^1.0.0-rc.10",
         "vue-template-compiler": "^2.5.21"
