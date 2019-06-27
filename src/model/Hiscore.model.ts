@@ -7,7 +7,7 @@ import {
     ForeignKey,
     Model,
     Table,
-    UpdatedAt
+    UpdatedAt,
 } from 'sequelize-typescript';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
@@ -17,6 +17,10 @@ import User from '@/model/User.model';
     paranoid: true,
     tableName: 'hiscore',
     engine: 'MYISAM',
+    indexes: [{
+        unique: true,
+        fields: ['id_game', 'id_user', 'rank', 'score', 'extraName'],
+    }],
 })
 export default class Hiscore extends Model<Hiscore> {
     @Column({
@@ -26,23 +30,46 @@ export default class Hiscore extends Model<Hiscore> {
     public id_hiscore!: number;
 
     @ForeignKey(() => Game)
-    @Column
+    @Column({
+        unique: 'uniqueScore',
+    })
     public id_game!: number;
 
     @BelongsTo(() => Game)
     public game!: Game;
 
     @ForeignKey(() => User)
-    @Column
+    @Column({
+        unique: 'uniqueScore',
+    })
     public id_user!: number;
 
-    @BelongsTo(() => User)
+    @BelongsTo(() => User, 'id_user')
     public user!: User;
 
     @Column({
         type: DataType.INTEGER,
+        unique: 'uniqueScore',
+    })
+    public rank!: number;
+
+    @Column({
+        type: DataType.INTEGER,
+        unique: 'uniqueScore',
     })
     public score!: number;
+
+    @Column({
+        type: DataType.STRING,
+        defaultValue: '',
+        unique: 'uniqueScore',
+    })
+    public extraName?: string;
+
+    @Column({
+        type: DataType.STRING,
+    })
+    public scoreSuffix?: string;
 
     @CreatedAt
     public creationDate!: Date;
