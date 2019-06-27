@@ -11,6 +11,9 @@ import Config from '@/class/Config.class';
 import Database from '@/class/Database.class';
 import GameService from '@/class/GameService.class';
 import MameService from '@/class/MameService.class';
+import UserService from '@/class/UserService.class';
+import User from '@/model/User.model';
+import HiscoreService from '@/class/HiscoreService.class';
 
 
 Vue.use(Vuex);
@@ -22,6 +25,8 @@ export default new Vuex.Store({
         database: new Database(),
         mameService: null as MameService|null,
         gameService: null as GameService|null,
+        userService: null as UserService|null,
+        hiscoreService: null as HiscoreService|null,
         // gameList: new GameList(),
         // mame: new Mame(),
         // hiscore: null as HiscoreService|null,
@@ -37,6 +42,8 @@ export default new Vuex.Store({
         database: (state): Database => state.database!,
         mameService: (state): MameService => state.mameService!,
         gameService: (state): GameService => state.gameService!,
+        userService: (state): UserService => state.userService!,
+        hiscoreService: (state): HiscoreService => state.hiscoreService!,
 
         // gameList: (state) => {
         //     return state.gameList;
@@ -69,6 +76,8 @@ export default new Vuex.Store({
             if (!state.isInit) {
                 state.mameService = new MameService(state.configuration);
                 state.gameService = new GameService(state.configuration, state.mameService);
+                state.userService = new UserService();
+                state.hiscoreService = new HiscoreService(state.mameService.iniPath, state.userService);
                 state.isInit = true;
             }
         },
