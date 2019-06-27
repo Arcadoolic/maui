@@ -13,6 +13,8 @@ export default class GameService {
     protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
     protected static nplayersIni?: { [romName: string]: { [romName: string]: boolean } };
 
+    protected games?: Game[];
+
     protected static nplayersTranslation: { [k: string]: Nplayers } = {
         '12P sim': {sim: 12, alt: 0},
         '1P': {sim: 0, alt: 0},
@@ -82,7 +84,7 @@ export default class GameService {
                 player_sim: players.sim,
             });
         }
-        await Game.bulkCreate(games);
+        return await Game.bulkCreate(games);
     }
 
     public getGameCategories() {
@@ -139,9 +141,12 @@ export default class GameService {
     }
 
     public async loadGames() {
-        return await Game.findAll({
-            order: ['romName'],
-        });
+        if (this.games === undefined) {
+            this.games = await Game.findAll({
+                order: ['romName'],
+            });
+        }
+        return this.games;
     }
 
     public async loadCategories() {
