@@ -39,6 +39,7 @@ import Category from "@/model/Category.model";
     },
 })
 export default class Home extends ControllableVue {
+    protected allGames: Game[] = [];
     protected games: Game[] = [];
     protected selectedGameIndex: number = 0;
 
@@ -64,16 +65,13 @@ export default class Home extends ControllableVue {
         remote.getCurrentWindow().setResizable(true);
 
         const gameService = this.$store.getters.gameService;
-        this.games = await gameService.loadGames();
+        this.allGames = await gameService.loadGames();
         this.categories = await gameService.loadCategories();
+        this.selectedCategoryIndex = this.categories.length;
+        this.games = this.allGames;
 
         Gamepads.init();
         this.registerKeyMapping();
-
-        // this.gameList = this.$store.getters.gameList;
-        // this.mame = this.$store.getters.mame;
-        // this.selectedCategory = this.gameList.getCategories()[0]; // Category ALL
-        // this.selectedGame = this.selectedCategory.getGames()[0];
     }
 
     protected registerKeyMapping() {
@@ -87,10 +85,10 @@ export default class Home extends ControllableVue {
                     this.selectNextGame();
                     break;
                 case 'ArrowLeft':
-                    this.selectPreviousCategory();
+                    this.selectPreviousCategory().then();
                     break;
                 case 'ArrowRight':
-                    this.selectNextCategory();
+                    this.selectNextCategory().then();
                     break;
                 case 'Space':
                     this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
@@ -116,34 +114,28 @@ export default class Home extends ControllableVue {
         this.selectedGameIndex = (this.selectedGameIndex >= this.games.length -1) ? 0 : this.selectedGameIndex + 1;
     }
 
-    protected selectPreviousCategory() {
-        this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ? this.categories.length - 1 : this.selectedCategoryIndex - 1;
+    protected async selectPreviousCategory() {
+        this.selectedGameIndex = 0;
+        this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ? this.categories.length : this.selectedCategoryIndex - 1;
+        if (this.selectedCategoryIndex === this.categories.length) {
+            this.games = this.allGames;
+        } else {
+            this.games = await this.categories[this.selectedCategoryIndex].$get('games') as Game[] || [];
+        }
     }
-    protected selectNextCategory() {
-        this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length -1) ? 0 : this.selectedCategoryIndex + 1;
+    protected async selectNextCategory() {
+        this.selectedGameIndex = 0;
+        this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length) ? 0 : this.selectedCategoryIndex + 1;
+        if (this.selectedCategoryIndex === this.categories.length) {
+            this.games = this.allGames;
+        } else {
+            this.games = await this.categories[this.selectedCategoryIndex].$get('games') as Game[] || [];
+        }
     }
 
     protected get selectedGame() {
         return this.games[this.selectedGameIndex] || null;
     }
-
-    /**
-     * Called when categoryChange event is triggered on Categories component
-     * @param categoryId
-     */
-    // protected categoryChange(categoryId: number) {
-    //     this.selectedCategory = this.gameList.getCategories()[categoryId];
-    //     this.showHiscores = false;
-    // }
-
-    /**
-     * Called when gameChange event is triggered on Games component
-     * @param gameId
-     */
-    // protected gameChange(gameId: number) {
-    //     this.selectedGameId = gameId;
-    //     this.selectedGame = this.selectedCategory!.getGames()[gameId];
-    // }
 }
 </script>
 
