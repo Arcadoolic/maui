@@ -21,6 +21,7 @@ export default class Database {
             dialect: 'sqlite',
             storage: this.databasePath,
             models: [Category, Game, User, Hiscore],
+            logging: false,
         });
     }
 
