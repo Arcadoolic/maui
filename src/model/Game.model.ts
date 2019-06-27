@@ -72,8 +72,8 @@ export default class Game extends Model<Game> {
     })
     public player_sim!: number;
 
-    // @HasMany(() => Hiscore)
-    // public hiscores!: Hiscore[];
+    @HasMany(() => Hiscore)
+    public hiscores!: Hiscore[];
 
     public get players() {
         let str: string|null = null;
