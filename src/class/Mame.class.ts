@@ -176,14 +176,13 @@ export default class Mame {
         }
     }
 
-	    public getRomParent(romName: string) {
-	   let cmdRet = '';
-	    try {
-		    cmdRet = execSync('mame -lc ' + romName + ' | grep \'^' + romName + '\'', {encoding: 'utf8'});
-	    } catch (e) {
-	    return '';
-	    }
-	    if (romName === 'kinst') console.log(cmdRet);
+    public getRomParent(romName: string) {
+        let cmdRet = '';
+        try {
+            cmdRet = execSync('mame -lc ' + romName + ' | grep \'^' + romName + '\'', {encoding: 'utf8'});
+        } catch (e) {
+            return '';
+        }
         if (!cmdRet) {
             return '';
         }
