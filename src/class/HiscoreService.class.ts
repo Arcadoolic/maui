@@ -42,11 +42,12 @@ export default class HiscoreService {
                         if (hiscores.trim() === '') {
                             return true;
                         }
-                        hiscores = parse(hiscores, {delimiter: '|', columns: true, skip_empty_lines: true});
+                        const hiscoresObj = parse(hiscores, {delimiter: '|', columns: true, skip_empty_lines: true});
+                        hiscoresObj.NAME = hiscoresObj.NAME.trim();
                         if (index) {
-                            ret.advanced.push(hiscores);
+                            ret.advanced.push(hiscoresObj);
                         } else {
-                            ret.classic.push(hiscores);
+                            ret.classic.push(hiscoresObj);
                         }
                     });
                     return resolve(ret);
