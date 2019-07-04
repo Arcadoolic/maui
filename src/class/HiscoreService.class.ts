@@ -35,7 +35,7 @@ export default class HiscoreService {
 
                 const scoreToSave: any[] = [];
                 for (const score of hiscore.default) {
-                    const user = this.userService.getUserByPseudo3(score.name);
+                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3));
                     if (!user) {
                         continue;
                     }
