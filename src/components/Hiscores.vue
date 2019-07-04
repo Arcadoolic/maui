@@ -10,7 +10,7 @@
                 <div class="info">
                     <span class="place">{{index + 1}}</span>
                     <div class="score_name">
-                        <!--<p class="name">{{score.user.pseudo_3}}</p>-->
+                        <p class="name">{{score.user.pseudo_3}}</p>
                         <p class="score">{{score.score}}</p>
                     </div>
                 </div>
