@@ -43,7 +43,7 @@ export default class HiscoreService {
                             return true;
                         }
                         const hiscoresObj = parse(hiscores, {delimiter: '|', columns: true, skip_empty_lines: true});
-                        hiscoresObj.NAME = hiscoresObj.NAME.trim();
+                        // hiscoresObj.NAME = hiscoresObj.NAME.trim();
                         if (index) {
                             ret.advanced.push(hiscoresObj);
                         } else {
