@@ -79,7 +79,7 @@ export default class Home extends ControllableVue {
         Gamepads.init();
         this.registerKeyMapping();
 
-        this.flyersPath = mameService.flyterPath;
+        this.flyersPath = mameService.flyerPath;
         this.flyers = gameService.loadFlyers()
     }
 

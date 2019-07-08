@@ -188,7 +188,7 @@ export default class GameService {
      */
     public loadFlyers() {
         if (this.mameService.uiIni && this.mameService.uiIni.flyers_directory) {
-            const flyerDirectory = this.mameService.flyterPath;
+            const flyerDirectory = this.mameService.flyerPath;
             return flyerDirectory ? readdirSync(flyerDirectory) : [];
         }
     }
