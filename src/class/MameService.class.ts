@@ -1,9 +1,8 @@
 import {readFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
-import {execFileSync} from 'child_process';
-import os from 'os';
 import Config from '@/class/Config.class';
+import {execFileSync, ChildProcess, execFile} from 'child_process';
 
 export default class MameService {
     public mameIni: { [key: string]: any } = {} = {};
@@ -11,6 +10,8 @@ export default class MameService {
     public iniPath!: string;
 
     protected config!: Config;
+
+    protected gameProcess: ChildProcess|null = null;
 
     /**
      * Load and parse mame.ini and ui.ini file
@@ -61,6 +62,9 @@ export default class MameService {
         return true;
     }
 
+    /**
+     * Read, parse and extract romNames from mame favorites.ini file
+     */
     public getRomListFromFavorites() {
         const favoritePath = Helpers.getFirstExistingDirectory(
             this.uiIni.ui_path,
@@ -84,6 +88,10 @@ export default class MameService {
         return retArray;
     }
 
+    /**
+     * Exec mame with param -lx to get game informations in XML
+     * @param romName
+     */
     public getGameInformation(romName: string) {
         const parser = new DOMParser();
         const xml = parser.parseFromString(
@@ -105,5 +113,60 @@ export default class MameService {
             this.uiIni.marquees_directory,
             this.iniPath,
         );
+    }
+
+    /**
+     * Return flyer path
+     */
+    public get flyerPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.flyers_directory,
+            this.iniPath,
+        );
+    }
+
+    /**
+     * Start game on mame
+     * @param romName
+     */
+    public startGame(romName: string): Promise<ChildProcess> {
+        return new Promise(async (resolve, reject) => {
+            await this.stopGame();
+            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', '-w', romName], {
+                killSignal: 'SIGQUIT',
+                cwd: this.iniPath,
+            }, (error, stdout, stderr) => {
+                if (error) {
+                    return reject();
+                }
+            });
+            this.gameProcess.on('close', (e) => {
+                this.gameProcess = null;
+            });
+            resolve(this.gameProcess);
+        });
+    }
+
+    /**
+     * Quit mame process
+     */
+    public async stopGame(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            console.log(this.gameProcess);
+            if (!this.gameProcess) {
+                return resolve();
+            }
+            this.gameProcess.kill('SIGQUIT');
+            this.gameProcess.on('close', (e) => {
+                return resolve();
+            });
+        });
+    }
+
+    /**
+     *  Check if mame process is started
+     */
+    public get isGameStarted(): boolean {
+        return (this.gameProcess !== null && this.gameProcess.pid !== 0 && !this.gameProcess.killed);
     }
 }
