@@ -1,4 +1,3 @@
-import Config from '@/class/Config.class';
 import {join} from 'path';
 import {existsSync, readFileSync, readdirSync} from 'fs';
 import {parse as iniParse} from 'ini';
@@ -36,15 +35,16 @@ export default class GameService {
         '8P sim': {sim: 8, alt: 0},
         '9P alt': {sim: 0, alt: 9},
     };
-
-    protected config!: Config;
     protected mameService!: MameService;
 
-    public constructor(config: Config, mameService: MameService) {
-        this.config = config;
+    public constructor(mameService: MameService) {
         this.mameService = mameService;
     }
 
+    /**
+     * Save games in database
+     * @param romNames
+     */
     public async saveGamesFromRomNames(romNames: string[]) {
         const existingGames = (await Game.findAll()).map((game) => {
             return game.romName;
@@ -90,6 +90,9 @@ export default class GameService {
         return await Game.bulkCreate(games);
     }
 
+    /**
+     * Load and parse genre.ini file
+     */
     public getGameCategories() {
         if (!GameService.genreIni) {
             GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
@@ -97,6 +100,10 @@ export default class GameService {
         return GameService.genreIni;
     }
 
+    /**
+     * Return category id for a romName
+     * @param romName
+     */
     public getGameCategoryId(romName: string) {
         if (!GameService.genreIni) {
             GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
@@ -143,6 +150,9 @@ export default class GameService {
         return existsSync(join(hi2txtPath, 'hi2txt', romName + '.xml'));
     }
 
+    /**
+     * Load games from database
+     */
     public async loadGames() {
         if (this.games === undefined) {
             this.games = await Game.findAll({
@@ -152,6 +162,9 @@ export default class GameService {
         return this.games;
     }
 
+    /**
+     * Load categories from database
+     */
     public async loadCategories() {
         return await Category.findAll({
             order: ['name'],
@@ -159,6 +172,9 @@ export default class GameService {
         });
     }
 
+    /**
+     * Read marquees dir
+     */
     public loadMarquees() {
         if (this.mameService.uiIni && this.mameService.uiIni.marquees_directory) {
             const marqueesDirectory = this.mameService.marqueePath;
@@ -167,99 +183,13 @@ export default class GameService {
         return [];
     }
 
-    // public gameJsonFromRomName(romName: string): GameJSON {
-    //     const fileName = romName + '.json';
-    //     if (!this.mame.isRomValid(romName)) {
-    //         throw new Error('Rom not valid');
-    //     }
-    //
-    //     const infoFromMameXml = this.mame.getGameInfoFromMameXML(romName);
-    //     if (!infoFromMameXml) {
-    //         throw new Error('Cant get xml');
-    //     }
-    //
-    //     const shortnameRegexp = /^(.[^\(]*)/g.exec(infoFromMameXml.description);
-    //     let shortname: string | null = null;
-    //     let subname: string | null = null;
-    //     if (shortnameRegexp) {
-    //         shortname = shortnameRegexp[0].trim().replace(/&amp;/g, '&');
-    //         const subnameRegexp = /^([^\-\/]*)(:\s+|\s+\-\s+|\s+\/\s+)(.*)$/.exec(shortname);
-    //         if (subnameRegexp) {
-    //             shortname = subnameRegexp.splice(0, 3)[1];
-    //             subname = subnameRegexp[0];
-    //         }
-    //     }
-    //     return {
-    //         fullname: infoFromMameXml.description,
-    //         shortname: shortname || '',
-    //         subname: subname || '',
-    //         manufacturer: infoFromMameXml.manufacturer,
-    //         year: infoFromMameXml.year,
-    //         hi: this.isGameHaveHiscore(romName),
-    //         romName,
-    //         nplayers: this.getGameNplayers(romName),
-    //         category: this.getGameGenre(romName),
-    //         parent: this.mame.getRomParent(romName),
-    //     };
-    // }
-
-    // public loadGamesMarquee() {
-    //     const marqueesPath = Helpers.getFirstExistingDirectory(
-    //         this.mame.mameUiConfig.marquees_directory,
-    //         this.mame.mameUiPath);
-    //
-    //     if (!marqueesPath) {
-    //         throw new Error('Cannot find marquees directory - ' + this.mame.mameUiConfig.marquees_directory.join('|'));
-    //     }
-    //
-    //     for (const game of this.gameList.getGames()) {
-    //         const marqueePath = join(marqueesPath, game.romName + '.png');
-    //         const parentMarqueePath = join(marqueesPath, game.parent + '.png');
-    //
-    //         let path: string | null = null;
-    //         if (existsSync(marqueePath)) {
-    //             path = marqueePath;
-    //         } else if (existsSync(parentMarqueePath)) {
-    //             path = parentMarqueePath;
-    //         }
-    //
-    //         if (path) {
-    //             game.marquee = format({
-    //                 pathname: path,
-    //                 protocol: 'file',
-    //                 slashes: true,
-    //             });
-    //         }
-    //     }
-    // }
-
-    // public loadGamesFlyers() {
-    //     const flyersPath = Helpers.getFirstExistingDirectory(
-    //         this.mame.mameUiConfig.flyers_directory,
-    //         this.mame.mameUiPath);
-    //     if (!flyersPath) {
-    //         throw new Error('Cannot find flyers directory ' + this.mame.mameUiConfig.flyers_directory.join('|'));
-    //     }
-    //
-    //     for (const game of this.gameList.getGames()) {
-    //         const flyerPath = join(flyersPath, game.romName + '.png');
-    //         const parentFlyerPath = join(flyersPath, game.parent + '.png');
-    //
-    //         let path: string | null = null;
-    //         if (existsSync(flyerPath)) {
-    //             path = flyerPath;
-    //         } else if (existsSync(parentFlyerPath)) {
-    //             path = parentFlyerPath;
-    //         }
-    //
-    //         if (path) {
-    //             game.flyer = format({
-    //                 pathname: path,
-    //                 protocol: 'file',
-    //                 slashes: true,
-    //             });
-    //         }
-    //     }
-    // }
-
+    /**
+     * Read flyers dir
+     */
+    public loadFlyers() {
+        if (this.mameService.uiIni && this.mameService.uiIni.flyers_directory) {
+            const flyerDirectory = this.mameService.flyterPath;
+            return flyerDirectory ? readdirSync(flyerDirectory) : [];
+        }
+    }
 }
