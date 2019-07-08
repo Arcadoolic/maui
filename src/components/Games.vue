@@ -9,7 +9,9 @@
                             marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
                             backgroundImage: getMarquee(game.romName)
                         }"
-                    ></div>
+                    >
+                        <Champions v-if='game.hasHiscore' :game='game'></Champions>
+                    </div>
                 </li>
             </ul>
             <!--            <ul ref='gameList' :style='{transition: 'top ' + transitionTime + 's ease'}'>-->
