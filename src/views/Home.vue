@@ -6,13 +6,17 @@
         </div>
         <Games :games="games" :selectedGameIndex="selectedGameIndex"></Games>
         <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
-<!--        <GamepadsComponent></GamepadsComponent>-->
+
+        <div class="flyer-container">
+            <transition name="slide">
+                <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+            </transition>
+        </div>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
         </transition>
     </div>
-    <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
 
 </template>
 
@@ -30,6 +34,9 @@ import ControllableVue from '@/ControllableVue';
 import {remote} from 'electron';
 import Game from '@/model/Game.model';
 import Category from "@/model/Category.model";
+import {join} from 'path';
+import {format} from 'url';
+import Velocity from 'velocity-animate';
 
 @Component({
     components: {
@@ -51,12 +58,8 @@ export default class Home extends ControllableVue {
     } = {};
 
     protected showHiscores:boolean = false;
-    // protected gameList = new GameList();
-    // protected mame = new Mame();
-    // protected selectedCategory: GameCategory|null = null;
-    // protected selectedGameId: number = 0;
-    // protected showHiscores: boolean = false;
-    // protected closeTimeout: any = 0;
+    protected flyersPath: string = '';
+    protected flyers: string [] = [];
 
     public async created() {
         if (!this.$store.getters.isInit) {
@@ -66,6 +69,7 @@ export default class Home extends ControllableVue {
         // remote.getCurrentWindow().setFullScreen(true);
         remote.getCurrentWindow().setResizable(true);
 
+        const mameService = this.$store.getters.mameService;
         const gameService = this.$store.getters.gameService;
         this.allGames = await gameService.loadGames();
         this.categories = await gameService.loadCategories();
@@ -74,6 +78,9 @@ export default class Home extends ControllableVue {
 
         Gamepads.init();
         this.registerKeyMapping();
+
+        this.flyersPath = mameService.flyterPath;
+        this.flyers = gameService.loadFlyers()
     }
 
     protected registerKeyMapping() {
@@ -95,6 +102,9 @@ export default class Home extends ControllableVue {
                 case 'Space':
                     this.showHiscores = !this.showHiscores;
                     this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
+                    break;
+                case 'Enter':
+                    this.startGame();
                     break;
 
             }
@@ -138,6 +148,36 @@ export default class Home extends ControllableVue {
 
     protected get selectedGame() {
         return this.games[this.selectedGameIndex] || null;
+    }
+
+    protected get flyer() {
+        if (this.selectedGame) {
+            const i =this.flyers.indexOf(this.selectedGame.romName + '.png');
+            const path = i < 0 ? null : join(this.flyersPath, this.flyers[i]);
+            if (!path) {
+                return '';
+            }
+            return format({
+                pathname: path,
+                protocol: 'file',
+                slashes: true,
+            });
+        }
+    }
+
+    protected startGame() {
+        const mameService = this.$store.getters.mameService;
+        const hiService = this.$store.getters.hiscoreService;
+        mameService.startGame(this.selectedGame.romName).then(gameProcess => {
+            gameProcess.on('close', async (e) => {
+                hiService.saveHiscores(this.selectedGame).done();
+            });
+        });
+    }
+
+    protected get isGameStarted() {
+        const mameService = this.$store.getters.mameService;
+        return mameService.isGameStarted;
     }
 }
 </script>
@@ -192,5 +232,21 @@ export default class Home extends ControllableVue {
 
     .slide-enter, .slide-leave-to{
         margin-bottom: -100%;
+    }
+
+    .flyer-container {
+        position: absolute;
+        right: -3%;
+        top: -5%;
+        bottom: -5%;
+        width: 40%;
+    }
+
+    .flyer {
+        width: 100%;
+        height: 100%;
+        transform: rotateZ(-4deg);
+        background-repeat: no-repeat;
+        background-size: cover;
     }
 </style>
