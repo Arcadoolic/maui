@@ -27,21 +27,12 @@
             <!--                </transition>-->
             <!--            </ul>-->
         </div>
-
-        <!--        <div class='flyer-container'>-->
-        <!--            <transition @before-enter='flyerAnimationBeforeEnter' @enter='flyerAnimationEnter' @leave='flyerAnimationLeave'>-->
-        <!--                <div class='flyer' v-if='showFlyer-->
-        <!--                    && selectedCategory.getGames()[selectedGameId] && selectedCategory.getGames()[selectedGameId].flyer'-->
-        <!--                    :style='{backgroundImage: this.flyerImage.length ? 'url(' + this.flyerImage + ')' : false}'></div>-->
-        <!--            </transition>-->
-        <!--        </div>-->
     </div>
 </template>
 
 <script lang='ts'>
-    import {Component, Prop, Watch, Model} from 'vue-property-decorator';
+    import {Component, Prop, Watch} from 'vue-property-decorator';
     import ControllableVue from '@/ControllableVue';
-    import Velocity from 'velocity-animate';
     import Champions from '@/components/Champions.vue';
     import Game from '@/model/Game.model';
     import {join} from 'path';
@@ -60,7 +51,6 @@
         protected marqueesPath: string = '';
         protected marquees: string[] = [];
 
-        // @Prop({required: true, type: GameCategory}) protected selectedCategory!: GameCategory;
         @Prop({type: Boolean, default: true}) protected focused!: boolean;
 
         public created() {
@@ -220,49 +210,6 @@
         //         return;
         //     };
         // }
-
-        /**
-         * Start a game
-         */
-        // protected async startGame() {
-        //     if (!this.focused) {
-        //         return;
-        //     }
-        //     const selectedGame = this.selectedCategory.getGames()[this.selectedGameId];
-        //     const db = this.$store.getters.db;
-        //
-        //     const mameProcess = await this.mame.start(selectedGame);
-        //     if (!mameProcess) {
-        //         console.error('Failed start rom ' + selectedGame.romName);
-        //         return;
-        //     }
-        //
-        //     // Log game start
-        //     await db.connect();
-        //     await db.logGameStart(selectedGame.romName);
-        //     db.end();
-        //
-        //     mameProcess.on('close', async () => {
-        //         try {
-        //             await db.connect();
-        //             const hiscores: HiscoresJson = {
-        //                 season: selectedGame.hiscores.season,
-        //                 allTime: selectedGame.hiscores.allTime
-        //             };
-        //             hiscores.season = await this.hiscores.getHiscore(selectedGame.romName);
-        //             if (selectedGame.hiscores.season.classic[0]) {
-        //                 await db.saveHiscores(selectedGame.romName, selectedGame.hiscores.season.classic[0]);
-        //             }
-        //             hiscores.allTime = await db.getAllTime(selectedGame.romName);
-        //             await this.hiscores.saveHiscore(selectedGame.romName, selectedGame.hiscores);
-        //             db.end();
-        //             selectedGame.hiscores = hiscores;
-        //         } catch (e) {
-        //             this.$store.getters.logger.logError('[' + selectedGame.romName + ']' + e);
-        //             return;
-        //         }
-        //     });
-        // }
     }
 </script>
 
@@ -334,22 +281,6 @@
     .games ul li.selected .marquee {
         width: 100%;
         height: 80%;
-    }
-
-    .flyer-container {
-        position: absolute;
-        right: -3%;
-        top: -5%;
-        bottom: -5%;
-        width: 40%;
-    }
-
-    .flyer {
-        width: 100%;
-        height: 100%;
-        transform: rotateZ(-4deg);
-        background-repeat: no-repeat;
-        background-size: cover;
     }
 
 
