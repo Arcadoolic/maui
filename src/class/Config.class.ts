@@ -24,7 +24,7 @@ export default class Config {
 
     public constructor() {
         this.configPath = join(
-            (process.env.NODE_ENV === "development" ? '.' : remote.app.getPath('userData')),
+            (process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData')),
             'mame-awesome-ui-config.json',
         );
     }
@@ -55,7 +55,7 @@ export default class Config {
         const userData = remote.app.getPath('userData');
         writeFileSync(
             join(
-                (process.env.NODE_ENV === "development" ? '.' : userData),
+                (process.env.NODE_ENV === 'development' ? '.' : userData),
                 'mame-awesome-ui-config.json',
             ),
             JSON.stringify({

@@ -15,8 +15,6 @@ export default class GameService {
     protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
     protected static nplayersIni?: { [romName: string]: { [romName: string]: boolean } };
 
-    protected games?: Game[];
-
     protected static nplayersTranslation: { [k: string]: Nplayers } = {
         '12P sim': {sim: 12, alt: 0},
         '1P': {sim: 0, alt: 0},
@@ -35,6 +33,8 @@ export default class GameService {
         '8P sim': {sim: 8, alt: 0},
         '9P alt': {sim: 0, alt: 9},
     };
+
+    protected games?: Game[];
     protected mameService!: MameService;
 
     public constructor(mameService: MameService) {

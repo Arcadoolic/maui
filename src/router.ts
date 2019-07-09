@@ -40,7 +40,7 @@ export default new Router({
         {
             path: '/config',
             name: 'config',
-            component: Config
+            component: Config,
         },
     ],
 });

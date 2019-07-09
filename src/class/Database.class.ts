@@ -14,7 +14,7 @@ export default class Database {
 
     public constructor() {
         this.databasePath = join(
-            (process.env.NODE_ENV === "development" ? '.' : remote.app.getPath('userData')),
+            (process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData')),
             'mame-awesome-ui.sqlite',
         );
         this._sequelize = new Sequelize({

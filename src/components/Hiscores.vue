@@ -24,31 +24,31 @@
 </template>
 
 <script lang="ts">
-    import ControllableVue from "@/ControllableVue";
-    import {Component, Prop, Watch} from "vue-property-decorator";
-    import Game from "@/model/Game.model";
-    import Hiscore from "@/model/Hiscore.model";
-    import User from '@/model/User.model';
+import ControllableVue from '@/ControllableVue';
+import {Component, Prop, Watch} from 'vue-property-decorator';
+import Game from '@/model/Game.model';
+import Hiscore from '@/model/Hiscore.model';
+import User from '@/model/User.model';
 
-    @Component
-    export default class Hiscores extends ControllableVue {
-        @Prop({required: true, type: Game})
-        protected game!: Game;
+@Component
+export default class Hiscores extends ControllableVue {
+    @Prop({required: true, type: Game})
+    protected game!: Game;
 
-        protected scores: Hiscore[] = [];
-        protected loading = true;
+    protected scores: Hiscore[] = [];
+    protected loading = true;
 
-        public async mounted() {
-            await this.onGameChange();
-        }
-
-        @Watch('game')
-        public async onGameChange() {
-            this.loading = true;
-            this.scores = await this.game.$get("hiscores", {"include": [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'hiscore.id_user']}) as Hiscore[] || [];
-            this.loading = false
-        }
+    public async mounted() {
+        await this.onGameChange();
     }
+
+    @Watch('game')
+    public async onGameChange() {
+        this.loading = true;
+        this.scores = await this.game.$get('hiscores', {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'hiscore.id_user']}) as Hiscore[] || [];
+        this.loading = false;
+    }
+}
 </script>
 
 <style scoped>

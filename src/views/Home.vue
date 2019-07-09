@@ -33,7 +33,7 @@ import Hiscores from '@/components/Hiscores.vue';
 import ControllableVue from '@/ControllableVue';
 import {remote} from 'electron';
 import Game from '@/model/Game.model';
-import Category from "@/model/Category.model";
+import Category from '@/model/Category.model';
 import {join} from 'path';
 import {format} from 'url';
 import Velocity from 'velocity-animate';
@@ -42,7 +42,7 @@ import Velocity from 'velocity-animate';
     components: {
         Categories,
         Games,
-        Hiscores
+        Hiscores,
     },
 })
 export default class Home extends ControllableVue {
@@ -54,10 +54,10 @@ export default class Home extends ControllableVue {
     protected selectedCategoryIndex: number = 0;
 
     protected timeouts: {
-        quit?: number
+        quit?: number,
     } = {};
 
-    protected showHiscores:boolean = false;
+    protected showHiscores: boolean = false;
     protected flyersPath: string = '';
     protected flyers: string [] = [];
 
@@ -80,7 +80,7 @@ export default class Home extends ControllableVue {
         this.registerKeyMapping();
 
         this.flyersPath = mameService.flyerPath;
-        this.flyers = gameService.loadFlyers()
+        this.flyers = gameService.loadFlyers();
     }
 
     protected registerKeyMapping() {
@@ -115,16 +115,16 @@ export default class Home extends ControllableVue {
             switch (key) {
                 case 'Space':
                     clearTimeout(this.timeouts.quit);
-                    break
+                    break;
             }
-        })
+        });
     }
 
     protected selectPreviousGame() {
         this.selectedGameIndex = (this.selectedGameIndex <= 0) ? this.games.length - 1 : this.selectedGameIndex - 1;
     }
     protected selectNextGame() {
-        this.selectedGameIndex = (this.selectedGameIndex >= this.games.length -1) ? 0 : this.selectedGameIndex + 1;
+        this.selectedGameIndex = (this.selectedGameIndex >= this.games.length - 1) ? 0 : this.selectedGameIndex + 1;
     }
 
     protected async selectPreviousCategory() {
@@ -152,7 +152,7 @@ export default class Home extends ControllableVue {
 
     protected get flyer() {
         if (this.selectedGame) {
-            const i =this.flyers.indexOf(this.selectedGame.romName + '.png');
+            const i = this.flyers.indexOf(this.selectedGame.romName + '.png');
             const path = i < 0 ? null : join(this.flyersPath, this.flyers[i]);
             if (!path) {
                 return '';
@@ -168,7 +168,7 @@ export default class Home extends ControllableVue {
     protected startGame() {
         const mameService = this.$store.getters.mameService;
         const hiService = this.$store.getters.hiscoreService;
-        mameService.startGame(this.selectedGame.romName).then(gameProcess => {
+        mameService.startGame(this.selectedGame.romName).then((gameProcess) => {
             gameProcess.on('close', async (e) => {
                 hiService.saveHiscores(this.selectedGame).done();
             });
