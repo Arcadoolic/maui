@@ -22,13 +22,9 @@
 
 <script lang="ts">
 import {Component} from 'vue-property-decorator';
-import GameList from '@/class/GameList.class';
 import Categories from '@/components/Categories.vue';
-import Mame from '@/class/Mame.class';
-import GameCategory from '@/class/GameCategory.class';
 import Games from '@/components/Games.vue';
 import Gamepads from '@/class/Gamepads.class';
-import GamepadsComponent from '@/components/Gamepads.vue';
 import Hiscores from '@/components/Hiscores.vue';
 import ControllableVue from '@/ControllableVue';
 import {remote} from 'electron';
@@ -36,7 +32,6 @@ import Game from '@/model/Game.model';
 import Category from '@/model/Category.model';
 import {join} from 'path';
 import {format} from 'url';
-import Velocity from 'velocity-animate';
 
 @Component({
     components: {
@@ -129,7 +124,8 @@ export default class Home extends ControllableVue {
 
     protected async selectPreviousCategory() {
         this.selectedGameIndex = 0;
-        this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ? this.categories.length : this.selectedCategoryIndex - 1;
+        this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ?
+            this.categories.length : this.selectedCategoryIndex - 1;
         if (this.selectedCategoryIndex === this.categories.length) {
             this.games = this.allGames;
         } else {
@@ -138,7 +134,8 @@ export default class Home extends ControllableVue {
     }
     protected async selectNextCategory() {
         this.selectedGameIndex = 0;
-        this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length) ? 0 : this.selectedCategoryIndex + 1;
+        this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length) ?
+            0 : this.selectedCategoryIndex + 1;
         if (this.selectedCategoryIndex === this.categories.length) {
             this.games = this.allGames;
         } else {
