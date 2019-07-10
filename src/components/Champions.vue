@@ -2,7 +2,8 @@
     <div class="champions">
         <div class="championsContainer" v-if="champions.length">
             <div v-for="(champion, index) of champions" class="champion" :style="{right: (index * 10) + '%'}">
-                <img src="../assets/defaultPlayer.png" :alt="champion.name">
+                <img v-if="getAvatar(champion.user)" :src="getAvatar(champion.user)" alt="">
+                <img v-else src="../assets/defaultPlayer.png" alt="">
             </div>
         </div>
         <img v-else class="default" src="../assets/hiscores.svg" alt="">
@@ -14,6 +15,9 @@
     import Game from '@/model/Game.model';
     import User from '@/model/User.model';
     import Hiscore from '@/model/Hiscore.model';
+    import Config from '@/class/Config.class';
+    import {join} from 'path';
+    import {format} from 'url';
 
     @Component
     export default class Champions extends Vue {
@@ -22,8 +26,12 @@
 
         protected champions: Hiscore[] = [];
         protected loading = true;
+        protected avatars: string[] = [];
+        protected config!: Config;
 
         public async mounted() {
+            this.avatars = this.$store.getters.userService.getAvatars();
+            this.config = this.$store.getters.configuration;
             await this.onGameChange();
         }
 
@@ -35,6 +43,17 @@
                 {include: [{model: User}], limit: 3, order: [['score', 'DESC']], group: ['hiscore.id_user']},
             ) as Hiscore[] || [];
             this.loading = false;
+        }
+
+        public getAvatar(user: User) {
+            if (this.avatars.indexOf(user.pseudo_3 + '.png') >= 0) {
+                return format({
+                    pathname: join(this.config.avatarsPath, user.pseudo_3 + '.png'),
+                    protocol: 'file',
+                    slashes: true
+                });
+            }
+            return false;
         }
     }
 </script>

@@ -4,8 +4,8 @@
         <template v-else>
             <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores">
                 <div class="icon" v-if="score.rank !== '1'">
-                    <img :src="score.icon" :alt="''" v-if="score.icon">
-                    <img src="../assets/defaultPlayer.png" v-else>
+                    <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
+                    <img v-else src="../assets/defaultPlayer.png" alt="">
                 </div>
                 <div class="info">
                     <span class="place">{{index + 1}}</span>
@@ -15,8 +15,8 @@
                     </div>
                 </div>
                 <div class="icon" v-if="score.rank === '1'">
-                    <img :src="score.icon" :alt="score.name" v-if="score.icon">
-                    <img src="../assets/defaultPlayer.png" v-else>
+                    <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
+                    <img v-else src="../assets/defaultPlayer.png" alt="">
                 </div>
             </div>
         </template>
@@ -29,6 +29,10 @@
     import Game from '@/model/Game.model';
     import Hiscore from '@/model/Hiscore.model';
     import User from '@/model/User.model';
+    import UserService from '@/class/UserService.class';
+    import Config from '@/class/Config.class';
+    import {join} from 'path';
+    import {format} from 'url';
 
     @Component
     export default class Hiscores extends ControllableVue {
@@ -37,8 +41,12 @@
 
         protected scores: Hiscore[] = [];
         protected loading = true;
+        protected avatars: string[] = [];
+        protected config!: Config;
 
         public async mounted() {
+            this.avatars = this.$store.getters.userService.getAvatars();
+            this.config = this.$store.getters.configuration;
             await this.onGameChange();
         }
 
@@ -50,6 +58,17 @@
                 {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'hiscore.id_user']},
             ) as Hiscore[] || [];
             this.loading = false;
+        }
+
+        public getAvatar(user: User) {
+            if (this.avatars.indexOf(user.pseudo_3 + '.png') >= 0) {
+                return format({
+                    pathname: join(this.config.avatarsPath, user.pseudo_3 + '.png'),
+                    protocol: 'file',
+                    slashes: true
+                });
+            }
+            return false;
         }
     }
 </script>
