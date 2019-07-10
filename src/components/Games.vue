@@ -10,24 +10,10 @@
                             backgroundImage: getMarquee(game.romName)
                         }"
                     >
-                        <Champions v-if='game.hasHiscore' :game='game'></Champions>
+                        <Champions v-if='game.hi' :game='game'></Champions>
                     </div>
                 </li>
             </ul>
-            <!--            <ul ref='gameList' :style='{transition: 'top ' + transitionTime + 's ease'}'>-->
-            <!--                <transition v-for='(game, index) in selectedCategory.getGames()' :key='index'-->
-            <!--                            @before-enter='gamesAnimationBeforeEnter'-->
-            <!--                            @enter='gamesAnimationEnter'-->
-            <!--                            @leave='gameLeaveAnimation'-->
-            <!--                >-->
-            <!--                    <li  :class='{selected: selectedGameId === index}' v-if='showGames'>-->
-            <!--                        <div class='marquee' :style='marqueeStyle(game, index)'>-->
-            <!--                            <Champions v-if='game.hasHiscore' :game='game'></Champions>-->
-            <!--                        </div>-->
-            <!--                        <img :src='game.flyer' style='display: none' v-if='game.flyer.length'> &lt;!&ndash; To cache flyers without displaying them &ndash;&gt;-->
-            <!--                    </li>-->
-            <!--                </transition>-->
-            <!--            </ul>-->
         </div>
     </div>
 </template>
