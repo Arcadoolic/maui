@@ -75,9 +75,9 @@ export default new Vuex.Store({
         initServices: (state) => {
             if (!state.isInit) {
                 state.mameService = new MameService(state.configuration);
-                state.gameService = new GameService(state.mameService);
                 state.userService = new UserService();
                 state.hiscoreService = new HiscoreService(state.mameService.iniPath, state.userService);
+                state.gameService = new GameService(state.mameService, state.hiscoreService);
                 state.isInit = true;
             }
         },
