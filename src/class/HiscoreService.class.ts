@@ -21,6 +21,14 @@ export default class HiscoreService {
     }
 
     /**
+     * Check if rom have hiscore extraction
+     * @param romName
+     */
+    public hasHiscore(romName: string) {
+        return this.hiExtractor.exist(romName);
+    }
+
+    /**
      * Save hiscores from one or multiples Game
      * TODO : Better error handling
      * @param games
