@@ -13,6 +13,7 @@
     import {Component, Prop, Vue, Watch} from 'vue-property-decorator';
     import Game from '@/model/Game.model';
     import User from '@/model/User.model';
+    import Hiscore from '@/model/Hiscore.model';
 
     @Component
     export default class Champions extends Vue {
@@ -31,7 +32,7 @@
             this.loading = true;
             this.champions = await this.game.$get(
                 'hiscores',
-                {include: [{model: User}], limit: 3, order: [['score', 'DESC']], group: ['hiscore.id_user']}
+                {include: [{model: User}], limit: 3, order: [['score', 'DESC']], group: ['hiscore.id_user']},
             ) as Hiscore[] || [];
             this.loading = false;
         }
