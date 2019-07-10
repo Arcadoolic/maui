@@ -7,6 +7,7 @@ import Helpers from '@/class/Helpers.class';
 import Category from '@/model/Category.model';
 import {Sequelize} from 'sequelize-typescript';
 import {Op} from 'sequelize';
+import HiscoreService from '@/class/HiscoreService.class';
 
 
 declare const __static: string;
@@ -36,9 +37,11 @@ export default class GameService {
 
     protected games?: Game[];
     protected mameService!: MameService;
+    protected hiService!: HiscoreService;
 
-    public constructor(mameService: MameService) {
+    public constructor(mameService: MameService, hiService: HiscoreService) {
         this.mameService = mameService;
+        this.hiService = hiService;
     }
 
     /**
@@ -82,7 +85,7 @@ export default class GameService {
                 subname,
                 manufacturer: gameInformation.manufacturer,
                 year: gameInformation.year,
-                hi: this.hasGameHaveHi2txt(romName),
+                hi: this.hiService.hasHiscore(romName),
                 player_alt: players.alt,
                 player_sim: players.sim,
             });
@@ -138,16 +141,6 @@ export default class GameService {
             sim: 0,
             alt: 0,
         };
-    }
-
-    /**
-     * Check if game.xml exist in hi2txt
-     * @param romName
-     */
-    public hasGameHaveHi2txt(romName: string): boolean {
-        const hi2txtPath = join(process.env.NODE_ENV === 'development'
-            ? './resources' : process.resourcesPath!, 'hi2txt');
-        return existsSync(join(hi2txtPath, 'hi2txt', romName + '.xml'));
     }
 
     /**
