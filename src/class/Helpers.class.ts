@@ -1,6 +1,7 @@
 import * as os from 'os';
 import {join, sep} from 'path';
 import {existsSync} from 'fs';
+import {remote} from 'electron';
 
 export default class Helpers {
 
@@ -33,5 +34,9 @@ export default class Helpers {
             }
         }
         return null;
+    }
+
+    public static getUserDataPath() {
+        return process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData');
     }
 }
