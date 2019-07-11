@@ -114,7 +114,7 @@ export default class GameService {
         const categories = Object.keys(GameService.genreIni);
         for (const category in GameService.genreIni) {
             if (GameService.genreIni[category][romName]) {
-                return categories.indexOf(category);
+                return categories.indexOf(category) + 1;
             }
         }
     }
@@ -184,5 +184,6 @@ export default class GameService {
             const flyerDirectory = this.mameService.flyerPath;
             return flyerDirectory ? readdirSync(flyerDirectory) : [];
         }
+        return [];
     }
 }
