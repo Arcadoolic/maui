@@ -65,7 +65,7 @@
                 return this.$router.push({name: 'init'});
             }
 
-            // remote.getCurrentWindow().setFullScreen(true);
+            remote.getCurrentWindow().setFullScreen(true);
             remote.getCurrentWindow().setResizable(true);
 
             const mameService = this.$store.getters.mameService;
