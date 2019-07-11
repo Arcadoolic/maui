@@ -3,18 +3,16 @@
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList">
-                <transition-group name="game-list">
-                    <li v-for="(game, index) in games" :class="{selected: selectedGameIndex === index}" :key="index">
-                        <div class="marquee"
-                             :style="{
-                                marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
-                                backgroundImage: getMarquee(game.romName)
-                            }"
-                        >
-                            <Champions v-if='game.hi' :game='game'></Champions>
-                        </div>
-                    </li>
-                </transition-group>
+                <li v-for="(game, index) in games" :class="{selected: selectedGameIndex === index}">
+                    <div class="marquee"
+                         :style="{
+                            marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
+                            backgroundImage: getMarquee(game.romName)
+                        }"
+                    >
+                        <Champions v-if='game.hi' :game='game'></Champions>
+                    </div>
+                </li>
             </ul>
         </div>
     </div>
