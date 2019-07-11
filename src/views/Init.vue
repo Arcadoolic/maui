@@ -22,7 +22,6 @@ export default class Init extends Vue {
         remote.getCurrentWindow().setFullScreen(false);
         remote.getCurrentWindow().setSize(346, 354);
         remote.getCurrentWindow().center();
-        remote.getCurrentWindow().setResizable(false);
     }
 
     public async mounted() {
@@ -48,7 +47,6 @@ export default class Init extends Vue {
 
         // Save new games
         // Create user for tests
-        // try {
         await User.bulkCreate([
                 {pseudo_3: 'NOB', realname: 'Bruno', email: 'bteffot@infopro-digital.com'},
                 {pseudo_3: 'ALN', realname: 'Adrien Landon', email: 'alandon@infopro-digital.com'},
@@ -90,25 +88,12 @@ export default class Init extends Vue {
                 {pseudo_3: 'ATN', realname: 'Anh-Tuan NGUYEN', email: 'anh-tuan.nguyen@infopro-digital.com'},
             ], {ignoreDuplicates: true},
         );
-        // } catch (e) {
-        //
-        // }
         const romList = mameService.getRomListFromFavorites();
         await gameService.saveGamesFromRomNames(romList);
 
 
         await userService.loadUsers();
-        // console.log(hiService.getHiscore("asteroid"));
         hiService.saveHiscores(await gameService.loadGames());
-
-        // Hiscore.bulkCreate([
-        //     {id_game: 1, id_user: 17, rank: 1, score: 8000000},
-        //     {id_game: 1, id_user: 17, rank: 2, score: 7129930},
-        //     {id_game: 1, id_user: 17, rank: 5, score: 6318325},
-        //     {id_game: 1, id_user: 36, rank: 3, score: 6640513},
-        //     {id_game: 1, id_user: 38, rank: 4, score: 6440517},
-        // ]);
-
 
         this.$router.push({name: 'home'});
     }

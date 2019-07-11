@@ -66,7 +66,6 @@
             }
 
             remote.getCurrentWindow().setFullScreen(true);
-            remote.getCurrentWindow().setResizable(true);
 
             const mameService = this.$store.getters.mameService;
             this.gameService = this.$store.getters.gameService;
@@ -78,6 +77,10 @@
 
             this.flyersPath = mameService.flyerPath;
             this.flyers = this.gameService.loadFlyers();
+        }
+
+        public mounted() {
+            remote.getCurrentWindow().setFullScreen(true);
         }
 
         protected registerKeyMapping() {

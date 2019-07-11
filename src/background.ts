@@ -69,6 +69,7 @@ app.on('ready', async () => {
     }
     win = createSplashWin();
     ipcMain.on('init-end', () => {
+        console.log(' --- HELLO WORLD --- ');
         win!.hide();
         updateToMain(win!);
         win!.once('ready-to-show', () => {
