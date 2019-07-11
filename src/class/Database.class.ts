@@ -33,10 +33,9 @@ export default class Database {
         await this.sequelize.sync();
 
         const records: Array<{id_category: number, name: string}> = [];
-        console.log(records);
         const categories = Object.keys(gameService.getGameCategories());
         for (let i = 0; i < categories.length; i++) {
-            records.push({id_category: i, name: categories[i]});
+            records.push({id_category: i + 1, name: categories[i]});
         }
         // Create categories
         await Category.bulkCreate(records);
