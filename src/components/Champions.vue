@@ -54,7 +54,7 @@
                 return format({
                     pathname: join(this.config.avatarsPath, user.pseudo_3 + '.png'),
                     protocol: 'file',
-                    slashes: true
+                    slashes: true,
                 });
             }
             return false;

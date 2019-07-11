@@ -40,7 +40,7 @@
                 next2 = 0 === index;
             }
 
-            let classes = {
+            const classes = {
                 selected: this.selectedCategoryIndex === index,
                 previous,
                 next,
