@@ -1,6 +1,7 @@
 <template>
     <div class="categories">
-        <div class="category" v-for="(category, index) in categories" :class="getCategoryClasses(index)"></div>
+        <div class="category" :class="getCategoryClasses(0)"></div>
+        <div class="category" v-for="(category, index) in categories" :class="getCategoryClasses(index + 1)"></div>
     </div>
 </template>
 
@@ -21,7 +22,7 @@
         protected readonly selectedCategoryIndex!: number;
 
         protected getCategoryClasses(index: number) {
-            const catLen = this.categories.length;
+            const catLen = this.categories.length + 1;
             let previous = this.selectedCategoryIndex - 1 === index;
             let previous2 = this.selectedCategoryIndex - 2 === index;
             let next2 = this.selectedCategoryIndex + 2 === index;
@@ -47,8 +48,10 @@
                 previous2,
                 next2,
             };
-            const classLogo = this.categories[index].name.replace(/([\s\W]+)/, '_').toLowerCase();
-            classes[classLogo] = true;
+            if (index > 0) {
+                const classLogo = this.categories[index - 1].name.replace(/([\s\W]+)/, '_').toLowerCase();
+                classes[classLogo] = true;
+            }
             return classes;
         }
 
