@@ -5,7 +5,6 @@
             <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
         </div>
         <Games :games="games" :selectedGameIndex="selectedGameIndex"></Games>
-        <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
         <div class="flyer-container">
             <transition name="flyer">
@@ -13,6 +12,8 @@
                      :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
             </transition>
         </div>
+
+        <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
@@ -33,6 +34,7 @@
     import Category from '@/model/Category.model';
     import {join} from 'path';
     import {format} from 'url';
+    import {EventBus} from '@/EventBus';
 
     @Component({
         components: {
@@ -137,7 +139,7 @@
 
         protected async selectNextCategory() {
             this.selectedGameIndex = 0;
-            this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length) ?
+            this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length - 1) ?
                 0 : this.selectedCategoryIndex + 1;
             if (this.selectedCategoryIndex === this.categories.length) {
                 this.games = this.allGames;
@@ -170,7 +172,8 @@
             const hiService = this.$store.getters.hiscoreService;
             mameService.startGame(this.selectedGame.romName).then((gameProcess) => {
                 gameProcess.on('close', async (e) => {
-                    hiService.saveHiscores(this.selectedGame).done();
+                    await hiService.saveHiscores(this.selectedGame);
+                    EventBus.$emit('game-quit')
                 });
             });
         }
