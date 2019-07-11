@@ -18,6 +18,7 @@
     import Config from '@/class/Config.class';
     import {join} from 'path';
     import {format} from 'url';
+    import {EventBus} from '@/EventBus';
 
     @Component
     export default class Champions extends Vue {
@@ -33,6 +34,8 @@
             this.avatars = this.$store.getters.userService.getAvatars();
             this.config = this.$store.getters.configuration;
             await this.onGameChange();
+
+            EventBus.$on('game-quit', this.onGameChange);
         }
 
         @Watch('game')

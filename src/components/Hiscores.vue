@@ -29,10 +29,10 @@
     import Game from '@/model/Game.model';
     import Hiscore from '@/model/Hiscore.model';
     import User from '@/model/User.model';
-    import UserService from '@/class/UserService.class';
     import Config from '@/class/Config.class';
     import {join} from 'path';
     import {format} from 'url';
+    import {EventBus} from '@/EventBus';
 
     @Component
     export default class Hiscores extends ControllableVue {
@@ -48,6 +48,8 @@
             this.avatars = this.$store.getters.userService.getAvatars();
             this.config = this.$store.getters.configuration;
             await this.onGameChange();
+
+            EventBus.$on('game-quit', this.onGameChange);
         }
 
         @Watch('game')
