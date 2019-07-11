@@ -35,6 +35,7 @@
     import {join} from 'path';
     import {format} from 'url';
     import {EventBus} from '@/EventBus';
+    import GameService from '@/class/GameService.class';
 
     @Component({
         components: {
@@ -44,7 +45,7 @@
         },
     })
     export default class Home extends ControllableVue {
-        protected allGames: Game[] = [];
+        protected gameService!: GameService;
         protected games: Game[] = [];
         protected selectedGameIndex: number = 0;
 
@@ -68,17 +69,15 @@
             remote.getCurrentWindow().setResizable(true);
 
             const mameService = this.$store.getters.mameService;
-            const gameService = this.$store.getters.gameService;
-            this.allGames = await gameService.loadGames();
-            this.categories = await gameService.loadCategories();
-            this.selectedCategoryIndex = this.categories.length;
-            this.games = this.allGames;
+            this.gameService = this.$store.getters.gameService;
+            this.categories = await this.gameService.loadCategories();
+            this.games = await this.gameService.loadGames();
 
             Gamepads.init();
             this.registerKeyMapping();
 
             this.flyersPath = mameService.flyerPath;
-            this.flyers = gameService.loadFlyers();
+            this.flyers = this.gameService.loadFlyers();
         }
 
         protected registerKeyMapping() {
@@ -130,21 +129,21 @@
             this.selectedGameIndex = 0;
             this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ?
                 this.categories.length : this.selectedCategoryIndex - 1;
-            if (this.selectedCategoryIndex === this.categories.length) {
-                this.games = this.allGames;
+            if (this.selectedCategoryIndex === 0) {
+                this.games = await this.gameService.loadGames();
             } else {
-                this.games = await this.categories[this.selectedCategoryIndex].$get('games') as Game[] || [];
+                this.games = await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
             }
         }
 
         protected async selectNextCategory() {
             this.selectedGameIndex = 0;
-            this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length - 1) ?
+            this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length) ?
                 0 : this.selectedCategoryIndex + 1;
-            if (this.selectedCategoryIndex === this.categories.length) {
-                this.games = this.allGames;
+            if (this.selectedCategoryIndex === 0) {
+                this.games = await this.gameService.loadGames();
             } else {
-                this.games = await this.categories[this.selectedCategoryIndex].$get('games') as Game[] || [];
+                this.games = await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
             }
         }
 
