@@ -2,9 +2,16 @@
     <div>
         <p>Config</p>
         <div>
-            <p>{{mamePath || 'undefined'}}</p>
-            <button @click.prevent-="selectMamePath()">Select mame path</button>
-            <button @click.prevent="selectAvatarsPath()">Select avatars path</button>
+            <div>
+                <p>Mame binary path</p>
+                <p>{{mamePath || 'undefined'}}</p>
+                <button @click.prevent-="selectMamePath()">Select mame path</button>
+            </div>
+            <div>
+                <p>User avatars path</p>
+                <p>{{avatarsPath || 'undefined'}}</p>
+                <button @click.prevent="selectAvatarsPath()">Select avatars path</button>
+            </div>
         </div>
         <button @click.prevent="save">Save</button>
     </div>
@@ -42,7 +49,7 @@
         public async selectMamePath() {
             let defaultPath = '.';
             if (os.platform() !== 'win32') {
-                defaultPath = '/usr/games'
+                defaultPath = '/usr/games';
             }
 
             const mameBinaryNames = ['mame.exe', 'mame64.exe', 'mame'];
@@ -91,5 +98,8 @@
 <style scoped>
     * {
         color: white
+    }
+    button {
+        color: black;
     }
 </style>
