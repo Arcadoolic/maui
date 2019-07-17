@@ -1,17 +1,21 @@
 <template>
     <div class="home">
-        <div class="gameTitle" v-if="selectedGame">
-            <h1>{{selectedGame.shortname}}</h1>
-            <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
-        </div>
-        <Games :games="games" :selectedGameIndex="selectedGameIndex"></Games>
+        <transition name="title">
+            <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
+                <h1>{{selectedGame.shortname}}</h1>
+                <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
+            </div>
+        </transition>
 
-        <div class="flyer-container">
-            <transition name="flyer">
-                <div class="flyer" v-if="flyer" :key="flyer"
-                     :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
-            </transition>
-        </div>
+        <transition name="games">
+            <Games :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
+        </transition>
+
+        <transition name="flyer">
+            <div class="flyer-container"  v-show="showFlyer">
+                <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+            </div>
+        </transition>
 
         <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
@@ -54,18 +58,25 @@
 
         protected timeouts: {
             quit?: number,
+            showGame?: number,
+            showFlyer?: number,
         } = {};
 
         protected showHiscores: boolean = false;
         protected flyersPath: string = '';
         protected flyers: string [] = [];
+        protected flyer: string = '';
+
+        protected showGames: boolean = true;
+        protected showTitle: boolean = true;
+        protected showFlyer: boolean = true;
 
         public async created() {
             if (!this.$store.getters.isInit) {
                 return this.$router.push({name: 'init'});
             }
 
-            remote.getCurrentWindow().setFullScreen(true);
+            // remote.getCurrentWindow().setFullScreen(true);
 
             const mameService = this.$store.getters.mameService;
             this.gameService = this.$store.getters.gameService;
@@ -77,10 +88,11 @@
 
             this.flyersPath = mameService.flyerPath;
             this.flyers = this.gameService.loadFlyers();
+            this.flyer = this.generateFlyerPath();
         }
 
         public mounted() {
-            remote.getCurrentWindow().setFullScreen(true);
+            // remote.getCurrentWindow().setFullScreen(true);
         }
 
         protected registerKeyMapping() {
@@ -88,16 +100,16 @@
                 const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
                 switch (key) {
                     case 'ArrowUp':
-                        this.selectPreviousGame();
+                        this.onGameChange(true);
                         break;
                     case 'ArrowDown':
-                        this.selectNextGame();
+                        this.onGameChange(false);
                         break;
                     case 'ArrowLeft':
-                        this.selectPreviousCategory().then();
+                        this.onCategoryChange(true);
                         break;
                     case 'ArrowRight':
-                        this.selectNextCategory().then();
+                        this.onCategoryChange(false);
                         break;
                     case 'Space':
                         this.showHiscores = !this.showHiscores;
@@ -120,41 +132,48 @@
             });
         }
 
-        protected selectPreviousGame() {
-            this.selectedGameIndex = (this.selectedGameIndex <= 0) ? this.games.length - 1 : this.selectedGameIndex - 1;
+        protected onGameChange(previous: boolean) {
+            const showFlyerFn = () => {
+                this.flyer = this.generateFlyerPath();
+                this.showFlyer = true;
+            };
+            this.showFlyer = false;
+            clearTimeout(this.timeouts.showFlyer);
+            this.timeouts.showFlyer = window.setTimeout(showFlyerFn, 300);
+            this.selectedGameIndex = previous ?
+                ((this.selectedGameIndex <= 0) ? this.games.length - 1 : this.selectedGameIndex - 1) :
+                ((this.selectedGameIndex >= this.games.length - 1) ? 0 : this.selectedGameIndex + 1);
         }
 
-        protected selectNextGame() {
-            this.selectedGameIndex = (this.selectedGameIndex >= this.games.length - 1) ? 0 : this.selectedGameIndex + 1;
-        }
+        protected onCategoryChange(previous: boolean) {
+            const showGameFn = async () => {
+                // Load games
+                this.games = (!this.selectedCategoryIndex) ? await this.gameService.loadGames() :
+                    await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
 
-        protected async selectPreviousCategory() {
-            this.selectedGameIndex = 0;
-            this.selectedCategoryIndex = (this.selectedCategoryIndex <= 0) ?
-                this.categories.length : this.selectedCategoryIndex - 1;
-            if (this.selectedCategoryIndex === 0) {
-                this.games = await this.gameService.loadGames();
-            } else {
-                this.games = await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
-            }
-        }
+                this.selectedGameIndex = 0;
+                this.flyer = this.generateFlyerPath();
 
-        protected async selectNextCategory() {
-            this.selectedGameIndex = 0;
-            this.selectedCategoryIndex = (this.selectedCategoryIndex >= this.categories.length) ?
-                0 : this.selectedCategoryIndex + 1;
-            if (this.selectedCategoryIndex === 0) {
-                this.games = await this.gameService.loadGames();
-            } else {
-                this.games = await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
-            }
+                this.showGames = true;
+                this.showTitle = true;
+                this.showFlyer = true;
+            };
+            this.showHiscores = false;
+            this.showTitle = false;
+            this.showFlyer = false;
+            this.showGames = false;
+            clearTimeout(this.timeouts.showGame); // Clear timeout if already exist
+            this.timeouts.showGame = window.setTimeout(showGameFn, 300); // In 300, execute all logic and show everyt
+            this.selectedCategoryIndex = previous ?
+                ((this.selectedCategoryIndex <= 0) ? this.categories.length : this.selectedCategoryIndex - 1) :
+                ((this.selectedCategoryIndex >= this.categories.length) ? 0 : this.selectedCategoryIndex + 1);
         }
 
         protected get selectedGame() {
             return this.games[this.selectedGameIndex] || null;
         }
 
-        protected get flyer() {
+        protected generateFlyerPath(): string {
             if (this.selectedGame) {
                 const i = this.flyers.indexOf(this.selectedGame.romName + '.png');
                 const path = i < 0 ? null : join(this.flyersPath, this.flyers[i]);
@@ -167,6 +186,7 @@
                     slashes: true,
                 });
             }
+            return '';
         }
 
         protected startGame() {
@@ -255,5 +275,33 @@
         transform: rotateZ(-4deg);
         background-repeat: no-repeat;
         background-size: cover;
+    }
+
+    .flyer-leave-active {
+        transition: all .3s ease-in 0s;
+    }
+    .flyer-enter-active {
+        transition: all .3s ease-out 0s;
+    }
+    .flyer-enter, .flyer-leave-to {
+        margin-right: -100%;
+    }
+    .games-leave-active {
+        transition: all .3s ease-in 0s;
+    }
+    .games-enter-active {
+        transition: all .3s ease-out 0s;
+    }
+    .games-enter, .games-leave-to {
+        margin-left: -100%;
+    }
+    .title-leave-active {
+        transition: all .3s ease-in 0s;
+    }
+    .title-enter-active {
+        transition: all .3s ease-out 0s;
+    }
+    .title-enter, .title-leave-to {
+        margin-top: -100%;
     }
 </style>
