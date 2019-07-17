@@ -7,6 +7,7 @@
     import {remote} from 'electron';
     import Database from '@/class/Database.class';
     import User from '@/model/User.model';
+    import {EventBus} from '@/EventBus';
 
     @Component
     export default class Init extends Vue {
@@ -92,7 +93,9 @@
 
 
             await userService.loadUsers();
-            hiService.saveHiscores(await gameService.loadGames());
+            hiService.saveHiscores(await gameService.loadGames()).then(() => {
+                EventBus.$emit('hiscores-loaded')
+            });
 
             this.$router.push({name: 'home'});
         }
