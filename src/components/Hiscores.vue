@@ -57,7 +57,7 @@
             this.loading = true;
             this.scores = await this.game.$get(
                 'hiscores',
-                {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'hiscore.id_user']},
+                {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
             ) as Hiscore[] || [];
             this.loading = false;
         }

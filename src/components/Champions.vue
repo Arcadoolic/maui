@@ -43,7 +43,7 @@
             this.loading = true;
             this.champions = await this.game.$get(
                 'hiscores',
-                {include: [{model: User}], limit: 3, order: [['score', 'DESC']], group: ['hiscore.id_user']},
+                {include: [{model: User}], limit: 3, order: [['score', 'DESC']], group: ['user.id_user']},
             ) as Hiscore[] || [];
             this.champions = this.champions.reverse();
             this.loading = false;
