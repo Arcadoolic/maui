@@ -16,6 +16,7 @@
     import {sep, join} from 'path';
     import {lstatSync, existsSync, mkdirSync} from 'fs';
     import Helpers from '@/class/Helpers.class';
+    import * as os from 'os';
 
     @Component
     export default class Config extends Vue {
@@ -39,11 +40,17 @@
         }
 
         public async selectMamePath() {
+            let defaultPath = '.';
+            if (os.platform() !== 'win32') {
+                defaultPath = '/usr/games'
+            }
+
             const mameBinaryNames = ['mame.exe', 'mame64.exe', 'mame'];
 
             const mameDirPath = await remote.dialog.showOpenDialog({
                 title: 'Select mame binary path',
                 properties: ['openDirectory', 'showHiddenFiles'],
+                defaultPath
             });
 
             if (mameDirPath) {
