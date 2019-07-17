@@ -36,6 +36,7 @@
             await this.onGameChange();
 
             EventBus.$on('game-quit', this.onGameChange);
+            EventBus.$on('hiscores-loaded', this.onGameChange);
         }
 
         @Watch('game')
