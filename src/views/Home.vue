@@ -76,7 +76,7 @@
                 return this.$router.push({name: 'init'});
             }
 
-            // remote.getCurrentWindow().setFullScreen(true);
+            remote.getCurrentWindow().setFullScreen(true);
 
             const mameService = this.$store.getters.mameService;
             this.gameService = this.$store.getters.gameService;
@@ -92,7 +92,7 @@
         }
 
         public mounted() {
-            // remote.getCurrentWindow().setFullScreen(true);
+            remote.getCurrentWindow().setFullScreen(true);
         }
 
         protected registerKeyMapping() {
