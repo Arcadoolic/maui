@@ -94,7 +94,7 @@
 
             await userService.loadUsers();
             hiService.saveHiscores(await gameService.loadGames()).then(() => {
-                EventBus.$emit('hiscores-loaded')
+                EventBus.$emit('hiscores-loaded');
             });
 
             this.$router.push({name: 'home'});

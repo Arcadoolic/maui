@@ -57,7 +57,7 @@
             const mameDirPath = await remote.dialog.showOpenDialog({
                 title: 'Select mame binary path',
                 properties: ['openDirectory', 'showHiddenFiles'],
-                defaultPath
+                defaultPath,
             });
 
             if (mameDirPath) {
@@ -65,7 +65,6 @@
                 if (mamePath && lstatSync(mamePath).isFile()) {
                     this.mamePath = mameDirPath[0];
                     this.mameBinaryName = mamePath.split(sep).slice(-1)[0];
-                    console.log(this.mameBinaryName);
                 } else {
                     remote.dialog.showErrorBox('Path invalid', `Selected path "${mamePath}" is invalid.`);
                 }
