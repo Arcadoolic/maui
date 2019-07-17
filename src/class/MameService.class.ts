@@ -132,7 +132,7 @@ export default class MameService {
     public startGame(romName: string): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
-            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', '-w', romName], {
+            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', romName], {
                 killSignal: 'SIGQUIT',
                 cwd: this.iniPath,
             }, (error, stdout, stderr) => {
