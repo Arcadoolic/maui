@@ -1,12 +1,9 @@
 import {join} from 'path';
-import {existsSync, readFileSync, readdirSync} from 'fs';
+import {readFileSync, readdirSync} from 'fs';
 import {parse as iniParse} from 'ini';
 import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
-import Helpers from '@/class/Helpers.class';
 import Category from '@/model/Category.model';
-import {Sequelize} from 'sequelize-typescript';
-import {Op} from 'sequelize';
 import HiscoreService from '@/class/HiscoreService.class';
 
 
