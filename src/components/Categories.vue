@@ -7,11 +7,8 @@
 
 <script lang="ts">
     import {Component, Prop} from 'vue-property-decorator';
-    import {join} from 'path';
     import ControllableVue from '@/ControllableVue';
     import Category from '@/model/Category.model';
-
-    declare const __static: string;
 
     @Component
     export default class Categories extends ControllableVue {

@@ -1,6 +1,6 @@
 'use strict';
 
-import {app, protocol, BrowserWindow, ipcMain} from 'electron';
+import {app, protocol, BrowserWindow} from 'electron';
 import {
     createProtocol,
     installVueDevtools
@@ -68,14 +68,6 @@ app.on('ready', async () => {
         await installVueDevtools();
     }
     win = createSplashWin();
-    ipcMain.on('init-end', () => {
-        console.log(' --- HELLO WORLD --- ');
-        win!.hide();
-        updateToMain(win!);
-        win!.once('ready-to-show', () => {
-            win!.show();
-        });
-    })
 });
 
 // Exit cleanly on request from parent process in development mode.
@@ -91,10 +83,6 @@ if (isDevelopment) {
             app.quit()
         })
     }
-}
-
-function updateToMain(win: BrowserWindow) {
-    win.setFullScreen(true);
 }
 
 function createSplashWin() {

@@ -4,14 +4,9 @@
 
 <script lang="ts">
     import {Component, Vue} from 'vue-property-decorator';
-    import {ipcRenderer, remote} from 'electron';
-    import Config from '@/class/Config.class';
-    import {join} from 'path';
-    import MameService from '@/class/MameService.class';
-    import GameService from '@/class/GameService.class';
+    import {remote} from 'electron';
     import Database from '@/class/Database.class';
     import User from '@/model/User.model';
-    import Hiscore from '@/model/Hiscore.model';
 
     @Component
     export default class Init extends Vue {
@@ -87,7 +82,7 @@
                     {
                         pseudo_3: 'JBJ',
                         realname: 'Jean-Baptiste Jouannaud',
-                        email: 'Jean-Baptiste.JOUANNAUD@infopro-digital.com'
+                        email: 'Jean-Baptiste.JOUANNAUD@infopro-digital.com',
                     },
                     {pseudo_3: 'ATN', realname: 'Anh-Tuan NGUYEN', email: 'anh-tuan.nguyen@infopro-digital.com'},
                 ], {ignoreDuplicates: true},
@@ -101,41 +96,6 @@
 
             this.$router.push({name: 'home'});
         }
-
-        // protected async init() {
-        //     this.$store.commit('initLogger', './arcade.log');
-        //     const logger = this.$store.getters.logger;
-        //
-        //     try {
-        //         const config: Config = this.$store.getters.config;
-        //         const mame = this.$store.getters.mame;
-        //         const gameList = this.$store.getters.gameList;
-        //
-        //         config.load(); // Loading config
-        //         this.$store.commit('initPlayers'); // Loading players
-        //         this.$store.commit('initDatabase'); // Init database
-        //         mame.init(config.mameIniPath); // Init mame config
-        //         gameList.init(config.gamesJsonPath); // Init gameList
-        //
-        //         this.$store.commit('initHiscores'); // Init Hiscores
-        //         this.$store.commit('initGameService');
-        //         const gameService = this.$store.getters.gameService;
-        //         gameService.refreshGameDir(); // Refresh gameList
-        //         gameService.loadGamesMarquee();
-        //         gameService.loadGamesFlyers();
-        //
-        //         await this.$store.getters.db.connect();
-        //         await gameService.loadHiscores();
-        //         this.$store.getters.db.end();
-        //
-        //         this.$store.commit('isInit');
-        //         ipcRenderer.send('init-end');
-        //         this.$router.push({name: 'home'});
-        //     } catch (e) {
-        //         logger.logError('[Init] ' + e.toString());
-        //         console.error(e.toString());
-        //     }
-        // }
     }
 </script>
 

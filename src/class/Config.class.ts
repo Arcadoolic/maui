@@ -1,8 +1,6 @@
 import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {join} from 'path';
-import {ConnectionConfig} from 'mysql';
 import {remote} from 'electron';
-import {execFile} from 'child_process';
 
 export default class Config {
     public mamePath: string = '';
