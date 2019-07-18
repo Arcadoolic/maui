@@ -47,9 +47,6 @@
                 'hiscores',
                 {include: [{model: User}], attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]}, limit: 3, order: [['score', 'DESC']], group: ['user.id_user']},
             ) as Hiscore[] || [];
-            if (this.game.id_game === 11) {
-                console.log(this.champions);
-            }
             this.champions = this.champions.reverse();
             this.loading = false;
         }
