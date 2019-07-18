@@ -46,7 +46,7 @@ export default class HiscoreService {
 
                 const scoreToSave: any[] = [];
                 for (const score of hiscore.default) {
-                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3));
+                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3).toUpperCase());
                     if (!user) {
                         continue;
                     }
@@ -65,7 +65,7 @@ export default class HiscoreService {
                     console.error(e);
                 }
             } catch (e) {
-                console.log(e);
+                console.warn(e);
             }
         }
     }
