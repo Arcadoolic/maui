@@ -36,7 +36,7 @@
         "@vue/cli-service": "^3.4.0",
         "electron": "^3.0.0",
         "electron-rebuild": "^1.8.4",
-        "mame-hi-extractor": "^1.1.0",
+        "mame-hi-extractor": "^1.1.2",
         "typescript": "^3.3.3333",
         "vue-cli-plugin-electron-builder": "^1.0.0-rc.10",
         "vue-template-compiler": "^2.5.21"
