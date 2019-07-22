@@ -2,6 +2,7 @@ import MameHiExtractor from 'mame-hi-extractor';
 import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
+import * as Log from 'electron-log';
 
 export default class HiscoreService {
     protected hiExtractor!: MameHiExtractor;
@@ -62,10 +63,12 @@ export default class HiscoreService {
                         ignoreDuplicates: true,
                     });
                 } catch (e) {
-                    console.error(e);
+                    Log.error('[HiscoreService] Failed to save hiscores for id_game ' + game.id_game + ' in database.');
+                    Log.error(e);
                 }
             } catch (e) {
-                console.warn(e);
+                Log.error('[HiscoreService] Error on hiscores saving.');
+                Log.error(e);
             }
         }
     }

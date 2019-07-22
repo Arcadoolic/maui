@@ -40,6 +40,7 @@
     import {format} from 'url';
     import {EventBus} from '@/EventBus';
     import GameService from '@/class/GameService.class';
+    import * as Log from 'electron-log';
 
     @Component({
         components: {
@@ -192,12 +193,23 @@
         protected startGame() {
             const mameService = this.$store.getters.mameService;
             const hiService = this.$store.getters.hiscoreService;
-            mameService.startGame(this.selectedGame.romName).then((gameProcess) => {
-                gameProcess.on('close', async (e) => {
-                    await hiService.saveHiscores(this.selectedGame);
-                    EventBus.$emit('game-quit');
-                });
-            });
+            mameService.startGame(this.selectedGame.romName).then(
+                (gameProcess) => {
+                    gameProcess.on('close', async (e) => {
+                        try {
+                            await hiService.saveHiscores(this.selectedGame);
+                            EventBus.$emit('game-quit');
+                        } catch (e) {
+                            Log.error('[Home] Error on save hiscores for game ' + this.selectedGame.id_game + '.');
+                            Log.error(e);
+                        }
+                    });
+                },
+                (error) => {
+                    Log.error('[Home] Error on game ' + this.selectedGame.id_game + ' launch.');
+                    Log.error(error);
+                }
+            );
         }
 
         protected get isGameStarted() {
