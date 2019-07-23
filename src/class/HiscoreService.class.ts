@@ -57,10 +57,10 @@ export default class HiscoreService {
                         rank: score.rank,
                         score: score.score,
                     });
-                    Log.debug('[HiscoreService] Scores to save for game ' + game.id_game + '.');
-                    Log.debug(scoreToSave);
                 }
                 try {
+                    Log.debug('[HiscoreService] Scores to save for game ' + game.id_game + '.');
+                    Log.debug(scoreToSave);
                     game.hiscores = await Hiscore.bulkCreate(scoreToSave, {
                         ignoreDuplicates: true,
                     });
