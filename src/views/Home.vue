@@ -12,7 +12,7 @@
         </transition>
 
         <transition name="flyer">
-            <div class="flyer-container"  v-show="showFlyer">
+            <div class="flyer-container" v-show="showFlyer">
                 <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
             </div>
         </transition>
@@ -195,14 +195,12 @@
             const hiService = this.$store.getters.hiscoreService;
             mameService.startGame(this.selectedGame.romName).then(
                 (gameProcess) => {
-                    gameProcess.on('close', async (e) => {
-                        try {
-                            await hiService.saveHiscores(this.selectedGame);
-                            EventBus.$emit('game-quit');
-                        } catch (e) {
-                            Log.error('[Home] Error on save hiscores for game ' + this.selectedGame.id_game + '.');
-                            Log.error(e);
-                        }
+                    gameProcess.on('close', (e) => {
+                        hiService.saveHiscores(this.selectedGame).then(
+                            () => {
+                                EventBus.$emit('game-quit');
+                            }
+                        );
                     });
                 },
                 (error) => {
@@ -292,27 +290,35 @@
     .flyer-leave-active {
         transition: all .3s ease-in 0s;
     }
+
     .flyer-enter-active {
         transition: all .3s ease-out 0s;
     }
+
     .flyer-enter, .flyer-leave-to {
         margin-right: -100%;
     }
+
     .games-leave-active {
         transition: all .3s ease-in 0s;
     }
+
     .games-enter-active {
         transition: all .3s ease-out 0s;
     }
+
     .games-enter, .games-leave-to {
         margin-left: -100%;
     }
+
     .title-leave-active {
         transition: all .3s ease-in 0s;
     }
+
     .title-enter-active {
         transition: all .3s ease-out 0s;
     }
+
     .title-enter, .title-leave-to {
         margin-top: -100%;
     }
