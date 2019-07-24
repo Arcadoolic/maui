@@ -196,11 +196,9 @@
             mameService.startGame(this.selectedGame.romName).then(
                 (gameProcess) => {
                     gameProcess.on('close', (e) => {
-                        hiService.saveHiscores(this.selectedGame).then(
-                            () => {
-                                EventBus.$emit('game-quit');
-                            }
-                        );
+                        hiService.saveHiscores(this.selectedGame).then(() => {
+                            EventBus.$emit('game-quit');
+                        });
                     });
                 },
                 (error) => {
