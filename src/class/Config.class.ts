@@ -1,28 +1,34 @@
-import {existsSync, readFileSync} from 'fs';
-import {ConnectionConfig} from 'mysql';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {join} from 'path';
+import {remote} from 'electron';
 
 export default class Config {
-    protected _defaultMameIni: string = '/etc/mame/mame.ini';
-    protected _defaultGamesJsonPath: string = './games';
-    protected _defaultHiscoresJsonPath: string = './hiscores';
-    protected _defaultFaceyourmangaPath: string = './faceyourmanga';
-    protected _defaultDb: ConnectionConfig = {host: 'localhost', user: 'root', password: '', database: 'mame'};
+    public mamePath: string = '';
+    public mameBinaryName: string =  '';
+    public avatarsPath: string = '';
 
+    protected configPath!: string;
     protected _configLoaded: boolean = false;
-    protected _mameIniPath?: string;
-    protected _gamesJsonPath?: string;
-    protected _hiscoresJsonPath?: string;
-    protected _faceyourmangaPath?: string;
-    protected _db?: ConnectionConfig;
+
+    public constructor() {
+        this.configPath = join(
+            (process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData')),
+            'mame-awesome-ui-config.json',
+        );
+    }
+
+    public exist(): boolean {
+        return existsSync(this.configPath);
+    }
 
     public load(): boolean {
-        if (existsSync('./config.json')) {
-            const configFile = JSON.parse(readFileSync('./config.json', 'utf8'));
-            this._mameIniPath = configFile.mameIniPath;
-            this._gamesJsonPath = configFile.gamesJsonPath;
-            this._hiscoresJsonPath = configFile.hiscoresJsonPath;
-            this._faceyourmangaPath = configFile.faceyourmangaPath;
-            this._db = configFile.db;
+        if (existsSync(this.configPath)) {
+            const configFile = JSON.parse(readFileSync(this.configPath, 'utf8'));
+
+            this.mamePath = configFile.mamePath;
+            this.mameBinaryName = configFile.mameBinaryName;
+            this.avatarsPath = configFile.avatarsPath;
+
             this._configLoaded = true;
             return true;
         }
@@ -30,38 +36,21 @@ export default class Config {
     }
 
     public save() {
-        // Ici on ecrit le ficher de config
+        const userData = remote.app.getPath('userData');
+        writeFileSync(
+            join(
+                (process.env.NODE_ENV === 'development' ? '.' : userData),
+                'mame-awesome-ui-config.json',
+            ),
+            JSON.stringify({
+                mamePath: this.mamePath,
+                mameBinaryName: this.mameBinaryName,
+                avatarsPath: this.avatarsPath,
+            }),
+        );
     }
 
-    /**
-     * @return string
-     */
-    public get mameIniPath(): string {
-        return this._mameIniPath || this._defaultMameIni;
-    }
-
-    /**
-     * @return string
-     */
-    public get gamesJsonPath(): string {
-        return this._gamesJsonPath || this._defaultGamesJsonPath;
-    }
-
-    /**
-     * @return string
-     */
-    public get hiscoresJsonPath(): string {
-        return this._hiscoresJsonPath || this._defaultHiscoresJsonPath;
-    }
-
-    /**
-     * @return string
-     */
-    public get faceyourmangaPath(): string {
-        return this._faceyourmangaPath || this._defaultFaceyourmangaPath;
-    }
-
-    public get db(): ConnectionConfig {
-        return this._db || this._defaultDb;
+    public loaded() {
+        return this._configLoaded;
     }
 }

@@ -1,101 +1,218 @@
 <template>
-    <span class="home">
-        <div class="gameTitle" v-if="selectedGame">
-            <h1>{{selectedGame.shortname}}</h1>
-            <p>({{selectedGame.year}}, {{selectedGame.nplayerString}})</p>
-        </div>
+    <div class="home">
+        <transition name="title">
+            <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
+                <h1>{{selectedGame.shortname}}</h1>
+                <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
+            </div>
+        </transition>
 
-        <Games :selectedCategory="selectedCategory" @gameChange="gameChange"></Games>
-        <Categories @categoryChange="categoryChange"></Categories>
-        <GamepadsComponent></GamepadsComponent>
+        <transition name="games">
+            <Games :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
+        </transition>
+
+        <transition name="flyer">
+            <div class="flyer-container" v-show="showFlyer">
+                <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+            </div>
+        </transition>
+
+        <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
         <transition name="slide">
-            <Hiscores :game="selectedGame" v-if="selectedGame.hasHiscore && showHiscores"></Hiscores>
+            <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
         </transition>
-    </span>
-    <!--<button v-if="mame.isGameOn" @click.prevent="mame.stop()">Kill</button>-->
+    </div>
 
 </template>
 
 <script lang="ts">
-import {Component} from 'vue-property-decorator';
-import GameList from '@/class/GameList.class';
-import Categories from '@/components/Categories.vue';
-import Mame from '@/class/Mame.class';
-import GameCategory from '@/class/GameCategory.class';
-import Games from '@/components/Games.vue';
-import Game from '@/class/Game.class';
-import Gamepads from '@/class/Gamepads.class';
-import GamepadsComponent from '@/components/Gamepads.vue';
-import Hiscores from '@/components/Hiscores.vue';
-import ControllableVue from '@/ControllableVue.vue';
-import {remote} from 'electron';
+    import {Component} from 'vue-property-decorator';
+    import Categories from '@/components/Categories.vue';
+    import Games from '@/components/Games.vue';
+    import Gamepads from '@/class/Gamepads.class';
+    import Hiscores from '@/components/Hiscores.vue';
+    import ControllableVue from '@/ControllableVue';
+    import {remote} from 'electron';
+    import Game from '@/model/Game.model';
+    import Category from '@/model/Category.model';
+    import {join} from 'path';
+    import {format} from 'url';
+    import {EventBus} from '@/EventBus';
+    import GameService from '@/class/GameService.class';
+    import * as Log from 'electron-log';
 
-@Component({
-    components: {
-        Categories,
-        Games,
-        GamepadsComponent,
-        Hiscores,
-    },
-})
-export default class Home extends ControllableVue {
-    protected gameList = new GameList();
-    protected mame = new Mame();
-    protected selectedCategory: GameCategory|null = null;
-    protected selectedGameId: number = 0;
-    protected selectedGame: Game|null = null;
-    protected showHiscores: boolean = false;
-    protected closeTimeout: any = 0;
+    @Component({
+        components: {
+            Categories,
+            Games,
+            Hiscores,
+        },
+    })
+    export default class Home extends ControllableVue {
+        protected gameService!: GameService;
+        protected games: Game[] = [];
+        protected selectedGameIndex: number = 0;
 
-    public created() {
-        this.gameList = this.$store.getters.gameList;
-        this.mame = this.$store.getters.mame;
-        this.selectedCategory = this.gameList.getCategories()[0]; // Category ALL
-        this.selectedGame = this.selectedCategory.getGames()[0];
+        protected categories: Category[] = [];
+        protected selectedCategoryIndex: number = 0;
 
-        this.onKeydown((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-            switch (key) {
-                case 'Space':
-                    this.showHiscores = !this.showHiscores;
-                    this.closeTimeout = setTimeout(() => {
-                        remote.getCurrentWindow().close();
-                    }, 3000);
-                    break;
+        protected timeouts: {
+            quit?: number,
+            showGame?: number,
+            showFlyer?: number,
+        } = {};
+
+        protected showHiscores: boolean = false;
+        protected flyersPath: string = '';
+        protected flyers: string [] = [];
+        protected flyer: string = '';
+
+        protected showGames: boolean = true;
+        protected showTitle: boolean = true;
+        protected showFlyer: boolean = true;
+
+        public async created() {
+            if (!this.$store.getters.isInit) {
+                return this.$router.push({name: 'init'});
             }
-        });
 
-        this.onKeyup((e: Event, isGamepad: boolean) => {
-            const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-            switch (key) {
-                case 'Space':
-                    clearTimeout(this.closeTimeout);
-                    break;
+            remote.getCurrentWindow().setFullScreen(true);
+
+            const mameService = this.$store.getters.mameService;
+            this.gameService = this.$store.getters.gameService;
+            this.categories = await this.gameService.loadCategories();
+            this.games = await this.gameService.loadGames();
+
+            Gamepads.init();
+            this.registerKeyMapping();
+
+            this.flyersPath = mameService.flyerPath;
+            this.flyers = this.gameService.loadFlyers();
+            this.flyer = this.generateFlyerPath();
+        }
+
+        public mounted() {
+            remote.getCurrentWindow().setFullScreen(true);
+        }
+
+        protected registerKeyMapping() {
+            this.onKeydown((e, isGamepad) => {
+                const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+                switch (key) {
+                    case 'ArrowUp':
+                        this.onGameChange(true);
+                        break;
+                    case 'ArrowDown':
+                        this.onGameChange(false);
+                        break;
+                    case 'ArrowLeft':
+                        this.onCategoryChange(true);
+                        break;
+                    case 'ArrowRight':
+                        this.onCategoryChange(false);
+                        break;
+                    case 'Space':
+                        this.showHiscores = !this.showHiscores;
+                        this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
+                        break;
+                    case 'Enter':
+                        this.startGame();
+                        break;
+
+                }
+            });
+
+            this.onKeyup((e, isGamepad) => {
+                const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+                switch (key) {
+                    case 'Space':
+                        clearTimeout(this.timeouts.quit);
+                        break;
+                }
+            });
+        }
+
+        protected onGameChange(previous: boolean) {
+            const showFlyerFn = () => {
+                this.flyer = this.generateFlyerPath();
+                this.showFlyer = true;
+            };
+            this.showFlyer = false;
+            clearTimeout(this.timeouts.showFlyer);
+            this.timeouts.showFlyer = window.setTimeout(showFlyerFn, 300);
+            this.selectedGameIndex = previous ?
+                ((this.selectedGameIndex <= 0) ? this.games.length - 1 : this.selectedGameIndex - 1) :
+                ((this.selectedGameIndex >= this.games.length - 1) ? 0 : this.selectedGameIndex + 1);
+        }
+
+        protected onCategoryChange(previous: boolean) {
+            const showGameFn = async () => {
+                // Load games
+                this.games = (!this.selectedCategoryIndex) ? await this.gameService.loadGames() :
+                    await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
+
+                this.selectedGameIndex = 0;
+                this.flyer = this.generateFlyerPath();
+
+                this.showGames = true;
+                this.showTitle = true;
+                this.showFlyer = true;
+            };
+            this.showHiscores = false;
+            this.showTitle = false;
+            this.showFlyer = false;
+            this.showGames = false;
+            clearTimeout(this.timeouts.showGame); // Clear timeout if already exist
+            this.timeouts.showGame = window.setTimeout(showGameFn, 300); // In 300, execute all logic and show everyt
+            this.selectedCategoryIndex = previous ?
+                ((this.selectedCategoryIndex <= 0) ? this.categories.length : this.selectedCategoryIndex - 1) :
+                ((this.selectedCategoryIndex >= this.categories.length) ? 0 : this.selectedCategoryIndex + 1);
+        }
+
+        protected get selectedGame() {
+            return this.games[this.selectedGameIndex] || null;
+        }
+
+        protected generateFlyerPath(): string {
+            if (this.selectedGame) {
+                const i = this.flyers.indexOf(this.selectedGame.romName + '.png');
+                const path = i < 0 ? null : join(this.flyersPath, this.flyers[i]);
+                if (!path) {
+                    return '';
+                }
+                return format({
+                    pathname: path,
+                    protocol: 'file',
+                    slashes: true,
+                });
             }
-        });
+            return '';
+        }
 
-        Gamepads.init();
-    }
+        protected startGame() {
+            const mameService = this.$store.getters.mameService;
+            const hiService = this.$store.getters.hiscoreService;
+            mameService.startGame(this.selectedGame.romName).then(
+                (gameProcess) => {
+                    gameProcess.on('close', (e) => {
+                        hiService.saveHiscores(this.selectedGame).then(() => {
+                            EventBus.$emit('game-quit');
+                        });
+                    });
+                },
+                (error) => {
+                    Log.error('[Home] Error on game ' + this.selectedGame.id_game + ' launch.');
+                    Log.error(error);
+                }
+            );
+        }
 
-    /**
-     * Called when categoryChange event is triggered on Categories component
-     * @param categoryId
-     */
-    protected categoryChange(categoryId: number) {
-        this.selectedCategory = this.gameList.getCategories()[categoryId];
-        this.showHiscores = false;
+        protected get isGameStarted() {
+            const mameService = this.$store.getters.mameService;
+            return mameService.isGameStarted;
+        }
     }
-
-    /**
-     * Called when gameChange event is triggered on Games component
-     * @param gameId
-     */
-    protected gameChange(gameId: number) {
-        this.selectedGameId = gameId;
-        this.selectedGame = this.selectedCategory!.getGames()[gameId];
-    }
-}
 </script>
 
 <style scoped>
@@ -104,7 +221,7 @@ export default class Home extends ControllableVue {
         width: 100%;
         height: 100%;
         background-color: #000000;
-        background-image:  url(../assets/background.jpg);
+        background-image: url(../assets/background.jpg);
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
@@ -117,36 +234,90 @@ export default class Home extends ControllableVue {
         text-align: center;
         background: linear-gradient(to bottom, rgb(35, 10, 0) -30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
         color: #fff513;
-        font-size: 2.5vw;/*45px;*/
+        font-size: 2.5vw; /*45px;*/
         padding: 26px;
         font-family: 'Arcade_I', sans-serif;
         perspective: 460px;
         perspective-origin: 50% 50%;
-        text-shadow:
-            0 0 30px rgba(237, 106, 10, 0.8),
-            0 3px 0 rgb(255, 81, 0),
-            0 5px 20px rgba(255, 81, 0, 0.5),
-            0 6px 5px rgba(242, 0, 10, 0.7),
-            0 12px 16px rgba(0, 0, 0, 1),
-            6px 12px 9px rgba(0, 0, 0, 1);
+        text-shadow: 0 0 30px rgba(237, 106, 10, 0.8),
+        0 3px 0 rgb(255, 81, 0),
+        0 5px 20px rgba(255, 81, 0, 0.5),
+        0 6px 5px rgba(242, 0, 10, 0.7),
+        0 12px 16px rgba(0, 0, 0, 1),
+        6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
-        .gameTitle > * {
-            transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
-        }
-        .gameTitle p {
-            line-height: 3em;
-            font-size: 1vw;
-        }
+
+    .gameTitle > * {
+        transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
+    }
+
+    .gameTitle p {
+        line-height: 3em;
+        font-size: 1vw;
+    }
 
     .slide-leave-active {
         transition: margin-bottom .3s ease-in 0s;
     }
+
     .slide-enter-active {
         transition: margin-bottom .3s ease-out 0s;
     }
 
-    .slide-enter, .slide-leave-to{
+    .slide-enter, .slide-leave-to {
         margin-bottom: -100%;
+    }
+
+    .flyer-container {
+        position: absolute;
+        right: -3%;
+        top: -5%;
+        bottom: -5%;
+        width: 40%;
+    }
+
+    .flyer {
+        width: 100%;
+        height: 100%;
+        transform: rotateZ(-4deg);
+        background-repeat: no-repeat;
+        background-size: cover;
+    }
+
+    .flyer-leave-active {
+        transition: all .3s ease-in 0s;
+    }
+
+    .flyer-enter-active {
+        transition: all .3s ease-out 0s;
+    }
+
+    .flyer-enter, .flyer-leave-to {
+        margin-right: -100%;
+    }
+
+    .games-leave-active {
+        transition: all .3s ease-in 0s;
+    }
+
+    .games-enter-active {
+        transition: all .3s ease-out 0s;
+    }
+
+    .games-enter, .games-leave-to {
+        margin-left: -100%;
+    }
+
+    .title-leave-active {
+        transition: all .3s ease-in 0s;
+    }
+
+    .title-enter-active {
+        transition: all .3s ease-out 0s;
+    }
+
+    .title-enter, .title-leave-to {
+        margin-top: -100%;
     }
 </style>

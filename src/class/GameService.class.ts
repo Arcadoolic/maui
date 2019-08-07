@@ -1,15 +1,11 @@
-import Config from '@/class/Config.class';
 import {join} from 'path';
-import {existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync} from 'fs';
-import Mame from '@/class/Mame.class';
+import {readFileSync, readdirSync} from 'fs';
 import {parse as iniParse} from 'ini';
-import GameList from '@/class/GameList.class';
-import {format} from 'url';
-import Helpers from '@/class/Helpers.class';
+import Game from '@/model/Game.model';
+import MameService from '@/class/MameService.class';
+import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
-import IPDDatabase from '@/class/IPDDatabase.class';
-import {appendFileSync} from 'fs';
-import FileLogger from '@/class/FileLogger.class';
+
 
 declare const __static: string;
 
@@ -36,44 +32,88 @@ export default class GameService {
         '9P alt': {sim: 0, alt: 9},
     };
 
-    protected config!: Config;
-    protected mame!: Mame;
-    protected gameList!: GameList;
-    protected hiscores!: HiscoreService;
-    protected db!: IPDDatabase;
-    protected logger!: FileLogger;
+    protected games?: Game[];
+    protected mameService!: MameService;
+    protected hiService!: HiscoreService;
 
-
-    public constructor(
-        config: Config,
-        mame: Mame,
-        gameList: GameList,
-        hiscores: HiscoreService,
-        db: IPDDatabase,
-        logger: FileLogger,
-    ) {
-        this.config = config;
-        this.mame = mame;
-        this.gameList = gameList;
-        this.hiscores = hiscores;
-        this.db = db;
-        this.logger = logger;
+    public constructor(mameService: MameService, hiService: HiscoreService) {
+        this.mameService = mameService;
+        this.hiService = hiService;
     }
 
     /**
-     * Get a game genre from genre.ini file
-     * @param romName
+     * Save games in database
+     * @param romNames
      */
-    public getGameGenre(romName: string) {
+    public async saveGamesFromRomNames(romNames: string[]) {
+        const existingGames = (await Game.findAll()).map((game) => {
+            return game.romName;
+        });
+        // TODO : What to do if rom is invalid ?
+        const games: any[] = [];
+        for (const romName of romNames) {
+            if (existingGames.indexOf(romName) >= 0) {
+                continue;
+            }
+
+            // Get game information from mame
+            const gameInformation = this.mameService.getGameInformation(romName);
+
+            // Extract shortname and subname
+            let shortname = gameInformation.description;
+            let subname = '';
+            const shortnameRegexp = /^(.[^(]*)/g.exec(gameInformation.description);
+            if (shortnameRegexp) {
+                shortname = shortnameRegexp[0].trim().replace(/&amp;/g, '&');
+                const subnameRegexp = /^([^\-\/]*)(:\s+|\s+-\s+|\s+\/\s+)(.*)$/.exec(shortname);
+                if (subnameRegexp) {
+                    shortname = subnameRegexp.splice(0, 3)[1];
+                    subname = subnameRegexp[0];
+                }
+            }
+
+            // Get player numbers
+            const players = this.getGameNplayers(romName);
+            games.push({
+                id_category: this.getGameCategoryId(romName),
+                romName,
+                fullname: gameInformation.description,
+                shortname,
+                subname,
+                manufacturer: gameInformation.manufacturer,
+                year: gameInformation.year,
+                hi: this.hiService.hasHiscore(romName),
+                player_alt: players.alt,
+                player_sim: players.sim,
+            });
+        }
+        return await Game.bulkCreate(games);
+    }
+
+    /**
+     * Load and parse genre.ini file
+     */
+    public getGameCategories() {
         if (!GameService.genreIni) {
             GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
         }
-        for (const genre in GameService.genreIni) {
-            if (GameService.genreIni[genre][romName]) {
-                return genre;
+        return GameService.genreIni;
+    }
+
+    /**
+     * Return category id for a romName
+     * @param romName
+     */
+    public getGameCategoryId(romName: string) {
+        if (!GameService.genreIni) {
+            GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
+        }
+        const categories = Object.keys(GameService.genreIni);
+        for (const category in GameService.genreIni) {
+            if (GameService.genreIni[category][romName]) {
+                return categories.indexOf(category) + 1;
             }
         }
-        return null;
     }
 
     /**
@@ -101,172 +141,46 @@ export default class GameService {
     }
 
     /**
-     * Check if game.xml exist in hi2txt
-     * @param romName
+     * Load games from database
      */
-    public isGameHaveHiscore(romName: string): boolean {
-        const hi2txtPath = join(process.env.NODE_ENV === 'development'
-            ? './resources' : process.resourcesPath!, 'hi2txt');
-        return existsSync(join(hi2txtPath, 'hi2txt', romName + '.xml'));
+    public async loadGames() {
+        if (this.games === undefined) {
+            this.games = await Game.findAll({
+                order: ['romName'],
+            });
+        }
+        return this.games;
     }
 
     /**
-     * Create a Game object from a rom name
-     * @param romName
-     * @param force
+     * Load categories from database
      */
-    public gameJsonFromRomName(romName: string): GameJSON {
-        const fileName = romName + '.json';
-        if (!this.mame.isRomValid(romName)) {
-            throw new Error('Rom not valid');
-        }
-
-        const infoFromMameXml = this.mame.getGameInfoFromMameXML(romName);
-        if (!infoFromMameXml) {
-            throw new Error('Cant get xml');
-        }
-
-        const shortnameRegexp = /^(.[^\(]*)/g.exec(infoFromMameXml.description);
-        let shortname: string | null = null;
-        let subname: string | null = null;
-        if (shortnameRegexp) {
-            shortname = shortnameRegexp[0].trim().replace(/&amp;/g, '&');
-            const subnameRegexp = /^([^\-\/]*)(:\s+|\s+\-\s+|\s+\/\s+)(.*)$/.exec(shortname);
-            if (subnameRegexp) {
-                shortname = subnameRegexp.splice(0, 3)[1];
-                subname = subnameRegexp[0];
-            }
-        }
-        return {
-            fullname: infoFromMameXml.description,
-            shortname: shortname || '',
-            subname: subname || '',
-            manufacturer: infoFromMameXml.manufacturer,
-            year: infoFromMameXml.year,
-            hi: this.isGameHaveHiscore(romName),
-            romName,
-            nplayers: this.getGameNplayers(romName),
-            category: this.getGameGenre(romName),
-            parent: this.mame.getRomParent(romName),
-        };
-    }
-
-    /**
-     * Delete game.json if no more in favorite and add new ones
-     * @param force
-     */
-    public refreshGameDir(force = false) {
-        if (!existsSync(this.config.gamesJsonPath)) {
-            mkdirSync(this.config.gamesJsonPath);
-        }
-        const favoriteList = this.mame.getFavorites();
-
-        const toDelete = this.gameList.getGameNames().filter((i) => {
-            return favoriteList.indexOf(i) < 0;
+    public async loadCategories() {
+        return await Category.findAll({
+            order: ['name'],
+            include: [{model: Game, required: true}],
         });
-        for (const gameName of toDelete) {
-            unlinkSync(join(this.config.gamesJsonPath, gameName + '.json'));
-        }
-
-        const errors: { [romName: string]: Error } = {};
-        for (const romName of favoriteList) {
-            if (!force && existsSync(join(this.config.gamesJsonPath, romName + '.json'))) {
-                continue;
-            }
-            try {
-                const game = this.gameJsonFromRomName(romName);
-                writeFileSync(join(this.config.gamesJsonPath, game.romName + '.json'), JSON.stringify(game));
-            } catch (e) {
-                errors[romName] = e;
-            }
-        }
-        return errors;
     }
 
-    public loadGamesMarquee() {
-        const marqueesPath = Helpers.getFirstExistingDirectory(
-            this.mame.mameUiConfig.marquees_directory,
-            this.mame.mameUiPath);
-
-        if (!marqueesPath) {
-            throw new Error('Cannot find marquees directory - ' + this.mame.mameUiConfig.marquees_directory.join('|'));
+    /**
+     * Read marquees dir
+     */
+    public loadMarquees() {
+        if (this.mameService.uiIni && this.mameService.uiIni.marquees_directory) {
+            const marqueesDirectory = this.mameService.marqueePath;
+            return marqueesDirectory ? readdirSync(marqueesDirectory) : [];
         }
-
-        for (const game of this.gameList.getGames()) {
-            const marqueePath = join(marqueesPath, game.romName + '.png');
-            const parentMarqueePath = join(marqueesPath, game.parent + '.png');
-
-            let path: string | null = null;
-            if (existsSync(marqueePath)) {
-                path = marqueePath;
-            } else if (existsSync(parentMarqueePath)) {
-                path = parentMarqueePath;
-            }
-
-            if (path) {
-                game.marquee = format({
-                    pathname: path,
-                    protocol: 'file',
-                    slashes: true,
-                });
-            }
-        }
+        return [];
     }
 
-    public loadGamesFlyers() {
-        const flyersPath = Helpers.getFirstExistingDirectory(
-            this.mame.mameUiConfig.flyers_directory,
-            this.mame.mameUiPath);
-        if (!flyersPath) {
-            throw new Error('Cannot find flyers directory ' + this.mame.mameUiConfig.flyers_directory.join('|'));
+    /**
+     * Read flyers dir
+     */
+    public loadFlyers() {
+        if (this.mameService.uiIni && this.mameService.uiIni.flyers_directory) {
+            const flyerDirectory = this.mameService.flyerPath;
+            return flyerDirectory ? readdirSync(flyerDirectory) : [];
         }
-
-        for (const game of this.gameList.getGames()) {
-            const flyerPath = join(flyersPath, game.romName + '.png');
-            const parentFlyerPath = join(flyersPath, game.parent + '.png');
-
-            let path: string | null = null;
-            if (existsSync(flyerPath)) {
-                path = flyerPath;
-            } else if (existsSync(parentFlyerPath)) {
-                path = parentFlyerPath;
-            }
-
-            if (path) {
-                game.flyer = format({
-                    pathname: path,
-                    protocol: 'file',
-                    slashes: true,
-                });
-            }
-        }
+        return [];
     }
-
-    public async loadHiscores() {
-        if (!existsSync(this.config.hiscoresJsonPath)) {
-            mkdirSync(this.config.hiscoresJsonPath);
-        }
-
-        const promises: any[] = [];
-        for (const game of this.gameList.getGames()) {
-            if (!game.hasHiscore) {
-                continue;
-            }
-            promises.push(new Promise(async (resolve, reject) => {
-                try {
-                    game.hiscores.season = await this.hiscores.getHiscore(game.romName);
-                    if (game.hiscores.season.classic[0]) {
-                        await this.db.saveHiscores(game.romName, game.hiscores.season.classic[0]);
-                    }
-                    game.hiscores.allTime = await this.db.getAllTime(game.romName);
-                    await this.hiscores.saveHiscore(game.romName, game.hiscores);
-                } catch (e) {
-                    this.logger.logError('[' + game.romName + ']' + e);
-                }
-                resolve();
-            }));
-        }
-        return Promise.all(promises);
-    }
-
 }

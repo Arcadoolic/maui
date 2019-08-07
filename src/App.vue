@@ -1,16 +1,5 @@
 <template>
     <div id="app">
-        <!--<nav :class="{hovered: verticalSelect == 0}">-->
-            <!--<router-link to="/">-->
-                <!--<p>Home</p>-->
-            <!--</router-link>-->
-            <!--<router-link to="/">-->
-                <!--<p>Search</p>-->
-            <!--</router-link>-->
-            <!--<router-link to="/">-->
-                <!--<p>Options</p>-->
-            <!--</router-link>-->
-        <!--</nav>-->
         <router-view :focused="focused"></router-view>
     </div>
 </template>

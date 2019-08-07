@@ -1,6 +1,7 @@
 import * as os from 'os';
 import {join, sep} from 'path';
 import {existsSync} from 'fs';
+import {remote} from 'electron';
 
 export default class Helpers {
 
@@ -12,7 +13,7 @@ export default class Helpers {
      */
     public static getFirstExistingDirectory(paths: string[], parentPath?: string|null, file?: string): string|null {
         for (let path of paths) {
-            path = path.replace('$HOME', os.homedir);
+            path = path.replace(/\$HOME|~/, os.homedir);
             if (path[0] !== '/' && parentPath) {
                 parentPath = parentPath.replace('$HOME', os.homedir);
                 const parentPathArray = parentPath.split(sep);
@@ -33,5 +34,9 @@ export default class Helpers {
             }
         }
         return null;
+    }
+
+    public static getUserDataPath() {
+        return process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData');
     }
 }

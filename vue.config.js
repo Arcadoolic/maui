@@ -1,16 +1,11 @@
 module.exports = {
     pluginOptions: {
         electronBuilder: {
+            externals: ['sqlite3', 'sequelize'],
             builderOptions: {
-                appId: "mame.frontend",
-                productName: "Mame Frontend",
+                appId: "mame-awesome-ui",
+                productName: "mame-awesome-ui",
                 asar: true,
-                extraResources: [
-                    {
-                        "from": "resources/hi2txt/",
-                        "to": "hi2txt/"
-                    }
-                ],
                 linux: {
                     category: "Game"
                 }
