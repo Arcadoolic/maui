@@ -2,6 +2,7 @@ import MameHiExtractor from 'mame-hi-extractor';
 import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
+import * as Log from 'electron-log';
 
 export default class HiscoreService {
     protected hiExtractor!: MameHiExtractor;
@@ -46,7 +47,7 @@ export default class HiscoreService {
 
                 const scoreToSave: any[] = [];
                 for (const score of hiscore.default) {
-                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3));
+                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3).toUpperCase());
                     if (!user) {
                         continue;
                     }
@@ -58,14 +59,18 @@ export default class HiscoreService {
                     });
                 }
                 try {
+                    Log.debug('[HiscoreService] Scores to save for game ' + game.id_game + '.');
+                    Log.debug(scoreToSave);
                     game.hiscores = await Hiscore.bulkCreate(scoreToSave, {
                         ignoreDuplicates: true,
                     });
                 } catch (e) {
-                    console.error(e);
+                    Log.error('[HiscoreService] Failed to save hiscores for id_game ' + game.id_game + ' in database.');
+                    Log.error(e);
                 }
             } catch (e) {
-                console.log(e);
+                Log.error('[HiscoreService] Error on hiscores saving.');
+                Log.error(e);
             }
         }
     }

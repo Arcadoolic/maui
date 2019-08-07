@@ -137,7 +137,11 @@ export default class MameService {
                 cwd: this.iniPath,
             }, (error, stdout, stderr) => {
                 if (error) {
-                    return reject();
+                    return reject(error);
+                }
+
+                if (stderr) {
+                    return reject(stderr);
                 }
             });
             this.gameProcess.on('close', (e) => {

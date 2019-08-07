@@ -12,7 +12,7 @@
         </transition>
 
         <transition name="flyer">
-            <div class="flyer-container"  v-show="showFlyer">
+            <div class="flyer-container" v-show="showFlyer">
                 <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
             </div>
         </transition>
@@ -40,6 +40,7 @@
     import {format} from 'url';
     import {EventBus} from '@/EventBus';
     import GameService from '@/class/GameService.class';
+    import * as Log from 'electron-log';
 
     @Component({
         components: {
@@ -192,12 +193,19 @@
         protected startGame() {
             const mameService = this.$store.getters.mameService;
             const hiService = this.$store.getters.hiscoreService;
-            mameService.startGame(this.selectedGame.romName).then((gameProcess) => {
-                gameProcess.on('close', async (e) => {
-                    await hiService.saveHiscores(this.selectedGame);
-                    EventBus.$emit('game-quit');
-                });
-            });
+            mameService.startGame(this.selectedGame.romName).then(
+                (gameProcess) => {
+                    gameProcess.on('close', (e) => {
+                        hiService.saveHiscores(this.selectedGame).then(() => {
+                            EventBus.$emit('game-quit');
+                        });
+                    });
+                },
+                (error) => {
+                    Log.error('[Home] Error on game ' + this.selectedGame.id_game + ' launch.');
+                    Log.error(error);
+                }
+            );
         }
 
         protected get isGameStarted() {
@@ -280,27 +288,35 @@
     .flyer-leave-active {
         transition: all .3s ease-in 0s;
     }
+
     .flyer-enter-active {
         transition: all .3s ease-out 0s;
     }
+
     .flyer-enter, .flyer-leave-to {
         margin-right: -100%;
     }
+
     .games-leave-active {
         transition: all .3s ease-in 0s;
     }
+
     .games-enter-active {
         transition: all .3s ease-out 0s;
     }
+
     .games-enter, .games-leave-to {
         margin-left: -100%;
     }
+
     .title-leave-active {
         transition: all .3s ease-in 0s;
     }
+
     .title-enter-active {
         transition: all .3s ease-out 0s;
     }
+
     .title-enter, .title-leave-to {
         margin-top: -100%;
     }

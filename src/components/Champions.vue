@@ -19,6 +19,7 @@
     import {join} from 'path';
     import {format} from 'url';
     import {EventBus} from '@/EventBus';
+    import {Sequelize} from 'sequelize-typescript';
 
     @Component
     export default class Champions extends Vue {
@@ -44,7 +45,7 @@
             this.loading = true;
             this.champions = await this.game.$get(
                 'hiscores',
-                {include: [{model: User}], limit: 3, order: [['score', 'DESC']], group: ['user.id_user']},
+                {include: [{model: User}], attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]}, limit: 3, order: [['score', 'DESC']], group: ['user.id_user']},
             ) as Hiscore[] || [];
             this.champions = this.champions.reverse();
             this.loading = false;
