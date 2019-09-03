@@ -1,6 +1,5 @@
 import {BelongsTo, Column, DataType, ForeignKey, HasMany, HasOne, Model, Table} from 'sequelize-typescript';
 import Category from './Category.model';
-import Hiscores from '@/components/Hiscores.vue';
 import Hiscore from '@/model/Hiscore.model';
 
 @Table({
