@@ -6,6 +6,7 @@ import {
     installVueDevtools
 } from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
+import api from '@/api/api';
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
@@ -68,6 +69,7 @@ app.on('ready', async () => {
         await installVueDevtools();
     }
     win = createSplashWin();
+    api();
 });
 
 // Exit cleanly on request from parent process in development mode.
