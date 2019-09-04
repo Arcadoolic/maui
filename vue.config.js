@@ -6,7 +6,7 @@ module.exports = {
             chainWebpackMainProcess: config => {
                 config.resolve.alias.set('@', path.join(__dirname, 'src'))
             },
-             mainProcessWatch: ['src/api/api.ts'],
+            mainProcessWatch: ['src/api/api.ts'],
             externals: ['sqlite3', 'sequelize'],
             builderOptions: {
                 appId: "mame-awesome-ui",
