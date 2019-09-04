@@ -39,8 +39,9 @@
             if (!database.exist()) {
                 // Create and fill database file if not existing
                 await database.install(gameService);
+            } else {
+                await database.update();
             }
-            await database.update();
 
             // Save new games
             const romList = mameService.getRomListFromFavorites();
