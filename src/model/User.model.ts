@@ -48,6 +48,12 @@ export default class User extends Model<User> {
     })
     public email?: string;
 
+    @Column({
+        type: DataType.BOOLEAN,
+        defaultValue: 0
+    })
+    public active!: boolean;
+
     @HasMany(() => Hiscore)
     public hiscores!: Hiscore[];
 
