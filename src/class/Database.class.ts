@@ -1,5 +1,5 @@
 import {existsSync} from 'fs';
-import {join} from 'path';
+import {join, basename} from 'path';
 import {remote} from 'electron';
 import {Sequelize} from 'sequelize-typescript';
 import Category from '@/model/Category.model';
@@ -7,6 +7,8 @@ import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
+import Umzug from 'umzug';
+import * as Log from 'electron-log';
 
 export default class Database {
     protected databasePath!: string;
@@ -43,5 +45,45 @@ export default class Database {
 
     public get sequelize(): Sequelize {
         return this._sequelize;
+    }
+
+    /**
+     * Perform all migrations and seeds
+     */
+    public async update() {
+        return new Promise((resolve, reject) => {
+            const umzug = new Umzug({
+                storage: 'sequelize',
+                storageOptions: {
+                    sequelize: this.sequelize
+                },
+                migrations: {
+                    params: [
+                        this.sequelize.getQueryInterface(),
+                        Sequelize,
+                        function() {
+                            throw new Error('Migration tried to use old style "done" callback.');
+                        }
+                    ],
+                    path: './migrations',
+                    pattern: /\.js$/,
+                    customResolver(path: string): { up: () => PromiseLike<any>; down?: () => PromiseLike<any> } {
+                        return require('../../migrations/' + basename(path, '.js'));
+                    }
+                }
+            });
+
+            umzug.up().then((migrations) => {
+                for (let migration of migrations) {
+                    Log.log('[Database] Migration "' + migration.file + "' success.");
+                }
+                resolve();
+            })
+            .catch((error) => {
+                Log.error('[Migration] Error on migration.');
+                Log.error(error);
+                reject(error);
+            });
+        })
     }
 }
