@@ -1,4 +1,4 @@
-# Mame UI Awesome
+# Mame Awesome UI
 
 This project is a Frontend for the emulation framework MAME.
 
