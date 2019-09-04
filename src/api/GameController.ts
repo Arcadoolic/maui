@@ -1,6 +1,5 @@
-import {Request, Response} from "express";
-import Game from "@/model/Game.model";
-import Games from "@/components/Games.vue";
+import {Request, Response} from 'express';
+import Game from '@/model/Game.model';
 
 export default class GameController
 {

@@ -1,6 +1,6 @@
-import {Request, Response} from "express";
-import User from "@/model/User.model";
-import Hiscore from "@/model/Hiscore.model";
+import {Request, Response} from 'express';
+import User from '@/model/User.model';
+import Hiscore from '@/model/Hiscore.model';
 
 export default class UserController
 {

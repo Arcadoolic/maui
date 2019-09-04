@@ -1,8 +1,7 @@
 import express from 'express';
-import User from '../model/User.model';
-import Database from "../class/Database.class";
-import UserController from "@/api/UserController";
-import GameController from "@/api/GameController";
+import Database from '@/class/Database.class';
+import UserController from '@/api/UserController';
+import GameController from '@/api/GameController';
 
 export default function() {
     const api: express.Application = express();
