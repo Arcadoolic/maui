@@ -3,10 +3,10 @@ import Database from '@/class/Database.class';
 import UserController from '@/api/UserController';
 import GameController from '@/api/GameController';
 
-export default function() {
+export default function(userDataPath: string) {
     const api: express.Application = express();
 
-    const db = new Database(); // Init db
+    const db = new Database(userDataPath); // Init db
 
     // Users routes
     api.get('/api/users', UserController.getUsers);
