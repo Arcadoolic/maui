@@ -1,6 +1,5 @@
 import {existsSync} from 'fs';
 import {join, basename} from 'path';
-import {remote} from 'electron';
 import {Sequelize} from 'sequelize-typescript';
 import Category from '@/model/Category.model';
 import GameService from '@/class/GameService.class';
@@ -14,10 +13,9 @@ export default class Database {
     protected databasePath!: string;
     protected _sequelize!: Sequelize;
 
-    public constructor() {
+    public constructor(userDataPath: string) {
         this.databasePath = join(
-            (process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData')),
-            'mame-awesome-ui.sqlite',
+            (process.env.NODE_ENV === 'development' ? '.' : userDataPath), 'mame-awesome-ui.sqlite',
         );
         this._sequelize = new Sequelize({
             dialect: 'sqlite',

@@ -10,10 +10,12 @@ export default class Config {
     protected configPath!: string;
     protected _configLoaded: boolean = false;
 
-    public constructor() {
+    protected userDataPath!: string;
+
+    public constructor(userDataPath: string) {
+        this.userDataPath = userDataPath;
         this.configPath = join(
-            (process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData')),
-            'mame-awesome-ui-config.json',
+            (process.env.NODE_ENV === 'development' ? '.' : userDataPath), 'mame-awesome-ui-config.json',
         );
     }
 
@@ -36,7 +38,7 @@ export default class Config {
     }
 
     public save() {
-        const userData = remote.app.getPath('userData');
+        const userData = this.userDataPath;
         writeFileSync(
             join(
                 (process.env.NODE_ENV === 'development' ? '.' : userData),
