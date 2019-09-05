@@ -69,7 +69,7 @@ app.on('ready', async () => {
         await installVueDevtools();
     }
     win = createSplashWin();
-    api();
+    api(app.getPath('userData'));
 });
 
 // Exit cleanly on request from parent process in development mode.
