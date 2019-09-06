@@ -8,10 +8,13 @@ module.exports = {
      * @return {Promise<Object>}
      */
     up: (queryInterface, Sequelize) => {
-        return Promise.all([
-            queryInterface.addColumn('user', 'active', {type: Sequelize.BOOLEAN, defaultValue: 0}),
-            queryInterface.bulkUpdate('user', {active: 1}, {})
-        ])
+        return queryInterface.describeTable('user').then(userTable => {
+            if (userTable.active) return Promise.resolve();
+            return Promise.all([
+                queryInterface.addColumn('user', 'active', {type: Sequelize.BOOLEAN, defaultValue: 0}),
+                queryInterface.bulkUpdate('user', {active: 1}, {})
+            ])
+        })
     },
 
     down: (queryInterface, Sequelize) => {
