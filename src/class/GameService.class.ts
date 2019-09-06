@@ -53,6 +53,10 @@ export default class GameService {
         const games: any[] = [];
         for (const romName of romNames) {
             if (existingGames.indexOf(romName) >= 0) {
+                games.push({
+                    romName,
+                    hi: this.hiService.hasHiscore(romName)
+                });
                 continue;
             }
 
@@ -87,7 +91,9 @@ export default class GameService {
                 player_sim: players.sim,
             });
         }
-        return await Game.bulkCreate(games);
+        await Game.bulkCreate(games, {
+            updateOnDuplicate: ['romName']
+        });
     }
 
     /**
