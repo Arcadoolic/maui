@@ -22,6 +22,8 @@
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
         </transition>
+
+        <user-registration v-if="showAddUser"></user-registration>
     </div>
 
 </template>
@@ -41,12 +43,14 @@
     import {EventBus} from '@/EventBus';
     import GameService from '@/class/GameService.class';
     import * as Log from 'electron-log';
+    import UserRegistration from "@/components/userRegistration.vue";
 
     @Component({
         components: {
             Categories,
             Games,
             Hiscores,
+            UserRegistration
         },
     })
     export default class Home extends ControllableVue {
@@ -71,6 +75,8 @@
         protected showGames: boolean = true;
         protected showTitle: boolean = true;
         protected showFlyer: boolean = true;
+
+        protected showAddUser: boolean = true;
 
         public async created() {
             if (!this.$store.getters.isInit) {
@@ -102,6 +108,9 @@
 
         protected registerKeyMapping() {
             this.onKeydown((e, isGamepad) => {
+                if (this.showAddUser) {
+                    return;
+                }
                 const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
                 switch (key) {
                     case 'ArrowUp':
@@ -128,6 +137,9 @@
             });
 
             this.onKeyup((e, isGamepad) => {
+                if (this.showAddUser) {
+                    return;
+                }
                 const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
                 switch (key) {
                     case 'Space':
