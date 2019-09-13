@@ -1,16 +1,25 @@
 import {Request, Response} from 'express';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
+import Controller from "@/api/Controller";
+import {IpcMain, BrowserWindow} from 'electron'
 
-export default class UserController
+export default class UserController extends Controller
 {
-    public static getUsers(request: Request, response: Response) {
+    constructor(userDataPath: string, ipcMain: IpcMain, window: BrowserWindow) {
+        super(userDataPath, ipcMain, window);
+        this.getUsers = this.getUsers.bind(this);
+        this.getUserById = this.getUserById.bind(this);
+        this.getScoresByIdGame = this.getScoresByIdGame.bind(this);
+    }
+
+    public getUsers(request: Request, response: Response) {
         User.findAll().then((users: User[]) => {
             return response.json(users)
         });
     }
 
-    public static getUserById(request: Request, response: Response) {
+    public getUserById(request: Request, response: Response) {
         User.findByPk(request.params.id_user).then((user: User|null) => {
             if (user) {
                 return response.json(user);
@@ -19,7 +28,7 @@ export default class UserController
         });
     }
 
-    public static getScoresByIdGame(request: Request, response: Response) {
+    public getScoresByIdGame(request: Request, response: Response) {
         Hiscore.findAll({
             where: {
                 id_user: request.params.id_user,
