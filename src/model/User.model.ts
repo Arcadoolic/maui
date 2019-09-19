@@ -19,8 +19,9 @@ export default class User extends Model<User> {
         type: DataType.TEXT,
         comment: 'User 2 characters pseudonyme',
         unique: true,
+        allowNull: true,
         validate: {
-            len: [1, 2],
+            len: [1, 2]
         },
     })
     public pseudo_2!: string;
