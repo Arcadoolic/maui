@@ -14,7 +14,13 @@ module.exports = {
                 asar: true,
                 linux: {
                     category: "Game"
-                }
+                },
+                extraResources: [
+                    {
+                        "from": "migrations/",
+                        "to": "migrations/"
+                    }
+                ],
             }
         }
     }
