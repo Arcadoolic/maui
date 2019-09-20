@@ -28,6 +28,7 @@ export default class App extends Vue {
 }
 </script>
 
+<style src="./assets/font-awesome/css/all.min.css"></style>
 <style>
     /***************************************/
     /*/////////////// BASE ////////////////*/
