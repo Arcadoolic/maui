@@ -1,5 +1,13 @@
 <template>
     <div class="home">
+        <modal v-if="showLoader">
+            <p>{{loaderTitle}}</p>
+            <loader :duration="loaderDuration"></loader>
+        </modal>
+
+
+        <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
+
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
                 <h1>{{selectedGame.shortname}}</h1>
@@ -22,8 +30,6 @@
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
         </transition>
-
-        <user-registration v-if="showAddUser"></user-registration>
     </div>
 
 </template>
@@ -44,13 +50,17 @@
     import GameService from '@/class/GameService.class';
     import * as Log from 'electron-log';
     import UserRegistration from "@/components/userRegistration.vue";
+    import Loader from "@/components/Loader.vue";
+    import Modal from "@/components/Modal.vue";
 
     @Component({
         components: {
             Categories,
             Games,
             Hiscores,
-            UserRegistration
+            UserRegistration,
+            Loader,
+            Modal
         },
     })
     export default class Home extends ControllableVue {
@@ -65,6 +75,7 @@
             quit?: number,
             showGame?: number,
             showFlyer?: number,
+            addPlayer?: number,
         } = {};
 
         protected showHiscores: boolean = false;
@@ -75,8 +86,11 @@
         protected showGames: boolean = true;
         protected showTitle: boolean = true;
         protected showFlyer: boolean = true;
+        protected showLoader: boolean = false;
+        protected showAddUser: boolean = false;
 
-        protected showAddUser: boolean = true;
+        protected loaderDuration: number = 2;
+        protected loaderTitle: string = 'Button pressing';
 
         public async created() {
             if (!this.$store.getters.isInit) {
@@ -132,6 +146,9 @@
                     case 'Enter':
                         this.startGame();
                         break;
+                    case 'KeyP':
+                        this.addPlayer();
+                        break;
 
                 }
             });
@@ -144,6 +161,10 @@
                 switch (key) {
                     case 'Space':
                         clearTimeout(this.timeouts.quit);
+                        break;
+                    case 'KeyP':
+                        this.showLoader = false;
+                        clearTimeout(this.timeouts.addPlayer);
                         break;
                 }
             });
@@ -227,6 +248,16 @@
         protected get isGameStarted() {
             const mameService = this.$store.getters.mameService;
             return mameService.isGameStarted;
+        }
+
+        protected addPlayer() {
+            this.loaderDuration = 2;
+            this.showLoader = true;
+            this.loaderTitle = 'Add new player ?';
+            this.timeouts.addPlayer = window.setTimeout(() => {
+                this.showLoader = false;
+                this.showAddUser = true;
+            }, 2000)
         }
     }
 </script>
@@ -335,5 +366,11 @@
 
     .title-enter, .title-leave-to {
         margin-top: -100%;
+    }
+
+    loader {
+        position: absolute;
+        top: 10%;
+        left: 50%;
     }
 </style>
