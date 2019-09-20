@@ -22,7 +22,7 @@
         "os": "^0.1.1",
         "pg-hstore": "^2.3.3",
         "reflect-metadata": "^0.1.13",
-        "sequelize": "^5.18.1",
+        "sequelize": "^5.18.4",
         "sequelize-typescript": "^1.0.0",
         "sqlite3": "^4.0.8",
         "velocity-animate": "^2.0.5",
