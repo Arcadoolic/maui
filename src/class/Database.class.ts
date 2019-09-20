@@ -63,7 +63,7 @@ export default class Database {
                             throw new Error('Migration tried to use old style "done" callback.');
                         }
                     ],
-                    path: './migrations',
+                    path: join(process.env.NODE_ENV === 'development' ? './migrations' : process.resourcesPath!, 'migrations'),
                     pattern: /\.js$/,
                     customResolver(path: string): { up: () => PromiseLike<any>; down?: () => PromiseLike<any> } {
                         return require('../../migrations/' + basename(path, '.js'));
