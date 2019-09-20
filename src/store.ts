@@ -13,8 +13,8 @@ Vue.use(Vuex);
 
 export default new Vuex.Store({
     state: {
-        configuration: new Config(remote.app.getPath('appData')),
-        database: new Database(remote.app.getPath('appData')),
+        configuration: new Config(remote.app.getPath('userData')),
+        database: new Database(remote.app.getPath('userData')),
         mameService: null as MameService|null,
         gameService: null as GameService|null,
         userService: null as UserService|null,
