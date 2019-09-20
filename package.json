@@ -42,7 +42,7 @@
         "electron": "^3.0.0",
         "electron-log": "^3.0.6",
         "electron-rebuild": "^1.8.4",
-        "mame-hi-extractor": "^1.1.7",
+        "mame-hi-extractor": "^1.1.9",
         "sequelize-cli": "^5.5.1",
         "typescript": "^3.3.3333",
         "umzug": "^2.2.0",
