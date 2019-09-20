@@ -24,3 +24,5 @@ npm run lint
 
 ## HELP
 * [Database and migration](docs/DATABASE.md)
+
+To compile on linux and macos you need gcc, make and build-essential
