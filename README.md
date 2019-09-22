@@ -23,6 +23,5 @@ npm run lint
 [Configuration Reference](https://cli.vuejs.org/config/).
 
 ## HELP
+* [Compilation](docs/COMPILATION.md)
 * [Database and migration](docs/DATABASE.md)
-
-To compile on linux and macos you need gcc, make and build-essential
