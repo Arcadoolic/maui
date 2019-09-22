@@ -1,8 +1,8 @@
-#DATABASE
+# DATABASE
 
 Mame-ui-extractor use a sqlite database and Sequelize ORM.
 
-##Migration :
+## Migration :
 To manage migration, we use `sequelize-cli`
 ```bash
 npx sequelize-cli migration:generate --name=migration-name
