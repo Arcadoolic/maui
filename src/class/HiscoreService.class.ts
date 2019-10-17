@@ -40,11 +40,11 @@ export default class HiscoreService {
         }
         for (const game of games) {
             try {
-                const hiscore = this.hiExtractor.get(game.romName);
-                if (!hiscore) {
+                const hiscoreExtractor = this.hiExtractor.get(game.romName);
+                if (!hiscoreExtractor) {
                     continue;
                 }
-
+                const hiscore = hiscoreExtractor.extract(false).scores;
                 const scoreToSave: any[] = [];
                 for (const score of hiscore.default) {
                     const user = this.userService.getUserByPseudo3(score.name.substr(0, 3).toUpperCase());
