@@ -1,11 +1,12 @@
 'use strict';
 
-import {app, protocol, BrowserWindow} from 'electron';
+import {app, protocol, BrowserWindow, ipcMain} from 'electron';
 import {
     createProtocol,
     installVueDevtools
 } from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
+import api from '@/api/api';
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
@@ -68,6 +69,7 @@ app.on('ready', async () => {
         await installVueDevtools();
     }
     win = createSplashWin();
+    // api(app.getPath('userData'), ipcMain, win);
 });
 
 // Exit cleanly on request from parent process in development mode.

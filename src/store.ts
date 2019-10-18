@@ -1,18 +1,11 @@
 import Vue from 'vue';
 import Vuex from 'vuex';
-// import GameList from '@/class/GameList.class';
 import Config from '@/class/Config.class';
-// import Mame from '@/class/Mame.class';
-// import HiscoreService from '@/class/HiscoreService.class';
-// import Players from '@/class/Players.class';
-// import IPDDatabase from '@/class/IPDDatabase.class';
-// import FileLogger from '@/class/FileLogger.class';
-// import GameService from '@/class/GameService.class';
+import {remote} from 'electron';
 import Database from '@/class/Database.class';
 import GameService from '@/class/GameService.class';
 import MameService from '@/class/MameService.class';
 import UserService from '@/class/UserService.class';
-import User from '@/model/User.model';
 import HiscoreService from '@/class/HiscoreService.class';
 
 
@@ -20,8 +13,8 @@ Vue.use(Vuex);
 
 export default new Vuex.Store({
     state: {
-        configuration: new Config(),
-        database: new Database(),
+        configuration: new Config(remote.app.getPath('userData')),
+        database: new Database(remote.app.getPath('userData')),
         mameService: null as MameService|null,
         gameService: null as GameService|null,
         userService: null as UserService|null,

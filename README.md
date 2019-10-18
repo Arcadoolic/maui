@@ -1,28 +1,27 @@
-# arcade2
+# Mame Awesome UI
 
-[![Build Status](https://travis-ci.com/Snosky/arcade.svg?token=u9494uQ6rfYdCEmu8L8Z&branch=develop)](https://travis-ci.com/Snosky/arcade)
+This project is a Frontend for the emulation framework MAME.
 
-Use [Vue CLI Plugin Electron Builder](https://nklayman.github.io/vue-cli-plugin-electron-builder/)
 
 ## Project setup
+Use [Vue CLI Plugin Electron Builder](https://nklayman.github.io/vue-cli-plugin-electron-builder/)
 ```
 npm install
 ```
-
-### Compiles and hot-reloads for development
+Compiles and hot-reloads for development:
 ```
 npm run electron:serve
 ```
-
-### Compiles and minifies for production
+Compiles and minifies for production
 ```
 npm run electron:build
 ```
-
-### Lints and fixes files
+Lints and fixes files
 ```
 npm run lint
 ```
+[Configuration Reference](https://cli.vuejs.org/config/).
 
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
+## HELP
+* [Compilation](docs/COMPILATION.md)
+* [Database and migration](docs/DATABASE.md)

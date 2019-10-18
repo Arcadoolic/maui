@@ -19,8 +19,9 @@ export default class User extends Model<User> {
         type: DataType.TEXT,
         comment: 'User 2 characters pseudonyme',
         unique: true,
+        allowNull: true,
         validate: {
-            len: [1, 2],
+            len: [1, 2]
         },
     })
     public pseudo_2!: string;
@@ -47,6 +48,12 @@ export default class User extends Model<User> {
         type: DataType.TEXT,
     })
     public email?: string;
+
+    @Column({
+        type: DataType.BOOLEAN,
+        defaultValue: 0
+    })
+    public active!: boolean;
 
     @HasMany(() => Hiscore)
     public hiscores!: Hiscore[];
