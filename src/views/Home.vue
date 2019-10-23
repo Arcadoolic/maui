@@ -15,6 +15,12 @@
             </div>
         </transition>
 
+        <transition name="category">
+            <div class="categoryTitle" v-show="showTitle">
+                <h1>{{category.name}}</h1>
+            </div>
+        </transition>
+
         <transition name="games">
             <Games :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
         </transition>
@@ -259,6 +265,13 @@
                 this.showAddUser = true;
             }, 2000)
         }
+
+        protected get category() {
+            if (this.selectedCategoryIndex) {
+                return this.categories[this.selectedCategoryIndex - 1];
+            }
+            return {name: 'All Games'};
+        }
     }
 </script>
 
@@ -274,7 +287,7 @@
         background-position: 0 0;
     }
 
-    .gameTitle {
+    .gameTitle, .categoryTitle {
         position: absolute;
         width: 100%;
         z-index: 2;
@@ -294,9 +307,17 @@
         6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
+    .categoryTitle {
+        bottom: 10px;
+        background: none;
+    }
 
     .gameTitle > * {
         transform: rotateX(15deg) rotateY(0deg) rotateZ(0deg);
+    }
+
+    .categoryTitle > * {
+        font-size: 0.5em;
     }
 
     .gameTitle p {
@@ -332,40 +353,28 @@
         background-size: cover;
     }
 
-    .flyer-leave-active {
-        transition: all .3s ease-in 0s;
-    }
-
-    .flyer-enter-active {
-        transition: all .3s ease-out 0s;
-    }
-
     .flyer-enter, .flyer-leave-to {
         margin-right: -100%;
-    }
-
-    .games-leave-active {
-        transition: all .3s ease-in 0s;
-    }
-
-    .games-enter-active {
-        transition: all .3s ease-out 0s;
     }
 
     .games-enter, .games-leave-to {
         margin-left: -100%;
     }
 
-    .title-leave-active {
+    .flyer-leave-active, .games-leave-active, .title-leave-active, .category-leave-active {
         transition: all .3s ease-in 0s;
     }
 
-    .title-enter-active {
+    .flyer-enter-active, .games-enter-active, .title-enter-active, .category-enter-active {
         transition: all .3s ease-out 0s;
     }
 
     .title-enter, .title-leave-to {
         margin-top: -100%;
+    }
+
+    .category.enter, .category-leave-to {
+        margin-bottom: -100%;
     }
 
     loader {
