@@ -52,6 +52,11 @@ export default class GameService {
         });
         // TODO : What to do if rom is invalid ?
         const games: any[] = [];
+
+        // Disable unwanted games
+        const romToDisable = existingGames.filter((i) => romNames.indexOf(i) < 0);
+        Game.destroy({ where: { romName: romToDisable }} );
+
         for (const romName of romNames) {
             if (existingGames.indexOf(romName) >= 0) {
                 games.push({
