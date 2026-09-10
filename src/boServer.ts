@@ -872,7 +872,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
                 getFavoritesInfo(config),
                 true,
                 {
-                    alreadyComplete: 0, downloaded: 0, notFound: 0, stoppedForQuota: false,
+                    alreadyComplete: 0, downloaded: 0, notFound: 0, noMedia: 0, stoppedForQuota: false,
                     errors: [error instanceof Error ? error.message : 'Erreur inattendue.'],
                 },
             ));
@@ -924,6 +924,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         const mamePath: string = (req.body.mamePath || '').trim();
         const avatarsPath: string = (req.body.avatarsPath || '').trim();
         const config = new Config(userDataPath);
+        config.load();
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
