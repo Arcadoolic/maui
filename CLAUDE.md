@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An Electron + Vue 2 (TypeScript) frontend ("arcade cabinet" front-end) for the MAME emulator. It shells out to a locally installed `mame` binary to list/launch ROMs, mirrors game/user/hiscore data into a local SQLite database via Sequelize, and drives everything with a gamepad-friendly UI.
 
+## Platform support
+
+The project must run on both:
+- **macOS** 15.1 and later
+- **Linux**: Ubuntu 24.04 and later, Debian 13 and later
+
+Keep path handling, shell/process invocation, and packaging (Electron build targets, native module rebuilds) working on both platforms. When changing anything platform-sensitive (paths, `execFile`/shell calls, `mame -showconfig`/`ui.ini` parsing, `justfile` recipes, native module builds), verify it holds on both macOS and Linux — don't assume macOS-only behavior.
+
 ## Commands
 
 Prefer the `justfile` recipes; they wrap the npm scripts:
