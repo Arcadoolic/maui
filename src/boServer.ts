@@ -9,7 +9,7 @@ import Config from '@/class/Config.class';
 declare const __static: string;
 
 type PathField = 'mamePath' | 'avatarsPath';
-type Tab = 'mame' | 'screenscraper';
+type Tab = 'mame' | 'screenscraper' | 'favorites';
 
 interface ScreenScraperValues {
     ssDevId: string;
@@ -120,6 +120,27 @@ function ensureFirstDirectory(paths: string[] | undefined, parentPath: string): 
     return target;
 }
 
+/**
+ * Resolves the directories/file ui.ini points mame-awesome-ui at: marquees, flyers
+ * (created if missing, see ensureFirstDirectory) and favorites.ini (never created -
+ * mame itself writes it the first time a favorite is added).
+ */
+interface MameLocations {
+    uiIni: { [key: string]: string[] };
+    marqueePath: string | null;
+    flyerPath: string | null;
+    favoritesPath: string | null;
+}
+
+function getMameLocations(iniPath: string): MameLocations {
+    const uiIniPath = join(iniPath, 'ui.ini');
+    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
+    const marqueePath = ensureFirstDirectory(uiIni.marquees_directory, iniPath);
+    const flyerPath = ensureFirstDirectory(uiIni.flyers_directory, iniPath);
+    const favoritesPath = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
+    return {uiIni, marqueePath, flyerPath, favoritesPath};
+}
+
 interface MameInfo {
     iniPath: string;
     mameIniPath: string;
@@ -127,6 +148,7 @@ interface MameInfo {
     romPath: string | null;
     marqueePath: string | null;
     flyerPath: string | null;
+    favoritesPath: string | null;
     error?: string;
 }
 
@@ -134,14 +156,11 @@ function getMameInfo(config: Config): MameInfo {
     const iniPath = getMameHomePath();
     const mameIniPath = join(iniPath, 'mame.ini');
     const uiIniPath = join(iniPath, 'ui.ini');
-
-    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
-    const marqueePath = ensureFirstDirectory(uiIni.marquees_directory, iniPath);
-    const flyerPath = ensureFirstDirectory(uiIni.flyers_directory, iniPath);
+    const {marqueePath, flyerPath, favoritesPath} = getMameLocations(iniPath);
 
     if (!config.mamePath || !config.mameBinaryName) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
     }
@@ -149,7 +168,7 @@ function getMameInfo(config: Config): MameInfo {
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -162,13 +181,131 @@ function getMameInfo(config: Config): MameInfo {
         );
         const parsed = parseMameIniFile(output.toString());
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
-        return {iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath};
+        return {iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, favoritesPath};
     } catch {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
+}
+
+/**
+ * Same favorites.ini parsing as MameService.getRomListFromFavorites(). Duplicated for the
+ * same reason as the rest of this file: avoids importing MameService.class.ts, which pulls
+ * in Helpers.class.ts's @electron/remote import at module scope.
+ */
+function getFavoriteRomNames(favoritesPath: string): string[] {
+    const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
+    const lines = readFileSync(favoritesPath, 'utf8').split('\n');
+    const romNames: string[] = [];
+    const seen: { [key: string]: boolean } = {};
+    lines.forEach((rawLine) => {
+        const line = rawLine.trim();
+        if (regexp.test(line) && !seen[line]) {
+            seen[line] = true;
+            romNames.push(line);
+        }
+    });
+    return romNames;
+}
+
+function extractXmlTagContent(xml: string, tagName: string): string | null {
+    const match = new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`).exec(xml);
+    return match ? match[1] : null;
+}
+
+/**
+ * Same per-rom lookup as MameService.getGameInformation(), but with regex tag extraction
+ * instead of DOMParser: DOMParser is a browser global available in the renderer, not in
+ * this main-process server.
+ */
+function getGameDescription(mameBinary: string, iniPath: string, romName: string): string | null {
+    try {
+        const xmlContent = execFileSync(
+            mameBinary,
+            ['-lx', romName, '-inipath', iniPath, '-homepath', iniPath],
+            {encoding: 'utf8', cwd: iniPath},
+        );
+        return extractXmlTagContent(xmlContent, 'description');
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Same shortname derivation as GameService.saveGamesFromRomNames(): the part of the
+ * description before the first "(", trimmed down further to what precedes a ":"/" - "/" / "
+ * separator when there is one.
+ */
+function deriveShortname(description: string): string {
+    let shortname = description;
+    const shortnameMatch = /^(.[^(]*)/g.exec(description);
+    if (shortnameMatch) {
+        shortname = shortnameMatch[0].trim().replace(/&amp;amp;/g, '&amp;');
+        const subnameMatch = /^([^\-\/]*)(:\s+|\s+-\s+|\s+\/\s+)(.*)$/.exec(shortname);
+        if (subnameMatch) {
+            shortname = subnameMatch[1];
+        }
+    }
+    return shortname;
+}
+
+interface FavoriteRow {
+    romName: string;
+    shortname: string;
+    fullname: string;
+    hasMarquee: boolean;
+    hasFlyer: boolean;
+}
+
+interface FavoritesInfo {
+    rows: FavoriteRow[];
+    error?: string;
+}
+
+function getFavoritesInfo(config: Config): FavoritesInfo {
+    const iniPath = getMameHomePath();
+    const {marqueePath, flyerPath, favoritesPath} = getMameLocations(iniPath);
+
+    if (!favoritesPath) {
+        return {
+            rows: [],
+            error: 'Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu).',
+        };
+    }
+
+    const romNames = getFavoriteRomNames(favoritesPath);
+    if (!romNames.length) {
+        return {
+            rows: [],
+            error: 'Le fichier favorites.ini ne contient aucun favori pour l\'instant.',
+        };
+    }
+
+    if (!config.mamePath || !config.mameBinaryName) {
+        return {
+            rows: [],
+            error: 'Configurez le binaire mame dans l\'onglet MAME pour afficher le nom des favoris.',
+        };
+    }
+    const mameBinary = join(config.mamePath, config.mameBinaryName);
+    if (!existsSync(mameBinary)) {
+        return {rows: [], error: `Le binaire "${mameBinary}" est introuvable.`};
+    }
+
+    const rows: FavoriteRow[] = romNames.map((romName) => {
+        const description = getGameDescription(mameBinary, iniPath, romName);
+        return {
+            romName,
+            shortname: description ? deriveShortname(description) : romName,
+            fullname: description || romName,
+            hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
+            hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
+        };
+    });
+
+    return {rows};
 }
 
 function escapeHtml(value: string): string {
@@ -316,6 +453,30 @@ function renderPage(body: string, active: Tab = 'mame'): string {
             padding: 6px 0;
             border-bottom: 1px solid #222222;
         }
+        .table-wrap {
+            overflow-x: auto;
+        }
+        table.favorites-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        table.favorites-table th,
+        table.favorites-table td {
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #222222;
+            white-space: nowrap;
+        }
+        table.favorites-table th.center,
+        table.favorites-table td.center {
+            text-align: center;
+        }
+        .badge-yes {
+            color: #6bff8a;
+        }
+        .badge-no {
+            color: #ff6b6b;
+        }
     </style>
 </head>
 <body>
@@ -323,6 +484,7 @@ function renderPage(body: string, active: Tab = 'mame'): string {
         <h1>mame-awesome-ui</h1>
         <nav class="tabs">
             <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
+            <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
         </nav>
     </header>
@@ -384,6 +546,12 @@ function renderMameInfoCard(mameInfo: MameInfo): string {
                     <dt>Dossier des flyers (flyers_directory)</dt>
                     <dd>${mameInfo.flyerPath ? escapeHtml(mameInfo.flyerPath) : '<em>Non disponible</em>'}</dd>
                 </div>
+                <div class="info-field">
+                    <dt>Fichier des favoris (favorites.ini)</dt>
+                    <dd>${mameInfo.favoritesPath
+                        ? escapeHtml(mameInfo.favoritesPath)
+                        : '<em>Aucun favori pour l\'instant — ajoutez-en depuis le menu de MAME (Tab en jeu).</em>'}</dd>
+                </div>
             </dl>
         </section>
     `;
@@ -442,6 +610,53 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
 
 function renderScreenScraperPage(values: ScreenScraperValues, error?: string, info?: string): string {
     return renderPage(renderScreenScraperCard(values, error, info), 'screenscraper');
+}
+
+function renderFavoriteBadge(found: boolean): string {
+    return found ? '<span class="badge-yes">✓</span>' : '<span class="badge-no">✗</span>';
+}
+
+function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
+    if (favoritesInfo.error) {
+        return `
+            <section class="card">
+                <h2>Favoris</h2>
+                <p class="info">${escapeHtml(favoritesInfo.error)}</p>
+            </section>
+        `;
+    }
+
+    const rows = favoritesInfo.rows.map(row => `
+        <tr>
+            <td>${escapeHtml(row.shortname)}</td>
+            <td>${escapeHtml(row.fullname)}</td>
+            <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
+            <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <section class="card">
+            <h2>Favoris (${favoritesInfo.rows.length})</h2>
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr>
+                            <th>Shortname</th>
+                            <th>Name</th>
+                            <th class="center">Marquee</th>
+                            <th class="center">Flyer</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </section>
+    `;
+}
+
+function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
+    return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
 }
 
 function renderBrowsePage(target: PathField, currentDir: string, formValues: {mamePath: string, avatarsPath: string}): string {
@@ -511,6 +726,12 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
             ssUserId: config.ssUserId,
             ssUserPassword: config.ssUserPassword,
         }));
+    });
+
+    app.get('/favorites', (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+        res.send(renderFavoritesPage(getFavoritesInfo(config)));
     });
 
     app.post('/screenscraper/save', (req, res) => {
