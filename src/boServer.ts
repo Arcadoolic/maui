@@ -1,6 +1,6 @@
 import express from 'express';
 import {Server} from 'http';
-import {existsSync, mkdirSync, readdirSync, readFileSync} from 'fs';
+import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'fs';
 import {join, dirname, sep} from 'path';
 import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
@@ -142,6 +142,36 @@ function getMameLocations(iniPath: string): MameLocations {
     return {uiIni, marqueePath, flyerPath, favoritesPath};
 }
 
+/**
+ * Reads a single key's current value directly out of mame.ini (not via -showconfig, so this
+ * works even without the mame binary configured).
+ */
+function getMameIniValue(mameIniPath: string, key: string): string | null {
+    if (!existsSync(mameIniPath)) {
+        return null;
+    }
+    const parsed = parseMameIniFile(readFileSync(mameIniPath, 'utf8'));
+    return parsed[key]?.[0] ?? null;
+}
+
+/**
+ * Rewrites a single key's value in mame.ini in place (regex substitution on that one line),
+ * preserving every other line, comment and ordering untouched. Returns false if mame.ini
+ * doesn't exist yet (mame never bootstrapped its config).
+ */
+function setMameIniValue(mameIniPath: string, key: string, value: string): boolean {
+    if (!existsSync(mameIniPath)) {
+        return false;
+    }
+    const content = readFileSync(mameIniPath, 'utf8');
+    const lineRegex = new RegExp(`^(${key}\\s+)\\S+`, 'm');
+    const updated = lineRegex.test(content)
+        ? content.replace(lineRegex, `$1${value}`)
+        : `${content.replace(/\s*$/, '')}\n${key.padEnd(27)}${value}\n`;
+    writeFileSync(mameIniPath, updated);
+    return true;
+}
+
 interface MameInfo {
     iniPath: string;
     mameIniPath: string;
@@ -150,6 +180,7 @@ interface MameInfo {
     marqueePath: string | null;
     flyerPath: string | null;
     favoritesPath: string | null;
+    windowed: boolean;
     error?: string;
 }
 
@@ -158,10 +189,11 @@ function getMameInfo(config: Config): MameInfo {
     const mameIniPath = join(iniPath, 'mame.ini');
     const uiIniPath = join(iniPath, 'ui.ini');
     const {marqueePath, flyerPath, favoritesPath} = getMameLocations(iniPath);
+    const windowed = getMameIniValue(mameIniPath, 'window') === '1';
 
     if (!config.mamePath || !config.mameBinaryName) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath, windowed,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
     }
@@ -169,7 +201,7 @@ function getMameInfo(config: Config): MameInfo {
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath, windowed,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -182,10 +214,10 @@ function getMameInfo(config: Config): MameInfo {
         );
         const parsed = parseMameIniFile(output.toString());
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
-        return {iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, favoritesPath};
+        return {iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, favoritesPath, windowed};
     } catch {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath, windowed,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
@@ -334,6 +366,7 @@ async function downloadMissingFavoriteMedia(
     marqueePath: string,
     flyerPath: string,
     rows: FavoriteRow[],
+    onProgress: (line: string) => void = () => {},
 ): Promise<DownloadSummary> {
     const summary: DownloadSummary = {
         alreadyComplete: 0, downloaded: 0, notFound: 0, noMedia: 0, errors: [], stoppedForQuota: false,
@@ -343,6 +376,7 @@ async function downloadMissingFavoriteMedia(
     for (const row of rows) {
         if (row.hasMarquee && row.hasFlyer) {
             summary.alreadyComplete++;
+            onProgress(`${row.romName} : déjà complet, ignoré.`);
             continue;
         }
 
@@ -351,44 +385,61 @@ async function downloadMissingFavoriteMedia(
         if (result.status === 'quota-exceeded') {
             summary.stoppedForQuota = true;
             summary.errors.push(`${row.romName}: quota ScreenScraper dépassé, arrêt du traitement.`);
+            onProgress(`${row.romName} : quota ScreenScraper dépassé, arrêt du traitement.`);
             break;
         }
         if (result.status === 'not-found') {
             summary.notFound++;
+            onProgress(`${row.romName} : introuvable sur ScreenScraper.`);
             continue;
         }
         if (result.status === 'error') {
             summary.errors.push(`${row.romName}: ${result.message}`);
+            onProgress(`${row.romName} : erreur (${result.message}).`);
             continue;
         }
 
-        let attempted = false;
+        const downloadedKinds: string[] = [];
+        const failedKinds: string[] = [];
         if (!row.hasMarquee && result.media.marqueeUrl) {
-            attempted = true;
             const download = await client.downloadMedia(
                 result.media.marqueeUrl, join(marqueePath, row.romName + '.png'), 'marquee',
             );
             if (download.status === 'ok') {
                 summary.downloaded++;
+                downloadedKinds.push('marquee');
             } else {
                 summary.errors.push(`${row.romName}: ${download.message}`);
+                failedKinds.push('marquee');
             }
         }
         if (!row.hasFlyer && result.media.flyerUrl) {
-            attempted = true;
             const download = await client.downloadMedia(
                 result.media.flyerUrl, join(flyerPath, row.romName + '.png'), 'flyer',
             );
             if (download.status === 'ok') {
                 summary.downloaded++;
+                downloadedKinds.push('flyer');
             } else {
                 summary.errors.push(`${row.romName}: ${download.message}`);
+                failedKinds.push('flyer');
             }
         }
-        if (!attempted) {
+
+        if (!downloadedKinds.length && !failedKinds.length) {
             // Found on ScreenScraper, but no marquee/flyer available for it (e.g. a
             // "notgame" driver entry like a BIOS/device, or media simply not uploaded yet).
             summary.noMedia++;
+            onProgress(`${row.romName} : trouvé, mais aucun visuel disponible.`);
+        } else {
+            const parts: string[] = [];
+            if (downloadedKinds.length) {
+                parts.push(`${downloadedKinds.join(' et ')} téléchargé(s)`);
+            }
+            if (failedKinds.length) {
+                parts.push(`${failedKinds.join(' et ')} en erreur`);
+            }
+            onProgress(`${row.romName} : ${parts.join(', ')}.`);
         }
     }
 
@@ -404,6 +455,15 @@ function escapeHtml(value: string): string {
 }
 
 function renderPage(body: string, active: Tab = 'mame'): string {
+    return renderPageHead(active) + body + renderPageTail();
+}
+
+/**
+ * Head/style/header/nav prelude, split out from renderPage() so a route can stream a page in
+ * chunks with res.write() (progress feedback for a long-running action) instead of building
+ * the whole HTML string before sending anything.
+ */
+function renderPageHead(active: Tab = 'mame'): string {
     return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -497,6 +557,16 @@ function renderPage(body: string, active: Tab = 'mame'): string {
         .path-row input {
             margin-top: 0;
         }
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+        }
+        .checkbox-row input {
+            width: auto;
+            margin-top: 0;
+        }
         .current-path {
             font-family: monospace;
             word-break: break-all;
@@ -570,6 +640,26 @@ function renderPage(body: string, active: Tab = 'mame'): string {
             color: #8ab4f8;
             cursor: help;
         }
+        .progress-log {
+            list-style: none;
+            padding: 0;
+            margin: 16px 0;
+            max-height: 320px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        .progress-log li {
+            padding: 4px 0;
+            border-bottom: 1px solid #222222;
+        }
+        .progress-log li:last-child {
+            animation: pulse 1s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
     </style>
 </head>
 <body>
@@ -581,12 +671,22 @@ function renderPage(body: string, active: Tab = 'mame'): string {
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
         </nav>
     </header>
-    ${body}
+    `;
+}
+
+function renderPageTail(): string {
+    return `
 </body>
 </html>`;
 }
 
-function renderConfigCard(values: {mamePath: string, avatarsPath: string}, error?: string, info?: string): string {
+interface ConfigFormValues {
+    mamePath: string;
+    avatarsPath: string;
+    openDevTools: boolean;
+}
+
+function renderConfigCard(values: ConfigFormValues, error?: string, info?: string): string {
     return `
         <section class="card">
             <h2>Configuration</h2>
@@ -603,17 +703,22 @@ function renderConfigCard(values: {mamePath: string, avatarsPath: string}, error
                     <input type="text" id="avatarsPath" name="avatarsPath" value="${escapeHtml(values.avatarsPath)}">
                     <button type="submit" name="target" value="avatarsPath" formaction="/browse" formmethod="get">Parcourir</button>
                 </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="openDevTools" ${values.openDevTools ? 'checked' : ''}>
+                    Ouvrir les DevTools au démarrage (mode développement)
+                </label>
                 <button type="submit">Enregistrer</button>
             </form>
         </section>
     `;
 }
 
-function renderMameInfoCard(mameInfo: MameInfo): string {
+function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
     return `
         <section class="card">
             <h2>Informations MAME</h2>
             ${mameInfo.error ? `<p class="error">${escapeHtml(mameInfo.error)}</p>` : ''}
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
             <dl>
                 <div class="info-field">
                     <dt>Dossier home mame (ini, cfg, nvram, snapshots...)</dt>
@@ -646,6 +751,13 @@ function renderMameInfoCard(mameInfo: MameInfo): string {
                         : '<em>Aucun favori pour l\'instant — ajoutez-en depuis le menu de MAME (Tab en jeu).</em>'}</dd>
                 </div>
             </dl>
+            <form method="post" action="/mame-options/save">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
+                    Lancer MAME en mode fenêtré (au lieu du plein écran) - modifie mame.ini
+                </label>
+                <button type="submit">Enregistrer</button>
+            </form>
         </section>
     `;
 }
@@ -662,14 +774,15 @@ function renderActionsCard(): string {
 }
 
 function renderForm(
-    values: {mamePath: string, avatarsPath: string},
+    values: ConfigFormValues,
     mameInfo: MameInfo,
     error?: string,
     info?: string,
+    mameInfoMessage?: string,
 ): string {
     return renderPage(
         renderConfigCard(values, error, info)
-        + renderMameInfoCard(mameInfo)
+        + renderMameInfoCard(mameInfo, mameInfoMessage)
         + renderActionsCard(),
         'mame',
     );
@@ -870,7 +983,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
         const avatarsPath = typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : (config.avatarsPath || '');
-        res.send(renderForm({mamePath, avatarsPath}, getMameInfo(config)));
+        res.send(renderForm({mamePath, avatarsPath, openDevTools: config.openDevTools}, getMameInfo(config)));
     });
 
     app.get('/screenscraper', (req, res) => {
@@ -900,16 +1013,30 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
             return;
         }
 
+        const iniPath = getMameHomePath();
+        const {marqueePath, flyerPath} = getMameLocations(iniPath);
+        const favoritesInfo = getFavoritesInfo(config);
+
+        if (favoritesInfo.error || !marqueePath || !flyerPath) {
+            res.send(renderFavoritesPage(favoritesInfo, true));
+            return;
+        }
+
+        // Stream the page as favorites are processed instead of blocking on the whole batch:
+        // each game appends a <li> the browser renders immediately, so long runs stay visible
+        // instead of looking like the request (and the tab) hung.
+        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+        // Disable Nagle's algorithm so each res.write() below reaches the browser as soon as
+        // it's flushed, instead of being buffered and coalesced with the next one.
+        res.socket?.setNoDelay(true);
+        res.write(renderPageHead('favorites'));
+        res.write(`
+            <section class="card">
+                <h2>Téléchargement en cours…</h2>
+                <ul class="progress-log">
+        `);
+
         try {
-            const iniPath = getMameHomePath();
-            const {marqueePath, flyerPath} = getMameLocations(iniPath);
-            const favoritesInfo = getFavoritesInfo(config);
-
-            if (favoritesInfo.error || !marqueePath || !flyerPath) {
-                res.send(renderFavoritesPage(favoritesInfo, true));
-                return;
-            }
-
             const summary = await downloadMissingFavoriteMedia(
                 {
                     devId: config.ssDevId,
@@ -921,21 +1048,21 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
                 marqueePath,
                 flyerPath,
                 favoritesInfo.rows,
+                line => res.write(`<li>${escapeHtml(line)}</li>`),
             );
 
-            // Re-read so the badges reflect the files just written to disk.
-            res.send(renderFavoritesPage(getFavoritesInfo(config), true, summary));
+            res.write('</ul></section>');
+            res.write(renderDownloadSummary(summary));
         } catch (error) {
             console.error('[boServer] ScreenScraper download failed:', error);
-            res.send(renderFavoritesPage(
-                getFavoritesInfo(config),
-                true,
-                {
-                    alreadyComplete: 0, downloaded: 0, notFound: 0, noMedia: 0, stoppedForQuota: false,
-                    errors: [error instanceof Error ? error.message : 'Erreur inattendue.'],
-                },
-            ));
+            res.write(`</ul><p class="error">${
+                escapeHtml(error instanceof Error ? error.message : 'Erreur inattendue.')
+            }</p>`);
         }
+
+        res.write('<p><a class="button-link" href="/favorites">Retour aux favoris</a></p>');
+        res.write(renderPageTail());
+        res.end();
     });
 
     app.post('/screenscraper/save', (req, res) => {
@@ -982,19 +1109,20 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
         const avatarsPath: string = (req.body.avatarsPath || '').trim();
+        const openDevTools = req.body.openDevTools === 'on';
         const config = new Config(userDataPath);
         config.load();
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath, avatarsPath}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
+                {mamePath, avatarsPath, openDevTools}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
             ));
             return;
         }
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath, avatarsPath}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
+                {mamePath, avatarsPath, openDevTools}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
             ));
             return;
         }
@@ -1005,7 +1133,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
             }
         } catch {
             res.status(422).send(renderForm(
-                {mamePath, avatarsPath}, getMameInfo(config), `Impossible de créer le dossier "${avatarsPath}".`,
+                {mamePath, avatarsPath, openDevTools}, getMameInfo(config), `Impossible de créer le dossier "${avatarsPath}".`,
             ));
             return;
         }
@@ -1013,6 +1141,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
         config.avatarsPath = avatarsPath;
+        config.openDevTools = openDevTools;
         config.save();
 
         res.send(renderPage('<section class="card"><h2>Configuration enregistrée</h2><p>'
@@ -1027,7 +1156,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
 
         if (!config.mamePath || !config.mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || '', avatarsPath: config.avatarsPath || ''},
+                {mamePath: config.mamePath || '', avatarsPath: config.avatarsPath || '', openDevTools: config.openDevTools},
                 getMameInfo(config),
                 'Aucune configuration valide enregistrée : impossible de lancer mame.',
             ));
@@ -1037,7 +1166,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         const mameBinary = join(config.mamePath, config.mameBinaryName);
         if (!existsSync(mameBinary)) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath, avatarsPath: config.avatarsPath},
+                {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
                 getMameInfo(config),
                 `Le binaire "${mameBinary}" est introuvable.`,
             ));
@@ -1061,10 +1190,30 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         });
 
         res.send(renderForm(
-            {mamePath: config.mamePath, avatarsPath: config.avatarsPath},
+            {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
             getMameInfo(config),
             undefined,
             'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur cette machine.',
+        ));
+    });
+
+    app.post('/mame-options/save', (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+
+        const iniPath = getMameHomePath();
+        const mameIniPath = join(iniPath, 'mame.ini');
+        const windowed = req.body.windowed === 'on';
+        const saved = setMameIniValue(mameIniPath, 'window', windowed ? '1' : '0');
+
+        res.send(renderForm(
+            {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
+            getMameInfo(config),
+            undefined,
+            undefined,
+            saved
+                ? 'Option "fenêtré" mise à jour dans mame.ini.'
+                : 'mame.ini introuvable - configurez et lancez mame au moins une fois avant de changer cette option.',
         ));
     });
 

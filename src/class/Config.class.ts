@@ -13,6 +13,10 @@ export default class Config {
     public ssUserId: string = '';
     public ssUserPassword: string = '';
 
+    // Whether to auto-open Chromium DevTools on startup, in dev mode (electron:serve). Defaults
+    // to true to match the previous always-open behavior.
+    public openDevTools: boolean = true;
+
     protected configPath!: string;
     protected _configLoaded: boolean = false;
 
@@ -43,6 +47,8 @@ export default class Config {
             this.ssUserId = configFile.ssUserId || '';
             this.ssUserPassword = configFile.ssUserPassword || '';
 
+            this.openDevTools = configFile.openDevTools !== false;
+
             this._configLoaded = true;
             return true;
         }
@@ -65,6 +71,7 @@ export default class Config {
                 ssSoftName: this.ssSoftName,
                 ssUserId: this.ssUserId,
                 ssUserPassword: this.ssUserPassword,
+                openDevTools: this.openDevTools,
             }),
         );
     }
