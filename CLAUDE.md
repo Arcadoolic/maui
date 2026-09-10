@@ -21,7 +21,7 @@ Prefer the `justfile` recipes; they wrap the npm scripts:
 ```bash
 just serve    # npm install, then electron:serve (dev, hot-reload)
 just build    # npm install, then electron:build (packaged app)
-just lint     # npm run lint (tslint --fix via vue-cli-service)
+just lint     # npm run lint:fix (eslint --fix)
 just install  # npm install only
 ```
 
@@ -54,5 +54,5 @@ There is no test suite in this repo.
 
 ## Style
 
-- Linting is **tslint** (not eslint), 4-space indent, single quotes, fields-before-methods member ordering — see `tslint.json`.
+- Linting is **eslint** (flat config, `eslint.config.js`): `@eslint/js` + `typescript-eslint` + `eslint-plugin-vue` (`vue2-essential`) + `@stylistic` for formatting. 4-space indent, single quotes, fields-before-methods member ordering. Every rule reports at `warn` severity (ported from tslint's `defaultSeverity`), so `npm run lint` never fails the build.
 - Vue components are class-based (`vue-property-decorator`/`vue-class-component`), not the Composition API.

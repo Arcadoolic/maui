@@ -84,4 +84,4 @@ build: install
 
 # Lint and auto-fix files
 lint:
-    npm run lint
+    npm run lint:fix
