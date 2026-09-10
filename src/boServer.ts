@@ -6,11 +6,23 @@ import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
+// Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
+// as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
+// -> Helpers.class.ts's @electron/remote import at module scope, which would break this
+// main-process server. The models themselves (Category/Game/User/Hiscore) are electron-free.
+import * as SequelizeTS from 'sequelize-typescript';
+const Sequelize = SequelizeTS.Sequelize;
+type Sequelize = SequelizeTS.Sequelize;
+import Category from '@/model/Category.model';
+import Game from '@/model/Game.model';
+import User from '@/model/User.model';
+import Hiscore from '@/model/Hiscore.model';
+import {UniqueConstraintError, ValidationError} from 'sequelize';
 
 declare const __static: string;
 
 type PathField = 'mamePath' | 'avatarsPath';
-type Tab = 'mame' | 'screenscraper' | 'favorites';
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users';
 
 interface ScreenScraperValues {
     ssDevId: string;
@@ -42,6 +54,24 @@ function getMameHomePath(): string {
         mkdirSync(homePath, {recursive: true});
     }
     return homePath;
+}
+
+/**
+ * Same sqlite connection Database.class.ts sets up, minus install()/update() (migrations
+ * already ran via the app's own startup) - built directly here rather than importing
+ * Database.class.ts, which pulls in GameService.class -> MameService.class ->
+ * Helpers.class.ts's @electron/remote import at module scope.
+ */
+function createSequelize(userDataPath: string): Sequelize {
+    const databasePath = join(
+        process.env.NODE_ENV === 'development' ? '.' : userDataPath, 'mame-awesome-ui.sqlite',
+    );
+    return new Sequelize({
+        dialect: 'sqlite',
+        storage: databasePath,
+        models: [Category, Game, User, Hiscore],
+        logging: false,
+    });
 }
 
 /**
@@ -758,6 +788,7 @@ function renderPageHead(active: Tab = 'mame'): string {
         <nav class="tabs">
             <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
+            <a href="/users" class="${active === 'users' ? 'active' : ''}">Users</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
         </nav>
     </header>
@@ -1029,6 +1060,92 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
     return renderPage(renderFavoritesCard(favoritesInfo, hasCreds, summary), 'favorites');
 }
 
+function renderUserStatusBadge(active: boolean): string {
+    return active ? '<span class="badge-yes">✓ actif</span>' : '<span class="badge-no">✗ inactif</span>';
+}
+
+function renderCreateUserCard(): string {
+    return `
+        <section class="card">
+            <h2>Ajouter un utilisateur</h2>
+            <form method="post" action="/users/create">
+                <label for="pseudo_3">Pseudo 3 lettres (requis, unique)</label>
+                <input type="text" id="pseudo_3" name="pseudo_3" maxlength="3" required>
+                <label for="realname">Nom</label>
+                <input type="text" id="realname" name="realname">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="active" checked>
+                    Actif
+                </label>
+                <button type="submit">Créer</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderUsersListCard(users: User[], error?: string, info?: string): string {
+    const rows = users.map(user => `
+        <tr>
+            <td>${escapeHtml(user.pseudo_3)}</td>
+            <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
+            <td class="center">${renderUserStatusBadge(user.active)}</td>
+            <td class="center">
+                <form method="post" action="/users/${user.id_user}/toggle-active">
+                    <button type="submit">${user.active ? 'Désactiver' : 'Activer'}</button>
+                </form>
+            </td>
+            <td class="center">
+                <form method="post" action="/users/${user.id_user}/delete"
+                    onsubmit="return confirm('Supprimer ${escapeHtml(user.pseudo_3)} ?')">
+                    <button type="submit">Supprimer</button>
+                </form>
+            </td>
+        </tr>
+    `).join('');
+
+    return `
+        <section class="card">
+            <h2>Utilisateurs (${users.length})</h2>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr>
+                            <th>Pseudo</th>
+                            <th>Nom</th>
+                            <th class="center">Statut</th>
+                            <th class="center"></th>
+                            <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows || '<tr><td colspan="5"><em>Aucun utilisateur</em></td></tr>'}</tbody>
+                </table>
+            </div>
+        </section>
+    `;
+}
+
+function renderUsersPage(users: User[], error?: string, info?: string): string {
+    return renderPage(renderCreateUserCard() + renderUsersListCard(users, error, info), 'users');
+}
+
+/**
+ * Friendly message for the common User.create() failure modes (unique pseudo_3,
+ * length validators) instead of a raw Sequelize error dump.
+ */
+function describeUserError(error: unknown): string {
+    if (error instanceof UniqueConstraintError) {
+        return 'Un utilisateur avec ce pseudo existe déjà.';
+    }
+    if (error instanceof ValidationError) {
+        return error.errors.map(e => e.message).join(' ');
+    }
+    return error instanceof Error ? error.message : 'Erreur inattendue.';
+}
+
 function renderBrowsePage(target: PathField, currentDir: string, formValues: {mamePath: string, avatarsPath: string}): string {
     let entries: string[] = [];
     let error: string|undefined;
@@ -1073,6 +1190,10 @@ function renderBrowsePage(target: PathField, currentDir: string, formValues: {ma
 export function startBoServer(userDataPath: string, port: number, onConfigured: () => void): Server {
     const app = express();
     app.use(express.urlencoded({extended: false}));
+    // Single connection for the server's lifetime: sequelize-typescript's static model methods
+    // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
+    // this must not be recreated per-request.
+    createSequelize(userDataPath);
 
     app.get('/background.jpg', (req, res) => {
         res.sendFile(join(__static, 'img/background.jpg'));
@@ -1102,6 +1223,56 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         const config = new Config(userDataPath);
         config.load();
         res.send(renderFavoritesPage(getFavoritesInfo(config), hasScreenScraperCredentials(config)));
+    });
+
+    app.get('/users', async (req, res) => {
+        try {
+            const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+            res.send(renderUsersPage(users));
+        } catch {
+            res.send(renderUsersPage([], 'Base de données introuvable ou pas encore initialisée - '
+                + 'lancez l\'application une première fois avant de gérer les utilisateurs.'));
+        }
+    });
+
+    app.post('/users/create', async (req, res) => {
+        const pseudo3: string = (req.body.pseudo_3 || '').trim().toUpperCase();
+        const realname: string = (req.body.realname || '').trim();
+        const email: string = (req.body.email || '').trim();
+        const active = req.body.active === 'on';
+
+        try {
+            await User.create({
+                pseudo_3: pseudo3,
+                ...(realname ? {realname} : {}),
+                ...(email ? {email} : {}),
+                active,
+            } as User);
+            const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+            res.send(renderUsersPage(users, undefined, `Utilisateur "${pseudo3}" créé.`));
+        } catch (error) {
+            const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
+            res.status(422).send(renderUsersPage(users, describeUserError(error)));
+        }
+    });
+
+    app.post('/users/:id/toggle-active', async (req, res) => {
+        const user = await User.findByPk(req.params.id);
+        if (user) {
+            user.active = !user.active;
+            await user.save();
+        }
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(renderUsersPage(users, undefined, user ? `Utilisateur "${user.pseudo_3}" mis à jour.` : undefined));
+    });
+
+    app.post('/users/:id/delete', async (req, res) => {
+        const user = await User.findByPk(req.params.id);
+        if (user) {
+            await user.destroy();
+        }
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(renderUsersPage(users, undefined, user ? `Utilisateur "${user.pseudo_3}" supprimé.` : undefined));
     });
 
     app.post('/favorites/download-media', async (req, res) => {
