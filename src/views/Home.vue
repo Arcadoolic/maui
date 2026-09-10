@@ -47,7 +47,7 @@
     import Gamepads from '@/class/Gamepads.class';
     import Hiscores from '@/components/Hiscores.vue';
     import ControllableVue from '@/ControllableVue';
-    import {remote} from 'electron';
+    import * as remote from '@electron/remote';
     import Game from '@/model/Game.model';
     import Category from '@/model/Category.model';
     import {join} from 'path';

@@ -1,6 +1,15 @@
 const path = require('path');
 
 module.exports = {
+    chainWebpack: config => {
+        // Force the real Node build instead of the no-op "browser" stub
+        // (webpack's default resolve.mainFields picks it up otherwise,
+        // which silently turns Sequelize/decorators into no-ops).
+        config.resolve.alias.set(
+            'sequelize-typescript',
+            path.join(__dirname, 'node_modules/sequelize-typescript/dist/index.js')
+        );
+    },
     pluginOptions: {
         electronBuilder: {
             chainWebpackMainProcess: config => {

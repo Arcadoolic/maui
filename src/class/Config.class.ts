@@ -1,6 +1,6 @@
 import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {join} from 'path';
-import {remote} from 'electron';
+import * as remote from '@electron/remote';
 
 export default class Config {
     public mamePath: string = '';

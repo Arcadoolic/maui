@@ -1,6 +1,8 @@
 import {existsSync} from 'fs';
 import {join, basename} from 'path';
-import {Sequelize} from 'sequelize-typescript';
+import * as SequelizeTS from 'sequelize-typescript';
+const Sequelize = SequelizeTS.Sequelize;
+type Sequelize = SequelizeTS.Sequelize;
 import Category from '@/model/Category.model';
 import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';

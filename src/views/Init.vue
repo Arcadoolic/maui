@@ -4,7 +4,7 @@
 
 <script lang="ts">
     import {Component, Vue} from 'vue-property-decorator';
-    import {remote} from 'electron';
+    import * as remote from '@electron/remote';
     import Database from '@/class/Database.class';
     import User from '@/model/User.model';
     import {EventBus} from '@/EventBus';

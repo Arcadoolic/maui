@@ -6,7 +6,7 @@
 
 <script lang="ts">
 import {Component, Vue} from 'vue-property-decorator';
-import {remote} from 'electron';
+import * as remote from '@electron/remote';
 import Gamepads from '@/class/Gamepads.class';
 
 @Component

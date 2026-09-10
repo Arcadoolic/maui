@@ -1,12 +1,15 @@
 'use strict';
 
 import {app, protocol, BrowserWindow, ipcMain} from 'electron';
+import * as remoteMain from '@electron/remote/main';
 import {
     createProtocol,
     installVueDevtools
 } from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import api from '@/api/api';
+
+remoteMain.initialize();
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
@@ -16,11 +19,14 @@ let createdAppProtocol = false;
 let win: BrowserWindow|null;
 
 // Standard scheme must be registered before the app is ready
-protocol.registerStandardSchemes(['app'], {secure: true});
+protocol.registerSchemesAsPrivileged([
+    {scheme: 'app', privileges: {secure: true, standard: true}}
+]);
 
 function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
     // Create the browser window.
     let winVar: BrowserWindow|null = new BrowserWindow(options);
+    remoteMain.enable(winVar.webContents);
 
     if (process.env.WEBPACK_DEV_SERVER_URL) {
         // Load the url of the dev server if in development mode
@@ -65,8 +71,11 @@ app.on('activate', () => {
 // Some APIs can only be used after this event occurs.
 app.on('ready', async () => {
     if (isDevelopment && !process.env.IS_TEST) {
-        // Install Vue Devtools
-        await installVueDevtools();
+        // Install Vue Devtools (non-blocking: the installer's promise can hang
+        // indefinitely against the current Chrome Web Store, so don't await it)
+        installVueDevtools().catch(error => {
+            console.error('Failed to install Vue Devtools:', error);
+        });
     }
     win = createSplashWin();
     // api(app.getPath('userData'), ipcMain, win);
@@ -90,7 +99,10 @@ if (isDevelopment) {
 function createSplashWin() {
     return createWindow({
         webPreferences: {
-            webSecurity: false
+            webSecurity: false,
+            nodeIntegration: true,
+            contextIsolation: false,
+            sandbox: false
         },
         backgroundColor: '#000000',
         frame: false,

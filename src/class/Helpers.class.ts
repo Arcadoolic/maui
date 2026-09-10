@@ -1,7 +1,7 @@
 import * as os from 'os';
 import {join, sep} from 'path';
 import {existsSync} from 'fs';
-import {remote} from 'electron';
+import * as remote from '@electron/remote';
 
 export default class Helpers {
 

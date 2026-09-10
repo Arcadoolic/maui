@@ -19,7 +19,7 @@
 
 <script lang="ts">
     import {Component, Vue} from 'vue-property-decorator';
-    import {remote} from 'electron';
+    import * as remote from '@electron/remote';
     import {sep, join} from 'path';
     import {lstatSync, existsSync, mkdirSync} from 'fs';
     import Helpers from '@/class/Helpers.class';

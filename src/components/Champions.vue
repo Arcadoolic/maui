@@ -19,7 +19,8 @@
     import {join} from 'path';
     import {format} from 'url';
     import {EventBus} from '@/EventBus';
-    import {Sequelize} from 'sequelize-typescript';
+    import * as SequelizeTS from 'sequelize-typescript';
+    const Sequelize = SequelizeTS.Sequelize;
 
     @Component
     export default class Champions extends Vue {
