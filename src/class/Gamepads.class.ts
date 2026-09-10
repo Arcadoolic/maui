@@ -5,7 +5,7 @@ export default class Gamepads {
     public static animationFrameRequest: number = 0;
     public static controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
     public static gamepadKeyPressed:
-        Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
+    Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
     protected static stop: boolean = false;
 
     public static init() {

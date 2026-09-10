@@ -6,9 +6,9 @@
                 <li v-for="(game, index) in games" :class="{selected: selectedGameIndex === index}">
                     <div class="marquee"
                          :style="{
-                            marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
-                            backgroundImage: getMarquee(game.romName)
-                        }"
+                             marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
+                             backgroundImage: getMarquee(game.romName)
+                         }"
                     >
                         <Champions v-if='game.hi' :game='game'></Champions>
                     </div>
