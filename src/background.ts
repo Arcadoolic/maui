@@ -8,6 +8,9 @@ import {
 } from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import api from '@/api/api';
+import Config from '@/class/Config.class';
+import {startBoServer} from '@/boServer';
+import {BO_SERVER_PORT} from '@/boServerPort';
 
 remoteMain.initialize();
 
@@ -23,11 +26,7 @@ protocol.registerSchemesAsPrivileged([
     {scheme: 'app', privileges: {secure: true, standard: true}}
 ]);
 
-function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
-    // Create the browser window.
-    let winVar: BrowserWindow|null = new BrowserWindow(options);
-    remoteMain.enable(winVar.webContents);
-
+function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.WEBPACK_DEV_SERVER_URL) {
         // Load the url of the dev server if in development mode
         winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + '#/' + path);
@@ -42,6 +41,14 @@ function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWi
         // Load the index.html when not in development
         winVar.loadURL('app://./index.html');
     }
+}
+
+function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
+    // Create the browser window.
+    let winVar: BrowserWindow|null = new BrowserWindow(options);
+    remoteMain.enable(winVar.webContents);
+
+    loadPath(winVar, path);
 
     winVar.on('closed', () => {
         winVar = null;
@@ -79,6 +86,15 @@ app.on('ready', async () => {
     }
     win = createSplashWin();
     // api(app.getPath('userData'), ipcMain, win);
+
+    const config = new Config(app.getPath('userData'));
+    if (!config.exist()) {
+        startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
+            if (win) {
+                loadPath(win, 'init');
+            }
+        });
+    }
 });
 
 // Exit cleanly on request from parent process in development mode.

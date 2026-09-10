@@ -1,108 +1,35 @@
 <template>
     <div>
-        <p>Config</p>
-        <div>
-            <div>
-                <p>Mame binary path</p>
-                <p>{{mamePath || 'undefined'}}</p>
-                <button @click.prevent-="selectMamePath()">Select mame path</button>
-            </div>
-            <div>
-                <p>User avatars path</p>
-                <p>{{avatarsPath || 'undefined'}}</p>
-                <button @click.prevent="selectAvatarsPath()">Select avatars path</button>
-            </div>
-        </div>
-        <button @click.prevent="save">Save</button>
+        <p>Merci de vous connecter depuis un navigateur sur cette machine à</p>
+        <p class="url">http://localhost:{{ boServerPort }}</p>
+        <p>pour configurer l'application.</p>
     </div>
 </template>
 
 <script lang="ts">
     import {Component, Vue} from 'vue-property-decorator';
-    import * as remote from '@electron/remote';
-    import {sep, join} from 'path';
-    import {statSync, existsSync, mkdirSync} from 'fs';
-    import Helpers from '@/class/Helpers.class';
-    import * as os from 'os';
+    import {BO_SERVER_PORT} from '@/boServerPort';
 
     @Component
     export default class Config extends Vue {
-        protected mamePath: string = '';
-        protected mameBinaryName: string = '';
-        protected avatarsPath: string = '';
-
-        public created() {
-            remote.getCurrentWindow().setResizable(true);
-            remote.getCurrentWindow().setSize(640, 360);
-            remote.getCurrentWindow().center();
-            remote.getCurrentWindow().setResizable(false);
-
-            this.mamePath = this.config.mamePath;
-            this.mameBinaryName = this.config.mameBinaryName;
-            this.avatarsPath = this.config.avatarsPath;
-        }
-
-        public get config() {
-            return this.$store.getters.configuration;
-        }
-
-        public async selectMamePath() {
-            let defaultPath = '.';
-            if (os.platform() !== 'win32') {
-                defaultPath = '/usr/games';
-            }
-
-            const mameBinaryNames = ['mame.exe', 'mame64.exe', 'mame'];
-
-            const {canceled, filePaths} = await remote.dialog.showOpenDialog({
-                title: 'Select mame binary path',
-                properties: ['openDirectory', 'showHiddenFiles'],
-                defaultPath,
-            });
-
-            if (!canceled) {
-                const mamePath = Helpers.getFirstExistingDirectory(mameBinaryNames, filePaths[0]);
-                if (mamePath && statSync(mamePath).isFile()) {
-                    this.mamePath = filePaths[0];
-                    this.mameBinaryName = mamePath.split(sep).slice(-1)[0];
-                } else {
-                    remote.dialog.showErrorBox('Path invalid', `Selected path "${mamePath}" is invalid.`);
-                }
-            }
-        }
-
-        public async selectAvatarsPath() {
-            const {canceled, filePaths} = await remote.dialog.showOpenDialog({
-                title: 'Select avatars directory path',
-                properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
-                defaultPath: Helpers.getUserDataPath(),
-            });
-
-            if (canceled) {
-                return;
-            }
-
-            if (!existsSync(join(filePaths[0], 'mame-awesome-ui-avatars'))) {
-                mkdirSync(join(filePaths[0], 'mame-awesome-ui-avatars'));
-            }
-            this.avatarsPath = join(filePaths[0], 'mame-awesome-ui-avatars');
-        }
-
-        public save() {
-            this.config.mamePath = this.mamePath;
-            this.config.mameBinaryName = this.mameBinaryName;
-            this.config.avatarsPath = this.avatarsPath;
-            this.config.save();
-            return this.$router.push({name: 'init'});
-        }
+        protected boServerPort = BO_SERVER_PORT;
     }
 </script>
 
 <style scoped>
+    div {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background-color: #000000;
+        text-align: center;
+        padding-top: 100px;
+    }
     * {
         color: white
     }
-    button {
-        color: black;
+    .url {
+        font-weight: bold;
+        font-size: 1.2em;
     }
 </style>
