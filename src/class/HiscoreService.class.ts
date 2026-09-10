@@ -1,5 +1,3 @@
-import {lstatSync, symlinkSync} from 'fs';
-import {join} from 'path';
 import MameHiExtractor from 'mame-hi-extractor';
 import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
@@ -11,30 +9,8 @@ export default class HiscoreService {
     protected userService!: UserService;
 
     public constructor(mamePath: string, userService: UserService) {
-        HiscoreService.ensureHiSymlink(mamePath);
         this.hiExtractor = new MameHiExtractor(mamePath);
         this.userService = userService;
-    }
-
-    /**
-     * mame-hi-extractor reads <mamePath>/hi/<romName>.hi (hardcoded in its AbstractExtractor),
-     * but mame's own hiscore plugin actually writes to <mamePath>/hiscore/<romName>.hi. Bridge
-     * that mismatch with a symlink instead of patching the third-party dependency.
-     */
-    protected static ensureHiSymlink(mamePath: string) {
-        const hiPath = join(mamePath, 'hi');
-        try {
-            lstatSync(hiPath);
-            return; // already a symlink, directory or file here - leave it alone
-        } catch {
-            // nothing at hiPath yet
-        }
-        try {
-            symlinkSync('hiscore', hiPath, 'dir');
-        } catch (e) {
-            Log.error('[HiscoreService] Failed to create the "hi" -> "hiscore" symlink.');
-            Log.error(e);
-        }
     }
 
     /**
