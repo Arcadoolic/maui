@@ -29,11 +29,12 @@ const ARCADE_SYSTEME_ID = '75';
 // World first, then Japan (confirmed as "jp", not "jap", against a real API response), then a
 // reasonable Western fallback before giving up on region and taking whatever is available.
 const REGION_PRIORITY = ['wor', 'jp', 'us', 'eu', 'ss'];
-// Full-size cabinet marquee with region variants, not the regionless "marquee" or the
-// "screenmarqueesmall" thumbnail. "flyer" is the arcade-specific flyer type (vs. "box-2D" used
-// by non-arcade systems) - confirmed against a real jeuInfos.php response for "gng".
+// "marquee" is the standard cabinet marquee (1200x449 on "gng") - not "screenmarquee"
+// (1024x512, a different media entirely) nor its "screenmarqueesmall" thumbnail (512x128).
+// "flyer" is the arcade-specific flyer type (vs. "box-2D" used by non-arcade systems).
+// All confirmed by downloading and inspecting real jeuInfos.php media for "gng".
 const MEDIA_TYPE: { [key in MediaType]: string } = {
-    marquee: 'screenmarquee',
+    marquee: 'marquee',
     flyer: 'flyer',
 };
 
