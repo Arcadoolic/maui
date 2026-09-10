@@ -7,7 +7,10 @@ import {
     installVueDevtools
 } from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
+import {Server} from 'http';
 import api from '@/api/api';
+import {startBoServer} from '@/boServer';
+import {BO_SERVER_PORT} from '@/boServerPort';
 
 remoteMain.initialize();
 
@@ -17,17 +20,14 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 // be closed automatically when the JavaScript object is garbage collected.
 let createdAppProtocol = false;
 let win: BrowserWindow|null;
+let boServer: Server|undefined;
 
 // Standard scheme must be registered before the app is ready
 protocol.registerSchemesAsPrivileged([
     {scheme: 'app', privileges: {secure: true, standard: true}}
 ]);
 
-function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
-    // Create the browser window.
-    let winVar: BrowserWindow|null = new BrowserWindow(options);
-    remoteMain.enable(winVar.webContents);
-
+function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.WEBPACK_DEV_SERVER_URL) {
         // Load the url of the dev server if in development mode
         winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + '#/' + path);
@@ -42,6 +42,14 @@ function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWi
         // Load the index.html when not in development
         winVar.loadURL('app://./index.html');
     }
+}
+
+function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
+    // Create the browser window.
+    let winVar: BrowserWindow|null = new BrowserWindow(options);
+    remoteMain.enable(winVar.webContents);
+
+    loadPath(winVar, path);
 
     winVar.on('closed', () => {
         winVar = null;
@@ -79,6 +87,16 @@ app.on('ready', async () => {
     }
     win = createSplashWin();
     // api(app.getPath('userData'), ipcMain, win);
+
+    boServer = startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
+        if (win) {
+            loadPath(win, 'init');
+        }
+    });
+});
+
+app.on('will-quit', () => {
+    boServer?.close();
 });
 
 // Exit cleanly on request from parent process in development mode.
