@@ -79,11 +79,11 @@ export default class Database {
                 }
                 resolve();
             })
-            .catch((error) => {
-                Log.error('[Migration] Error on migration.');
-                Log.error(error);
-                reject(error);
-            });
+                .catch((error) => {
+                    Log.error('[Migration] Error on migration.');
+                    Log.error(error);
+                    reject(error);
+                });
         });
     }
 }

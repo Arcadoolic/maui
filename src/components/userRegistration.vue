@@ -32,13 +32,13 @@
 </template>
 
 <script lang="ts">
-import {Component} from 'vue-property-decorator';
-import ControllableVue from '../ControllableVue';
-import User from '@/model/User.model';
-import {ValidationError} from 'sequelize';
-import Modal from '@/components/Modal.vue';
+    import {Component} from 'vue-property-decorator';
+    import ControllableVue from '../ControllableVue';
+    import User from '@/model/User.model';
+    import {ValidationError} from 'sequelize';
+    import Modal from '@/components/Modal.vue';
 
-@Component({
+    @Component({
         components: {
             Modal,
         },
@@ -56,24 +56,24 @@ import Modal from '@/components/Modal.vue';
             this.onKeydown((e, isGamepad) => {
                 const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
                 switch (key) {
-                    case 'ArrowUp':
-                        this.previousLetter();
-                        break;
-                    case 'ArrowDown':
-                        this.nextLetter();
-                        break;
-                    case 'ArrowLeft':
-                        this.previousSelectedLetter();
-                        break;
-                    case 'ArrowRight':
-                        this.nextSelectedLetter();
-                        break;
-                    case 'KeyP':
-                        this.addUser();
-                        break;
-                    case 'Space':
-                        this.$emit('quit');
-                        break;
+                case 'ArrowUp':
+                    this.previousLetter();
+                    break;
+                case 'ArrowDown':
+                    this.nextLetter();
+                    break;
+                case 'ArrowLeft':
+                    this.previousSelectedLetter();
+                    break;
+                case 'ArrowRight':
+                    this.nextSelectedLetter();
+                    break;
+                case 'KeyP':
+                    this.addUser();
+                    break;
+                case 'Space':
+                    this.$emit('quit');
+                    break;
                 }
                 this.prisitine = false;
             });

@@ -41,25 +41,25 @@
 </template>
 
 <script lang="ts">
-import {Component} from 'vue-property-decorator';
-import Categories from '@/components/Categories.vue';
-import Games from '@/components/Games.vue';
-import Gamepads from '@/class/Gamepads.class';
-import Hiscores from '@/components/Hiscores.vue';
-import ControllableVue from '@/ControllableVue';
-import * as remote from '@electron/remote';
-import Game from '@/model/Game.model';
-import Category from '@/model/Category.model';
-import {join} from 'path';
-import {format} from 'url';
-import {EventBus} from '@/EventBus';
-import GameService from '@/class/GameService.class';
-import * as Log from 'electron-log';
-import UserRegistration from '@/components/userRegistration.vue';
-import Loader from '@/components/Loader.vue';
-import Modal from '@/components/Modal.vue';
+    import {Component} from 'vue-property-decorator';
+    import Categories from '@/components/Categories.vue';
+    import Games from '@/components/Games.vue';
+    import Gamepads from '@/class/Gamepads.class';
+    import Hiscores from '@/components/Hiscores.vue';
+    import ControllableVue from '@/ControllableVue';
+    import * as remote from '@electron/remote';
+    import Game from '@/model/Game.model';
+    import Category from '@/model/Category.model';
+    import {join} from 'path';
+    import {format} from 'url';
+    import {EventBus} from '@/EventBus';
+    import GameService from '@/class/GameService.class';
+    import * as Log from 'electron-log';
+    import UserRegistration from '@/components/userRegistration.vue';
+    import Loader from '@/components/Loader.vue';
+    import Modal from '@/components/Modal.vue';
 
-@Component({
+    @Component({
         components: {
             Categories,
             Games,
@@ -136,28 +136,28 @@ import Modal from '@/components/Modal.vue';
                 }
                 const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
                 switch (key) {
-                    case 'ArrowUp':
-                        this.onGameChange(true);
-                        break;
-                    case 'ArrowDown':
-                        this.onGameChange(false);
-                        break;
-                    case 'ArrowLeft':
-                        this.onCategoryChange(true);
-                        break;
-                    case 'ArrowRight':
-                        this.onCategoryChange(false);
-                        break;
-                    case 'Space':
-                        this.showHiscores = !this.showHiscores;
-                        this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
-                        break;
-                    case 'Enter':
-                        this.startGame();
-                        break;
-                    case 'KeyP':
-                        this.addPlayer();
-                        break;
+                case 'ArrowUp':
+                    this.onGameChange(true);
+                    break;
+                case 'ArrowDown':
+                    this.onGameChange(false);
+                    break;
+                case 'ArrowLeft':
+                    this.onCategoryChange(true);
+                    break;
+                case 'ArrowRight':
+                    this.onCategoryChange(false);
+                    break;
+                case 'Space':
+                    this.showHiscores = !this.showHiscores;
+                    this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
+                    break;
+                case 'Enter':
+                    this.startGame();
+                    break;
+                case 'KeyP':
+                    this.addPlayer();
+                    break;
 
                 }
             });
@@ -168,13 +168,13 @@ import Modal from '@/components/Modal.vue';
                 }
                 const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
                 switch (key) {
-                    case 'Space':
-                        clearTimeout(this.timeouts.quit);
-                        break;
-                    case 'KeyP':
-                        this.showLoader = false;
-                        clearTimeout(this.timeouts.addPlayer);
-                        break;
+                case 'Space':
+                    clearTimeout(this.timeouts.quit);
+                    break;
+                case 'KeyP':
+                    this.showLoader = false;
+                    clearTimeout(this.timeouts.addPlayer);
+                    break;
                 }
             });
         }

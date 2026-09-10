@@ -11,18 +11,18 @@
 </template>
 
 <script lang="ts">
-import {Component, Vue, Watch} from 'vue-property-decorator';
+    import {Component, Vue, Watch} from 'vue-property-decorator';
 
-@Component
-export default class Gamepads extends Vue {
-    protected gamepadCount: number = 0;
+    @Component
+    export default class Gamepads extends Vue {
+        protected gamepadCount: number = 0;
 
-    public mounted() {
-        window.addEventListener('gamepadCountUpdate', (e) => {
-            this.gamepadCount = (e as CustomEvent).detail.gamepadCount;
-        });
+        public mounted() {
+            window.addEventListener('gamepadCountUpdate', (e) => {
+                this.gamepadCount = (e as CustomEvent).detail.gamepadCount;
+            });
+        }
     }
-}
 </script>
 
 <style scoped>
