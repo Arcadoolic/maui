@@ -1,7 +1,7 @@
 import express from 'express';
 import {Server} from 'http';
-import {existsSync, mkdirSync, readdirSync} from 'fs';
-import {join, dirname} from 'path';
+import {existsSync, mkdirSync, readdirSync, readFileSync} from 'fs';
+import {join, dirname, sep} from 'path';
 import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
 import Config from '@/class/Config.class';
@@ -63,11 +63,70 @@ function parseMameIniFile(fileContent: string): { [key: string]: string[] } {
     return target;
 }
 
+/**
+ * Same relative-path resolution Helpers.getFirstExistingDirectory() applies to each
+ * candidate: expands $HOME/~, then joins onto parentPath when the path isn't absolute.
+ */
+function resolveDirectoryPath(path: string, parentPath: string): string {
+    path = path.replace(/\$HOME|~/, os.homedir);
+    if (path[0] === '/') {
+        return path;
+    }
+    parentPath = parentPath.replace('$HOME', os.homedir);
+    const parentPathArray = parentPath.split(sep);
+    const pathArray = path.split(sep);
+    if (parentPathArray[parentPathArray.length - 1] === pathArray[0]) {
+        pathArray.shift();
+        path = pathArray.join(sep);
+    }
+    return join(parentPath, path);
+}
+
+/**
+ * Same directory-resolution logic as Helpers.getFirstExistingDirectory(): returns the
+ * first of `paths` (as declared in an ini file, e.g. ui.ini's marquees_directory) that
+ * exists on disk, resolved against `parentPath` when relative. Duplicated for the same
+ * reason as getMameHomePath(): avoids pulling in Helpers.class.ts's @electron/remote
+ * import at module scope.
+ */
+function getFirstExistingDirectory(paths: string[], parentPath: string, file?: string): string | null {
+    for (const rawPath of paths) {
+        let path = resolveDirectoryPath(rawPath, parentPath);
+        if (file) {
+            path = join(path, file);
+        }
+        if (existsSync(path)) {
+            return path;
+        }
+    }
+    return null;
+}
+
+/**
+ * Same lookup as getFirstExistingDirectory(), but when none of the declared paths exist
+ * yet, creates and returns the first one instead of null - so roms/marquees/flyers always
+ * have a usable directory to drop assets into, right from the dedicated mame home.
+ */
+function ensureFirstDirectory(paths: string[] | undefined, parentPath: string): string | null {
+    if (!paths || !paths.length) {
+        return null;
+    }
+    const existing = getFirstExistingDirectory(paths, parentPath);
+    if (existing) {
+        return existing;
+    }
+    const target = resolveDirectoryPath(paths[0], parentPath);
+    mkdirSync(target, {recursive: true});
+    return target;
+}
+
 interface MameInfo {
     iniPath: string;
     mameIniPath: string;
     uiIniPath: string;
-    romPaths: string[] | null;
+    romPath: string | null;
+    marqueePath: string | null;
+    flyerPath: string | null;
     error?: string;
 }
 
@@ -76,9 +135,13 @@ function getMameInfo(config: Config): MameInfo {
     const mameIniPath = join(iniPath, 'mame.ini');
     const uiIniPath = join(iniPath, 'ui.ini');
 
+    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
+    const marqueePath = ensureFirstDirectory(uiIni.marquees_directory, iniPath);
+    const flyerPath = ensureFirstDirectory(uiIni.flyers_directory, iniPath);
+
     if (!config.mamePath || !config.mameBinaryName) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPaths: null,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
     }
@@ -86,7 +149,7 @@ function getMameInfo(config: Config): MameInfo {
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPaths: null,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -98,10 +161,11 @@ function getMameInfo(config: Config): MameInfo {
             {cwd: iniPath},
         );
         const parsed = parseMameIniFile(output.toString());
-        return {iniPath, mameIniPath, uiIniPath, romPaths: parsed.rompath || null};
+        const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
+        return {iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath};
     } catch {
         return {
-            iniPath, mameIniPath, uiIniPath, romPaths: null,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
@@ -291,10 +355,6 @@ function renderConfigCard(values: {mamePath: string, avatarsPath: string}, error
 }
 
 function renderMameInfoCard(mameInfo: MameInfo): string {
-    const romPathsHtml = mameInfo.romPaths && mameInfo.romPaths.length
-        ? `<ul>${mameInfo.romPaths.map(path => `<li>${escapeHtml(path)}</li>`).join('')}</ul>`
-        : '<em>Non disponible</em>';
-
     return `
         <section class="card">
             <h2>Informations MAME</h2>
@@ -313,8 +373,16 @@ function renderMameInfoCard(mameInfo: MameInfo): string {
                     <dd>${escapeHtml(mameInfo.uiIniPath)}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Dossiers de roms (rompath)</dt>
-                    <dd>${romPathsHtml}</dd>
+                    <dt>Dossier des roms (rompath)</dt>
+                    <dd>${mameInfo.romPath ? escapeHtml(mameInfo.romPath) : '<em>Non disponible</em>'}</dd>
+                </div>
+                <div class="info-field">
+                    <dt>Dossier des marquees (marquees_directory)</dt>
+                    <dd>${mameInfo.marqueePath ? escapeHtml(mameInfo.marqueePath) : '<em>Non disponible</em>'}</dd>
+                </div>
+                <div class="info-field">
+                    <dt>Dossier des flyers (flyers_directory)</dt>
+                    <dd>${mameInfo.flyerPath ? escapeHtml(mameInfo.flyerPath) : '<em>Non disponible</em>'}</dd>
                 </div>
             </dl>
         </section>
