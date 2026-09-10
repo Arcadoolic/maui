@@ -1,6 +1,5 @@
 import {Column, CreatedAt, DataType, DeletedAt, HasMany, Model, Table, UpdatedAt} from 'sequelize-typescript';
 import Hiscore from '@/model/Hiscore.model';
-import Data = Electron.Data;
 
 @Table({
     timestamps: true,
@@ -21,7 +20,7 @@ export default class User extends Model<User> {
         unique: true,
         allowNull: true,
         validate: {
-            len: [1, 2]
+            len: [1, 2],
         },
     })
     public pseudo_2!: string;
@@ -51,7 +50,7 @@ export default class User extends Model<User> {
 
     @Column({
         type: DataType.BOOLEAN,
-        defaultValue: 0
+        defaultValue: 0,
     })
     public active!: boolean;
 

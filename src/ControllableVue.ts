@@ -23,7 +23,7 @@ export default abstract class ControllableVue extends Vue {
                     keyActions(e as KeyboardEvent, false);
                 }
             }
-        }
+        };
     }
 
     protected gamepadKeydownHandler(keyActions?: (e: Event, isGamepad: boolean) => void, keyPressed?: boolean) {
@@ -37,7 +37,7 @@ export default abstract class ControllableVue extends Vue {
                     keyActions(e as KeyboardEvent, true);
                 }
             }
-        }
+        };
     }
 
     protected beforeDestroy() {

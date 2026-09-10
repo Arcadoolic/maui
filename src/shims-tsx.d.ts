@@ -6,8 +6,6 @@ declare global {
     interface Element extends VNode {}
     // tslint:disable no-empty-interface
     interface ElementClass extends Vue {}
-    interface IntrinsicElements {
-      [elem: string]: any;
-    }
+    // IntrinsicElements is declared by vue/types/jsx.d.ts since Vue 2.7.
   }
 }

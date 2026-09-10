@@ -51,31 +51,31 @@ export default class Database {
      * Perform all migrations and seeds
      */
     public async update() {
-        return new Promise((resolve, reject) => {
+        return new Promise<void>((resolve, reject) => {
             const umzug = new Umzug({
                 storage: 'sequelize',
                 storageOptions: {
-                    sequelize: this.sequelize
+                    sequelize: this.sequelize,
                 },
                 migrations: {
                     params: [
                         this.sequelize.getQueryInterface(),
                         Sequelize,
-                        function() {
+                        () => {
                             throw new Error('Migration tried to use old style "done" callback.');
-                        }
+                        },
                     ],
                     path: process.env.NODE_ENV === 'development' ? './migrations' : join(process.resourcesPath!, 'migrations'),
                     pattern: /\.js$/,
                     customResolver(path: string): { up: () => PromiseLike<any>; down?: () => PromiseLike<any> } {
                         return require('../../migrations/' + basename(path, '.js'));
-                    }
-                }
+                    },
+                },
             });
 
             umzug.up().then((migrations) => {
-                for (let migration of migrations) {
-                    Log.log('[Database] Migration "' + migration.file + "' success.");
+                for (const migration of migrations) {
+                    Log.log('[Database] Migration "' + migration.file + '\' success.');
                 }
                 resolve();
             })
@@ -84,6 +84,6 @@ export default class Database {
                 Log.error(error);
                 reject(error);
             });
-        })
+        });
     }
 }

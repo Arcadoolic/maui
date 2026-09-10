@@ -41,32 +41,32 @@
 </template>
 
 <script lang="ts">
-    import {Component} from 'vue-property-decorator';
-    import Categories from '@/components/Categories.vue';
-    import Games from '@/components/Games.vue';
-    import Gamepads from '@/class/Gamepads.class';
-    import Hiscores from '@/components/Hiscores.vue';
-    import ControllableVue from '@/ControllableVue';
-    import * as remote from '@electron/remote';
-    import Game from '@/model/Game.model';
-    import Category from '@/model/Category.model';
-    import {join} from 'path';
-    import {format} from 'url';
-    import {EventBus} from '@/EventBus';
-    import GameService from '@/class/GameService.class';
-    import * as Log from 'electron-log';
-    import UserRegistration from "@/components/userRegistration.vue";
-    import Loader from "@/components/Loader.vue";
-    import Modal from "@/components/Modal.vue";
+import {Component} from 'vue-property-decorator';
+import Categories from '@/components/Categories.vue';
+import Games from '@/components/Games.vue';
+import Gamepads from '@/class/Gamepads.class';
+import Hiscores from '@/components/Hiscores.vue';
+import ControllableVue from '@/ControllableVue';
+import * as remote from '@electron/remote';
+import Game from '@/model/Game.model';
+import Category from '@/model/Category.model';
+import {join} from 'path';
+import {format} from 'url';
+import {EventBus} from '@/EventBus';
+import GameService from '@/class/GameService.class';
+import * as Log from 'electron-log';
+import UserRegistration from '@/components/userRegistration.vue';
+import Loader from '@/components/Loader.vue';
+import Modal from '@/components/Modal.vue';
 
-    @Component({
+@Component({
         components: {
             Categories,
             Games,
             Hiscores,
             UserRegistration,
             Loader,
-            Modal
+            Modal,
         },
     })
     export default class Home extends ControllableVue {
@@ -250,7 +250,7 @@
                 (error) => {
                     Log.error('[Home] Error on game ' + this.selectedGame.id_game + ' launch.');
                     Log.error(error);
-                }
+                },
             );
         }
 
@@ -266,7 +266,7 @@
             this.timeouts.addPlayer = window.setTimeout(() => {
                 this.showLoader = false;
                 this.showAddUser = true;
-            }, 2000)
+            }, 2000);
         }
 
         protected get category() {

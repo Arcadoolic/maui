@@ -25,7 +25,7 @@ export default function(userDataPath: string, ipcMain: IpcMain, window: BrowserW
         if (!db.exist()) {
             return res.end({
                 success: false,
-                message: 'Database do not exist'
+                message: 'Database do not exist',
             });
         }
         return next();

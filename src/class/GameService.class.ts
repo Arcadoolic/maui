@@ -5,7 +5,7 @@ import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
 import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
-import Log from 'electron-log'
+import Log from 'electron-log';
 
 
 declare const __static: string;
@@ -61,7 +61,7 @@ export default class GameService {
             if (existingGames.indexOf(romName) >= 0) {
                 games.push({
                     romName,
-                    hi: this.hiService.hasHiscore(romName)
+                    hi: this.hiService.hasHiscore(romName),
                 });
                 continue;
             }
@@ -99,7 +99,7 @@ export default class GameService {
         }
         await Game.bulkCreate(games, {
             updateOnDuplicate: ['hi'],
-            logging: Log.log
+            logging: Log.log,
         });
     }
 

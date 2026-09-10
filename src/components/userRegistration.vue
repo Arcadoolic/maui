@@ -32,16 +32,16 @@
 </template>
 
 <script lang="ts">
-    import {Component} from "vue-property-decorator";
-    import ControllableVue from "../ControllableVue";
-    import User from "@/model/User.model";
-    import {ValidationError} from 'sequelize';
-    import Modal from "@/components/Modal.vue";
+import {Component} from 'vue-property-decorator';
+import ControllableVue from '../ControllableVue';
+import User from '@/model/User.model';
+import {ValidationError} from 'sequelize';
+import Modal from '@/components/Modal.vue';
 
-    @Component({
+@Component({
         components: {
-            Modal
-        }
+            Modal,
+        },
     })
     export default class UserRegistration extends ControllableVue {
         protected username: {[key: number]: string} = {0: 'A', 1: 'A', 2: 'A'};
@@ -78,7 +78,9 @@
                 this.prisitine = false;
             });
 
-            this.onKeyup((e, isGamepad) => { });
+            this.onKeyup((e, isGamepad) => {
+                // No-op: keyup is handled by the keydown listener above.
+            });
         }
 
         protected nextLetter() {
@@ -125,7 +127,7 @@
         }
 
         protected get usernameString() {
-            return this.username[0] + this.username[1] + this.username[2]
+            return this.username[0] + this.username[1] + this.username[2];
         }
 
         protected beforeDestroy() {

@@ -45,7 +45,7 @@
         "electron-rebuild": "^3.2.9",
         "mame-hi-extractor": "^1.2.1",
         "sequelize-cli": "^5.5.1",
-        "typescript": "^3.3.3333",
+        "typescript": "^5.9.3",
         "umzug": "^2.2.0",
         "vue-cli-plugin-electron-builder": "^1.0.0-rc.10",
         "vue-template-compiler": "^2.5.21"

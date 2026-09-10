@@ -15,28 +15,28 @@
 </template>
 
 <script lang="ts">
-    import {Component, Prop, Vue} from "vue-property-decorator";
+import {Component, Prop, Vue} from 'vue-property-decorator';
 
-    @Component
+@Component
     export default class Loader extends Vue {
         @Prop({default: 2})
         protected duration!: number;
 
-        created() {
+        public created() {
             console.log(this.duration);
         }
 
         protected get leftPieStyle() {
             return {
-                'animation-duration': ['-webkit-', this.duration / 2 + 's']
-            }
+                'animation-duration': ['-webkit-', this.duration / 2 + 's'],
+            };
         }
 
         protected get rightPieStyle() {
             return {
                 'animation-duration': ['-webkit-', this.duration / 2 + 's'],
-                'animation-delay': ['-webkit-', this.duration / 2 + 's']
-            }
+                'animation-delay': ['-webkit-', this.duration / 2 + 's'],
+            };
         }
 
 

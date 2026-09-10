@@ -34,7 +34,11 @@ export default class MameService {
             throw new Error('File missing or failed parsing ' + uiIniPath);
         }
 
-        const mameIniContent = execFileSync(this.mameBinary, ['-showconfig', ...this.mameHomeArgs], {cwd: this.iniPath});
+        const mameIniContent = execFileSync(
+            this.mameBinary,
+            ['-showconfig', ...this.mameHomeArgs],
+            {cwd: this.iniPath},
+        );
         MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni);
 
         const uiIniContent = readFileSync(uiIniPath, 'utf8');
@@ -106,10 +110,12 @@ export default class MameService {
      */
     public getGameInformation(romName: string) {
         const parser = new DOMParser();
-        const xml = parser.parseFromString(
-            execFileSync(this.mameBinary, ['-lx', romName, ...this.mameHomeArgs], {encoding: 'utf8', cwd: this.iniPath}),
-            'text/xml',
+        const xmlContent = execFileSync(
+            this.mameBinary,
+            ['-lx', romName, ...this.mameHomeArgs],
+            {encoding: 'utf8', cwd: this.iniPath},
         );
+        const xml = parser.parseFromString(xmlContent, 'text/xml');
         return {
             manufacturer: xml.getElementsByTagName('manufacturer')[0].innerHTML,
             year: parseInt(xml.getElementsByTagName('year')[0].innerHTML, 10),
