@@ -298,6 +298,7 @@ interface DownloadSummary {
     alreadyComplete: number;
     downloaded: number;
     notFound: number;
+    noMedia: number;
     errors: string[];
     stoppedForQuota: boolean;
 }
@@ -314,7 +315,7 @@ async function downloadMissingFavoriteMedia(
     rows: FavoriteRow[],
 ): Promise<DownloadSummary> {
     const summary: DownloadSummary = {
-        alreadyComplete: 0, downloaded: 0, notFound: 0, errors: [], stoppedForQuota: false,
+        alreadyComplete: 0, downloaded: 0, notFound: 0, noMedia: 0, errors: [], stoppedForQuota: false,
     };
     const client = new ScreenScraperClient(credentials);
 
@@ -340,7 +341,9 @@ async function downloadMissingFavoriteMedia(
             continue;
         }
 
+        let attempted = false;
         if (!row.hasMarquee && result.media.marqueeUrl) {
+            attempted = true;
             const download = await client.downloadMedia(
                 result.media.marqueeUrl, join(marqueePath, row.romName + '.png'), 'marquee',
             );
@@ -351,6 +354,7 @@ async function downloadMissingFavoriteMedia(
             }
         }
         if (!row.hasFlyer && result.media.flyerUrl) {
+            attempted = true;
             const download = await client.downloadMedia(
                 result.media.flyerUrl, join(flyerPath, row.romName + '.png'), 'flyer',
             );
@@ -359,6 +363,11 @@ async function downloadMissingFavoriteMedia(
             } else {
                 summary.errors.push(`${row.romName}: ${download.message}`);
             }
+        }
+        if (!attempted) {
+            // Found on ScreenScraper, but no marquee/flyer available for it (e.g. a
+            // "notgame" driver entry like a BIOS/device, or media simply not uploaded yet).
+            summary.noMedia++;
         }
     }
 
@@ -678,6 +687,7 @@ function renderDownloadSummary(summary: DownloadSummary): string {
         `${summary.alreadyComplete} déjà complet(s)`,
         `${summary.downloaded} fichier(s) téléchargé(s)`,
         `${summary.notFound} introuvable(s) sur ScreenScraper`,
+        `${summary.noMedia} sans visuel disponible`,
         `${summary.errors.length} erreur(s)`,
     ];
     const errorsHtml = summary.errors.length
