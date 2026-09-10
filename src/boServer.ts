@@ -2,6 +2,8 @@ import express from 'express';
 import {Server} from 'http';
 import {existsSync, mkdirSync} from 'fs';
 import {join} from 'path';
+import * as os from 'os';
+import {execFile} from 'child_process';
 import Config from '@/class/Config.class';
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -13,6 +15,19 @@ function findMameBinary(mamePath: string): string|null {
         }
     }
     return null;
+}
+
+/**
+ * Same directory MameService pins mame's ini/home to (see Helpers.getMameHomePath()).
+ * Duplicated here rather than imported: Helpers.class.ts pulls in the renderer-only
+ * @electron/remote at module scope, which isn't safe to load in the main process bundle.
+ */
+function getMameHomePath(): string {
+    const homePath = join(os.homedir(), '.mame-awesome-ui', 'mame-home');
+    if (!existsSync(homePath)) {
+        mkdirSync(homePath, {recursive: true});
+    }
+    return homePath;
 }
 
 function escapeHtml(value: string): string {
@@ -56,6 +71,14 @@ function renderPage(body: string): string {
         .error {
             color: #ff6b6b;
         }
+        .info {
+            color: #8ab4f8;
+        }
+        .launch-form {
+            margin-top: 40px;
+            padding-top: 24px;
+            border-top: 1px solid #333333;
+        }
     </style>
 </head>
 <body>
@@ -64,16 +87,20 @@ function renderPage(body: string): string {
 </html>`;
 }
 
-function renderForm(values: {mamePath: string, avatarsPath: string}, error?: string): string {
+function renderForm(values: {mamePath: string, avatarsPath: string}, error?: string, info?: string): string {
     return renderPage(`
         <h1>Configuration mame-awesome-ui</h1>
         ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+        ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
         <form method="post" action="/save">
             <label for="mamePath">Dossier contenant le binaire mame</label>
             <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}" required>
             <label for="avatarsPath">Dossier des avatars utilisateurs</label>
             <input type="text" id="avatarsPath" name="avatarsPath" value="${escapeHtml(values.avatarsPath)}" required>
             <button type="submit">Enregistrer</button>
+        </form>
+        <form method="post" action="/launch" class="launch-form">
+            <button type="submit">Lancer mame</button>
         </form>
     `);
 }
@@ -120,6 +147,50 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         res.send(renderPage('<h1>Configuration enregistrée</h1><p>L\'application redémarre automatiquement.</p>'));
 
         onConfigured();
+    });
+
+    app.post('/launch', (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+
+        if (!config.mamePath || !config.mameBinaryName) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || '', avatarsPath: config.avatarsPath || ''},
+                'Aucune configuration valide enregistrée : impossible de lancer mame.',
+            ));
+            return;
+        }
+
+        const mameBinary = join(config.mamePath, config.mameBinaryName);
+        if (!existsSync(mameBinary)) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath, avatarsPath: config.avatarsPath},
+                `Le binaire "${mameBinary}" est introuvable.`,
+            ));
+            return;
+        }
+
+        // Same launch shape as MameService.startGame(), minus -skip_gameinfo/romName:
+        // no rom selected here, so mame opens its own UI, on the dedicated home
+        // directory mame-awesome-ui always pins it to.
+        const iniPath = getMameHomePath();
+        const mameProcess = execFile(mameBinary, ['-inipath', iniPath, '-homepath', iniPath], {
+            killSignal: 'SIGQUIT',
+            cwd: iniPath,
+        }, error => {
+            if (error) {
+                console.error('[boServer] mame exited with an error:', error);
+            }
+        });
+        mameProcess.once('error', error => {
+            console.error('[boServer] failed to launch mame:', error);
+        });
+
+        res.send(renderForm(
+            {mamePath: config.mamePath, avatarsPath: config.avatarsPath},
+            undefined,
+            'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur cette machine.',
+        ));
     });
 
     return app.listen(port, () => {
