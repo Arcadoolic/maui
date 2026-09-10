@@ -1,10 +1,12 @@
 import express from 'express';
 import {Server} from 'http';
-import {existsSync, mkdirSync} from 'fs';
-import {join} from 'path';
+import {existsSync, mkdirSync, readdirSync} from 'fs';
+import {join, dirname} from 'path';
 import * as os from 'os';
 import {execFile} from 'child_process';
 import Config from '@/class/Config.class';
+
+type PathField = 'mamePath' | 'avatarsPath';
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
 
@@ -53,6 +55,9 @@ function renderPage(body: string): string {
             margin: 48px auto;
             padding: 0 16px;
         }
+        a {
+            color: #8ab4f8;
+        }
         label {
             display: block;
             margin-top: 16px;
@@ -64,9 +69,11 @@ function renderPage(body: string): string {
             margin-top: 4px;
         }
         button {
-            margin-top: 24px;
             padding: 8px 16px;
             color: #000000;
+        }
+        form > button[type="submit"]:last-child {
+            margin-top: 24px;
         }
         .error {
             color: #ff6b6b;
@@ -78,6 +85,39 @@ function renderPage(body: string): string {
             margin-top: 40px;
             padding-top: 24px;
             border-top: 1px solid #333333;
+        }
+        .path-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .path-row input {
+            margin-top: 0;
+        }
+        .current-path {
+            font-family: monospace;
+            word-break: break-all;
+            background-color: #111111;
+            padding: 8px;
+        }
+        .button-link {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #ffffff;
+            color: #000000;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        .browse-list {
+            list-style: none;
+            padding: 0;
+            margin: 16px 0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .browse-list li {
+            padding: 6px 0;
+            border-bottom: 1px solid #222222;
         }
     </style>
 </head>
@@ -92,16 +132,61 @@ function renderForm(values: {mamePath: string, avatarsPath: string}, error?: str
         <h1>Configuration mame-awesome-ui</h1>
         ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
         ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
-        <form method="post" action="/save">
+        <form method="post" action="/save" novalidate>
             <label for="mamePath">Dossier contenant le binaire mame</label>
-            <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}" required>
+            <div class="path-row">
+                <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
+                <button type="submit" formaction="/browse?target=mamePath" formmethod="get">Parcourir</button>
+            </div>
             <label for="avatarsPath">Dossier des avatars utilisateurs</label>
-            <input type="text" id="avatarsPath" name="avatarsPath" value="${escapeHtml(values.avatarsPath)}" required>
+            <div class="path-row">
+                <input type="text" id="avatarsPath" name="avatarsPath" value="${escapeHtml(values.avatarsPath)}">
+                <button type="submit" formaction="/browse?target=avatarsPath" formmethod="get">Parcourir</button>
+            </div>
             <button type="submit">Enregistrer</button>
         </form>
         <form method="post" action="/launch" class="launch-form">
             <button type="submit">Lancer mame</button>
         </form>
+    `);
+}
+
+function renderBrowsePage(target: PathField, currentDir: string, formValues: {mamePath: string, avatarsPath: string}): string {
+    let entries: string[] = [];
+    let error: string|undefined;
+    try {
+        entries = readdirSync(currentDir, {withFileTypes: true})
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name)
+            .sort((a, b) => a.localeCompare(b));
+    } catch {
+        error = `Impossible de lire le dossier "${currentDir}".`;
+    }
+
+    const parentDir = dirname(currentDir);
+    const canGoUp = parentDir !== currentDir;
+    const carryQuery = `mamePath=${encodeURIComponent(formValues.mamePath)}&avatarsPath=${encodeURIComponent(formValues.avatarsPath)}`;
+    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}&${carryQuery}`;
+    const selectLink = (dir: string) => {
+        const selected = {...formValues, [target]: dir};
+        return `/?mamePath=${encodeURIComponent(selected.mamePath)}&avatarsPath=${encodeURIComponent(selected.avatarsPath)}`;
+    };
+
+    const rows = entries.map(name => {
+        const fullPath = join(currentDir, name);
+        return `<li><a href="${navLink(fullPath)}">📁 ${escapeHtml(name)}</a></li>`;
+    }).join('');
+
+    return renderPage(`
+        <h1>Choisir un dossier</h1>
+        <p class="current-path">${escapeHtml(currentDir)}</p>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+        <p>
+            <a class="button-link" href="${selectLink(currentDir)}">Choisir ce dossier</a>
+            ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Dossier parent</a>` : ''}
+        </p>
+        <ul class="browse-list">${rows || '<li><em>Aucun sous-dossier</em></li>'}</ul>
+        <p><a href="/?${carryQuery}">Annuler</a></p>
     `);
 }
 
@@ -112,7 +197,29 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
     app.get('/', (req, res) => {
         const config = new Config(userDataPath);
         config.load();
-        res.send(renderForm({mamePath: config.mamePath || '', avatarsPath: config.avatarsPath || ''}));
+        const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
+        const avatarsPath = typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : (config.avatarsPath || '');
+        res.send(renderForm({mamePath, avatarsPath}));
+    });
+
+    app.get('/browse', (req, res) => {
+        const target: PathField = req.query.target === 'avatarsPath' ? 'avatarsPath' : 'mamePath';
+        const formValues = {
+            mamePath: typeof req.query.mamePath === 'string' ? req.query.mamePath : '',
+            avatarsPath: typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : '',
+        };
+
+        let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : formValues[target];
+        if (!currentDir || !existsSync(currentDir)) {
+            const config = new Config(userDataPath);
+            config.load();
+            currentDir = (target === 'mamePath' ? config.mamePath : config.avatarsPath) || os.homedir();
+        }
+        if (!existsSync(currentDir)) {
+            currentDir = os.homedir();
+        }
+
+        res.send(renderBrowsePage(target, currentDir, formValues));
     });
 
     app.post('/save', (req, res) => {
