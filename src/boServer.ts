@@ -5,6 +5,7 @@ import {join, dirname, sep} from 'path';
 import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
 import Config from '@/class/Config.class';
+import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 
 declare const __static: string;
 
@@ -233,27 +234,8 @@ function getGameDescription(mameBinary: string, iniPath: string, romName: string
     }
 }
 
-/**
- * Same shortname derivation as GameService.saveGamesFromRomNames(): the part of the
- * description before the first "(", trimmed down further to what precedes a ":"/" - "/" / "
- * separator when there is one.
- */
-function deriveShortname(description: string): string {
-    let shortname = description;
-    const shortnameMatch = /^(.[^(]*)/g.exec(description);
-    if (shortnameMatch) {
-        shortname = shortnameMatch[0].trim().replace(/&amp;amp;/g, '&amp;');
-        const subnameMatch = /^([^\-\/]*)(:\s+|\s+-\s+|\s+\/\s+)(.*)$/.exec(shortname);
-        if (subnameMatch) {
-            shortname = subnameMatch[1];
-        }
-    }
-    return shortname;
-}
-
 interface FavoriteRow {
     romName: string;
-    shortname: string;
     fullname: string;
     hasMarquee: boolean;
     hasFlyer: boolean;
@@ -298,7 +280,6 @@ function getFavoritesInfo(config: Config): FavoritesInfo {
         const description = getGameDescription(mameBinary, iniPath, romName);
         return {
             romName,
-            shortname: description ? deriveShortname(description) : romName,
             fullname: description || romName,
             hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
             hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
@@ -306,6 +287,82 @@ function getFavoritesInfo(config: Config): FavoritesInfo {
     });
 
     return {rows};
+}
+
+function hasScreenScraperCredentials(config: Config): boolean {
+    return !!(config.ssDevId && config.ssDevPassword && config.ssSoftName
+        && config.ssUserId && config.ssUserPassword);
+}
+
+interface DownloadSummary {
+    alreadyComplete: number;
+    downloaded: number;
+    notFound: number;
+    errors: string[];
+    stoppedForQuota: boolean;
+}
+
+/**
+ * Downloads the missing marquee/flyer for every favorite that doesn't already have both.
+ * Never re-fetches a game whose marquee AND flyer are both already on disk - the ScreenScraper
+ * call is skipped entirely for those, to keep API usage to the minimum needed.
+ */
+async function downloadMissingFavoriteMedia(
+    credentials: ScreenScraperCredentials,
+    marqueePath: string,
+    flyerPath: string,
+    rows: FavoriteRow[],
+): Promise<DownloadSummary> {
+    const summary: DownloadSummary = {
+        alreadyComplete: 0, downloaded: 0, notFound: 0, errors: [], stoppedForQuota: false,
+    };
+    const client = new ScreenScraperClient(credentials);
+
+    for (const row of rows) {
+        if (row.hasMarquee && row.hasFlyer) {
+            summary.alreadyComplete++;
+            continue;
+        }
+
+        const result = await client.fetchGameMedia(row.romName);
+
+        if (result.status === 'quota-exceeded') {
+            summary.stoppedForQuota = true;
+            summary.errors.push(`${row.romName}: quota ScreenScraper dépassé, arrêt du traitement.`);
+            break;
+        }
+        if (result.status === 'not-found') {
+            summary.notFound++;
+            continue;
+        }
+        if (result.status === 'error') {
+            summary.errors.push(`${row.romName}: ${result.message}`);
+            continue;
+        }
+
+        if (!row.hasMarquee && result.media.marqueeUrl) {
+            const download = await client.downloadMedia(
+                result.media.marqueeUrl, join(marqueePath, row.romName + '.png'), 'marquee',
+            );
+            if (download.status === 'ok') {
+                summary.downloaded++;
+            } else {
+                summary.errors.push(`${row.romName}: ${download.message}`);
+            }
+        }
+        if (!row.hasFlyer && result.media.flyerUrl) {
+            const download = await client.downloadMedia(
+                result.media.flyerUrl, join(flyerPath, row.romName + '.png'), 'flyer',
+            );
+            if (download.status === 'ok') {
+                summary.downloaded++;
+            } else {
+                summary.errors.push(`${row.romName}: ${download.message}`);
+            }
+        }
+    }
+
+    return summary;
 }
 
 function escapeHtml(value: string): string {
@@ -598,7 +655,7 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
 
                 <label for="ssSoftName">Nom du logiciel (softname)</label>
                 <input type="text" id="ssSoftName" name="ssSoftName" value="${escapeHtml(values.ssSoftName)}" autocomplete="off">
-                <label for="ssDevId">Identifiant développeur (devid) — laisser vide pour utiliser celui fourni par défaut</label>
+                <label for="ssDevId">Identifiant développeur (devid) — à créer sur screenscraper.fr, aucune valeur par défaut n'est fournie par l'application</label>
                 <input type="text" id="ssDevId" name="ssDevId" value="${escapeHtml(values.ssDevId)}" autocomplete="off">
                 <label for="ssDevPassword">Mot de passe développeur (devpassword)</label>
                 <input type="password" id="ssDevPassword" name="ssDevPassword" value="${escapeHtml(values.ssDevPassword)}" autocomplete="off">
@@ -616,7 +673,25 @@ function renderFavoriteBadge(found: boolean): string {
     return found ? '<span class="badge-yes">✓</span>' : '<span class="badge-no">✗</span>';
 }
 
-function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
+function renderDownloadSummary(summary: DownloadSummary): string {
+    const parts = [
+        `${summary.alreadyComplete} déjà complet(s)`,
+        `${summary.downloaded} fichier(s) téléchargé(s)`,
+        `${summary.notFound} introuvable(s) sur ScreenScraper`,
+        `${summary.errors.length} erreur(s)`,
+    ];
+    const errorsHtml = summary.errors.length
+        ? `<ul>${summary.errors.map(error => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`
+        : '';
+    return `
+        <p class="info">${escapeHtml(parts.join(' — '))}${summary.stoppedForQuota
+            ? ' — arrêté : quota ScreenScraper dépassé, réessayez plus tard.'
+            : ''}</p>
+        ${errorsHtml}
+    `;
+}
+
+function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, summary?: DownloadSummary): string {
     if (favoritesInfo.error) {
         return `
             <section class="card">
@@ -628,12 +703,24 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
 
     const rows = favoritesInfo.rows.map(row => `
         <tr>
-            <td>${escapeHtml(row.shortname)}</td>
+            <td>${escapeHtml(row.romName)}</td>
             <td>${escapeHtml(row.fullname)}</td>
             <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
             <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
         </tr>
     `).join('');
+
+    const downloadSection = hasCreds
+        ? `
+            ${summary ? renderDownloadSummary(summary) : ''}
+            <form method="post" action="/favorites/download-media">
+                <p class="info">Télécharge les marquees/flyers manquants depuis ScreenScraper pour les favoris
+                ci-dessous. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de favoris
+                (délai imposé entre chaque appel) - ne fermez pas cette page pendant le téléchargement.</p>
+                <button type="submit">Télécharger les visuels manquants</button>
+            </form>
+        `
+        : '<p class="error">Identifiants ScreenScraper manquants : configurez-les dans l\'onglet ScreenScraper.</p>';
 
     return `
         <section class="card">
@@ -651,12 +738,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                     <tbody>${rows}</tbody>
                 </table>
             </div>
+            ${downloadSection}
         </section>
     `;
 }
 
-function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
-    return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
+function renderFavoritesPage(favoritesInfo: FavoritesInfo, hasCreds: boolean, summary?: DownloadSummary): string {
+    return renderPage(renderFavoritesCard(favoritesInfo, hasCreds, summary), 'favorites');
 }
 
 function renderBrowsePage(target: PathField, currentDir: string, formValues: {mamePath: string, avatarsPath: string}): string {
@@ -731,7 +819,54 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
     app.get('/favorites', (req, res) => {
         const config = new Config(userDataPath);
         config.load();
-        res.send(renderFavoritesPage(getFavoritesInfo(config)));
+        res.send(renderFavoritesPage(getFavoritesInfo(config), hasScreenScraperCredentials(config)));
+    });
+
+    app.post('/favorites/download-media', async (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+
+        if (!hasScreenScraperCredentials(config)) {
+            res.send(renderFavoritesPage(getFavoritesInfo(config), false));
+            return;
+        }
+
+        try {
+            const iniPath = getMameHomePath();
+            const {marqueePath, flyerPath} = getMameLocations(iniPath);
+            const favoritesInfo = getFavoritesInfo(config);
+
+            if (favoritesInfo.error || !marqueePath || !flyerPath) {
+                res.send(renderFavoritesPage(favoritesInfo, true));
+                return;
+            }
+
+            const summary = await downloadMissingFavoriteMedia(
+                {
+                    devId: config.ssDevId,
+                    devPassword: config.ssDevPassword,
+                    softName: config.ssSoftName,
+                    userId: config.ssUserId,
+                    userPassword: config.ssUserPassword,
+                },
+                marqueePath,
+                flyerPath,
+                favoritesInfo.rows,
+            );
+
+            // Re-read so the badges reflect the files just written to disk.
+            res.send(renderFavoritesPage(getFavoritesInfo(config), true, summary));
+        } catch (error) {
+            console.error('[boServer] ScreenScraper download failed:', error);
+            res.send(renderFavoritesPage(
+                getFavoritesInfo(config),
+                true,
+                {
+                    alreadyComplete: 0, downloaded: 0, notFound: 0, stoppedForQuota: false,
+                    errors: [error instanceof Error ? error.message : 'Erreur inattendue.'],
+                },
+            ));
+        }
     });
 
     app.post('/screenscraper/save', (req, res) => {
