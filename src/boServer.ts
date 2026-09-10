@@ -172,6 +172,84 @@ function setMameIniValue(mameIniPath: string, key: string, value: string): boole
     return true;
 }
 
+interface AvailablePlugin {
+    name: string;
+    defaultStart: boolean;
+}
+
+/**
+ * Lists every standalone (non-library) plugin mame ships under pluginsPath, by reading each
+ * subdirectory's plugin.json manifest - same manifest mame itself uses to populate plugin.ini
+ * via -createconfig. Skips "library" plugins (commonui, json, xml...): they're dependencies
+ * other plugins require(), not something to toggle on/off themselves.
+ */
+// Plugins mame-awesome-ui's own features depend on, forced enabled regardless of mame's own
+// manifest default - "hiscore" ships with start:"false" upstream, but HiscoreService.class.ts
+// needs it running to read the .hi files it writes.
+const REQUIRED_PLUGINS = ['hiscore'];
+
+function getAvailablePlugins(pluginsPath: string | null): AvailablePlugin[] {
+    if (!pluginsPath || !existsSync(pluginsPath)) {
+        return [];
+    }
+    const plugins: AvailablePlugin[] = [];
+    for (const entry of readdirSync(pluginsPath, {withFileTypes: true})) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+        const manifestPath = join(pluginsPath, entry.name, 'plugin.json');
+        if (!existsSync(manifestPath)) {
+            continue;
+        }
+        try {
+            const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+            if (manifest?.plugin?.type !== 'plugin') {
+                continue;
+            }
+            const name = manifest.plugin.name || entry.name;
+            plugins.push({
+                name,
+                defaultStart: REQUIRED_PLUGINS.includes(name) || manifest.plugin.start === 'true',
+            });
+        } catch {
+            // Malformed/unreadable manifest - skip it rather than fail the whole listing.
+        }
+    }
+    return plugins;
+}
+
+/**
+ * Names of available plugins that plugin.ini doesn't mention at all yet - e.g. plugin.ini was
+ * never properly generated (empty/missing) because pluginspath was wrong when mame first ran
+ * -createconfig. Existing entries (whatever their value) are left alone; only gaps are reported.
+ */
+function getMissingPlugins(pluginIniPath: string, availablePlugins: AvailablePlugin[]): string[] {
+    const existing = existsSync(pluginIniPath)
+        ? parseMameIniFile(readFileSync(pluginIniPath, 'utf8'))
+        : {};
+    return availablePlugins.filter(plugin => !(plugin.name in existing)).map(plugin => plugin.name);
+}
+
+/**
+ * Appends one line per plugin missing from plugin.ini, using each plugin's own manifest
+ * default (plugin.json's "start" field) - the same default mame's own -createconfig would
+ * have written. Never touches a plugin that's already listed, however it's currently set.
+ */
+function repairPluginIni(pluginIniPath: string, availablePlugins: AvailablePlugin[]): number {
+    const existing = existsSync(pluginIniPath)
+        ? parseMameIniFile(readFileSync(pluginIniPath, 'utf8'))
+        : {};
+    const missing = availablePlugins.filter(plugin => !(plugin.name in existing));
+    if (!missing.length) {
+        return 0;
+    }
+    const additions = missing.map(plugin => `${plugin.name.padEnd(27)}${plugin.defaultStart ? '1' : '0'}`);
+    const currentContent = existsSync(pluginIniPath) ? readFileSync(pluginIniPath, 'utf8') : '';
+    const updated = `${currentContent.replace(/\s*$/, '')}\n${additions.join('\n')}\n`;
+    writeFileSync(pluginIniPath, updated);
+    return missing.length;
+}
+
 interface MameInfo {
     iniPath: string;
     mameIniPath: string;
@@ -181,6 +259,8 @@ interface MameInfo {
     flyerPath: string | null;
     favoritesPath: string | null;
     windowed: boolean;
+    pluginsPath: string | null;
+    missingPlugins: string[];
     error?: string;
 }
 
@@ -188,12 +268,17 @@ function getMameInfo(config: Config): MameInfo {
     const iniPath = getMameHomePath();
     const mameIniPath = join(iniPath, 'mame.ini');
     const uiIniPath = join(iniPath, 'ui.ini');
+    const pluginIniPath = join(iniPath, 'plugin.ini');
     const {marqueePath, flyerPath, favoritesPath} = getMameLocations(iniPath);
     const windowed = getMameIniValue(mameIniPath, 'window') === '1';
+    const pluginsPath = getMameIniValue(mameIniPath, 'pluginspath');
+    const resolvedPluginsPath = pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : null;
+    const missingPlugins = getMissingPlugins(pluginIniPath, getAvailablePlugins(resolvedPluginsPath));
 
     if (!config.mamePath || !config.mameBinaryName) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath, windowed,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            windowed, pluginsPath, missingPlugins,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
     }
@@ -201,7 +286,8 @@ function getMameInfo(config: Config): MameInfo {
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath, windowed,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            windowed, pluginsPath, missingPlugins,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -214,10 +300,14 @@ function getMameInfo(config: Config): MameInfo {
         );
         const parsed = parseMameIniFile(output.toString());
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
-        return {iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, favoritesPath, windowed};
+        return {
+            iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, favoritesPath,
+            windowed, pluginsPath, missingPlugins,
+        };
     } catch {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath, windowed,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            windowed, pluginsPath, missingPlugins,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
@@ -752,12 +842,22 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                 </div>
             </dl>
             <form method="post" action="/mame-options/save">
+                <label for="pluginsPath">Dossier des plugins MAME (pluginspath)</label>
+                <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(mameInfo.pluginsPath || '')}">
                 <label class="checkbox-row">
                     <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
                     Lancer MAME en mode fenêtré (au lieu du plein écran) - modifie mame.ini
                 </label>
                 <button type="submit">Enregistrer</button>
             </form>
+            ${mameInfo.missingPlugins.length ? `
+                <form method="post" action="/mame-options/repair-plugins">
+                    <p class="error">plugin.ini est incomplet : ${mameInfo.missingPlugins.length} plugin(s)
+                    détecté(s) dans le dossier des plugins mais absent(s) de plugin.ini
+                    (${escapeHtml(mameInfo.missingPlugins.join(', '))}).</p>
+                    <button type="submit">Réparer plugin.ini (ajouter les plugins manquants)</button>
+                </form>
+            ` : ''}
         </section>
     `;
 }
@@ -1204,7 +1304,12 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         const iniPath = getMameHomePath();
         const mameIniPath = join(iniPath, 'mame.ini');
         const windowed = req.body.windowed === 'on';
-        const saved = setMameIniValue(mameIniPath, 'window', windowed ? '1' : '0');
+        const pluginsPath: string = (req.body.pluginsPath || '').trim();
+
+        let saved = setMameIniValue(mameIniPath, 'window', windowed ? '1' : '0');
+        if (pluginsPath) {
+            saved = setMameIniValue(mameIniPath, 'pluginspath', pluginsPath) && saved;
+        }
 
         res.send(renderForm(
             {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
@@ -1212,8 +1317,30 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
             undefined,
             undefined,
             saved
-                ? 'Option "fenêtré" mise à jour dans mame.ini.'
-                : 'mame.ini introuvable - configurez et lancez mame au moins une fois avant de changer cette option.',
+                ? 'Options MAME mises à jour dans mame.ini.'
+                : 'mame.ini introuvable - configurez et lancez mame au moins une fois avant de changer ces options.',
+        ));
+    });
+
+    app.post('/mame-options/repair-plugins', (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+
+        const iniPath = getMameHomePath();
+        const mameIniPath = join(iniPath, 'mame.ini');
+        const pluginIniPath = join(iniPath, 'plugin.ini');
+        const pluginsPath = getMameIniValue(mameIniPath, 'pluginspath');
+        const resolvedPluginsPath = pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : null;
+        const added = repairPluginIni(pluginIniPath, getAvailablePlugins(resolvedPluginsPath));
+
+        res.send(renderForm(
+            {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
+            getMameInfo(config),
+            undefined,
+            undefined,
+            added
+                ? `${added} plugin(s) ajouté(s) à plugin.ini (valeurs par défaut de mame).`
+                : 'Rien à réparer : plugin.ini contient déjà tous les plugins détectés (ou aucun plugin trouvé - vérifiez le dossier des plugins ci-dessus).',
         ));
     });
 
