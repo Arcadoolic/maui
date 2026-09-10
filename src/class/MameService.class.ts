@@ -72,7 +72,8 @@ export default class MameService {
             'favorites.ini',
         );
         if (!favoritePath) {
-            throw new Error('Unable to read or parse favorites.ini - ' + favoritePath);
+            // No favorites.ini yet (e.g. fresh MAME install, no favorite added) - treat as empty list
+            return [];
         }
         const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
         const file = readFileSync(favoritePath!, 'utf8').split('\n');
