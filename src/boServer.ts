@@ -183,6 +183,11 @@ interface AvailablePlugin {
  * via -createconfig. Skips "library" plugins (commonui, json, xml...): they're dependencies
  * other plugins require(), not something to toggle on/off themselves.
  */
+// Plugins mame-awesome-ui's own features depend on, forced enabled regardless of mame's own
+// manifest default - "hiscore" ships with start:"false" upstream, but HiscoreService.class.ts
+// needs it running to read the .hi files it writes.
+const REQUIRED_PLUGINS = ['hiscore'];
+
 function getAvailablePlugins(pluginsPath: string | null): AvailablePlugin[] {
     if (!pluginsPath || !existsSync(pluginsPath)) {
         return [];
@@ -201,9 +206,10 @@ function getAvailablePlugins(pluginsPath: string | null): AvailablePlugin[] {
             if (manifest?.plugin?.type !== 'plugin') {
                 continue;
             }
+            const name = manifest.plugin.name || entry.name;
             plugins.push({
-                name: manifest.plugin.name || entry.name,
-                defaultStart: manifest.plugin.start === 'true',
+                name,
+                defaultStart: REQUIRED_PLUGINS.includes(name) || manifest.plugin.start === 'true',
             });
         } catch {
             // Malformed/unreadable manifest - skip it rather than fail the whole listing.
