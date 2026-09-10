@@ -216,27 +216,47 @@ function extractXmlTagContent(xml: string, tagName: string): string | null {
     return match ? match[1] : null;
 }
 
+function extractXmlAttribute(xml: string, tagName: string, attributeName: string): string | null {
+    const tagMatch = new RegExp(`<${tagName}\\b[^>]*>`).exec(xml);
+    if (!tagMatch) {
+        return null;
+    }
+    const attrMatch = new RegExp(`${attributeName}="([^"]*)"`).exec(tagMatch[0]);
+    return attrMatch ? attrMatch[1] : null;
+}
+
+interface GameXmlInfo {
+    description: string | null;
+    // The name of the separate BIOS set this game needs (mame -lx's `romof` attribute on
+    // <machine>), e.g. "neogeo" - null when the game is self-contained.
+    biosName: string | null;
+}
+
 /**
- * Same per-rom lookup as MameService.getGameInformation(), but with regex tag extraction
- * instead of DOMParser: DOMParser is a browser global available in the renderer, not in
- * this main-process server.
+ * Same per-rom lookup as MameService.getGameInformation(), but with regex tag/attribute
+ * extraction instead of DOMParser: DOMParser is a browser global available in the renderer,
+ * not in this main-process server.
  */
-function getGameDescription(mameBinary: string, iniPath: string, romName: string): string | null {
+function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): GameXmlInfo {
     try {
         const xmlContent = execFileSync(
             mameBinary,
             ['-lx', romName, '-inipath', iniPath, '-homepath', iniPath],
             {encoding: 'utf8', cwd: iniPath},
         );
-        return extractXmlTagContent(xmlContent, 'description');
+        return {
+            description: extractXmlTagContent(xmlContent, 'description'),
+            biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
+        };
     } catch {
-        return null;
+        return {description: null, biosName: null};
     }
 }
 
 interface FavoriteRow {
     romName: string;
     fullname: string;
+    biosName: string | null;
     hasMarquee: boolean;
     hasFlyer: boolean;
 }
@@ -277,10 +297,11 @@ function getFavoritesInfo(config: Config): FavoritesInfo {
     }
 
     const rows: FavoriteRow[] = romNames.map((romName) => {
-        const description = getGameDescription(mameBinary, iniPath, romName);
+        const {description, biosName} = getGameXmlInfo(mameBinary, iniPath, romName);
         return {
             romName,
             fullname: description || romName,
+            biosName,
             hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
             hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
         };
@@ -543,6 +564,12 @@ function renderPage(body: string, active: Tab = 'mame'): string {
         .badge-no {
             color: #ff6b6b;
         }
+        .info-icon {
+            display: inline-flex;
+            vertical-align: middle;
+            color: #8ab4f8;
+            cursor: help;
+        }
     </style>
 </head>
 <body>
@@ -682,6 +709,36 @@ function renderFavoriteBadge(found: boolean): string {
     return found ? '<span class="badge-yes">✓</span>' : '<span class="badge-no">✗</span>';
 }
 
+/**
+ * Splits a MAME description ("Ghosts'n Goblins (World? set 1)", sometimes with several
+ * parenthesized groups like "(Japan) (Alt)") into the plain name and the parenthesized
+ * region/revision info (kept with their own parentheses, each group separate), so the table
+ * can show the short name and move the (often long) extra info into a tooltip instead of
+ * widening the column.
+ */
+function splitGameName(fullname: string): { name: string; extra: string | null } {
+    const groups = fullname.match(/\([^)]*\)/g);
+    if (!groups) {
+        return {name: fullname, extra: null};
+    }
+    const name = fullname.slice(0, fullname.indexOf('(')).trim();
+    return {name, extra: groups.join(' ')};
+}
+
+function renderGameName(fullname: string): string {
+    const {name, extra} = splitGameName(fullname);
+    if (!extra) {
+        return escapeHtml(name);
+    }
+    return `${escapeHtml(name)} <span class="info-icon" title="${escapeHtml(extra)}">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
+            <rect x="7.25" y="7" width="1.5" height="5" fill="currentColor"/>
+        </svg>
+    </span>`;
+}
+
 function renderDownloadSummary(summary: DownloadSummary): string {
     const parts = [
         `${summary.alreadyComplete} déjà complet(s)`,
@@ -714,7 +771,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
     const rows = favoritesInfo.rows.map(row => `
         <tr>
             <td>${escapeHtml(row.romName)}</td>
-            <td>${escapeHtml(row.fullname)}</td>
+            <td>${renderGameName(row.fullname)}</td>
+            <td>${row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
             <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
             <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
         </tr>
@@ -741,6 +799,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
                         <tr>
                             <th>Shortname</th>
                             <th>Name</th>
+                            <th>BIOS requis</th>
                             <th class="center">Marquee</th>
                             <th class="center">Flyer</th>
                         </tr>
