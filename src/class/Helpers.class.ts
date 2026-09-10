@@ -1,6 +1,6 @@
 import * as os from 'os';
 import {join, sep} from 'path';
-import {existsSync} from 'fs';
+import {existsSync, mkdirSync} from 'fs';
 import * as remote from '@electron/remote';
 
 export default class Helpers {
@@ -38,5 +38,17 @@ export default class Helpers {
 
     public static getUserDataPath() {
         return process.env.NODE_ENV === 'development' ? '.' : remote.app.getPath('userData');
+    }
+
+    /**
+     * Dedicated, stable directory where mame is forced to read its ini files from and
+     * write its own state (cfg, nvram, snapshots, ...), regardless of the app's cwd.
+     */
+    public static getMameHomePath(): string {
+        const homePath = join(os.homedir(), '.mame-awesome-ui', 'mame-home');
+        if (!existsSync(homePath)) {
+            mkdirSync(homePath, {recursive: true});
+        }
+        return homePath;
     }
 }

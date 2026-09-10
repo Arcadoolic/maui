@@ -1,4 +1,4 @@
-import {readFileSync} from 'fs';
+import {existsSync, readFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
@@ -20,26 +20,37 @@ export default class MameService {
      */
     public constructor(config: Config) {
         this.config = config;
-        const mameIniContent = execFileSync(this.mameBinary, ['-showconfig']);
-        if (!MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni)) {
-            throw new Error('File missing or failed parsing ' + join(this.config.mamePath, 'mame.ini'));
+        // Force mame to read/write everything (ini files, cfg, nvram, snapshots, ...) from a
+        // dedicated, stable directory instead of wherever it happens to be launched from.
+        this.iniPath = Helpers.getMameHomePath();
+
+        const uiIniPath = join(this.iniPath, 'ui.ini');
+        if (!existsSync(uiIniPath)) {
+            // -createconfig always writes mame.ini/ui.ini next to cwd, ignoring -inipath/-homepath,
+            // so bootstrap the dedicated home directory by running it from there.
+            execFileSync(this.mameBinary, ['-createconfig'], {cwd: this.iniPath});
         }
-        if (!this.mameIni.inipath) {
-            throw new Error('ui value is missing in mame.ini');
+        if (!existsSync(uiIniPath)) {
+            throw new Error('File missing or failed parsing ' + uiIniPath);
         }
-        const iniPath = Helpers.getFirstExistingDirectory(this.mameIni.inipath, this.config.mamePath) || '';
-        if (!iniPath) {
-            throw new Error('File missing or failed parsing ui.ini');
-        }
-        this.iniPath = iniPath;
-        const uiIniContent = readFileSync(join(this.iniPath, 'ui.ini'), 'utf8');
-        if (!MameService.parseMameIniFile(uiIniContent, this.uiIni)) {
-            throw new Error('File missing or failed parsing ' + join(this.iniPath, 'ui.ini'));
-        }
+
+        const mameIniContent = execFileSync(this.mameBinary, ['-showconfig', ...this.mameHomeArgs], {cwd: this.iniPath});
+        MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni);
+
+        const uiIniContent = readFileSync(uiIniPath, 'utf8');
+        MameService.parseMameIniFile(uiIniContent, this.uiIni);
     }
 
     public get mameBinary() {
         return join(this.config.mamePath, this.config.mameBinaryName);
+    }
+
+    /**
+     * CLI args forcing mame to use the dedicated home directory for both ini lookup
+     * and everything it would otherwise write relative to its own cwd.
+     */
+    protected get mameHomeArgs(): string[] {
+        return ['-inipath', this.iniPath, '-homepath', this.iniPath];
     }
 
     /**
@@ -96,7 +107,7 @@ export default class MameService {
     public getGameInformation(romName: string) {
         const parser = new DOMParser();
         const xml = parser.parseFromString(
-            execFileSync(this.mameBinary, ['-lx', romName], {encoding: 'utf8'}),
+            execFileSync(this.mameBinary, ['-lx', romName, ...this.mameHomeArgs], {encoding: 'utf8', cwd: this.iniPath}),
             'text/xml',
         );
         return {
@@ -133,7 +144,7 @@ export default class MameService {
     public startGame(romName: string): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
-            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', romName], {
+            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', romName, ...this.mameHomeArgs], {
                 killSignal: 'SIGQUIT',
                 cwd: this.iniPath,
             }, (error, stdout, stderr) => {
