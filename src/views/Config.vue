@@ -21,7 +21,7 @@
     import {Component, Vue} from 'vue-property-decorator';
     import * as remote from '@electron/remote';
     import {sep, join} from 'path';
-    import {lstatSync, existsSync, mkdirSync} from 'fs';
+    import {statSync, existsSync, mkdirSync} from 'fs';
     import Helpers from '@/class/Helpers.class';
     import * as os from 'os';
 
@@ -54,16 +54,16 @@
 
             const mameBinaryNames = ['mame.exe', 'mame64.exe', 'mame'];
 
-            const mameDirPath = await remote.dialog.showOpenDialog({
+            const {canceled, filePaths} = await remote.dialog.showOpenDialog({
                 title: 'Select mame binary path',
                 properties: ['openDirectory', 'showHiddenFiles'],
                 defaultPath,
             });
 
-            if (mameDirPath) {
-                const mamePath = Helpers.getFirstExistingDirectory(mameBinaryNames, mameDirPath[0]);
-                if (mamePath && lstatSync(mamePath).isFile()) {
-                    this.mamePath = mameDirPath[0];
+            if (!canceled) {
+                const mamePath = Helpers.getFirstExistingDirectory(mameBinaryNames, filePaths[0]);
+                if (mamePath && statSync(mamePath).isFile()) {
+                    this.mamePath = filePaths[0];
                     this.mameBinaryName = mamePath.split(sep).slice(-1)[0];
                 } else {
                     remote.dialog.showErrorBox('Path invalid', `Selected path "${mamePath}" is invalid.`);
@@ -72,16 +72,20 @@
         }
 
         public async selectAvatarsPath() {
-            const avatarsDirPath = await remote.dialog.showOpenDialog({
+            const {canceled, filePaths} = await remote.dialog.showOpenDialog({
                 title: 'Select avatars directory path',
                 properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
                 defaultPath: Helpers.getUserDataPath(),
             });
 
-            if (!existsSync(join(avatarsDirPath[0], 'mame-awesome-ui-avatars'))) {
-                mkdirSync(join(avatarsDirPath[0], 'mame-awesome-ui-avatars'));
+            if (canceled) {
+                return;
             }
-            this.avatarsPath = join(avatarsDirPath[0], 'mame-awesome-ui-avatars');
+
+            if (!existsSync(join(filePaths[0], 'mame-awesome-ui-avatars'))) {
+                mkdirSync(join(filePaths[0], 'mame-awesome-ui-avatars'));
+            }
+            this.avatarsPath = join(filePaths[0], 'mame-awesome-ui-avatars');
         }
 
         public save() {
