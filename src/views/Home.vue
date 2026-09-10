@@ -105,6 +105,9 @@
 
             if (process.env.NODE_ENV !== 'development') {
                 remote.getCurrentWindow().setFullScreen(true);
+            } else {
+                remote.getCurrentWindow().setSize(1280, 720);
+                remote.getCurrentWindow().center();
             }
 
             const mameService = this.$store.getters.mameService;
