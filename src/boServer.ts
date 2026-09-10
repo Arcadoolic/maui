@@ -6,6 +6,8 @@ import * as os from 'os';
 import {execFile} from 'child_process';
 import Config from '@/class/Config.class';
 
+declare const __static: string;
+
 type PathField = 'mamePath' | 'avatarsPath';
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -47,13 +49,22 @@ function renderPage(body: string): string {
     <meta charset="utf-8">
     <title>mame-awesome-ui - Configuration</title>
     <style>
-        body {
+        html {
+            min-height: 100%;
             background-color: #000000;
+            background-image: url('/background.jpg');
+            background-size: cover;
+            background-repeat: repeat;
+            background-position: 0 0;
+        }
+        body {
             color: #ffffff;
             font-family: sans-serif;
             max-width: 480px;
             margin: 48px auto;
-            padding: 0 16px;
+            padding: 24px 16px;
+            background-color: rgba(0, 0, 0, 0.55);
+            border-radius: 8px;
         }
         a {
             color: #8ab4f8;
@@ -193,6 +204,10 @@ function renderBrowsePage(target: PathField, currentDir: string, formValues: {ma
 export function startBoServer(userDataPath: string, port: number, onConfigured: () => void): Server {
     const app = express();
     app.use(express.urlencoded({extended: false}));
+
+    app.get('/background.jpg', (req, res) => {
+        res.sendFile(join(__static, 'img/background.jpg'));
+    });
 
     app.get('/', (req, res) => {
         const config = new Config(userDataPath);
