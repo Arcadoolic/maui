@@ -6,6 +6,13 @@ export default class Config {
     public mameBinaryName: string =  '';
     public avatarsPath: string = '';
 
+    // ScreenScraper API (screenscraper.fr) credentials, used to fetch marquees/artworks.
+    public ssDevId: string = '';
+    public ssDevPassword: string = '';
+    public ssSoftName: string = '';
+    public ssUserId: string = '';
+    public ssUserPassword: string = '';
+
     protected configPath!: string;
     protected _configLoaded: boolean = false;
 
@@ -30,6 +37,12 @@ export default class Config {
             this.mameBinaryName = configFile.mameBinaryName;
             this.avatarsPath = configFile.avatarsPath;
 
+            this.ssDevId = configFile.ssDevId || '';
+            this.ssDevPassword = configFile.ssDevPassword || '';
+            this.ssSoftName = configFile.ssSoftName || '';
+            this.ssUserId = configFile.ssUserId || '';
+            this.ssUserPassword = configFile.ssUserPassword || '';
+
             this._configLoaded = true;
             return true;
         }
@@ -47,6 +60,11 @@ export default class Config {
                 mamePath: this.mamePath,
                 mameBinaryName: this.mameBinaryName,
                 avatarsPath: this.avatarsPath,
+                ssDevId: this.ssDevId,
+                ssDevPassword: this.ssDevPassword,
+                ssSoftName: this.ssSoftName,
+                ssUserId: this.ssUserId,
+                ssUserPassword: this.ssUserPassword,
             }),
         );
     }

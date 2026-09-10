@@ -9,6 +9,15 @@ import Config from '@/class/Config.class';
 declare const __static: string;
 
 type PathField = 'mamePath' | 'avatarsPath';
+type Tab = 'mame' | 'screenscraper';
+
+interface ScreenScraperValues {
+    ssDevId: string;
+    ssDevPassword: string;
+    ssSoftName: string;
+    ssUserId: string;
+    ssUserPassword: string;
+}
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
 
@@ -106,7 +115,7 @@ function escapeHtml(value: string): string {
         .replace(/"/g, '&quot;');
 }
 
-function renderPage(body: string): string {
+function renderPage(body: string, active: Tab = 'mame'): string {
     return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -135,6 +144,24 @@ function renderPage(body: string): string {
         header h1 {
             margin: 0;
             font-size: 1.4em;
+        }
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            margin-top: 16px;
+            border-bottom: 1px solid #333333;
+        }
+        .tabs a {
+            display: inline-block;
+            padding: 8px 16px;
+            color: #aaaaaa;
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+        }
+        .tabs a.active {
+            color: #ffffff;
+            border-bottom-color: #8ab4f8;
         }
         .card {
             background-color: rgba(0, 0, 0, 0.55);
@@ -228,7 +255,13 @@ function renderPage(body: string): string {
     </style>
 </head>
 <body>
-    <header><h1>mame-awesome-ui</h1></header>
+    <header>
+        <h1>mame-awesome-ui</h1>
+        <nav class="tabs">
+            <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
+            <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
+        </nav>
+    </header>
     ${body}
 </body>
 </html>`;
@@ -309,7 +342,38 @@ function renderForm(
         renderConfigCard(values, error, info)
         + renderMameInfoCard(mameInfo)
         + renderActionsCard(),
+        'mame',
     );
+}
+
+function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
+    return `
+        <section class="card">
+            <h2>ScreenScraper</h2>
+            <p>Identifiants utilisés pour récupérer marquees, flyers et autres visuels depuis
+            <a href="https://www.screenscraper.fr" target="_blank" rel="noopener">screenscraper.fr</a>.</p>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="post" action="/screenscraper/save" novalidate>
+                <label for="ssUserId">Identifiant utilisateur (ssid)</label>
+                <input type="text" id="ssUserId" name="ssUserId" value="${escapeHtml(values.ssUserId)}" autocomplete="off">
+                <label for="ssUserPassword">Mot de passe utilisateur (sspassword)</label>
+                <input type="password" id="ssUserPassword" name="ssUserPassword" value="${escapeHtml(values.ssUserPassword)}" autocomplete="off">
+
+                <label for="ssSoftName">Nom du logiciel (softname)</label>
+                <input type="text" id="ssSoftName" name="ssSoftName" value="${escapeHtml(values.ssSoftName)}" autocomplete="off">
+                <label for="ssDevId">Identifiant développeur (devid) — laisser vide pour utiliser celui fourni par défaut</label>
+                <input type="text" id="ssDevId" name="ssDevId" value="${escapeHtml(values.ssDevId)}" autocomplete="off">
+                <label for="ssDevPassword">Mot de passe développeur (devpassword)</label>
+                <input type="password" id="ssDevPassword" name="ssDevPassword" value="${escapeHtml(values.ssDevPassword)}" autocomplete="off">
+                <button type="submit">Enregistrer</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderScreenScraperPage(values: ScreenScraperValues, error?: string, info?: string): string {
+    return renderPage(renderScreenScraperCard(values, error, info), 'screenscraper');
 }
 
 function renderBrowsePage(target: PathField, currentDir: string, formValues: {mamePath: string, avatarsPath: string}): string {
@@ -367,6 +431,39 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
         const avatarsPath = typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : (config.avatarsPath || '');
         res.send(renderForm({mamePath, avatarsPath}, getMameInfo(config)));
+    });
+
+    app.get('/screenscraper', (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+        res.send(renderScreenScraperPage({
+            ssDevId: config.ssDevId,
+            ssDevPassword: config.ssDevPassword,
+            ssSoftName: config.ssSoftName,
+            ssUserId: config.ssUserId,
+            ssUserPassword: config.ssUserPassword,
+        }));
+    });
+
+    app.post('/screenscraper/save', (req, res) => {
+        const values: ScreenScraperValues = {
+            ssDevId: (req.body.ssDevId || '').trim(),
+            ssDevPassword: (req.body.ssDevPassword || '').trim(),
+            ssSoftName: (req.body.ssSoftName || '').trim(),
+            ssUserId: (req.body.ssUserId || '').trim(),
+            ssUserPassword: (req.body.ssUserPassword || '').trim(),
+        };
+
+        const config = new Config(userDataPath);
+        config.load();
+        config.ssDevId = values.ssDevId;
+        config.ssDevPassword = values.ssDevPassword;
+        config.ssSoftName = values.ssSoftName;
+        config.ssUserId = values.ssUserId;
+        config.ssUserPassword = values.ssUserPassword;
+        config.save();
+
+        res.send(renderScreenScraperPage(values, undefined, 'Configuration ScreenScraper enregistrée.'));
     });
 
     app.get('/browse', (req, res) => {
