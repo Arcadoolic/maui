@@ -83,7 +83,9 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
     app.use(express.urlencoded({extended: false}));
 
     app.get('/', (req, res) => {
-        res.send(renderForm({mamePath: '', avatarsPath: ''}));
+        const config = new Config(userDataPath);
+        config.load();
+        res.send(renderForm({mamePath: config.mamePath || '', avatarsPath: config.avatarsPath || ''}));
     });
 
     app.post('/save', (req, res) => {
@@ -117,13 +119,10 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
 
         res.send(renderPage('<h1>Configuration enregistrée</h1><p>L\'application redémarre automatiquement.</p>'));
 
-        server.close();
         onConfigured();
     });
 
-    const server = app.listen(port, () => {
+    return app.listen(port, () => {
         console.log(`BO server listening on http://localhost:${port}`);
     });
-
-    return server;
 }

@@ -7,8 +7,8 @@ import {
     installVueDevtools
 } from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
+import {Server} from 'http';
 import api from '@/api/api';
-import Config from '@/class/Config.class';
 import {startBoServer} from '@/boServer';
 import {BO_SERVER_PORT} from '@/boServerPort';
 
@@ -20,6 +20,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 // be closed automatically when the JavaScript object is garbage collected.
 let createdAppProtocol = false;
 let win: BrowserWindow|null;
+let boServer: Server|undefined;
 
 // Standard scheme must be registered before the app is ready
 protocol.registerSchemesAsPrivileged([
@@ -87,14 +88,15 @@ app.on('ready', async () => {
     win = createSplashWin();
     // api(app.getPath('userData'), ipcMain, win);
 
-    const config = new Config(app.getPath('userData'));
-    if (!config.exist()) {
-        startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
-            if (win) {
-                loadPath(win, 'init');
-            }
-        });
-    }
+    boServer = startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
+        if (win) {
+            loadPath(win, 'init');
+        }
+    });
+});
+
+app.on('will-quit', () => {
+    boServer?.close();
 });
 
 // Exit cleanly on request from parent process in development mode.
