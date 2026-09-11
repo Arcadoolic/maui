@@ -211,6 +211,7 @@ interface MameLocations {
     uiIni: { [key: string]: string[] };
     marqueePath: string | null;
     flyerPath: string | null;
+    logoPath: string | null;
     favoritesPath: string | null;
 }
 
@@ -219,8 +220,10 @@ function getMameLocations(iniPath: string): MameLocations {
     const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
     const marqueePath = ensureFirstDirectory(uiIni.marquees_directory, iniPath);
     const flyerPath = ensureFirstDirectory(uiIni.flyers_directory, iniPath);
+    // ui.ini's own name for mame's game-logo ("wheel") art directory - defaults to "logo".
+    const logoPath = ensureFirstDirectory(uiIni.logos_directory, iniPath);
     const favoritesPath = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
-    return {uiIni, marqueePath, flyerPath, favoritesPath};
+    return {uiIni, marqueePath, flyerPath, logoPath, favoritesPath};
 }
 
 /**
@@ -359,6 +362,7 @@ interface MameInfo {
     romPath: string | null;
     marqueePath: string | null;
     flyerPath: string | null;
+    logoPath: string | null;
     favoritesPath: string | null;
     windowed: boolean;
     pluginsPath: string | null;
@@ -371,7 +375,7 @@ function getMameInfo(config: Config): MameInfo {
     const mameIniPath = join(iniPath, 'mame.ini');
     const uiIniPath = join(iniPath, 'ui.ini');
     const pluginIniPath = join(iniPath, 'plugin.ini');
-    const {marqueePath, flyerPath, favoritesPath} = getMameLocations(iniPath);
+    const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
     const windowed = getMameIniValue(mameIniPath, 'window') === '1';
     const pluginsPath = getMameIniValue(mameIniPath, 'pluginspath');
     const resolvedPluginsPath = pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : null;
@@ -379,7 +383,7 @@ function getMameInfo(config: Config): MameInfo {
 
     if (!config.mamePath || !config.mameBinaryName) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
             windowed, pluginsPath, missingPlugins,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
@@ -388,7 +392,7 @@ function getMameInfo(config: Config): MameInfo {
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
             windowed, pluginsPath, missingPlugins,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
@@ -403,12 +407,12 @@ function getMameInfo(config: Config): MameInfo {
         const parsed = parseMameIniFile(output.toString());
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
         return {
-            iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, logoPath, favoritesPath,
             windowed, pluginsPath, missingPlugins,
         };
     } catch {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, favoritesPath,
+            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
             windowed, pluginsPath, missingPlugins,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
@@ -483,6 +487,7 @@ interface FavoriteRow {
     biosName: string | null;
     hasMarquee: boolean;
     hasFlyer: boolean;
+    hasLogo: boolean;
 }
 
 interface FavoritesInfo {
@@ -492,7 +497,7 @@ interface FavoritesInfo {
 
 function getFavoritesInfo(config: Config): FavoritesInfo {
     const iniPath = getMameHomePath();
-    const {marqueePath, flyerPath, favoritesPath} = getMameLocations(iniPath);
+    const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
 
     if (!favoritesPath) {
         return {
@@ -528,6 +533,7 @@ function getFavoritesInfo(config: Config): FavoritesInfo {
             biosName,
             hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
             hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
+            hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
         };
     });
 
@@ -549,14 +555,15 @@ interface DownloadSummary {
 }
 
 /**
- * Downloads the missing marquee/flyer for every favorite that doesn't already have both.
- * Never re-fetches a game whose marquee AND flyer are both already on disk - the ScreenScraper
- * call is skipped entirely for those, to keep API usage to the minimum needed.
+ * Downloads the missing marquee/flyer/logo for every favorite that doesn't already have all
+ * three. Never re-fetches a game that already has all of them on disk - the ScreenScraper call
+ * is skipped entirely for those, to keep API usage to the minimum needed.
  */
 async function downloadMissingFavoriteMedia(
     credentials: ScreenScraperCredentials,
     marqueePath: string,
     flyerPath: string,
+    logoPath: string,
     rows: FavoriteRow[],
     onProgress: (line: string) => void = () => {},
 ): Promise<DownloadSummary> {
@@ -566,7 +573,7 @@ async function downloadMissingFavoriteMedia(
     const client = new ScreenScraperClient(credentials);
 
     for (const row of rows) {
-        if (row.hasMarquee && row.hasFlyer) {
+        if (row.hasMarquee && row.hasFlyer && row.hasLogo) {
             summary.alreadyComplete++;
             onProgress(`${row.romName} : déjà complet, ignoré.`);
             continue;
@@ -617,9 +624,21 @@ async function downloadMissingFavoriteMedia(
                 failedKinds.push('flyer');
             }
         }
+        if (!row.hasLogo && result.media.logoUrl) {
+            const download = await client.downloadMedia(
+                result.media.logoUrl, join(logoPath, row.romName + '.png'), 'logo',
+            );
+            if (download.status === 'ok') {
+                summary.downloaded++;
+                downloadedKinds.push('logo');
+            } else {
+                summary.errors.push(`${row.romName}: ${download.message}`);
+                failedKinds.push('logo');
+            }
+        }
 
         if (!downloadedKinds.length && !failedKinds.length) {
-            // Found on ScreenScraper, but no marquee/flyer available for it (e.g. a
+            // Found on ScreenScraper, but no marquee/flyer/logo available for it (e.g. a
             // "notgame" driver entry like a BIOS/device, or media simply not uploaded yet).
             summary.noMedia++;
             onProgress(`${row.romName} : trouvé, mais aucun visuel disponible.`);
@@ -804,7 +823,11 @@ function renderPageHead(active: Tab = 'mame'): string {
         body {
             color: #ffffff;
             font-family: sans-serif;
-            max-width: 560px;
+            box-sizing: border-box;
+            /* Grows with the viewport (tables like Users/Favorites need the room) instead of
+               a fixed 560px that forced .table-wrap's horizontal scrollbar on every page,
+               but stays capped so text stays readable on wide desktop windows. */
+            max-width: min(1100px, 96vw);
             margin: 0 auto;
             padding: 24px 16px 48px;
         }
@@ -1096,6 +1119,10 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dd>${mameInfo.flyerPath ? escapeHtml(mameInfo.flyerPath) : '<em>Non disponible</em>'}</dd>
                 </div>
                 <div class="info-field">
+                    <dt>Dossier des logos (logos_directory)</dt>
+                    <dd>${mameInfo.logoPath ? escapeHtml(mameInfo.logoPath) : '<em>Non disponible</em>'}</dd>
+                </div>
+                <div class="info-field">
                     <dt>Fichier des favoris (favorites.ini)</dt>
                     <dd>${mameInfo.favoritesPath
                         ? escapeHtml(mameInfo.favoritesPath)
@@ -1282,6 +1309,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
             <td>${row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
             <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
             <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
+            <td class="center">${renderFavoriteBadge(row.hasLogo)}</td>
         </tr>
     `).join('');
 
@@ -1289,9 +1317,10 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
         ? `
             ${summary ? renderDownloadSummary(summary) : ''}
             <form method="post" action="/favorites/download-media">
-                <p class="info">Télécharge les marquees/flyers manquants depuis ScreenScraper pour les favoris
-                ci-dessous. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de favoris
-                (délai imposé entre chaque appel) - ne fermez pas cette page pendant le téléchargement.</p>
+                <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour les
+                favoris ci-dessous. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de
+                favoris (délai imposé entre chaque appel) - ne fermez pas cette page pendant le
+                téléchargement.</p>
                 <button type="submit">Télécharger les visuels manquants</button>
             </form>
         `
@@ -1306,9 +1335,10 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
                         <tr>
                             <th>Shortname</th>
                             <th>Name</th>
-                            <th>BIOS requis</th>
+                            <th>Bios</th>
                             <th class="center">Marquee</th>
                             <th class="center">Flyer</th>
+                            <th class="center">Logo</th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
@@ -1655,10 +1685,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         const iniPath = getMameHomePath();
-        const {marqueePath, flyerPath} = getMameLocations(iniPath);
+        const {marqueePath, flyerPath, logoPath} = getMameLocations(iniPath);
         const favoritesInfo = getFavoritesInfo(config);
 
-        if (favoritesInfo.error || !marqueePath || !flyerPath) {
+        if (favoritesInfo.error || !marqueePath || !flyerPath || !logoPath) {
             res.send(renderFavoritesPage(favoritesInfo, true));
             return;
         }
@@ -1688,6 +1718,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 },
                 marqueePath,
                 flyerPath,
+                logoPath,
                 favoritesInfo.rows,
                 line => res.write(`<li>${escapeHtml(line)}</li>`),
             );

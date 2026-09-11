@@ -146,6 +146,16 @@ export default class MameService {
     }
 
     /**
+     * Return logo ("wheel" art) path
+     */
+    public get logoPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.logos_directory,
+            this.iniPath,
+        );
+    }
+
+    /**
      * Start game on mame
      * @param romName
      */

@@ -10,6 +10,10 @@
                              backgroundImage: getMarquee(game.romName)
                          }"
                     >
+                        <div v-if="hasFlyerLogoFallback(game.romName)" class="flyerLogoFallback">
+                            <div class="flyerBackground" :style="{backgroundImage: getFlyer(game.romName)}"></div>
+                            <img class="logoOverlay" :src="getLogo(game.romName)" alt="">
+                        </div>
                         <Champions v-if='game.hi' :game='game'></Champions>
                     </div>
                 </li>
@@ -38,6 +42,10 @@
 
         protected marqueesPath: string = '';
         protected marquees: string[] = [];
+        protected flyersPath: string = '';
+        protected flyers: string[] = [];
+        protected logosPath: string = '';
+        protected logos: string[] = [];
 
         @Prop({type: Boolean, default: true}) protected focused!: boolean;
 
@@ -47,6 +55,10 @@
 
             this.marqueesPath = mameService.marqueePath;
             this.marquees = gameService.loadMarquees();
+            this.flyersPath = mameService.flyerPath;
+            this.flyers = gameService.loadFlyers();
+            this.logosPath = mameService.logoPath;
+            this.logos = gameService.loadLogos();
         }
 
         @Watch('selectedGameIndex')
@@ -56,17 +68,39 @@
             }
         }
 
+        protected findMediaPath(dirPath: string, filenames: string[], romName: string): string|null {
+            const i = filenames.indexOf(romName + '.png');
+            return i < 0 ? null : join(dirPath, filenames[i]);
+        }
+
+        protected toFileUrl(path: string): string {
+            return format({pathname: path, protocol: 'file', slashes: true});
+        }
+
         protected getMarquee(romName: string) {
-            const i = this.marquees.indexOf(romName + '.png');
-            const path = i < 0 ? null : join(this.marqueesPath, this.marquees[i]);
-            if (!path) {
-                return '';
-            }
-            return 'url(' + format({
-                pathname: path,
-                protocol: 'file',
-                slashes: true,
-            })  + ')';
+            const path = this.findMediaPath(this.marqueesPath, this.marquees, romName);
+            return path ? `url(${this.toFileUrl(path)})` : '';
+        }
+
+        protected getFlyer(romName: string) {
+            const path = this.findMediaPath(this.flyersPath, this.flyers, romName);
+            return path ? `url(${this.toFileUrl(path)})` : '';
+        }
+
+        protected getLogo(romName: string) {
+            const path = this.findMediaPath(this.logosPath, this.logos, romName);
+            return path ? this.toFileUrl(path) : '';
+        }
+
+        /**
+         * When a game has no marquee, show its (blurred) flyer with the logo overlaid on top
+         * instead - only when both are actually available, otherwise fall back to the default
+         * marquee background image from CSS.
+         */
+        protected hasFlyerLogoFallback(romName: string): boolean {
+            return !this.findMediaPath(this.marqueesPath, this.marquees, romName)
+                && !!this.findMediaPath(this.flyersPath, this.flyers, romName)
+                && !!this.findMediaPath(this.logosPath, this.logos, romName);
         }
     }
 </script>
@@ -141,6 +175,31 @@
         height: 80%;
     }
 
+    .flyerLogoFallback {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        border-radius: 5px;
+    }
+
+    .flyerLogoFallback .flyerBackground {
+        position: absolute;
+        /* Overscan past the edges so the blur doesn't reveal them under overflow: hidden. */
+        inset: -10px;
+        background-repeat: no-repeat;
+        background-size: cover;
+        background-position: center;
+        filter: blur(8px) brightness(0.6);
+    }
+
+    .flyerLogoFallback .logoOverlay {
+        position: absolute;
+        inset: 10%;
+        width: 80%;
+        height: 80%;
+        object-fit: contain;
+        filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.8));
+    }
 
     .champions {
         position: absolute;
