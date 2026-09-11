@@ -7,6 +7,7 @@ export default class Gamepads {
     public static gamepadKeyPressed:
     Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
     protected static stop: boolean = false;
+    protected static warnedUnmappedGamepadIds: Set<string> = new Set();
 
     public static init() {
         this.stop = false;
@@ -35,9 +36,20 @@ export default class Gamepads {
                 this.gamepadKeyPressed[gamepadsKey] = {axes: [], buttons: []};
             }
 
-            const mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
+            // Many gamepads/arcade encoders - especially on Linux - never get tagged
+            // mapping: "standard" by the browser and aren't in controllers.json either, so
+            // fall back to the standard layout instead of silently dropping their input:
+            // most of them follow it in practice regardless of what the browser reports.
+            let mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
             if (!mapping) {
-                continue;
+                mapping = this.controllerMapping.standard;
+                if (!this.warnedUnmappedGamepadIds.has(gamepad.id)) {
+                    this.warnedUnmappedGamepadIds.add(gamepad.id);
+                    console.warn(
+                        `[Gamepads] No mapping found for gamepad "${gamepad.id}" `
+                        + `(mapping: "${gamepad.mapping}") - falling back to the standard layout.`,
+                    );
+                }
             }
 
             // Joysticks
