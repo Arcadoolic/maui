@@ -23,6 +23,10 @@ export interface StartingPackGameEntry {
     hasRomFile: boolean;
     hasMarquee: boolean;
     hasFlyer: boolean;
+    // Added after formatVersion 1 packs were already in the wild - optional so an older pack
+    // (missing the field entirely, and with no logos/ entries in its ZIP) still imports fine,
+    // just without logos, same as a game missing a rom/marquee/flyer would.
+    hasLogo?: boolean;
 }
 
 export interface StartingPackManifest {

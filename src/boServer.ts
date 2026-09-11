@@ -677,6 +677,7 @@ interface ImportSummary {
     biosFilesWritten: number;
     marqueesWritten: number;
     flyersWritten: number;
+    logosWritten: number;
     favoritesReplaced: boolean;
     categoriesCreated: string[];
     warnings: string[];
@@ -685,7 +686,7 @@ interface ImportSummary {
 
 /**
  * Ingests a starting pack ZIP (built by scripts/build-starting-pack.ts): for every rom present
- * in the pack, overwrites its Game row, rom file, marquee and flyer (full-replacement, by
+ * in the pack, overwrites its Game row, rom file, marquee, flyer and logo (full-replacement, by
  * design - nothing outside the pack's scope is touched), then replaces favorites.ini wholesale
  * with the pack's copy. One rom failing (missing entry, DB error) is logged as a warning/error
  * and skipped rather than aborting the whole import, mirroring the pack builder's own
@@ -697,12 +698,13 @@ async function importStartingPack(
     romPath: string,
     marqueePath: string,
     flyerPath: string,
+    logoPath: string,
     iniPath: string,
     onProgress: (line: string) => void,
 ): Promise<ImportSummary> {
     const summary: ImportSummary = {
         gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0,
-        flyersWritten: 0, favoritesReplaced: false, categoriesCreated: [], warnings: [], errors: [],
+        flyersWritten: 0, logosWritten: 0, favoritesReplaced: false, categoriesCreated: [], warnings: [], errors: [],
     };
     const categoryIds = new Map<string, number>();
 
@@ -755,6 +757,10 @@ async function importStartingPack(
             const flyerEntry = game.hasFlyer ? zip.getEntry(`flyers/${game.romName}.png`) : null;
             if (flyerEntry && zip.extractEntryTo(flyerEntry, flyerPath, false, true)) {
                 summary.flyersWritten++;
+            }
+            const logoEntry = game.hasLogo ? zip.getEntry(`logos/${game.romName}.png`) : null;
+            if (logoEntry && zip.extractEntryTo(logoEntry, logoPath, false, true)) {
+                summary.logosWritten++;
             }
 
             const gameFields = {
@@ -1421,6 +1427,7 @@ function renderImportSummary(summary: ImportSummary): string {
         `${summary.biosFilesWritten} bios écrite(s)`,
         `${summary.marqueesWritten} marquee(s)`,
         `${summary.flyersWritten} flyer(s)`,
+        `${summary.logosWritten} logo(s)`,
         summary.favoritesReplaced ? 'favoris remplacés' : 'favoris inchangés',
         `${summary.errors.length} erreur(s)`,
     ];
@@ -1830,9 +1837,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         const iniPath = getMameHomePath();
-        const {marqueePath, flyerPath} = getMameLocations(iniPath);
+        const {marqueePath, flyerPath, logoPath} = getMameLocations(iniPath);
         const mameInfo = getMameInfo(config);
-        if (!mameInfo.romPath || !marqueePath || !flyerPath) {
+        if (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath) {
             res.status(422).send(renderImportPage(
                 'Configuration MAME incomplète - configurez MAME (onglet MAME) avant d\'importer.',
             ));
@@ -1846,7 +1853,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         try {
             const summary = await importStartingPack(
-                zip, manifest, mameInfo.romPath, marqueePath, flyerPath, iniPath,
+                zip, manifest, mameInfo.romPath, marqueePath, flyerPath, logoPath, iniPath,
                 line => res.write(`<li>${escapeHtml(line)}</li>`),
             );
             res.write('</ul></section>');
