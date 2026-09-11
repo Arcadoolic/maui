@@ -8,7 +8,7 @@ import BrowserWindow = Electron.BrowserWindow;
 export default function(userDataPath: string, ipcMain: IpcMain, window: BrowserWindow) {
     const api: express.Application = express();
 
-    const db = new Database(userDataPath); // Init db
+    const db = new Database(); // Init db
 
     // Users routes
     const userController = new UserController(userDataPath, ipcMain, window);

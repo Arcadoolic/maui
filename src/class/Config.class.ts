@@ -1,5 +1,20 @@
-import {existsSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
+import {existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
 import {join} from 'path';
+import * as os from 'os';
+
+// This app's own state directory - separate from ~/.mame (see Helpers.getMameHomePath()),
+// which belongs to mame itself, not to mame-awesome-ui. Config/DB live here rather than under
+// NODE_ENV-dependent locations (Electron's userData in production, the repo root in dev):
+// there's no upside to splitting an app's own state across two different places depending on
+// how it's run, and using the same fixed path in dev and production keeps behavior identical
+// between the two instead of only exercising the production path once packaged.
+function getAppDataPath(): string {
+    const path = join(os.homedir(), '.mame-awesome-ui');
+    if (!existsSync(path)) {
+        mkdirSync(path, {recursive: true});
+    }
+    return path;
+}
 
 export default class Config {
     public mamePath: string = '';
@@ -20,13 +35,8 @@ export default class Config {
     public configPath!: string;
     protected _configLoaded: boolean = false;
 
-    protected userDataPath!: string;
-
-    public constructor(userDataPath: string) {
-        this.userDataPath = userDataPath;
-        this.configPath = join(
-            (process.env.NODE_ENV === 'development' ? '.' : userDataPath), 'mame-awesome-ui-config.json',
-        );
+    public constructor() {
+        this.configPath = join(getAppDataPath(), 'mame-awesome-ui-config.json');
     }
 
     public exist(): boolean {
@@ -56,12 +66,8 @@ export default class Config {
     }
 
     public save() {
-        const userData = this.userDataPath;
         writeFileSync(
-            join(
-                (process.env.NODE_ENV === 'development' ? '.' : userData),
-                'mame-awesome-ui-config.json',
-            ),
+            this.configPath,
             JSON.stringify({
                 mamePath: this.mamePath,
                 mameBinaryName: this.mameBinaryName,

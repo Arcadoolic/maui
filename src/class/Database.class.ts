@@ -1,5 +1,6 @@
-import {existsSync} from 'fs';
+import {existsSync, mkdirSync} from 'fs';
 import {join, basename} from 'path';
+import * as os from 'os';
 import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
 type Sequelize = SequelizeTS.Sequelize;
@@ -15,10 +16,15 @@ export default class Database {
     protected databasePath!: string;
     protected _sequelize!: Sequelize;
 
-    public constructor(userDataPath: string) {
-        this.databasePath = join(
-            (process.env.NODE_ENV === 'development' ? '.' : userDataPath), 'mame-awesome-ui.sqlite',
-        );
+    public constructor() {
+        // Same fixed <home>/.mame-awesome-ui directory Config.class.ts uses (see its
+        // getAppDataPath() comment) - kept identical in dev and production instead of an
+        // NODE_ENV-dependent location.
+        const appDataPath = join(os.homedir(), '.mame-awesome-ui');
+        if (!existsSync(appDataPath)) {
+            mkdirSync(appDataPath, {recursive: true});
+        }
+        this.databasePath = join(appDataPath, 'mame-awesome-ui.sqlite');
         this._sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: this.databasePath,

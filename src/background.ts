@@ -33,7 +33,7 @@ function loadPath(winVar: BrowserWindow, path: string) {
         // Load the url of the dev server if in development mode
         winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + '#/' + path);
         if (!process.env.IS_TEST) {
-            const config = new Config(app.getPath('userData'));
+            const config = new Config();
             config.load();
             if (config.openDevTools) {
                 winVar.webContents.openDevTools();
@@ -93,7 +93,7 @@ app.on('ready', async () => {
     win = createSplashWin();
     // api(app.getPath('userData'), ipcMain, win);
 
-    boServer = startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
+    boServer = startBoServer(BO_SERVER_PORT, () => {
         if (win) {
             loadPath(win, 'init');
         }
