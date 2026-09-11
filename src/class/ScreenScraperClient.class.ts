@@ -8,11 +8,12 @@ export interface ScreenScraperCredentials {
     userPassword: string;
 }
 
-export type MediaType = 'marquee' | 'flyer';
+export type MediaType = 'marquee' | 'flyer' | 'logo';
 
 export interface GameMediaResult {
     marqueeUrl: string | null;
     flyerUrl: string | null;
+    logoUrl: string | null;
 }
 
 export type FetchGameMediaResult =
@@ -32,10 +33,13 @@ const REGION_PRIORITY = ['wor', 'jp', 'us', 'eu', 'ss'];
 // "marquee" is the standard cabinet marquee (1200x449 on "gng") - not "screenmarquee"
 // (1024x512, a different media entirely) nor its "screenmarqueesmall" thumbnail (512x128).
 // "flyer" is the arcade-specific flyer type (vs. "box-2D" used by non-arcade systems).
+// "wheel" is ScreenScraper's transparent game-logo cutout - matches mame's own
+// logos_directory ("logo" by default, see boServer.ts's getMameLocations()).
 // All confirmed by downloading and inspecting real jeuInfos.php media for "gng".
 const MEDIA_TYPE: { [key in MediaType]: string } = {
     marquee: 'marquee',
     flyer: 'flyer',
+    logo: 'wheel',
 };
 
 interface RawMedia {
@@ -127,6 +131,7 @@ export default class ScreenScraperClient {
             media: {
                 marqueeUrl: pickBestMediaUrl(medias, MEDIA_TYPE.marquee),
                 flyerUrl: pickBestMediaUrl(medias, MEDIA_TYPE.flyer),
+                logoUrl: pickBestMediaUrl(medias, MEDIA_TYPE.logo),
             },
         };
     }

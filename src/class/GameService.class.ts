@@ -196,4 +196,15 @@ export default class GameService {
         }
         return [];
     }
+
+    /**
+     * Read logos ("wheel" art) dir
+     */
+    public loadLogos() {
+        if (this.mameService.uiIni && this.mameService.uiIni.logos_directory) {
+            const logoDirectory = this.mameService.logoPath;
+            return logoDirectory ? readdirSync(logoDirectory) : [];
+        }
+        return [];
+    }
 }
