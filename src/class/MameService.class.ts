@@ -90,12 +90,14 @@ export default class MameService {
             // No favorites.ini yet (e.g. fresh MAME install, no favorite added) - treat as empty list
             return [];
         }
-        const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
+        // No 'g' flag: a global regexp's .test() keeps lastIndex state between calls, which
+        // silently skips every other line when reused across forEach iterations like this.
+        const regexp = /^(?![0-9]$)[a-z0-9]+$/;
         const file = readFileSync(favoritePath!, 'utf8').split('\n');
         const retArray: string[] = [];
         const existing: { [key: string]: boolean } = {};
         file.forEach((line: string) => {
-            line = line.trim(); // FIXME : Do not take first favorite !
+            line = line.trim();
             if (regexp.test(line) && !existing[line]) {
                 existing[line] = true;
                 retArray.push(line);
