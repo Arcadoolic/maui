@@ -145,13 +145,15 @@ interface MameLocations {
     uiIni: { [key: string]: string[] };
     marqueePath: string | null;
     flyerPath: string | null;
+    logoPath: string | null;
     favoritesPath: string | null;
 }
 
 /**
  * Read-only variant of boServer.ts's getMameLocations(): unlike that one (which creates the
- * marquees/flyers directories via ensureFirstDirectory so downloads always have somewhere to
- * land), this script only ever reads from the user's MAME home and must not create anything.
+ * marquees/flyers/logos directories via ensureFirstDirectory so downloads always have
+ * somewhere to land), this script only ever reads from the user's MAME home and must not
+ * create anything.
  */
 function getMameLocationsReadOnly(iniPath: string): MameLocations {
     const uiIniPath = join(iniPath, 'ui.ini');
@@ -160,9 +162,11 @@ function getMameLocationsReadOnly(iniPath: string): MameLocations {
         ? getFirstExistingDirectory(uiIni.marquees_directory, iniPath) : null;
     const flyerPath = uiIni.flyers_directory
         ? getFirstExistingDirectory(uiIni.flyers_directory, iniPath) : null;
+    const logoPath = uiIni.logos_directory
+        ? getFirstExistingDirectory(uiIni.logos_directory, iniPath) : null;
     const favoritesPath = uiIni.ui_path
         ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
-    return {uiIni, marqueePath, flyerPath, favoritesPath};
+    return {uiIni, marqueePath, flyerPath, logoPath, favoritesPath};
 }
 
 // Same genre/nplayers ini lookup as GameService.class.ts, minus the numeric category id (not
@@ -258,7 +262,7 @@ function main() {
         fail('Impossible de lire la configuration mame ("-showconfig" a échoué).');
     }
 
-    const {marqueePath, flyerPath, favoritesPath} = getMameLocationsReadOnly(iniPath);
+    const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocationsReadOnly(iniPath);
     if (!favoritesPath) {
         fail('Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu) '
             + 'avant de générer un starting pack.');
@@ -277,6 +281,7 @@ function main() {
     let romsMissing = 0;
     let marqueesFound = 0;
     let flyersFound = 0;
+    let logosFound = 0;
 
     for (const romName of romNames) {
         const xmlInfo = getGameXmlInfoForPack(mameBinary, iniPath, romName);
@@ -316,8 +321,10 @@ function main() {
 
         const marqueeFile = marqueePath ? join(marqueePath, romName + '.png') : null;
         const flyerFile = flyerPath ? join(flyerPath, romName + '.png') : null;
+        const logoFile = logoPath ? join(logoPath, romName + '.png') : null;
         const hasMarquee = !!marqueeFile && existsSync(marqueeFile);
         const hasFlyer = !!flyerFile && existsSync(flyerFile);
+        const hasLogo = !!logoFile && existsSync(logoFile);
         if (hasMarquee) {
             marqueesFound++;
             zip.addLocalFile(marqueeFile!, 'marquees');
@@ -325,6 +332,10 @@ function main() {
         if (hasFlyer) {
             flyersFound++;
             zip.addLocalFile(flyerFile!, 'flyers');
+        }
+        if (hasLogo) {
+            logosFound++;
+            zip.addLocalFile(logoFile!, 'logos');
         }
 
         const players = getGameNplayers(romName);
@@ -342,6 +353,7 @@ function main() {
             hasRomFile: !!romZipPath,
             hasMarquee,
             hasFlyer,
+            hasLogo,
         });
 
         console.log(`[build-starting-pack] ${romName} : ${fullname}`);
@@ -365,7 +377,7 @@ function main() {
     console.log(`[build-starting-pack] Terminé -> ${args.output}`);
     console.log(`[build-starting-pack] ${games.length} jeu(x), ${romsFound} rom(s) `
         + `(${romsMissing} manquante(s)), ${biosRomPaths.size} bios, ${marqueesFound} marquee(s), `
-        + `${flyersFound} flyer(s).`);
+        + `${flyersFound} flyer(s), ${logosFound} logo(s).`);
 }
 
 main();
