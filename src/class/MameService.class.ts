@@ -2,7 +2,7 @@ import {existsSync, readFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
-import {parseMameIni} from '@/class/MameIniParser';
+import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 
 export default class MameService {
@@ -71,20 +71,7 @@ export default class MameService {
             // No favorites.ini yet (e.g. fresh MAME install, no favorite added) - treat as empty list
             return [];
         }
-        // No 'g' flag: a global regexp's .test() keeps lastIndex state between calls, which
-        // silently skips every other line when reused across forEach iterations like this.
-        const regexp = /^(?![0-9]$)[a-z0-9]+$/;
-        const file = readFileSync(favoritePath!, 'utf8').split('\n');
-        const retArray: string[] = [];
-        const existing: { [key: string]: boolean } = {};
-        file.forEach((line: string) => {
-            line = line.trim();
-            if (regexp.test(line) && !existing[line]) {
-                existing[line] = true;
-                retArray.push(line);
-            }
-        });
-        return retArray;
+        return parseFavorites(readFileSync(favoritePath, 'utf8'));
     }
 
     /**

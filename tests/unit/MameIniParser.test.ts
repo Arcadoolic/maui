@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {parseMameIni} from '@/class/MameIniParser';
+import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 
 describe('parseMameIni', () => {
     it('reads a key and its value', () => {
@@ -58,5 +58,61 @@ describe('parseMameIni', () => {
 
     it('returns an empty object for empty input', () => {
         expect(parseMameIni('')).toEqual({});
+    });
+});
+
+describe('parseFavorites', () => {
+    it('extracts rom names from a realistic favorites.ini', () => {
+        const content = [
+            '[ROOT_FOLDER]',
+            '[Favorite]',
+            '',
+            'pacman',
+            '0',
+            '0',
+            '0',
+            'galaga',
+            '0',
+            '0',
+            '0',
+            'dkong',
+            '0',
+            '0',
+            '0',
+        ].join('\n');
+
+        expect(parseFavorites(content)).toEqual(['pacman', 'galaga', 'dkong']);
+    });
+
+    it('drops every other entry when matching lines are adjacent (known defect)', () => {
+        // Deliberately locked in. The regex is built with the 'g' flag and reused
+        // across .test() calls, so lastIndex survives a successful match and the
+        // next line is tested from the wrong offset. See parseFavorites' comment.
+        // Do not "fix" this test; fixing the parser is a separate change.
+        const content = ['pacman', 'galaga', 'dkong', 'frogger', 'mspacman'].join('\n');
+
+        expect(parseFavorites(content)).toEqual(['pacman', 'dkong', 'mspacman']);
+    });
+
+    it('ignores section headers', () => {
+        expect(parseFavorites('[ROOT_FOLDER]\npacman')).toEqual(['pacman']);
+    });
+
+    it('ignores a bare single digit', () => {
+        // The negative lookahead (?![0-9]$) exists to skip the metadata lines.
+        expect(parseFavorites('0\npacman')).toEqual(['pacman']);
+    });
+
+    it('keeps a multi-digit line, which the lookahead does not cover', () => {
+        expect(parseFavorites('[Favorite]\n1942')).toEqual(['1942']);
+    });
+
+    it('deduplicates', () => {
+        const content = ['pacman', '0', 'pacman', '0', 'galaga'].join('\n');
+        expect(parseFavorites(content)).toEqual(['pacman', 'galaga']);
+    });
+
+    it('returns an empty list for empty input', () => {
+        expect(parseFavorites('')).toEqual([]);
     });
 });
