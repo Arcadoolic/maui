@@ -1,0 +1,398 @@
+// Standalone script (run via `just starting-pack`, see package.json's "starting-pack" script)
+// that packages the current MAME home's favorites - their metadata, rom files, marquees,
+// flyers and favorites.ini - into a single ZIP a fresh install's BO server can import back
+// (see the /import route in src/boServer.ts).
+//
+// Never bundled by webpack and never runs inside Electron, so unlike src/boServer.ts it
+// *could* safely import MameService.class.ts/Helpers.class.ts. It deliberately doesn't: this
+// repo's convention is that the small mame-ini/path-resolution helpers are duplicated per
+// electron-free entry point (see the comments at the top of src/boServer.ts) rather than
+// shared, and this script follows the same convention rather than being the one exception.
+// Config.class.ts has no Electron dependency and is imported directly, same as boServer.ts.
+
+import {existsSync, readFileSync} from 'fs';
+import {join, sep} from 'path';
+import * as os from 'os';
+import {execFileSync} from 'child_process';
+import {parse as iniParse} from 'ini';
+import AdmZip from 'adm-zip';
+import Config from '../src/class/Config.class';
+import {StartingPackGameEntry, StartingPackManifest} from '../src/types/StartingPackManifest';
+
+/**
+ * Same directory MameService.class.ts/boServer.ts pin mame's ini/home to. Duplicated here for
+ * the reason explained at the top of this file.
+ */
+function getMameHomePath(): string {
+    return join(os.homedir(), '.mame-awesome-ui', 'mame-home');
+}
+
+/**
+ * Same ini-line parsing MameService.class.ts/boServer.ts use for `-showconfig`/`ui.ini`.
+ */
+function parseMameIniFile(fileContent: string): { [key: string]: string[] } {
+    const target: { [key: string]: string[] } = {};
+    const regex = new RegExp(/^([a-z_]+)\s+(.+)$/);
+    fileContent.split('\n').forEach((line) => {
+        if (line[0] === '#') {
+            return;
+        }
+        const data = regex.exec(line.trim());
+        if (data) {
+            target[data[1]] = data[2].replace(/^"(.*)"$/, '$1').split(';');
+        }
+    });
+    return target;
+}
+
+/**
+ * Same relative-path resolution as Helpers.getFirstExistingDirectory()/boServer.ts's
+ * resolveDirectoryPath(): expands $HOME/~, then joins onto parentPath when not absolute.
+ */
+function resolveDirectoryPath(path: string, parentPath: string): string {
+    path = path.replace(/\$HOME|~/, os.homedir());
+    if (path[0] === '/') {
+        return path;
+    }
+    parentPath = parentPath.replace('$HOME', os.homedir());
+    const parentPathArray = parentPath.split(sep);
+    const pathArray = path.split(sep);
+    if (parentPathArray[parentPathArray.length - 1] === pathArray[0]) {
+        pathArray.shift();
+        path = pathArray.join(sep);
+    }
+    return join(parentPath, path);
+}
+
+/**
+ * Same directory-resolution logic as Helpers.getFirstExistingDirectory()/boServer.ts: returns
+ * the first of `paths` (as declared in an ini file, e.g. mame.ini's rompath) that exists on
+ * disk, resolved against `parentPath` when relative, with `file` appended when given.
+ */
+function getFirstExistingDirectory(paths: string[], parentPath: string, file?: string): string | null {
+    for (const rawPath of paths) {
+        let path = resolveDirectoryPath(rawPath, parentPath);
+        if (file) {
+            path = join(path, file);
+        }
+        if (existsSync(path)) {
+            return path;
+        }
+    }
+    return null;
+}
+
+/**
+ * Same favorites.ini parsing as MameService.getRomListFromFavorites()/boServer.ts's
+ * getFavoriteRomNames().
+ */
+function getFavoriteRomNames(favoritesPath: string): string[] {
+    const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
+    const lines = readFileSync(favoritesPath, 'utf8').split('\n');
+    const romNames: string[] = [];
+    const seen: { [key: string]: boolean } = {};
+    lines.forEach((rawLine) => {
+        const line = rawLine.trim();
+        if (regexp.test(line) && !seen[line]) {
+            seen[line] = true;
+            romNames.push(line);
+        }
+    });
+    return romNames;
+}
+
+function extractXmlTagContent(xml: string, tagName: string): string | null {
+    const match = new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`).exec(xml);
+    return match ? match[1] : null;
+}
+
+function extractXmlAttribute(xml: string, tagName: string, attributeName: string): string | null {
+    const tagMatch = new RegExp(`<${tagName}\\b[^>]*>`).exec(xml);
+    if (!tagMatch) {
+        return null;
+    }
+    const attrMatch = new RegExp(`${attributeName}="([^"]*)"`).exec(tagMatch[0]);
+    return attrMatch ? attrMatch[1] : null;
+}
+
+interface PackGameXmlInfo {
+    description: string | null;
+    biosName: string | null;
+    manufacturer: string | null;
+    year: string | null;
+}
+
+/**
+ * Same per-rom `-lx` lookup as MameService.getGameInformation()/boServer.ts's
+ * getGameXmlInfo(), extended with manufacturer/year (boServer.ts never needed those).
+ */
+function getGameXmlInfoForPack(mameBinary: string, iniPath: string, romName: string): PackGameXmlInfo {
+    const xmlContent = execFileSync(
+        mameBinary,
+        ['-lx', romName, '-inipath', iniPath, '-homepath', iniPath],
+        {encoding: 'utf8', cwd: iniPath},
+    );
+    return {
+        description: extractXmlTagContent(xmlContent, 'description'),
+        biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
+        manufacturer: extractXmlTagContent(xmlContent, 'manufacturer'),
+        year: extractXmlTagContent(xmlContent, 'year'),
+    };
+}
+
+interface MameLocations {
+    uiIni: { [key: string]: string[] };
+    marqueePath: string | null;
+    flyerPath: string | null;
+    favoritesPath: string | null;
+}
+
+/**
+ * Read-only variant of boServer.ts's getMameLocations(): unlike that one (which creates the
+ * marquees/flyers directories via ensureFirstDirectory so downloads always have somewhere to
+ * land), this script only ever reads from the user's MAME home and must not create anything.
+ */
+function getMameLocationsReadOnly(iniPath: string): MameLocations {
+    const uiIniPath = join(iniPath, 'ui.ini');
+    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
+    const marqueePath = uiIni.marquees_directory
+        ? getFirstExistingDirectory(uiIni.marquees_directory, iniPath) : null;
+    const flyerPath = uiIni.flyers_directory
+        ? getFirstExistingDirectory(uiIni.flyers_directory, iniPath) : null;
+    const favoritesPath = uiIni.ui_path
+        ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
+    return {uiIni, marqueePath, flyerPath, favoritesPath};
+}
+
+/**
+ * Electron's app.getPath('userData') for productName "mame-awesome-ui" (see vue.config.js's
+ * builderOptions), reimplemented without Electron so this script can find the real running
+ * app's config file.
+ *
+ * `just`/`npm run` invocations never set NODE_ENV, unlike vue-cli-service (which sets it to
+ * "development" for `electron:serve`) - so Config.class.ts's own NODE_ENV==='development'
+ * branch (which points it at "./mame-awesome-ui-config.json" instead of userData) never
+ * kicks in here on its own. Since this script is only ever run from a repo checkout (there's
+ * no packaged/standalone build of it), that repo-root config file - if present - is almost
+ * certainly the real app's config, so check for it before falling back to the production
+ * userData path.
+ */
+function resolveUserDataPath(override?: string): string {
+    if (override) {
+        return override;
+    }
+    if (existsSync(join(process.cwd(), 'mame-awesome-ui-config.json'))) {
+        return process.cwd();
+    }
+    if (process.platform === 'darwin') {
+        return join(os.homedir(), 'Library', 'Application Support', 'mame-awesome-ui');
+    }
+    return join(os.homedir(), '.config', 'mame-awesome-ui');
+}
+
+// Same genre/nplayers ini lookup as GameService.class.ts, minus the numeric category id (not
+// portable across installs - the pack stores the category by name instead) and resolved
+// relative to the repo instead of webpack's __static (unavailable outside the Electron build).
+const genreIni: { [genre: string]: { [romName: string]: boolean } } =
+    iniParse(readFileSync(join(__dirname, '..', 'public', 'data', 'genre_206.ini'), 'utf8'));
+const nplayersIni: { [nplayers: string]: { [romName: string]: boolean } } =
+    iniParse(readFileSync(join(__dirname, '..', 'public', 'data', 'nplayers_206.ini'), 'utf8'));
+
+const nplayersTranslation: { [k: string]: { sim: number; alt: number } } = {
+    '12P sim': {sim: 12, alt: 0},
+    '1P': {sim: 0, alt: 0},
+    '2P alt': {sim: 0, alt: 2},
+    '2P sim': {sim: 2, alt: 0},
+    '3P alt': {sim: 0, alt: 3},
+    '3P sim': {sim: 3, alt: 0},
+    '4P alt': {sim: 0, alt: 4},
+    '4P alt / 2P sim': {sim: 2, alt: 4},
+    '4P sim': {sim: 4, alt: 0},
+    '5P alt': {sim: 0, alt: 5},
+    '6P alt': {sim: 0, alt: 6},
+    '6P alt / 2P sim': {sim: 2, alt: 6},
+    '6P sim': {sim: 6, alt: 0},
+    '8P alt / 2P sim': {sim: 2, alt: 8},
+    '8P sim': {sim: 8, alt: 0},
+    '9P alt': {sim: 0, alt: 9},
+};
+
+function getGameCategoryName(romName: string): string | null {
+    for (const category of Object.keys(genreIni)) {
+        if (genreIni[category][romName]) {
+            return category;
+        }
+    }
+    return null;
+}
+
+function getGameNplayers(romName: string): { sim: number; alt: number } {
+    for (const nplayers of Object.keys(nplayersIni)) {
+        if (nplayersIni[nplayers][romName]) {
+            return nplayersTranslation[nplayers] || {sim: 0, alt: 0};
+        }
+    }
+    return {sim: 0, alt: 0};
+}
+
+interface CliArgs {
+    output: string;
+    configDir?: string;
+}
+
+function parseArgs(argv: string[]): CliArgs {
+    const args: CliArgs = {output: './mame-starting-pack.zip'};
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === '--output' && argv[i + 1]) {
+            args.output = argv[++i];
+        } else if (argv[i] === '--config-dir' && argv[i + 1]) {
+            args.configDir = argv[++i];
+        }
+    }
+    return args;
+}
+
+function fail(message: string): never {
+    console.error(`[build-starting-pack] ${message}`);
+    process.exit(1);
+}
+
+function main() {
+    const args = parseArgs(process.argv.slice(2));
+    const userDataPath = resolveUserDataPath(args.configDir);
+    const config = new Config(userDataPath);
+    config.load();
+
+    if (!config.mamePath || !config.mameBinaryName) {
+        fail(`Aucune configuration mame trouvée dans "${userDataPath}". Configurez et lancez `
+            + 'mame-awesome-ui au moins une fois (ou passez --config-dir).');
+    }
+
+    const mameBinary = join(config.mamePath, config.mameBinaryName);
+    if (!existsSync(mameBinary)) {
+        fail(`Binaire mame introuvable : "${mameBinary}".`);
+    }
+
+    const iniPath = getMameHomePath();
+
+    let mameIni: { [key: string]: string[] };
+    try {
+        const output = execFileSync(
+            mameBinary, ['-showconfig', '-inipath', iniPath, '-homepath', iniPath], {cwd: iniPath},
+        );
+        mameIni = parseMameIniFile(output.toString());
+    } catch {
+        fail('Impossible de lire la configuration mame ("-showconfig" a échoué).');
+    }
+
+    const {marqueePath, flyerPath, favoritesPath} = getMameLocationsReadOnly(iniPath);
+    if (!favoritesPath) {
+        fail('Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu) '
+            + 'avant de générer un starting pack.');
+    }
+
+    const romNames = getFavoriteRomNames(favoritesPath);
+    if (!romNames.length) {
+        fail('favorites.ini ne contient aucun favori.');
+    }
+
+    const romPaths = mameIni.rompath || [];
+    const zip = new AdmZip();
+    const games: StartingPackGameEntry[] = [];
+    const biosRomPaths = new Map<string, string>();
+    let romsFound = 0;
+    let romsMissing = 0;
+    let marqueesFound = 0;
+    let flyersFound = 0;
+
+    for (const romName of romNames) {
+        const xmlInfo = getGameXmlInfoForPack(mameBinary, iniPath, romName);
+        const fullname = xmlInfo.description || romName;
+
+        let shortname = fullname;
+        let subname = '';
+        const shortnameMatch = /^(.[^(]*)/g.exec(fullname);
+        if (shortnameMatch) {
+            shortname = shortnameMatch[0].trim().replace(/&amp;/g, '&');
+            const subnameMatch = /^([^\-\/]*)(:\s+|\s+-\s+|\s+\/\s+)(.*)$/.exec(shortname);
+            if (subnameMatch) {
+                shortname = subnameMatch.splice(0, 3)[1];
+                subname = subnameMatch[0];
+            }
+        }
+
+        const romZipPath = getFirstExistingDirectory(romPaths, iniPath, romName + '.zip');
+        if (romZipPath) {
+            romsFound++;
+            zip.addLocalFile(romZipPath, 'roms');
+        } else {
+            romsMissing++;
+            console.warn(`[build-starting-pack] ROM introuvable pour "${romName}" dans rompath `
+                + '- ses métadonnées seront incluses, pas le fichier rom.');
+        }
+
+        if (xmlInfo.biosName && !biosRomPaths.has(xmlInfo.biosName)) {
+            const biosZipPath = getFirstExistingDirectory(romPaths, iniPath, xmlInfo.biosName + '.zip');
+            if (biosZipPath) {
+                biosRomPaths.set(xmlInfo.biosName, biosZipPath);
+            } else {
+                console.warn(`[build-starting-pack] BIOS "${xmlInfo.biosName}" requis par `
+                    + `"${romName}" introuvable dans rompath.`);
+            }
+        }
+
+        const marqueeFile = marqueePath ? join(marqueePath, romName + '.png') : null;
+        const flyerFile = flyerPath ? join(flyerPath, romName + '.png') : null;
+        const hasMarquee = !!marqueeFile && existsSync(marqueeFile);
+        const hasFlyer = !!flyerFile && existsSync(flyerFile);
+        if (hasMarquee) {
+            marqueesFound++;
+            zip.addLocalFile(marqueeFile!, 'marquees');
+        }
+        if (hasFlyer) {
+            flyersFound++;
+            zip.addLocalFile(flyerFile!, 'flyers');
+        }
+
+        const players = getGameNplayers(romName);
+        games.push({
+            romName,
+            fullname,
+            shortname,
+            subname,
+            manufacturer: xmlInfo.manufacturer,
+            year: xmlInfo.year,
+            categoryName: getGameCategoryName(romName),
+            player_alt: players.alt,
+            player_sim: players.sim,
+            biosName: xmlInfo.biosName,
+            hasRomFile: !!romZipPath,
+            hasMarquee,
+            hasFlyer,
+        });
+
+        console.log(`[build-starting-pack] ${romName} : ${fullname}`);
+    }
+
+    for (const biosZipPath of biosRomPaths.values()) {
+        zip.addLocalFile(biosZipPath, 'roms');
+    }
+
+    const manifest: StartingPackManifest = {
+        formatVersion: 1,
+        generatedAt: new Date().toISOString(),
+        games,
+        biosRoms: [...biosRomPaths.keys()],
+    };
+    zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
+    zip.addFile('favorites.ini', readFileSync(favoritesPath));
+
+    zip.writeZip(args.output);
+
+    console.log(`[build-starting-pack] Terminé -> ${args.output}`);
+    console.log(`[build-starting-pack] ${games.length} jeu(x), ${romsFound} rom(s) `
+        + `(${romsMissing} manquante(s)), ${biosRomPaths.size} bios, ${marqueesFound} marquee(s), `
+        + `${flyersFound} flyer(s).`);
+}
+
+main();
