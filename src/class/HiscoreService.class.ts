@@ -93,6 +93,13 @@ export default class HiscoreService {
                     Log.error(e);
                 }
             } catch (e) {
+                if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+                    // No .hi file yet: the game hasn't been played long enough to produce a
+                    // score. mame-hi-extractor's exist()/hasHiscore() only checks whether the
+                    // rom is a *supported* game, not whether its .hi file is actually present
+                    // on disk - get() itself throws ENOENT for that case. Not an error.
+                    continue;
+                }
                 Log.error('[HiscoreService] Error on hiscores saving.');
                 Log.error(e);
             }
