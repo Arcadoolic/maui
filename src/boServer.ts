@@ -28,7 +28,7 @@ import {UniqueConstraintError, ValidationError} from 'sequelize';
 
 declare const __static: string;
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import';
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import' | 'maui';
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -1088,6 +1088,7 @@ function renderPageHead(active: Tab = 'mame'): string {
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Users</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
             <a href="/import" class="${active === 'import' ? 'active' : ''}">Import</a>
+            <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
         </nav>
     </header>
     `;
@@ -1101,7 +1102,6 @@ function renderPageTail(): string {
 
 interface ConfigFormValues {
     mamePath: string;
-    openDevTools: boolean;
     // Whether the current request came from the machine running the BO itself. The BO listens
     // on every network interface (app.listen() below has no host argument), so it's reachable
     // from the rest of the LAN - but launching mame only makes sense on the cabinet's own
@@ -1123,10 +1123,6 @@ function renderConfigCard(values: ConfigFormValues, error?: string, info?: strin
                     <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
                     <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Parcourir</button>
                 </div>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="openDevTools" ${values.openDevTools ? 'checked' : ''}>
-                    Ouvrir les DevTools au démarrage (mode développement)
-                </label>
                 <div class="button-row">
                     <button type="submit">Enregistrer</button>
                     ${values.isLocal
@@ -1254,10 +1250,33 @@ function renderForm(
 ): string {
     return renderPage(
         renderConfigCard(values, error, info)
-        + renderMameInfoCard(mameInfo, mameInfoMessage)
-        + renderDangerZoneCard(mameInfo),
+        + renderMameInfoCard(mameInfo, mameInfoMessage),
         'mame',
     );
+}
+
+function renderMauiCard(config: Config, info?: string): string {
+    return `
+        <section class="card">
+            <h2>mame-awesome-ui</h2>
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="post" action="/maui/save">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
+                    Afficher en plein écran (décoché = fenêtré)
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
+                    Ouvrir les DevTools au démarrage (mode développement)
+                </label>
+                <button type="submit">Enregistrer</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderMauiPage(config: Config, mameInfo: MameInfo, info?: string): string {
+    return renderPage(renderMauiCard(config, info) + renderDangerZoneCard(mameInfo), 'maui');
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -1623,7 +1642,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
         res.send(renderForm(
-            {mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)}, mameInfo,
+            {mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
         ));
     });
 
@@ -1870,6 +1889,21 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    app.get('/maui', (req, res) => {
+        const config = new Config();
+        config.load();
+        res.send(renderMauiPage(config, getMameInfo(config)));
+    });
+
+    app.post('/maui/save', (req, res) => {
+        const config = new Config();
+        config.load();
+        config.openDevTools = req.body.openDevTools === 'on';
+        config.fullscreen = req.body.fullscreen === 'on';
+        config.save();
+        res.send(renderMauiPage(config, getMameInfo(config), 'Configuration enregistrée.'));
+    });
+
     app.post('/screenscraper/save', (req, res) => {
         const values: ScreenScraperValues = {
             ssDevId: (req.body.ssDevId || '').trim(),
@@ -1916,20 +1950,19 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
-        const openDevTools = req.body.openDevTools === 'on';
         const config = new Config();
         config.load();
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath, openDevTools, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
+                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
             ));
             return;
         }
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath, openDevTools, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
+                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
             ));
             return;
         }
@@ -1938,7 +1971,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath, openDevTools, isLocal: isLocalhostRequest(req)}, getMameInfo(config),
+                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config),
                 'Échec de l\'initialisation de mame ("-createconfig") : '
                     + `${error instanceof Error ? error.message : 'erreur inattendue'}.`,
             ));
@@ -1947,7 +1980,6 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
-        config.openDevTools = openDevTools;
         config.save();
 
         res.send(renderPage('<section class="card"><h2>Configuration enregistrée</h2><p>'
@@ -1962,7 +1994,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if (!isLocalhostRequest(req)) {
             res.status(403).send(renderForm(
-                {mamePath: config.mamePath || '', openDevTools: config.openDevTools, isLocal: false},
+                {mamePath: config.mamePath || '', isLocal: false},
                 getMameInfo(config),
                 'Le lancement de mame n\'est possible que depuis la machine qui héberge mame-awesome-ui.',
             ));
@@ -1971,7 +2003,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if (!config.mamePath || !config.mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || '', openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
+                {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)},
                 getMameInfo(config),
                 'Aucune configuration valide enregistrée : impossible de lancer mame.',
             ));
@@ -1981,7 +2013,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const mameBinary = join(config.mamePath, config.mameBinaryName);
         if (!existsSync(mameBinary)) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
                 getMameInfo(config),
                 `Le binaire "${mameBinary}" est introuvable.`,
             ));
@@ -2005,7 +2037,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         });
 
         res.send(renderForm(
-            {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
+            {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
             getMameInfo(config),
             undefined,
             'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur cette machine.',
@@ -2036,7 +2068,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         res.send(renderForm(
-            {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
+            {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
             getMameInfo(config),
             undefined,
             undefined,
@@ -2059,7 +2091,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const added = repairPluginIni(pluginIniPath, getAvailablePlugins(resolvedPluginsPath));
 
         res.send(renderForm(
-            {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
+            {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
             getMameInfo(config),
             undefined,
             undefined,
@@ -2097,7 +2129,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
             + 'production) - recharger cette page ou l\'application ne suffit pas : le '
             + 'renderer garde en mémoire les services construits sur l\'ancienne configuration '
-            + 'tant que le process n\'a pas complètement redémarré.</p></section>'));
+            + 'tant que le process n\'a pas complètement redémarré.</p></section>', 'maui'));
 
         // Only closes the app (see onReset in background.ts) - it does NOT relaunch it.
         // Reloading the window to /init (like onConfigured() does after a normal config save)

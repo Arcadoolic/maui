@@ -103,9 +103,9 @@
                 return this.$router.push({name: 'init'});
             }
 
-            if (process.env.NODE_ENV !== 'development') {
+            if (this.$store.getters.configuration.fullscreen) {
                 remote.getCurrentWindow().setFullScreen(true);
-            } else {
+            } else if (process.env.NODE_ENV === 'development') {
                 remote.getCurrentWindow().setSize(1280, 720);
                 remote.getCurrentWindow().center();
             }
@@ -124,7 +124,7 @@
         }
 
         public mounted() {
-            if (process.env.NODE_ENV !== 'development') {
+            if (this.$store.getters.configuration.fullscreen) {
                 remote.getCurrentWindow().setFullScreen(true);
             }
         }

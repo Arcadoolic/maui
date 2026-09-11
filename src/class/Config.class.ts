@@ -44,6 +44,11 @@ export default class Config {
     // to false - opt in explicitly, either via the BO config form or by editing the config file.
     public openDevTools: boolean = false;
 
+    // Whether Home.vue puts the window in full screen once launched - dev and production alike,
+    // the BO setting is authoritative either way. Defaults to true: a cabinet's own display is
+    // the main use case.
+    public fullscreen: boolean = true;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
 
@@ -69,6 +74,7 @@ export default class Config {
             this.ssUserPassword = configFile.ssUserPassword || '';
 
             this.openDevTools = configFile.openDevTools === true;
+            this.fullscreen = configFile.fullscreen !== false;
 
             this._configLoaded = true;
             return true;
@@ -88,6 +94,7 @@ export default class Config {
                 ssUserId: this.ssUserId,
                 ssUserPassword: this.ssUserPassword,
                 openDevTools: this.openDevTools,
+                fullscreen: this.fullscreen,
             }),
         );
     }
