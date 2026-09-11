@@ -1228,6 +1228,42 @@ The consequences to accept:
 - Produces: `npm run probe:dev` starting an Electron window rendering a Vue 3
   component. Tasks 7 to 10 extend this same probe.
 
+### Decorator metadata: read this before writing any config
+
+Amended 2026-09-11, after Task 5 surfaced it.
+
+`sequelize-typescript`'s `@Column` decorators need `emitDecoratorMetadata`.
+`tsconfig.json` sets it (line 13), and the current build emits it because
+`@vue/cli-plugin-typescript` compiles through webpack and ts-loader.
+
+**esbuild does not implement `emitDecoratorMetadata`, and electron-vite
+transforms TypeScript with esbuild by default.** Task 5 hit this directly: the
+Sequelize models could not be imported under Vitest, whose transform is also
+esbuild, and had to be stubbed.
+
+So a default electron-vite setup silently produces models with no column
+metadata. That is the same hazard `vue.config.js` already warns about in its own
+comment about the "browser" stub turning decorators into no-ops, arriving by a
+different route, and it is invisible until something reads a column.
+
+The intended remedy: electron-vite declares `@swc/core` as an **optional** peer
+dependency precisely for this, and ships an swc-based transform. swc does
+implement `emitDecoratorMetadata`.
+
+Your obligation for Tasks 6 and 7:
+
+- Any bundle that touches `sequelize-typescript` must be transformed by
+  something that emits decorator metadata. That is the main bundle (it carries
+  `boServer.ts`) and, for the probe, the renderer too.
+- Install `@swc/core` and use electron-vite's swc plugin for the main bundle.
+  Check the installed version's docs for the exact export name and whether it
+  applies to the renderer as well.
+- If the renderer cannot use that plugin, find another mechanism that emits the
+  metadata there (a swc or ts Vite plugin), and **report which mechanism
+  actually worked**.
+- Do not declare this step done on the basis that the build succeeded. A build
+  with missing metadata succeeds. Task 7's check is what proves it.
+
 - [ ] **Step 1: Check the electron-vite 5 config API before writing it**
 
 The config below is written against electron-vite 5's documented shape. Verify
@@ -1238,8 +1274,9 @@ because a wrong `build.rollupOptions.input` key fails with an unhelpful error:
 npm view electron-vite@^5.0.0 version
 ```
 
-Then read the config reference for that exact version. If the shape differs from
-what follows, follow the docs and note the difference in the commit message.
+Then read the config reference for that exact version, including how it exposes
+the swc transform described above. If the shape differs from what follows,
+follow the docs and note the difference in the commit message.
 
 - [ ] **Step 2: Install the Phase B dependencies**
 
@@ -1521,25 +1558,57 @@ The point is to exercise the same stack `Database.class.ts` uses: the native
 In `src/probe/Probe.vue`, add to `onMounted`:
 
 ```ts
-    record('sqlite3 + sequelize-typescript', () => {
+    record('sqlite3 + sequelize-typescript', async () => {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const {Sequelize} = require('sequelize-typescript');
+        const {Sequelize, Table, Column, Model, DataType} = require('sequelize-typescript');
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const {app} = require('@electron/remote');
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const {join} = require('path');
 
+        // A decorated model, declared here rather than imported, so this check
+        // stands on its own. Its only job is to prove that decorator metadata
+        // survived the bundler: a build without emitDecoratorMetadata still
+        // succeeds, and still opens a database, but registers no columns.
+        @Table({tableName: 'probe_rows', timestamps: false})
+        class ProbeRow extends Model {
+            @Column({type: DataType.STRING})
+            public label!: string;
+        }
+
         const sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: join(app.getPath('userData'), 'probe.sqlite'),
+            models: [ProbeRow],
             logging: false,
         });
 
-        // If the decorators were turned into no-ops by the browser stub, or the
-        // native binding is missing, this is where it surfaces.
-        return `sequelize dialect is ${sequelize.getDialect()}`;
+        const attributes = Object.keys(ProbeRow.getAttributes());
+        if (!attributes.includes('label')) {
+            throw new Error(
+                `decorator metadata was lost: ProbeRow registered ${JSON.stringify(attributes)}`,
+            );
+        }
+
+        // Round-trip through the native binding, so a missing sqlite3 also fails here.
+        await sequelize.sync({force: true});
+        await ProbeRow.create({label: 'probe'});
+        const count = await ProbeRow.count();
+
+        return `dialect ${sequelize.getDialect()}, attributes ${attributes.join(',')}, rows ${count}`;
     });
 ```
+
+Note that `record` as written in Task 6 takes a synchronous function. Adapt it to
+await an async check, or add a second `recordAsync` helper next to it. Either is
+fine; say which you did.
+
+**Why this check is shaped this way.** An earlier version of this plan asserted
+only `sequelize.getDialect() === 'sqlite'`. That would pass with decorator
+metadata entirely absent, which is exactly the failure Task 5 proved is possible
+under an esbuild transform. Reading back a registered column, and writing a row
+through the native binding, is the difference between "the build succeeded" and
+"the data layer works".
 
 - [ ] **Step 4: Run and confirm**
 
