@@ -1,7 +1,10 @@
 # Vue 2 to Vue 3 migration: design
 
-- **Date**: 2026-09-10, sequencing approved 2026-09-11
-- **Branch**: `chore/migrate-vue2-to-vue3` (created from `refacto-2026` at `21a2b3d`)
+- **Date**: 2026-09-10, sequencing approved 2026-09-11, rebased onto the
+  current `refacto-2026` on 2026-09-11
+- **Branch**: `chore/migrate-vue2-to-vue3`, now based on `refacto-2026` at
+  `d93fa46` (originally cut at `21a2b3d`; the 22 commits in between added the
+  BO server, see 2.5)
 - **Status**: **APPROVED. No code written yet, implementation plan pending**
 
 This is the validated design for the migration. All six decisions below are
@@ -22,8 +25,12 @@ Vue 3 is confirmed as the current major: npm `vue@latest` = **3.5.42**,
 
 ### 2.1 The Vue-level migration is small
 
-- 3347 lines total, 11 SFC, already on **Vue 2.7.16** (so `defineComponent`
-  and the Composition API are already available as a launch pad).
+- 5019 lines total, 12 SFC (8 components, 3 views, `App.vue`), already on
+  **Vue 2.7.16** (so `defineComponent` and the Composition API are already
+  available as a launch pad).
+- `Config.vue` is now down to 35 lines: since the BO server landed (2.5), it is
+  a static message pointing the user at `http://localhost:3131`. The heaviest
+  view of the original design is no longer a concern.
 - Grepped for Vue 3 breaking changes across `src/`: **zero** occurrences of
   `filters`, `$listeners`, `slot-scope`/`slot=`, functional components,
   `Vue.set`/`Vue.delete`, `Vue.prototype`, keyCode event modifiers,
@@ -78,6 +85,50 @@ All 20 `$store` accesses are imperative reads inside methods (`created`,
 No reactivity is used at all. `CLAUDE.md` already documents the store as a
 service container rather than state.
 
+### 2.5 The main process is in scope too (BO server)
+
+Added by the rebase onto `refacto-2026` at `d93fa46` on 2026-09-11, after the
+first draft of this design: `src/boServer.ts` (1521 lines), a local Express
+back office started by `background.ts` for the app's lifetime, plus
+`src/class/ScreenScraperClient.class.ts` (152 lines) and
+`src/boServerPort.ts` (one exported constant). Total went from 3347 to 5019
+lines.
+
+None of it is Vue code, so Vue 3 does not touch it. But all of it is bundled,
+so the toolchain change does:
+
+- `boServer.ts` imports `sequelize-typescript` and the models directly. The
+  `sqlite3` / `sequelize` externals and the `sequelize-typescript` resolution
+  override (2.3) must therefore be reproduced in the **main** bundle as well as
+  the renderer one. electron-vite configures the two separately.
+- `boServerPort.ts` is imported from both sides: `background.ts` and
+  `boServer.ts` (main) and `Config.vue` (renderer). It must stay a plain
+  dependency-free module so both bundles can take it.
+- `boServer.ts` documents a landmine in its own header comment: importing
+  `Database.class.ts` from the main process would drag in
+  `GameService` to `MameService` to `Helpers.class.ts`, which imports
+  `@electron/remote` **at module scope** and breaks a main-process file. That is
+  why the file duplicates the Sequelize import shape instead of reusing
+  `Database.class.ts`. Under electron-vite this coupling turns into a build-time
+  failure instead of a runtime one, which is an improvement, but step 2 must not
+  be surprised by it.
+
+### 2.6 `__static` does not exist under electron-vite
+
+`__static` is used in `GameService.class.ts` (renderer, to read
+`genre_206.ini` / `nplayers_206.ini`) and in `boServer.ts` (main). It is
+declared ambient in the sources (`declare const __static: string`) and listed as
+a readonly global in `eslint.config.js`, but **defined nowhere in the repo**:
+`vue-cli-plugin-electron-builder` injects it through webpack's DefinePlugin
+(`lib/webpackConfig.js`, pointing at `./public` in dev and at the real dirname
+in production).
+
+electron-vite provides no equivalent. Dropping vue-cli therefore deletes this
+global out from under both processes, and the symptom is exactly the silent
+kind D5 is meant to catch: an unresolved static path yields an empty ROM list,
+not an error. Replacing `__static` with an explicit resolution valid in dev and
+in the packaged app is a **required deliverable of step 2**, not a detail.
+
 ## 3. Decisions taken (approved)
 
 | # | Topic | Decision | Rationale |
@@ -115,6 +166,16 @@ list, not an error):
 - `GameService`: `genre_206.ini` / `nplayers_206.ini` parsing from
   `public/data` via the `__static` global
 - `Helpers`, `Config` (load/save of `mame-awesome-ui-config.json`)
+
+`ScreenScraperClient.class.ts` (2.5) calls `https://api.screenscraper.fr` through
+the global `fetch`. It is left **out of step 1**: characterizing it means
+mocking the network, which is a different kind of test, and the bundler change
+puts nothing about it at risk. Revisit it as its own task once the migration is
+done.
+
+`boServer.ts` is 1521 lines and is not characterized either. It is exercised by
+the manual smoke path at step 4 instead. Testing it properly means driving an
+Express app, which is out of scope for a migration safety net.
 
 ## 4. Version matrix (constrained by electron-vite)
 
@@ -158,17 +219,28 @@ error".
 
 **Step 2: plumbing.**
 Stand up electron-vite + Vue 3 with a minimal renderer (no app code ported).
-Reproduce what `vue.config.js` does today: the `sequelize-typescript` resolution
-override and the `sqlite3` / `sequelize` externals. Keep `nodeIntegration: true`
-and `contextIsolation: false` per D4.
+Reproduce what `vue.config.js` does today, **in both bundles** (2.5): the
+`sequelize-typescript` resolution override and the `sqlite3` / `sequelize`
+externals. Replace `__static` with an explicit path resolution valid in dev and
+in the packaged app (2.6). Keep `nodeIntegration: true` and
+`contextIsolation: false` per D4.
 *Exit criteria*: `just serve` starts the app; the renderer opens the SQLite
-database and runs migrations; `@electron/remote` resolves; `__static` resolves
-in both dev and production branches; `just build` produces a working package.
-Verified on both macOS and Linux (section 7).
+database and runs migrations; the BO server answers on
+`http://localhost:3131`; `@electron/remote` resolves in the renderer and is
+absent from the main bundle; the two static ini files load through the
+`__static` replacement, in dev and from the packaged app; `just build` produces
+a working package. Verified on both macOS and Linux (section 7).
+
+This is the only step that can fail for a reason outside our control. It is
+deliberately first: if electron-vite cannot externalize the native modules
+cleanly, we find out in a day rather than after porting 12 components.
 
 **Step 3: Vue-free layers.**
 Port `class/`, `model/`, `api/`, and introduce `src/services.ts` (D3). No SFC
-touched yet.
+touched yet. `boServer.ts`, `boServerPort.ts` and `ScreenScraperClient` come
+along here as main-process code: no rewrite, only whatever the bundler change
+forces, and the `Helpers` / `@electron/remote` module-scope constraint (2.5)
+must survive intact.
 *Exit criteria*: step 1 tests still green, now running against the ported code.
 
 **Step 4: components, bottom-up.**
