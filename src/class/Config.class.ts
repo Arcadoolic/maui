@@ -16,10 +16,22 @@ function getAppDataPath(): string {
     return path;
 }
 
+// User avatars used to live wherever the BO's setup form pointed avatarsPath at, requiring it
+// to be browsed to and created by hand before it could be used. Fixed under the app's own data
+// directory instead, created eagerly like getAppDataPath() itself, so it always exists with
+// zero setup.
+function getAvatarsPath(): string {
+    const path = join(getAppDataPath(), 'avatars');
+    if (!existsSync(path)) {
+        mkdirSync(path, {recursive: true});
+    }
+    return path;
+}
+
 export default class Config {
     public mamePath: string = '';
     public mameBinaryName: string =  '';
-    public avatarsPath: string = '';
+    public readonly avatarsPath: string = getAvatarsPath();
 
     // ScreenScraper API (screenscraper.fr) credentials, used to fetch marquees/artworks.
     public ssDevId: string = '';
@@ -49,7 +61,6 @@ export default class Config {
 
             this.mamePath = configFile.mamePath;
             this.mameBinaryName = configFile.mameBinaryName;
-            this.avatarsPath = configFile.avatarsPath;
 
             this.ssDevId = configFile.ssDevId || '';
             this.ssDevPassword = configFile.ssDevPassword || '';
@@ -71,7 +82,6 @@ export default class Config {
             JSON.stringify({
                 mamePath: this.mamePath,
                 mameBinaryName: this.mameBinaryName,
-                avatarsPath: this.avatarsPath,
                 ssDevId: this.ssDevId,
                 ssDevPassword: this.ssDevPassword,
                 ssSoftName: this.ssSoftName,

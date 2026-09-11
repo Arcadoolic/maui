@@ -1,7 +1,7 @@
 import express from 'express';
 import {Server} from 'http';
 import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
-import {join, dirname, sep} from 'path';
+import {join, dirname, sep, basename} from 'path';
 import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
 import multer from 'multer';
@@ -28,7 +28,6 @@ import {UniqueConstraintError, ValidationError} from 'sequelize';
 
 declare const __static: string;
 
-type PathField = 'mamePath' | 'avatarsPath';
 type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import';
 
 interface ScreenScraperValues {
@@ -100,6 +99,15 @@ function getDatabasePath(): string {
         mkdirSync(appDataPath, {recursive: true});
     }
     return join(appDataPath, 'mame-awesome-ui.sqlite');
+}
+
+/**
+ * Filenames currently sitting in Config's fixed avatarsPath (<home>/.mame-awesome-ui/avatars,
+ * created eagerly by Config's constructor). Matches the "<pseudo_3>.png" lookup
+ * UserService.class.ts/Champions.vue/Hiscores.vue use in the Electron app itself.
+ */
+function getAvatarFilenames(config: Config): string[] {
+    return readdirSync(config.avatarsPath);
 }
 
 /**
@@ -949,6 +957,38 @@ function renderPageHead(active: Tab = 'mame'): string {
         .badge-no {
             color: #ff6b6b;
         }
+        .avatar-thumb {
+            display: block;
+            width: 36px;
+            height: 36px;
+            object-fit: cover;
+            border-radius: 4px;
+        }
+        .avatar-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #222222;
+            color: #888888;
+            font-size: 18px;
+        }
+        .avatar-upload {
+            display: inline-block;
+            position: relative;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .avatar-upload:hover .avatar-thumb {
+            opacity: 0.6;
+        }
+        .avatar-upload input[type="file"] {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
         .info-icon {
             display: inline-flex;
             vertical-align: middle;
@@ -999,7 +1039,6 @@ function renderPageTail(): string {
 
 interface ConfigFormValues {
     mamePath: string;
-    avatarsPath: string;
     openDevTools: boolean;
 }
 
@@ -1013,12 +1052,7 @@ function renderConfigCard(values: ConfigFormValues, error?: string, info?: strin
                 <label for="mamePath">Dossier contenant le binaire mame</label>
                 <div class="path-row">
                     <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
-                    <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Parcourir</button>
-                </div>
-                <label for="avatarsPath">Dossier des avatars utilisateurs</label>
-                <div class="path-row">
-                    <input type="text" id="avatarsPath" name="avatarsPath" value="${escapeHtml(values.avatarsPath)}">
-                    <button type="submit" name="target" value="avatarsPath" formaction="/browse" formmethod="get">Parcourir</button>
+                    <button type="submit" formaction="/browse" formmethod="get">Parcourir</button>
                 </div>
                 <label class="checkbox-row">
                     <input type="checkbox" name="openDevTools" ${values.openDevTools ? 'checked' : ''}>
@@ -1358,9 +1392,22 @@ function renderCreateUserCard(): string {
     `;
 }
 
-function renderUsersListCard(users: User[], error?: string, info?: string): string {
-    const rows = users.map(user => `
+function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+    const rows = users.map(user => {
+        const avatarFilename = `${user.pseudo_3}.png`;
+        const hasAvatar = avatarFilenames.indexOf(avatarFilename) >= 0;
+        return `
         <tr>
+            <td class="center">
+                <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
+                    <label class="avatar-upload" title="Changer l'avatar (PNG)">
+                        ${hasAvatar
+                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                            : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
+                        <input type="file" name="avatar" accept="image/png" onchange="this.form.submit()">
+                    </label>
+                </form>
+            </td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
             <td class="center">${renderUserStatusBadge(user.active)}</td>
@@ -1376,7 +1423,8 @@ function renderUsersListCard(users: User[], error?: string, info?: string): stri
                 </form>
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 
     return `
         <section class="card">
@@ -1387,6 +1435,7 @@ function renderUsersListCard(users: User[], error?: string, info?: string): stri
                 <table class="favorites-table">
                     <thead>
                         <tr>
+                            <th class="center">Avatar</th>
                             <th>Pseudo</th>
                             <th>Nom</th>
                             <th class="center">Statut</th>
@@ -1394,15 +1443,15 @@ function renderUsersListCard(users: User[], error?: string, info?: string): stri
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows || '<tr><td colspan="5"><em>Aucun utilisateur</em></td></tr>'}</tbody>
+                    <tbody>${rows || '<tr><td colspan="6"><em>Aucun utilisateur</em></td></tr>'}</tbody>
                 </table>
             </div>
         </section>
     `;
 }
 
-function renderUsersPage(users: User[], error?: string, info?: string): string {
-    return renderPage(renderCreateUserCard() + renderUsersListCard(users, error, info), 'users');
+function renderUsersPage(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+    return renderPage(renderCreateUserCard() + renderUsersListCard(users, avatarFilenames, error, info), 'users');
 }
 
 /**
@@ -1419,7 +1468,7 @@ function describeUserError(error: unknown): string {
     return error instanceof Error ? error.message : 'Erreur inattendue.';
 }
 
-function renderBrowsePage(target: PathField, currentDir: string, formValues: {mamePath: string, avatarsPath: string}): string {
+function renderBrowsePage(currentDir: string, formValues: {mamePath: string}): string {
     let entries: string[] = [];
     let error: string|undefined;
     try {
@@ -1433,12 +1482,9 @@ function renderBrowsePage(target: PathField, currentDir: string, formValues: {ma
 
     const parentDir = dirname(currentDir);
     const canGoUp = parentDir !== currentDir;
-    const carryQuery = `mamePath=${encodeURIComponent(formValues.mamePath)}&avatarsPath=${encodeURIComponent(formValues.avatarsPath)}`;
-    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}&${carryQuery}`;
-    const selectLink = (dir: string) => {
-        const selected = {...formValues, [target]: dir};
-        return `/?mamePath=${encodeURIComponent(selected.mamePath)}&avatarsPath=${encodeURIComponent(selected.avatarsPath)}`;
-    };
+    const carryQuery = `mamePath=${encodeURIComponent(formValues.mamePath)}`;
+    const navLink = (dir: string) => `/browse?path=${encodeURIComponent(dir)}&${carryQuery}`;
+    const selectLink = (dir: string) => `/?mamePath=${encodeURIComponent(dir)}`;
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -1466,6 +1512,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // Memory storage (not disk): the import route reads the upload straight into AdmZip, no
     // temp file to clean up afterwards.
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 500 * 1024 * 1024}});
+    const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
     // this must not be recreated per-request.
@@ -1479,8 +1526,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
-        const avatarsPath = typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : (config.avatarsPath || '');
-        res.send(renderForm({mamePath, avatarsPath, openDevTools: config.openDevTools}, getMameInfo(config)));
+        res.send(renderForm({mamePath, openDevTools: config.openDevTools}, getMameInfo(config)));
     });
 
     app.get('/screenscraper', (req, res) => {
@@ -1502,11 +1548,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.get('/users', async (req, res) => {
+        const avatarFilenames = getAvatarFilenames(new Config());
         try {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users));
+            res.send(renderUsersPage(users, avatarFilenames));
         } catch {
-            res.send(renderUsersPage([], 'Base de données introuvable ou pas encore initialisée - '
+            res.send(renderUsersPage([], avatarFilenames, 'Base de données introuvable ou pas encore initialisée - '
                 + 'lancez l\'application une première fois avant de gérer les utilisateurs.'));
         }
     });
@@ -1516,6 +1563,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const realname: string = (req.body.realname || '').trim();
         const email: string = (req.body.email || '').trim();
         const active = req.body.active === 'on';
+        const avatarFilenames = getAvatarFilenames(new Config());
 
         try {
             await User.create({
@@ -1525,10 +1573,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 active,
             } as User);
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users, undefined, `Utilisateur "${pseudo3}" créé.`));
+            res.send(renderUsersPage(users, avatarFilenames, undefined, `Utilisateur "${pseudo3}" créé.`));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
-            res.status(422).send(renderUsersPage(users, describeUserError(error)));
+            res.status(422).send(renderUsersPage(users, avatarFilenames, describeUserError(error)));
         }
     });
 
@@ -1539,7 +1587,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             await user.save();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-        res.send(renderUsersPage(users, undefined, user ? `Utilisateur "${user.pseudo_3}" mis à jour.` : undefined));
+        res.send(renderUsersPage(
+            users, getAvatarFilenames(new Config()), undefined,
+            user ? `Utilisateur "${user.pseudo_3}" mis à jour.` : undefined,
+        ));
     });
 
     app.post('/users/:id/delete', async (req, res) => {
@@ -1548,7 +1599,50 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             await user.destroy();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-        res.send(renderUsersPage(users, undefined, user ? `Utilisateur "${user.pseudo_3}" supprimé.` : undefined));
+        res.send(renderUsersPage(
+            users, getAvatarFilenames(new Config()), undefined,
+            user ? `Utilisateur "${user.pseudo_3}" supprimé.` : undefined,
+        ));
+    });
+
+    app.post('/users/:id/avatar', avatarUpload.single('avatar'), async (req, res) => {
+        const user = await User.findByPk(req.params.id);
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
+        const config = new Config();
+
+        if (!user) {
+            res.status(404).send(renderUsersPage(users, getAvatarFilenames(config), 'Utilisateur introuvable.'));
+            return;
+        }
+        if (!req.file) {
+            res.status(422).send(
+                renderUsersPage(users, getAvatarFilenames(config), 'Aucun fichier envoyé.'),
+            );
+            return;
+        }
+        if (req.file.mimetype !== 'image/png') {
+            res.status(422).send(renderUsersPage(
+                users, getAvatarFilenames(config), 'L\'avatar doit être une image PNG.',
+            ));
+            return;
+        }
+
+        writeFileSync(join(config.avatarsPath, `${user.pseudo_3}.png`), req.file.buffer);
+        res.send(renderUsersPage(
+            users, getAvatarFilenames(config), undefined, `Avatar mis à jour pour "${user.pseudo_3}".`,
+        ));
+    });
+
+    app.get('/avatars/:filename', (req, res) => {
+        const config = new Config();
+        // basename() strips any directory components (e.g. "../../etc/passwd") from the
+        // user-controlled route param before it ever reaches the filesystem.
+        const filePath = join(config.avatarsPath, basename(req.params.filename));
+        if (!existsSync(filePath)) {
+            res.status(404).end();
+            return;
+        }
+        res.sendFile(filePath);
     });
 
     app.post('/favorites/download-media', async (req, res) => {
@@ -1699,53 +1793,39 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.get('/browse', (req, res) => {
-        const target: PathField = req.query.target === 'avatarsPath' ? 'avatarsPath' : 'mamePath';
         const formValues = {
             mamePath: typeof req.query.mamePath === 'string' ? req.query.mamePath : '',
-            avatarsPath: typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : '',
         };
 
-        let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : formValues[target];
+        let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : formValues.mamePath;
         if (!currentDir || !existsSync(currentDir)) {
             const config = new Config();
             config.load();
-            currentDir = (target === 'mamePath' ? config.mamePath : config.avatarsPath) || os.homedir();
+            currentDir = config.mamePath || os.homedir();
         }
         if (!existsSync(currentDir)) {
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, formValues));
+        res.send(renderBrowsePage(currentDir, formValues));
     });
 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
-        const avatarsPath: string = (req.body.avatarsPath || '').trim();
         const openDevTools = req.body.openDevTools === 'on';
         const config = new Config();
         config.load();
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath, avatarsPath, openDevTools}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
+                {mamePath, openDevTools}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
             ));
             return;
         }
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath, avatarsPath, openDevTools}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
-            ));
-            return;
-        }
-
-        try {
-            if (!existsSync(avatarsPath)) {
-                mkdirSync(avatarsPath, {recursive: true});
-            }
-        } catch {
-            res.status(422).send(renderForm(
-                {mamePath, avatarsPath, openDevTools}, getMameInfo(config), `Impossible de créer le dossier "${avatarsPath}".`,
+                {mamePath, openDevTools}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
             ));
             return;
         }
@@ -1754,7 +1834,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath, avatarsPath, openDevTools}, getMameInfo(config),
+                {mamePath, openDevTools}, getMameInfo(config),
                 'Échec de l\'initialisation de mame ("-createconfig") : '
                     + `${error instanceof Error ? error.message : 'erreur inattendue'}.`,
             ));
@@ -1763,7 +1843,6 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
-        config.avatarsPath = avatarsPath;
         config.openDevTools = openDevTools;
         config.save();
 
@@ -1779,7 +1858,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if (!config.mamePath || !config.mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || '', avatarsPath: config.avatarsPath || '', openDevTools: config.openDevTools},
+                {mamePath: config.mamePath || '', openDevTools: config.openDevTools},
                 getMameInfo(config),
                 'Aucune configuration valide enregistrée : impossible de lancer mame.',
             ));
@@ -1789,7 +1868,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const mameBinary = join(config.mamePath, config.mameBinaryName);
         if (!existsSync(mameBinary)) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
+                {mamePath: config.mamePath, openDevTools: config.openDevTools},
                 getMameInfo(config),
                 `Le binaire "${mameBinary}" est introuvable.`,
             ));
@@ -1813,7 +1892,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         });
 
         res.send(renderForm(
-            {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
+            {mamePath: config.mamePath, openDevTools: config.openDevTools},
             getMameInfo(config),
             undefined,
             'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur cette machine.',
@@ -1844,7 +1923,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         res.send(renderForm(
-            {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
+            {mamePath: config.mamePath, openDevTools: config.openDevTools},
             getMameInfo(config),
             undefined,
             undefined,
@@ -1867,7 +1946,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const added = repairPluginIni(pluginIniPath, getAvailablePlugins(resolvedPluginsPath));
 
         res.send(renderForm(
-            {mamePath: config.mamePath, avatarsPath: config.avatarsPath, openDevTools: config.openDevTools},
+            {mamePath: config.mamePath, openDevTools: config.openDevTools},
             getMameInfo(config),
             undefined,
             undefined,
