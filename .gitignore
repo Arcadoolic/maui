@@ -35,3 +35,6 @@ arcade.log
 
 # Vitest 5 writes a JSON run report here even without an explicit reporter config
 /.vitest
+
+# electron-vite output
+/out

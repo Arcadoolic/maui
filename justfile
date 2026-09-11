@@ -78,6 +78,10 @@ _check-sandbox:
 serve: install _check-sandbox
     npm run electron:serve
 
+# Run the Phase B plumbing probe (electron-vite + Vue 3)
+probe: install _check-sandbox
+    npm run probe:dev
+
 # Build production Electron app
 build: install
     npm run electron:build
