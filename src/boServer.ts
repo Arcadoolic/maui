@@ -29,6 +29,7 @@ import {UniqueConstraintError, ValidationError} from 'sequelize';
 declare const __static: string;
 
 type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import';
+type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
     ssDevId: string;
@@ -108,6 +109,19 @@ function getDatabasePath(): string {
  */
 function getAvatarFilenames(config: Config): string[] {
     return readdirSync(config.avatarsPath);
+}
+
+/**
+ * True only for a request from the machine the BO server itself runs on. app.listen() below
+ * binds every interface, not just loopback, so the BO is reachable from the rest of the LAN -
+ * fine for browsing config/favorites/users remotely, but launching mame only makes sense on
+ * the cabinet's own display. Checked against the raw socket address (not req.ip, which would
+ * follow X-Forwarded-For if this ever sat behind a proxy - it doesn't, and shouldn't be
+ * spoofable into bypassing this check if it ever did).
+ */
+function isLocalhostRequest(req: {socket: {remoteAddress?: string}}): boolean {
+    const address = req.socket.remoteAddress;
+    return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
 }
 
 /**
@@ -903,6 +917,25 @@ function renderPageHead(active: Tab = 'mame'): string {
         .path-row input {
             margin-top: 0;
         }
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 24px;
+        }
+        .launch-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .launch-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .launch-logo {
+            height: 20px;
+            width: auto;
+        }
         .checkbox-row {
             display: flex;
             align-items: center;
@@ -1063,6 +1096,13 @@ function renderPageTail(): string {
 interface ConfigFormValues {
     mamePath: string;
     openDevTools: boolean;
+    // Whether the current request came from the machine running the BO itself. The BO listens
+    // on every network interface (app.listen() below has no host argument), so it's reachable
+    // from the rest of the LAN - but launching mame only makes sense on the cabinet's own
+    // display, not from whoever else can open this page over the network. Threaded through
+    // instead of re-derived in renderConfigCard() since only the request, not the rendered
+    // HTML, knows where it came from.
+    isLocal: boolean;
 }
 
 function renderConfigCard(values: ConfigFormValues, error?: string, info?: string): string {
@@ -1075,13 +1115,27 @@ function renderConfigCard(values: ConfigFormValues, error?: string, info?: strin
                 <label for="mamePath">Dossier contenant le binaire mame</label>
                 <div class="path-row">
                     <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
-                    <button type="submit" formaction="/browse" formmethod="get">Parcourir</button>
+                    <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Parcourir</button>
                 </div>
                 <label class="checkbox-row">
                     <input type="checkbox" name="openDevTools" ${values.openDevTools ? 'checked' : ''}>
                     Ouvrir les DevTools au démarrage (mode développement)
                 </label>
-                <button type="submit">Enregistrer</button>
+                <div class="button-row">
+                    <button type="submit">Enregistrer</button>
+                    ${values.isLocal
+                        ? `<button type="submit" formaction="/launch" formmethod="post" class="launch-button">
+                            <img src="/mame-logo.svg" alt="" class="launch-logo">
+                            Lancer mame
+                        </button>`
+                        : `<button type="button" class="launch-button" disabled
+                            title="Disponible uniquement depuis la machine qui héberge mame-awesome-ui.">
+                            <img src="/mame-logo.svg" alt="" class="launch-logo">
+                            Lancer mame
+                        </button>`}
+                </div>
+                ${values.isLocal ? '' : `<p class="info">Le lancement de mame n'est possible que depuis la
+                    machine qui héberge mame-awesome-ui, pas depuis le réseau local.</p>`}
             </form>
         </section>
     `;
@@ -1131,7 +1185,10 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
             </dl>
             <form method="post" action="/mame-options/save">
                 <label for="pluginsPath">Dossier des plugins MAME (pluginspath)</label>
-                <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(mameInfo.pluginsPath || '')}">
+                <div class="path-row">
+                    <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(mameInfo.pluginsPath || '')}">
+                    <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get">Parcourir</button>
+                </div>
                 <label class="checkbox-row">
                     <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
                     Lancer MAME en mode fenêtré (au lieu du plein écran) - modifie mame.ini
@@ -1146,17 +1203,6 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <button type="submit">Réparer plugin.ini (ajouter les plugins manquants)</button>
                 </form>
             ` : ''}
-        </section>
-    `;
-}
-
-function renderActionsCard(): string {
-    return `
-        <section class="card">
-            <h2>Actions</h2>
-            <form method="post" action="/launch">
-                <button type="submit">Lancer mame</button>
-            </form>
         </section>
     `;
 }
@@ -1203,7 +1249,6 @@ function renderForm(
     return renderPage(
         renderConfigCard(values, error, info)
         + renderMameInfoCard(mameInfo, mameInfoMessage)
-        + renderActionsCard()
         + renderDangerZoneCard(mameInfo),
         'mame',
     );
@@ -1498,7 +1543,7 @@ function describeUserError(error: unknown): string {
     return error instanceof Error ? error.message : 'Erreur inattendue.';
 }
 
-function renderBrowsePage(currentDir: string, formValues: {mamePath: string}): string {
+function renderBrowsePage(target: PathField, currentDir: string, initialValue: string): string {
     let entries: string[] = [];
     let error: string|undefined;
     try {
@@ -1512,9 +1557,13 @@ function renderBrowsePage(currentDir: string, formValues: {mamePath: string}): s
 
     const parentDir = dirname(currentDir);
     const canGoUp = parentDir !== currentDir;
-    const carryQuery = `mamePath=${encodeURIComponent(formValues.mamePath)}`;
-    const navLink = (dir: string) => `/browse?path=${encodeURIComponent(dir)}&${carryQuery}`;
-    const selectLink = (dir: string) => `/?mamePath=${encodeURIComponent(dir)}`;
+    // Only ever carries the one field being browsed - carrying the other one too (even as an
+    // empty default) would blank it out on the page this returns to, since that page treats
+    // a present-but-empty query param differently from an absent one (falls back to the saved
+    // config/mame.ini value only when the param is absent).
+    const carryQuery = `${target}=${encodeURIComponent(initialValue)}`;
+    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}&${carryQuery}`;
+    const selectLink = (dir: string) => `/?${target}=${encodeURIComponent(dir)}`;
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -1552,11 +1601,23 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.sendFile(join(__static, 'img/background.jpg'));
     });
 
+    app.get('/mame-logo.svg', (req, res) => {
+        res.sendFile(join(__static, 'img/mame-logo.svg'));
+    });
+
     app.get('/', (req, res) => {
         const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
-        res.send(renderForm({mamePath, openDevTools: config.openDevTools}, getMameInfo(config)));
+        const mameInfo = getMameInfo(config);
+        // Only set after browsing for it below "Dossier des plugins MAME" - not persisted until
+        // its own form is submitted, same as mamePath above.
+        if (typeof req.query.pluginsPath === 'string') {
+            mameInfo.pluginsPath = req.query.pluginsPath;
+        }
+        res.send(renderForm(
+            {mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)}, mameInfo,
+        ));
     });
 
     app.get('/screenscraper', (req, res) => {
@@ -1824,21 +1885,26 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.get('/browse', (req, res) => {
-        const formValues = {
-            mamePath: typeof req.query.mamePath === 'string' ? req.query.mamePath : '',
-        };
+        const target: PathField = req.query.target === 'pluginsPath' ? 'pluginsPath' : 'mamePath';
+        const initialValue = typeof req.query[target] === 'string' ? req.query[target] as string : '';
 
-        let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : formValues.mamePath;
+        let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : initialValue;
         if (!currentDir || !existsSync(currentDir)) {
             const config = new Config();
             config.load();
-            currentDir = config.mamePath || os.homedir();
+            if (target === 'mamePath') {
+                currentDir = config.mamePath || os.homedir();
+            } else {
+                const iniPath = getMameHomePath();
+                const pluginsPath = getMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath');
+                currentDir = pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : os.homedir();
+            }
         }
         if (!existsSync(currentDir)) {
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(currentDir, formValues));
+        res.send(renderBrowsePage(target, currentDir, initialValue));
     });
 
     app.post('/save', (req, res) => {
@@ -1849,14 +1915,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath, openDevTools}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
+                {mamePath, openDevTools, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
             ));
             return;
         }
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath, openDevTools}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
+                {mamePath, openDevTools, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
             ));
             return;
         }
@@ -1865,7 +1931,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath, openDevTools}, getMameInfo(config),
+                {mamePath, openDevTools, isLocal: isLocalhostRequest(req)}, getMameInfo(config),
                 'Échec de l\'initialisation de mame ("-createconfig") : '
                     + `${error instanceof Error ? error.message : 'erreur inattendue'}.`,
             ));
@@ -1887,9 +1953,18 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         config.load();
 
+        if (!isLocalhostRequest(req)) {
+            res.status(403).send(renderForm(
+                {mamePath: config.mamePath || '', openDevTools: config.openDevTools, isLocal: false},
+                getMameInfo(config),
+                'Le lancement de mame n\'est possible que depuis la machine qui héberge mame-awesome-ui.',
+            ));
+            return;
+        }
+
         if (!config.mamePath || !config.mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || '', openDevTools: config.openDevTools},
+                {mamePath: config.mamePath || '', openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
                 getMameInfo(config),
                 'Aucune configuration valide enregistrée : impossible de lancer mame.',
             ));
@@ -1899,7 +1974,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const mameBinary = join(config.mamePath, config.mameBinaryName);
         if (!existsSync(mameBinary)) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath, openDevTools: config.openDevTools},
+                {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
                 getMameInfo(config),
                 `Le binaire "${mameBinary}" est introuvable.`,
             ));
@@ -1923,7 +1998,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         });
 
         res.send(renderForm(
-            {mamePath: config.mamePath, openDevTools: config.openDevTools},
+            {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
             getMameInfo(config),
             undefined,
             'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur cette machine.',
@@ -1954,7 +2029,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         res.send(renderForm(
-            {mamePath: config.mamePath, openDevTools: config.openDevTools},
+            {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
             getMameInfo(config),
             undefined,
             undefined,
@@ -1977,7 +2052,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const added = repairPluginIni(pluginIniPath, getAvailablePlugins(resolvedPluginsPath));
 
         res.send(renderForm(
-            {mamePath: config.mamePath, openDevTools: config.openDevTools},
+            {mamePath: config.mamePath, openDevTools: config.openDevTools, isLocal: isLocalhostRequest(req)},
             getMameInfo(config),
             undefined,
             undefined,
