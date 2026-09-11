@@ -24,6 +24,17 @@ function createWindow(): void {
     // checks leave a readable trace next to the Vite output.
     win.webContents.on('console-message', event => {
         process.stdout.write(`[renderer] ${event.message}\n`);
+
+        // The renderer logs this sentinel once every check has settled. Exiting
+        // here, immediately after the line was written, lets a headless run
+        // terminate on its own with a status that reflects the checks, instead
+        // of hanging until an external timeout kills it. Doing it from this
+        // handler rather than from the renderer means no forwarded output can
+        // be lost to a race with app.exit().
+        const done = /^\[probe] done exit=([01])$/.exec(event.message);
+        if (done) {
+            app.exit(Number(done[1]));
+        }
     });
 
     win.webContents.on('did-finish-load', () => {
@@ -41,6 +52,13 @@ initialize();
 
 app.whenReady().then(() => {
     createWindow();
+}).catch((error: unknown) => {
+    // Without this the promise floats. The checks Tasks 7 to 9 add can throw,
+    // and an unhandled rejection here would present as a probe run with no
+    // window and no message at all. Exit non-zero so a headless run fails
+    // loudly rather than hanging on an empty desktop.
+    process.stderr.write(`[probe] startup failed: ${String(error)}\n`);
+    app.exit(1);
 });
 
 app.on('window-all-closed', () => {
