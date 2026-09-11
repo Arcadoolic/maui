@@ -1,4 +1,4 @@
-import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {existsSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
 import {join} from 'path';
 
 export default class Config {
@@ -14,10 +14,10 @@ export default class Config {
     public ssUserPassword: string = '';
 
     // Whether to auto-open Chromium DevTools on startup, in dev mode (electron:serve). Defaults
-    // to true to match the previous always-open behavior.
-    public openDevTools: boolean = true;
+    // to false - opt in explicitly, either via the BO config form or by editing the config file.
+    public openDevTools: boolean = false;
 
-    protected configPath!: string;
+    public configPath!: string;
     protected _configLoaded: boolean = false;
 
     protected userDataPath!: string;
@@ -47,7 +47,7 @@ export default class Config {
             this.ssUserId = configFile.ssUserId || '';
             this.ssUserPassword = configFile.ssUserPassword || '';
 
-            this.openDevTools = configFile.openDevTools !== false;
+            this.openDevTools = configFile.openDevTools === true;
 
             this._configLoaded = true;
             return true;
@@ -78,5 +78,15 @@ export default class Config {
 
     public loaded() {
         return this._configLoaded;
+    }
+
+    /**
+     * Delete the config file, if any, so the app falls back to first-run setup.
+     */
+    public delete(): void {
+        if (existsSync(this.configPath)) {
+            unlinkSync(this.configPath);
+        }
+        this._configLoaded = false;
     }
 }

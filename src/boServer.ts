@@ -1,11 +1,18 @@
 import express from 'express';
 import {Server} from 'http';
-import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'fs';
+import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
 import {join, dirname, sep} from 'path';
 import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
+import multer from 'multer';
+// Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
+// syntax in methods/inflater.js that the main process's webpack build (older acorn parser)
+// fails to parse. Bumping this past 0.5.16 breaks `just serve`/`just build` with a
+// "Module parse failed: Unexpected token" error on that file - re-check before upgrading.
+import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
+import {StartingPackManifest} from '@/types/StartingPackManifest';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
 // -> Helpers.class.ts's @electron/remote import at module scope, which would break this
@@ -22,7 +29,7 @@ import {UniqueConstraintError, ValidationError} from 'sequelize';
 declare const __static: string;
 
 type PathField = 'mamePath' | 'avatarsPath';
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users';
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import';
 
 interface ScreenScraperValues {
     ssDevId: string;
@@ -41,6 +48,29 @@ function findMameBinary(mamePath: string): string|null {
         }
     }
     return null;
+}
+
+/**
+ * Same bootstrap as MameService.class.ts's constructor: mame.ini/ui.ini don't exist until mame
+ * writes them via -createconfig at least once. Duplicated here for the usual reason (importing
+ * MameService.class.ts would pull in Helpers.class.ts's @electron/remote import) - without it,
+ * the BO only ever sees mame.ini/ui.ini once the Electron kiosk window has reached /home at
+ * least once (the only other place this bootstrap currently runs), leaving marquees/flyers/
+ * favorites unresolvable and /import refusing to work if the BO is used to configure mame on
+ * its own.
+ */
+function ensureMameConfigBootstrapped(mameBinary: string, iniPath: string): void {
+    const uiIniPath = join(iniPath, 'ui.ini');
+    if (existsSync(uiIniPath)) {
+        return;
+    }
+    // -createconfig always writes mame.ini/ui.ini next to cwd, ignoring -inipath/-homepath, so
+    // bootstrap the dedicated home directory by running it from there (same trick
+    // MameService.class.ts uses).
+    execFileSync(mameBinary, ['-createconfig'], {cwd: iniPath});
+    if (!existsSync(uiIniPath)) {
+        throw new Error(`"${uiIniPath}" introuvable après -createconfig.`);
+    }
 }
 
 /**
@@ -170,6 +200,27 @@ function getMameLocations(iniPath: string): MameLocations {
     const flyerPath = ensureFirstDirectory(uiIni.flyers_directory, iniPath);
     const favoritesPath = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
     return {uiIni, marqueePath, flyerPath, favoritesPath};
+}
+
+/**
+ * Same resolution as getMameLocations().favoritesPath, but - unlike that one, which stays null
+ * on purpose when favorites.ini doesn't exist yet (mame itself is meant to be the only writer)
+ * - creates the target ui_path directory when needed and returns where favorites.ini should be
+ * written. Needed for importing a starting pack onto a brand new install that has no
+ * favorites.ini at all yet.
+ */
+function ensureFavoritesPath(iniPath: string): string {
+    const uiIniPath = join(iniPath, 'ui.ini');
+    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
+    const existing = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
+    if (existing) {
+        return existing;
+    }
+    const dir = ensureFirstDirectory(uiIni.ui_path, iniPath);
+    if (!dir) {
+        throw new Error('ui_path introuvable dans ui.ini.');
+    }
+    return join(dir, 'favorites.ini');
 }
 
 /**
@@ -566,6 +617,137 @@ async function downloadMissingFavoriteMedia(
     return summary;
 }
 
+interface ImportSummary {
+    gamesUpserted: number;
+    romFilesWritten: number;
+    biosFilesWritten: number;
+    marqueesWritten: number;
+    flyersWritten: number;
+    favoritesReplaced: boolean;
+    categoriesCreated: string[];
+    warnings: string[];
+    errors: string[];
+}
+
+/**
+ * Ingests a starting pack ZIP (built by scripts/build-starting-pack.ts): for every rom present
+ * in the pack, overwrites its Game row, rom file, marquee and flyer (full-replacement, by
+ * design - nothing outside the pack's scope is touched), then replaces favorites.ini wholesale
+ * with the pack's copy. One rom failing (missing entry, DB error) is logged as a warning/error
+ * and skipped rather than aborting the whole import, mirroring the pack builder's own
+ * warn-and-continue policy.
+ */
+async function importStartingPack(
+    zip: AdmZip,
+    manifest: StartingPackManifest,
+    romPath: string,
+    marqueePath: string,
+    flyerPath: string,
+    iniPath: string,
+    onProgress: (line: string) => void,
+): Promise<ImportSummary> {
+    const summary: ImportSummary = {
+        gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0,
+        flyersWritten: 0, favoritesReplaced: false, categoriesCreated: [], warnings: [], errors: [],
+    };
+    const categoryIds = new Map<string, number>();
+
+    for (const biosName of manifest.biosRoms) {
+        const entry = zip.getEntry(`roms/${biosName}.zip`);
+        if (!entry) {
+            summary.warnings.push(`BIOS "${biosName}" : absent du ZIP, ignoré.`);
+            continue;
+        }
+        if (zip.extractEntryTo(entry, romPath, false, true)) {
+            summary.biosFilesWritten++;
+        } else {
+            summary.warnings.push(`BIOS "${biosName}" : échec de l'extraction.`);
+        }
+    }
+
+    for (const game of manifest.games) {
+        try {
+            let categoryId: number | null = null;
+            if (game.categoryName) {
+                categoryId = categoryIds.get(game.categoryName) ?? null;
+                if (categoryId === null) {
+                    const [category, created] = await Category.findOrCreate({
+                        where: {name: game.categoryName},
+                        defaults: {name: game.categoryName} as Category,
+                    });
+                    categoryId = category.id_category;
+                    categoryIds.set(game.categoryName, categoryId);
+                    if (created) {
+                        summary.categoriesCreated.push(game.categoryName);
+                    }
+                }
+            }
+
+            const romEntry = game.hasRomFile ? zip.getEntry(`roms/${game.romName}.zip`) : null;
+            if (romEntry) {
+                if (zip.extractEntryTo(romEntry, romPath, false, true)) {
+                    summary.romFilesWritten++;
+                } else {
+                    summary.warnings.push(`${game.romName} : échec de l'extraction de la rom.`);
+                }
+            } else if (game.hasRomFile) {
+                summary.warnings.push(`${game.romName} : rom annoncée dans le manifest mais absente du ZIP.`);
+            }
+
+            const marqueeEntry = game.hasMarquee ? zip.getEntry(`marquees/${game.romName}.png`) : null;
+            if (marqueeEntry && zip.extractEntryTo(marqueeEntry, marqueePath, false, true)) {
+                summary.marqueesWritten++;
+            }
+            const flyerEntry = game.hasFlyer ? zip.getEntry(`flyers/${game.romName}.png`) : null;
+            if (flyerEntry && zip.extractEntryTo(flyerEntry, flyerPath, false, true)) {
+                summary.flyersWritten++;
+            }
+
+            const gameFields = {
+                id_category: categoryId,
+                fullname: game.fullname,
+                shortname: game.shortname,
+                subname: game.subname,
+                manufacturer: game.manufacturer,
+                year: game.year ? parseInt(game.year, 10) : null,
+                hi: false,
+                player_alt: game.player_alt,
+                player_sim: game.player_sim,
+            };
+            // paranoid: true (see Game.model.ts) means a game GameService.saveGamesFromRomNames
+            // previously dropped (e.g. favorites.ini emptied by a reset) is only soft-deleted -
+            // its romName still occupies the unique constraint. A plain findOne() (which hides
+            // soft-deleted rows) would miss it and Game.create() would then collide with that
+            // constraint, so look it up with paranoid:false and restore() it if needed.
+            const existing = await Game.findOne({where: {romName: game.romName}, paranoid: false});
+            if (existing) {
+                await existing.restore();
+                await existing.update(gameFields);
+            } else {
+                await Game.create({romName: game.romName, ...gameFields} as Game);
+            }
+            summary.gamesUpserted++;
+            onProgress(`${game.romName} : ${game.fullname} importé.`);
+        } catch (error) {
+            const message = error instanceof ValidationError
+                ? error.errors.map(e => e.message).join(', ')
+                : (error instanceof Error ? error.message : 'erreur inattendue');
+            summary.errors.push(`${game.romName} : ${message}`);
+            onProgress(`${game.romName} : erreur (${message}).`);
+        }
+    }
+
+    const favoritesEntry = zip.getEntry('favorites.ini');
+    if (favoritesEntry) {
+        writeFileSync(ensureFavoritesPath(iniPath), zip.readAsText(favoritesEntry), 'utf8');
+        summary.favoritesReplaced = true;
+    } else {
+        summary.warnings.push('favorites.ini absent du ZIP, favoris inchangés.');
+    }
+
+    return summary;
+}
+
 function escapeHtml(value: string): string {
     return value
         .replace(/&/g, '&amp;')
@@ -790,6 +972,7 @@ function renderPageHead(active: Tab = 'mame'): string {
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Users</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
+            <a href="/import" class="${active === 'import' ? 'active' : ''}">Import</a>
         </nav>
     </header>
     `;
@@ -904,6 +1087,29 @@ function renderActionsCard(): string {
     `;
 }
 
+function renderDangerZoneCard(mameInfo: MameInfo): string {
+    // No apostrophes in this message: it's embedded in a single-quoted JS string literal
+    // inside the onsubmit attribute below (same pattern as the user-delete confirm()).
+    const confirmMessage = 'Supprimer definitivement la configuration de mame-awesome-ui et tout '
+        + 'le dossier home de mame (roms, marquees, flyers, favoris, sauvegardes, scores) ? '
+        + 'Cette action est irreversible.';
+    return `
+        <section class="card">
+            <h2>Zone dangereuse</h2>
+            <p class="error">Réinitialise complètement mame-awesome-ui pour repartir de zéro :
+            supprime le fichier de configuration (mame-awesome-ui-config.json) et tout le dossier
+            home de mame - <strong>${escapeHtml(mameInfo.iniPath)}</strong> - donc ses roms,
+            marquees, flyers, favoris, sauvegardes et scores. La base de données (jeux,
+            utilisateurs) n'est pas touchée. Cette action est irréversible. L'application se
+            ferme ensuite - il faudra la relancer manuellement (<code>just serve</code> en
+            développement) pour terminer la réinitialisation.</p>
+            <form method="post" action="/reset" onsubmit="return confirm('${confirmMessage}')">
+                <button type="submit">Réinitialiser l'application</button>
+            </form>
+        </section>
+    `;
+}
+
 function renderForm(
     values: ConfigFormValues,
     mameInfo: MameInfo,
@@ -914,7 +1120,8 @@ function renderForm(
     return renderPage(
         renderConfigCard(values, error, info)
         + renderMameInfoCard(mameInfo, mameInfoMessage)
-        + renderActionsCard(),
+        + renderActionsCard()
+        + renderDangerZoneCard(mameInfo),
         'mame',
     );
 }
@@ -1060,6 +1267,50 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
     return renderPage(renderFavoritesCard(favoritesInfo, hasCreds, summary), 'favorites');
 }
 
+function renderImportCard(error?: string): string {
+    return `
+        <section class="card">
+            <h2>Importer un starting pack</h2>
+            <p class="info">Remplace intégralement les jeux/roms/artwork/favoris présents dans
+            le pack. Les autres jeux, utilisateurs et scores ne sont pas touchés.</p>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            <form method="post" action="/import" enctype="multipart/form-data">
+                <label for="pack">Fichier ZIP</label>
+                <input type="file" id="pack" name="pack" accept=".zip" required>
+                <button type="submit">Importer</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderImportSummary(summary: ImportSummary): string {
+    const parts = [
+        `${summary.gamesUpserted} jeu(x) importé(s)`,
+        `${summary.romFilesWritten} rom(s) écrite(s)`,
+        `${summary.biosFilesWritten} bios écrite(s)`,
+        `${summary.marqueesWritten} marquee(s)`,
+        `${summary.flyersWritten} flyer(s)`,
+        summary.favoritesReplaced ? 'favoris remplacés' : 'favoris inchangés',
+        `${summary.errors.length} erreur(s)`,
+    ];
+    const categoriesHtml = summary.categoriesCreated.length
+        ? `<p class="info">Catégorie(s) créée(s) : ${escapeHtml(summary.categoriesCreated.join(', '))}</p>`
+        : '';
+    const issues = [...summary.warnings, ...summary.errors];
+    const issuesHtml = issues.length
+        ? `<ul>${issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
+        : '';
+    return `
+        <p class="info">${escapeHtml(parts.join(' — '))}</p>
+        ${categoriesHtml}
+        ${issuesHtml}
+    `;
+}
+
+function renderImportPage(error?: string): string {
+    return renderPage(renderImportCard(error), 'import');
+}
+
 function renderUserStatusBadge(active: boolean): string {
     return active ? '<span class="badge-yes">✓ actif</span>' : '<span class="badge-no">✗ inactif</span>';
 }
@@ -1187,9 +1438,14 @@ function renderBrowsePage(target: PathField, currentDir: string, formValues: {ma
     `);
 }
 
-export function startBoServer(userDataPath: string, port: number, onConfigured: () => void): Server {
+export function startBoServer(
+    userDataPath: string, port: number, onConfigured: () => void, onReset: () => void,
+): Server {
     const app = express();
     app.use(express.urlencoded({extended: false}));
+    // Memory storage (not disk): the import route reads the upload straight into AdmZip, no
+    // temp file to clean up afterwards.
+    const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 500 * 1024 * 1024}});
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
     // this must not be recreated per-request.
@@ -1336,6 +1592,71 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
         res.end();
     });
 
+    app.get('/import', (req, res) => {
+        res.send(renderImportPage());
+    });
+
+    app.post('/import', upload.single('pack'), async (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+
+        if (!req.file) {
+            res.status(400).send(renderImportPage('Aucun fichier reçu.'));
+            return;
+        }
+
+        let zip: AdmZip;
+        let manifest: StartingPackManifest;
+        try {
+            zip = new AdmZip(req.file.buffer);
+            const manifestEntry = zip.getEntry('manifest.json');
+            if (!manifestEntry) {
+                throw new Error('manifest.json manquant.');
+            }
+            manifest = JSON.parse(zip.readAsText(manifestEntry));
+            if (manifest.formatVersion !== 1) {
+                throw new Error(`version de pack non supportée (${manifest.formatVersion}).`);
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            res.status(422).send(renderImportPage(`ZIP invalide : ${message}`));
+            return;
+        }
+
+        const iniPath = getMameHomePath();
+        const {marqueePath, flyerPath} = getMameLocations(iniPath);
+        const mameInfo = getMameInfo(config);
+        if (!mameInfo.romPath || !marqueePath || !flyerPath) {
+            res.status(422).send(renderImportPage(
+                'Configuration MAME incomplète - configurez MAME (onglet MAME) avant d\'importer.',
+            ));
+            return;
+        }
+
+        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+        res.socket?.setNoDelay(true);
+        res.write(renderPageHead('import'));
+        res.write('<section class="card"><h2>Import en cours…</h2><ul class="progress-log">');
+
+        try {
+            const summary = await importStartingPack(
+                zip, manifest, mameInfo.romPath, marqueePath, flyerPath, iniPath,
+                line => res.write(`<li>${escapeHtml(line)}</li>`),
+            );
+            res.write('</ul></section>');
+            res.write(renderImportSummary(summary));
+        } catch (error) {
+            console.error('[boServer] Import failed:', error);
+            res.write(`</ul><p class="error">${
+                escapeHtml(error instanceof Error ? error.message : 'Erreur inattendue.')
+            }</p>`);
+        }
+
+        res.write('<p><a class="button-link" href="/import">Retour</a></p>');
+        res.write(renderPageTail());
+        res.end();
+    });
+
     app.post('/screenscraper/save', (req, res) => {
         const values: ScreenScraperValues = {
             ssDevId: (req.body.ssDevId || '').trim(),
@@ -1409,6 +1730,17 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
             return;
         }
 
+        try {
+            ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
+        } catch (error) {
+            res.status(422).send(renderForm(
+                {mamePath, avatarsPath, openDevTools}, getMameInfo(config),
+                'Échec de l\'initialisation de mame ("-createconfig") : '
+                    + `${error instanceof Error ? error.message : 'erreur inattendue'}.`,
+            ));
+            return;
+        }
+
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
         config.avatarsPath = avatarsPath;
@@ -1474,12 +1806,21 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
 
         const iniPath = getMameHomePath();
         const mameIniPath = join(iniPath, 'mame.ini');
+        const pluginIniPath = join(iniPath, 'plugin.ini');
         const windowed = req.body.windowed === 'on';
         const pluginsPath: string = (req.body.pluginsPath || '').trim();
 
         let saved = setMameIniValue(mameIniPath, 'window', windowed ? '1' : '0');
+        let pluginsAdded = 0;
         if (pluginsPath) {
             saved = setMameIniValue(mameIniPath, 'pluginspath', pluginsPath) && saved;
+            // As soon as pluginspath points at a folder that actually has plugins in it,
+            // initialize/complete plugin.ini right away instead of making the user click the
+            // separate "Réparer plugin.ini" button as a second step.
+            const availablePlugins = getAvailablePlugins(resolveDirectoryPath(pluginsPath, iniPath));
+            if (availablePlugins.length) {
+                pluginsAdded = repairPluginIni(pluginIniPath, availablePlugins);
+            }
         }
 
         res.send(renderForm(
@@ -1489,6 +1830,7 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
             undefined,
             saved
                 ? 'Options MAME mises à jour dans mame.ini.'
+                    + (pluginsAdded ? ` ${pluginsAdded} plugin(s) initialisé(s) dans plugin.ini.` : '')
                 : 'mame.ini introuvable - configurez et lancez mame au moins une fois avant de changer ces options.',
         ));
     });
@@ -1513,6 +1855,35 @@ export function startBoServer(userDataPath: string, port: number, onConfigured: 
                 ? `${added} plugin(s) ajouté(s) à plugin.ini (valeurs par défaut de mame).`
                 : 'Rien à réparer : plugin.ini contient déjà tous les plugins détectés (ou aucun plugin trouvé - vérifiez le dossier des plugins ci-dessus).',
         ));
+    });
+
+    app.post('/reset', (req, res) => {
+        const config = new Config(userDataPath);
+        config.load();
+        config.delete();
+
+        try {
+            rmSync(getMameHomePath(), {recursive: true, force: true});
+        } catch (error) {
+            console.error('[boServer] Failed to remove mame home directory:', error);
+        }
+
+        res.send(renderPage('<section class="card"><h2>Réinitialisation effectuée</h2>'
+            + '<p class="error">Configuration et dossier home de mame supprimés. '
+            + 'L\'application va se fermer dans un instant.</p>'
+            + '<p><strong>Relancez-la manuellement</strong> pour terminer la réinitialisation '
+            + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
+            + 'production) - recharger cette page ou l\'application ne suffit pas : le '
+            + 'renderer garde en mémoire les services construits sur l\'ancienne configuration '
+            + 'tant que le process n\'a pas complètement redémarré.</p></section>'));
+
+        // Only closes the app (see onReset in background.ts) - it does NOT relaunch it.
+        // Reloading the window to /init (like onConfigured() does after a normal config save)
+        // is not enough here: the renderer's Vuex store holds long-lived Config/MameService/
+        // GameService instances (see store.ts's initServices) built from the files we just
+        // deleted, and only a real process restart clears that in-memory state. Delayed
+        // slightly so this response finishes flushing to the browser before the process exits.
+        setTimeout(onReset, 300);
     });
 
     return app.listen(port, () => {

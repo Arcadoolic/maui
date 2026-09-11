@@ -97,6 +97,20 @@ app.on('ready', async () => {
         if (win) {
             loadPath(win, 'init');
         }
+    }, () => {
+        // Unlike onConfigured() above (a route reload is enough after a normal config save), a
+        // reset needs a real process restart: the renderer's Vuex store only ever builds its
+        // MameService/GameService/... once (see store.ts's initServices), so those would keep
+        // serving stale data - parsed from the mame home files /reset just deleted - even after
+        // reloading to /init and going through first-run setup again.
+        //
+        // app.relaunch() is NOT used here: under `electron:serve` the app is a child process
+        // orchestrated by vue-cli-plugin-electron-builder's dev server (WEBPACK_DEV_SERVER_URL
+        // and friends), and relaunch()'s re-spawn doesn't reconnect to that setup - the process
+        // just exits and nothing comes back. So the /reset response tells the user to close and
+        // restart manually (`just serve` in dev; relaunching the packaged app otherwise), and
+        // this just performs the actual exit.
+        app.exit(0);
     });
 });
 
