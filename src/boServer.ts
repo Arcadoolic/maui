@@ -74,16 +74,32 @@ function ensureMameConfigBootstrapped(mameBinary: string, iniPath: string): void
 }
 
 /**
- * Same directory MameService pins mame's ini/home to (see Helpers.getMameHomePath()).
- * Duplicated here rather than imported: Helpers.class.ts pulls in the renderer-only
- * @electron/remote at module scope, which isn't safe to load in the main process bundle.
+ * Same directory MameService pins mame's ini/home to (see Helpers.getMameHomePath()) - a plain
+ * ~/.mame, separate from ~/.mame-awesome-ui (this app's own config/database - see
+ * Config.class.ts) since it belongs to mame itself, not to mame-awesome-ui. Duplicated here
+ * rather than imported, matching the rest of this file's electron-free helpers.
  */
 function getMameHomePath(): string {
-    const homePath = join(os.homedir(), '.mame-awesome-ui', 'mame-home');
+    const homePath = join(os.homedir(), '.mame');
     if (!existsSync(homePath)) {
         mkdirSync(homePath, {recursive: true});
     }
     return homePath;
+}
+
+/**
+ * Same fixed <home>/.mame-awesome-ui/mame-awesome-ui.sqlite path Database.class.ts uses (see
+ * Config.class.ts's getAppDataPath() comment) - kept identical in dev and production. Ensures
+ * the parent directory exists itself (sqlite won't create missing intermediate directories),
+ * same as Config.class.ts/Database.class.ts's own constructors - doesn't rely on
+ * getMameHomePath() having been called first to create it as a side effect.
+ */
+function getDatabasePath(): string {
+    const appDataPath = join(os.homedir(), '.mame-awesome-ui');
+    if (!existsSync(appDataPath)) {
+        mkdirSync(appDataPath, {recursive: true});
+    }
+    return join(appDataPath, 'mame-awesome-ui.sqlite');
 }
 
 /**
@@ -92,13 +108,10 @@ function getMameHomePath(): string {
  * Database.class.ts, which pulls in GameService.class -> MameService.class ->
  * Helpers.class.ts's @electron/remote import at module scope.
  */
-function createSequelize(userDataPath: string): Sequelize {
-    const databasePath = join(
-        process.env.NODE_ENV === 'development' ? '.' : userDataPath, 'mame-awesome-ui.sqlite',
-    );
+function createSequelize(): Sequelize {
     return new Sequelize({
         dialect: 'sqlite',
-        storage: databasePath,
+        storage: getDatabasePath(),
         models: [Category, Game, User, Hiscore],
         logging: false,
     });
@@ -1088,11 +1101,14 @@ function renderActionsCard(): string {
 }
 
 function renderDangerZoneCard(mameInfo: MameInfo): string {
-    // No apostrophes in this message: it's embedded in a single-quoted JS string literal
-    // inside the onsubmit attribute below (same pattern as the user-delete confirm()).
+    // No apostrophes in these messages: embedded in single-quoted JS string literals inside the
+    // onsubmit attribute below (same pattern as the user-delete confirm()).
     const confirmMessage = 'Supprimer definitivement la configuration de mame-awesome-ui et tout '
         + 'le dossier home de mame (roms, marquees, flyers, favoris, sauvegardes, scores) ? '
         + 'Cette action est irreversible.';
+    const confirmMessageWithDb = 'Supprimer definitivement la configuration de mame-awesome-ui, '
+        + 'tout le dossier home de mame (roms, marquees, flyers, favoris, sauvegardes, scores) '
+        + 'ET la base de donnees (jeux, utilisateurs, scores) ? Cette action est irreversible.';
     return `
         <section class="card">
             <h2>Zone dangereuse</h2>
@@ -1100,10 +1116,16 @@ function renderDangerZoneCard(mameInfo: MameInfo): string {
             supprime le fichier de configuration (mame-awesome-ui-config.json) et tout le dossier
             home de mame - <strong>${escapeHtml(mameInfo.iniPath)}</strong> - donc ses roms,
             marquees, flyers, favoris, sauvegardes et scores. La base de données (jeux,
-            utilisateurs) n'est pas touchée. Cette action est irréversible. L'application se
-            ferme ensuite - il faudra la relancer manuellement (<code>just serve</code> en
-            développement) pour terminer la réinitialisation.</p>
-            <form method="post" action="/reset" onsubmit="return confirm('${confirmMessage}')">
+            utilisateurs, scores) n'est pas touchée, sauf si vous cochez la case ci-dessous.
+            Cette action est irréversible. L'application se ferme ensuite - il faudra la relancer
+            manuellement (<code>just serve</code> en développement) pour terminer la
+            réinitialisation.</p>
+            <form method="post" action="/reset"
+                onsubmit="return confirm(this.deleteDatabase.checked ? '${confirmMessageWithDb}' : '${confirmMessage}')">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="deleteDatabase">
+                    Supprimer aussi la base de données (jeux, utilisateurs, scores)
+                </label>
                 <button type="submit">Réinitialiser l'application</button>
             </form>
         </section>
@@ -1438,9 +1460,7 @@ function renderBrowsePage(target: PathField, currentDir: string, formValues: {ma
     `);
 }
 
-export function startBoServer(
-    userDataPath: string, port: number, onConfigured: () => void, onReset: () => void,
-): Server {
+export function startBoServer(port: number, onConfigured: () => void, onReset: () => void): Server {
     const app = express();
     app.use(express.urlencoded({extended: false}));
     // Memory storage (not disk): the import route reads the upload straight into AdmZip, no
@@ -1449,14 +1469,14 @@ export function startBoServer(
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
     // this must not be recreated per-request.
-    createSequelize(userDataPath);
+    createSequelize();
 
     app.get('/background.jpg', (req, res) => {
         res.sendFile(join(__static, 'img/background.jpg'));
     });
 
     app.get('/', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
         const avatarsPath = typeof req.query.avatarsPath === 'string' ? req.query.avatarsPath : (config.avatarsPath || '');
@@ -1464,7 +1484,7 @@ export function startBoServer(
     });
 
     app.get('/screenscraper', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
         res.send(renderScreenScraperPage({
             ssDevId: config.ssDevId,
@@ -1476,7 +1496,7 @@ export function startBoServer(
     });
 
     app.get('/favorites', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
         res.send(renderFavoritesPage(getFavoritesInfo(config), hasScreenScraperCredentials(config)));
     });
@@ -1532,7 +1552,7 @@ export function startBoServer(
     });
 
     app.post('/favorites/download-media', async (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
 
         if (!hasScreenScraperCredentials(config)) {
@@ -1597,7 +1617,7 @@ export function startBoServer(
     });
 
     app.post('/import', upload.single('pack'), async (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
 
         if (!req.file) {
@@ -1666,7 +1686,7 @@ export function startBoServer(
             ssUserPassword: (req.body.ssUserPassword || '').trim(),
         };
 
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
         config.ssDevId = values.ssDevId;
         config.ssDevPassword = values.ssDevPassword;
@@ -1687,7 +1707,7 @@ export function startBoServer(
 
         let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : formValues[target];
         if (!currentDir || !existsSync(currentDir)) {
-            const config = new Config(userDataPath);
+            const config = new Config();
             config.load();
             currentDir = (target === 'mamePath' ? config.mamePath : config.avatarsPath) || os.homedir();
         }
@@ -1702,7 +1722,7 @@ export function startBoServer(
         const mamePath: string = (req.body.mamePath || '').trim();
         const avatarsPath: string = (req.body.avatarsPath || '').trim();
         const openDevTools = req.body.openDevTools === 'on';
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
 
         if (!existsSync(mamePath)) {
@@ -1754,7 +1774,7 @@ export function startBoServer(
     });
 
     app.post('/launch', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
 
         if (!config.mamePath || !config.mameBinaryName) {
@@ -1801,7 +1821,7 @@ export function startBoServer(
     });
 
     app.post('/mame-options/save', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
 
         const iniPath = getMameHomePath();
@@ -1836,7 +1856,7 @@ export function startBoServer(
     });
 
     app.post('/mame-options/repair-plugins', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
 
         const iniPath = getMameHomePath();
@@ -1858,9 +1878,11 @@ export function startBoServer(
     });
 
     app.post('/reset', (req, res) => {
-        const config = new Config(userDataPath);
+        const config = new Config();
         config.load();
         config.delete();
+
+        const deleteDatabase = req.body.deleteDatabase === 'on';
 
         try {
             rmSync(getMameHomePath(), {recursive: true, force: true});
@@ -1868,9 +1890,17 @@ export function startBoServer(
             console.error('[boServer] Failed to remove mame home directory:', error);
         }
 
+        if (deleteDatabase) {
+            try {
+                rmSync(getDatabasePath(), {force: true});
+            } catch (error) {
+                console.error('[boServer] Failed to remove database file:', error);
+            }
+        }
+
         res.send(renderPage('<section class="card"><h2>Réinitialisation effectuée</h2>'
-            + '<p class="error">Configuration et dossier home de mame supprimés. '
-            + 'L\'application va se fermer dans un instant.</p>'
+            + `<p class="error">Configuration${deleteDatabase ? ', base de données' : ''} et `
+            + 'dossier home de mame supprimés. L\'application va se fermer dans un instant.</p>'
             + '<p><strong>Relancez-la manuellement</strong> pour terminer la réinitialisation '
             + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
             + 'production) - recharger cette page ou l\'application ne suffit pas : le '

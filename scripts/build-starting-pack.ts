@@ -20,11 +20,12 @@ import Config from '../src/class/Config.class';
 import {StartingPackGameEntry, StartingPackManifest} from '../src/types/StartingPackManifest';
 
 /**
- * Same directory MameService.class.ts/boServer.ts pin mame's ini/home to. Duplicated here for
- * the reason explained at the top of this file.
+ * Same directory MameService.class.ts/boServer.ts pin mame's ini/home to - a plain ~/.mame,
+ * separate from ~/.mame-awesome-ui (the app's own config/database). Duplicated here for the
+ * reason explained at the top of this file.
  */
 function getMameHomePath(): string {
-    return join(os.homedir(), '.mame-awesome-ui', 'mame-home');
+    return join(os.homedir(), '.mame');
 }
 
 /**
@@ -164,32 +165,6 @@ function getMameLocationsReadOnly(iniPath: string): MameLocations {
     return {uiIni, marqueePath, flyerPath, favoritesPath};
 }
 
-/**
- * Electron's app.getPath('userData') for productName "mame-awesome-ui" (see vue.config.js's
- * builderOptions), reimplemented without Electron so this script can find the real running
- * app's config file.
- *
- * `just`/`npm run` invocations never set NODE_ENV, unlike vue-cli-service (which sets it to
- * "development" for `electron:serve`) - so Config.class.ts's own NODE_ENV==='development'
- * branch (which points it at "./mame-awesome-ui-config.json" instead of userData) never
- * kicks in here on its own. Since this script is only ever run from a repo checkout (there's
- * no packaged/standalone build of it), that repo-root config file - if present - is almost
- * certainly the real app's config, so check for it before falling back to the production
- * userData path.
- */
-function resolveUserDataPath(override?: string): string {
-    if (override) {
-        return override;
-    }
-    if (existsSync(join(process.cwd(), 'mame-awesome-ui-config.json'))) {
-        return process.cwd();
-    }
-    if (process.platform === 'darwin') {
-        return join(os.homedir(), 'Library', 'Application Support', 'mame-awesome-ui');
-    }
-    return join(os.homedir(), '.config', 'mame-awesome-ui');
-}
-
 // Same genre/nplayers ini lookup as GameService.class.ts, minus the numeric category id (not
 // portable across installs - the pack stores the category by name instead) and resolved
 // relative to the repo instead of webpack's __static (unavailable outside the Electron build).
@@ -237,7 +212,6 @@ function getGameNplayers(romName: string): { sim: number; alt: number } {
 
 interface CliArgs {
     output: string;
-    configDir?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -245,8 +219,6 @@ function parseArgs(argv: string[]): CliArgs {
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--output' && argv[i + 1]) {
             args.output = argv[++i];
-        } else if (argv[i] === '--config-dir' && argv[i + 1]) {
-            args.configDir = argv[++i];
         }
     }
     return args;
@@ -259,13 +231,14 @@ function fail(message: string): never {
 
 function main() {
     const args = parseArgs(process.argv.slice(2));
-    const userDataPath = resolveUserDataPath(args.configDir);
-    const config = new Config(userDataPath);
+    // Config.class.ts always resolves to <home>/.mame-awesome-ui/mame-awesome-ui-config.json,
+    // identically in dev and production - same file the app itself reads/writes.
+    const config = new Config();
     config.load();
 
     if (!config.mamePath || !config.mameBinaryName) {
-        fail(`Aucune configuration mame trouvée dans "${userDataPath}". Configurez et lancez `
-            + 'mame-awesome-ui au moins une fois (ou passez --config-dir).');
+        fail(`Aucune configuration mame trouvée dans "${config.configPath}". Configurez et `
+            + 'lancez mame-awesome-ui au moins une fois.');
     }
 
     const mameBinary = join(config.mamePath, config.mameBinaryName);

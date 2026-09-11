@@ -1,7 +1,6 @@
 import Vue from 'vue';
 import Vuex from 'vuex';
 import Config from '@/class/Config.class';
-import * as remote from '@electron/remote';
 import Database from '@/class/Database.class';
 import GameService from '@/class/GameService.class';
 import MameService from '@/class/MameService.class';
@@ -13,8 +12,8 @@ Vue.use(Vuex);
 
 export default new Vuex.Store({
     state: {
-        configuration: new Config(remote.app.getPath('userData')),
-        database: new Database(remote.app.getPath('userData')),
+        configuration: new Config(),
+        database: new Database(),
         mameService: null as MameService|null,
         gameService: null as GameService|null,
         userService: null as UserService|null,
