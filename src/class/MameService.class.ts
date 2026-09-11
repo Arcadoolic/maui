@@ -2,11 +2,12 @@ import {existsSync, readFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
+import {parseMameIni} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 
 export default class MameService {
-    public mameIni: { [key: string]: any } = {} = {};
-    public uiIni: any = {};
+    public mameIni: { [key: string]: string[] } = {};
+    public uiIni: { [key: string]: string[] } = {};
     public iniPath!: string;
 
     protected config!: Config;
@@ -39,10 +40,10 @@ export default class MameService {
             ['-showconfig', ...this.mameHomeArgs],
             {cwd: this.iniPath},
         );
-        MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni);
+        this.mameIni = parseMameIni(mameIniContent.toString());
 
         const uiIniContent = readFileSync(uiIniPath, 'utf8');
-        MameService.parseMameIniFile(uiIniContent, this.uiIni);
+        this.uiIni = parseMameIni(uiIniContent);
     }
 
     public get mameBinary() {
@@ -55,26 +56,6 @@ export default class MameService {
      */
     protected get mameHomeArgs(): string[] {
         return ['-inipath', this.iniPath, '-homepath', this.iniPath];
-    }
-
-    /**
-     * Parse a mame ini file
-     * @param fileContent
-     * @param TargetObject
-     */
-    protected static parseMameIniFile(fileContent: string, TargetObject: { [key: string]: any }) {
-        const regex = new RegExp(/^([a-z_]+)\s+(.+)$/);
-        const file = fileContent.split('\n');
-        file.forEach((line) => {
-            if (line[0] === '#') { // Skip comments
-                return true;
-            }
-            const data = regex.exec(line.trim());
-            if (data) {
-                TargetObject[data[1]] = data[2].replace(/^"(.*)"$/, '$1').split(';');
-            }
-        });
-        return true;
     }
 
     /**
