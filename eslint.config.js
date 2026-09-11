@@ -106,4 +106,14 @@ module.exports = tseslint.config(
             '@stylistic/indent': 'off',
         },
     },
+
+    {
+        // Vitest injects its own globals into test files.
+        files: ['tests/**/*.ts'],
+        languageOptions: {
+            globals: {
+                ...globals.vitest,
+            },
+        },
+    },
 );
