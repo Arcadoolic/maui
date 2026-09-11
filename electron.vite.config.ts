@@ -24,6 +24,25 @@ import vue from '@vitejs/plugin-vue';
 // strips. Running swc first would hand `compileScript` type-erased source and
 // break the type-only macros.
 
+// swcPlugin hardcodes `jsc.target: 'es2022'`, where `useDefineForClassFields`
+// is implicitly true, while tsconfig.json is `target: "es6"` with the option
+// unset, so the current webpack/ts-loader build defaults it to false. That
+// difference is not cosmetic. With define semantics, a field declared without an
+// initializer emits a native class field, which creates an own `undefined`
+// property on every instance. Sequelize v5 installs its attribute accessors on
+// the prototype (sequelize/lib/model.js, Object.defineProperty(this.prototype,
+// ...)), so an own property shadows them and every column read returns
+// undefined while the build stays green and the database opens. The same
+// shadowing would hit `@Prop()` and `@Inject()` from vue-property-decorator
+// once the SFC are ported. `transformOptions` is spread into swc's
+// `jsc.transform`, so this puts the field semantics back where the current
+// build has them.
+const swcOptions = {
+    transformOptions: {
+        useDefineForClassFields: false,
+    },
+};
+
 const alias = {
     // Force the real Node build of sequelize-typescript instead of the no-op
     // "browser" stub, which the default mainFields resolution picks up and
@@ -40,7 +59,7 @@ export default defineConfig({
         // main and preload bundles. sqlite3 (a native addon) and sequelize
         // therefore stay external without any configuration, which is what
         // `externals: ['sqlite3', 'sequelize']` did in vue.config.js.
-        plugins: [swcPlugin()],
+        plugins: [swcPlugin(swcOptions)],
         resolve: {alias},
         build: {
             rollupOptions: {
@@ -57,7 +76,7 @@ export default defineConfig({
         // the renderer is a web-target bundle and dependencies are bundled.
         // Node and native modules are reached at runtime through the
         // nodeIntegration `require` instead, which is what the probe checks.
-        plugins: [vue(), swcPlugin()],
+        plugins: [vue(), swcPlugin(swcOptions)],
         resolve: {alias},
         build: {
             rollupOptions: {
