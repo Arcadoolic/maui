@@ -39,21 +39,6 @@ export default class GameService {
     }
 
     /**
-     * Passthrough to MameService.genreIniPath - lets Database.install() check it's present
-     * before seeding categories, without exposing the whole (protected) mameService.
-     */
-    public get genreIniPath() {
-        return this.mameService.genreIniPath;
-    }
-
-    /**
-     * Passthrough to MameService.nplayersIniPath - same purpose as genreIniPath.
-     */
-    public get nplayersIniPath() {
-        return this.mameService.nplayersIniPath;
-    }
-
-    /**
      * Save games in database
      * @param romNames
      */
@@ -70,9 +55,18 @@ export default class GameService {
 
         for (const romName of romNames) {
             if (existingGames.indexOf(romName) >= 0) {
+                // Re-derived from genre.ini/Multiplayer.ini on every sync, not just once at
+                // creation: both are optional and can be added (or replaced by a newer starting
+                // pack) after a game already exists in the database, and the ini lookups
+                // themselves are cheap (cached parses, no `mame -lx` subprocess) - unlike the
+                // rest of a game's info below, which is deliberately only fetched once.
+                const players = this.getGameNplayers(romName);
                 games.push({
                     romName,
                     hi: this.hiService.hasHiscore(romName),
+                    id_category: this.getGameCategoryId(romName),
+                    player_alt: players.alt,
+                    player_sim: players.sim,
                 });
                 continue;
             }
@@ -109,7 +103,7 @@ export default class GameService {
             });
         }
         await Game.bulkCreate(games, {
-            updateOnDuplicate: ['hi'],
+            updateOnDuplicate: ['hi', 'id_category', 'player_alt', 'player_sim'],
             logging: Log.log,
         });
     }
@@ -117,27 +111,30 @@ export default class GameService {
     /**
      * Load and parse genre.ini - the real, per-mame-version categorization dataset
      * (MameService.genreIniPath, resolved from ui.ini's categorypath), never the app's own
-     * bundled data. Guaranteed present by the starting pack (see genreIniPath's own comment),
-     * so no fallback/missing-file handling here.
+     * bundled data. Optional: genre.ini is only ever installed by a starting pack import, so
+     * when it's absent (no import done yet, or a MAME version without a "folders" pack) this
+     * returns an empty set of categories instead of throwing - callers then see "no category"
+     * for every rom, which is how the UI falls back to a flat game list (see Home.vue).
      */
     public getGameCategories() {
         if (!GameService.genreIni) {
-            GameService.genreIni = iniParse(readFileSync(this.mameService.genreIniPath!, 'utf8'));
+            GameService.genreIni = this.mameService.genreIniPath
+                ? iniParse(readFileSync(this.mameService.genreIniPath, 'utf8'))
+                : {};
         }
         return GameService.genreIni;
     }
 
     /**
-     * Return category id for a romName
+     * Return category id for a romName, or undefined if genre.ini is absent or doesn't
+     * categorize this rom.
      * @param romName
      */
     public getGameCategoryId(romName: string) {
-        if (!GameService.genreIni) {
-            GameService.genreIni = iniParse(readFileSync(this.mameService.genreIniPath!, 'utf8'));
-        }
-        const categories = Object.keys(GameService.genreIni);
-        for (const category in GameService.genreIni) {
-            if (GameService.genreIni[category][romName]) {
+        const genreIni = this.getGameCategories();
+        const categories = Object.keys(genreIni);
+        for (const category of categories) {
+            if (genreIni[category][romName]) {
                 return categories.indexOf(category) + 1;
             }
         }
@@ -146,12 +143,15 @@ export default class GameService {
     /**
      * Load and parse Multiplayer.ini - the real, per-mame-version player-count dataset
      * (MameService.nplayersIniPath, resolved from ui.ini's categorypath), never the app's own
-     * bundled data. Guaranteed present by the starting pack, so no fallback here either.
+     * bundled data. Optional, same as genre.ini: when absent, every rom falls through to the
+     * {sim: 0, alt: 0} default below instead of throwing.
      * @param romName
      */
     public getGameNplayers(romName: string): Nplayers {
         if (!GameService.nplayersIni) {
-            GameService.nplayersIni = iniParse(readFileSync(this.mameService.nplayersIniPath!, 'utf8'));
+            GameService.nplayersIni = this.mameService.nplayersIniPath
+                ? iniParse(readFileSync(this.mameService.nplayersIniPath, 'utf8'))
+                : {};
         }
         for (const nplayers in GameService.nplayersIni) {
             if (GameService.nplayersIni[nplayers][romName]) {

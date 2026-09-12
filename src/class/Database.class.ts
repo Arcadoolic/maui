@@ -37,30 +37,27 @@ export default class Database {
         return existsSync(this.databasePath);
     }
 
-    public async install(gameService: GameService) {
-        // Categories are seeded from genre.ini (see GameService.getGameCategories()), and the
-        // rom sync that immediately follows install() (Init.vue) needs Multiplayer.ini too (see
-        // GameService.getGameNplayers()) - neither is ever bundled with the app, only installed
-        // by a starting pack import (see boServer.ts's importStartingPack()). Check both are
-        // there before touching the database at all, rather than syncing tables and then failing
-        // partway through seeding/sync.
-        if (!gameService.genreIniPath || !gameService.nplayersIniPath) {
-            throw new Error(
-                'genre.ini et/ou Multiplayer.ini introuvable(s) (categorypath de ui.ini) - '
-                + 'importez un starting pack depuis le BO avant de lancer mame-awesome-ui pour '
-                + 'la première fois.',
-            );
-        }
-
+    public async install() {
         await this.sequelize.sync();
+    }
 
-        const records: Array<{id_category: number, name: string}> = [];
+    /**
+     * (Re)seeds the category table from genre.ini (see GameService.getGameCategories()), which
+     * is only ever installed by a starting pack import (see boServer.ts's importStartingPack())
+     * and is optional - possibly added (or replaced by a newer pack) well after the database
+     * already exists. Idempotent (upserts by the same positional id_category
+     * GameService.getGameCategoryId() derives games' id_category from) so it's safe - and
+     * necessary - to call on every launch, not just Database.install()'s first-ever run:
+     * otherwise a game synced with an id_category genre.ini now maps to, but that was never
+     * seeded into this table, violates the game/category foreign key.
+     */
+    public async syncCategories(gameService: GameService) {
         const categories = Object.keys(gameService.getGameCategories());
-        for (let i = 0; i < categories.length; i++) {
-            records.push({id_category: i + 1, name: categories[i]});
-        }
-        // Create categories
-        await Category.bulkCreate(records);
+        const records: Array<{id_category: number, name: string}> = categories.map((name, i) => ({
+            id_category: i + 1,
+            name,
+        }));
+        await Category.bulkCreate(records, {updateOnDuplicate: ['name']});
     }
 
     public get sequelize(): Sequelize {

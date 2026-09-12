@@ -277,15 +277,16 @@ function main() {
         fail('Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu) '
             + 'avant de générer un starting pack.');
     }
+    // Both optional: absent (no "folders" pack installed on this MAME version) simply means the
+    // pack ships without categories/player counts - importStartingPack() in boServer.ts already
+    // tolerates missing genre.ini/Multiplayer.ini entries in the zip.
     if (!genreIniPath) {
-        fail('genre.ini introuvable (categorypath dans ui.ini) - installez le pack "folders" de '
-            + 'cette version de MAME avant de générer un starting pack : il doit être embarqué '
-            + 'dans le pack, jamais absent.');
+        console.warn('[build-starting-pack] genre.ini introuvable (categorypath dans ui.ini) - '
+            + 'le pack sera généré sans catégories.');
     }
     if (!nplayersIniPath) {
-        fail('Multiplayer.ini introuvable (categorypath dans ui.ini) - installez le pack '
-            + '"folders" de cette version de MAME avant de générer un starting pack : il doit '
-            + 'être embarqué dans le pack, jamais absent.');
+        console.warn('[build-starting-pack] Multiplayer.ini introuvable (categorypath dans '
+            + 'ui.ini) - le pack sera généré sans nombre de joueurs.');
     }
 
     const romNames = getFavoriteRomNames(favoritesPath);
@@ -294,9 +295,9 @@ function main() {
     }
 
     const genreIni: { [genre: string]: { [romName: string]: boolean } } =
-        iniParse(readFileSync(genreIniPath, 'utf8'));
+        genreIniPath ? iniParse(readFileSync(genreIniPath, 'utf8')) : {};
     const nplayersIni: { [nplayers: string]: { [romName: string]: boolean } } =
-        iniParse(readFileSync(nplayersIniPath, 'utf8'));
+        nplayersIniPath ? iniParse(readFileSync(nplayersIniPath, 'utf8')) : {};
 
     const romPaths = mameIni.rompath || [];
     const zip = new AdmZip();
@@ -396,10 +397,15 @@ function main() {
     };
     zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
     zip.addFile('favorites.ini', readFileSync(favoritesPath));
-    // Bundled so an import always has genre.ini/Multiplayer.ini available to install (see
-    // importStartingPack() in boServer.ts) - neither must ever be absent from a pack.
-    zip.addFile('genre.ini', readFileSync(genreIniPath));
-    zip.addFile('Multiplayer.ini', readFileSync(nplayersIniPath));
+    // Bundled when available so an import can install them too (see importStartingPack() in
+    // boServer.ts) - omitted entirely when absent on this source MAME install, which
+    // importStartingPack() already tolerates (warns, doesn't fail the import).
+    if (genreIniPath) {
+        zip.addFile('genre.ini', readFileSync(genreIniPath));
+    }
+    if (nplayersIniPath) {
+        zip.addFile('Multiplayer.ini', readFileSync(nplayersIniPath));
+    }
 
     zip.writeZip(args.output);
 

@@ -157,10 +157,10 @@ export default class MameService {
 
     /**
      * Path to genre.ini inside ui.ini's categorypath directory - the game categorization
-     * dataset matching the installed mame version. Unlike marquees/flyers/logos, which may
-     * legitimately not exist yet, genre.ini is guaranteed present: every starting pack bundles
-     * and (re)installs its own copy on import (see boServer.ts's importStartingPack()), so
-     * callers don't need to handle it being missing.
+     * dataset matching the installed mame version. Optional, like marquees/flyers/logos: null
+     * until a starting pack import installs it (see boServer.ts's importStartingPack()); callers
+     * (GameService.getGameCategories()) treat a missing file as "no categories" rather than
+     * failing, which is how the UI falls back to a flat game list (see Home.vue).
      */
     public get genreIniPath() {
         return Helpers.getFirstExistingDirectory(
@@ -172,9 +172,9 @@ export default class MameService {
 
     /**
      * Path to Multiplayer.ini inside ui.ini's categorypath directory - the game player-count
-     * dataset matching the installed mame version. Same guarantee as genreIniPath: every
-     * starting pack bundles and (re)installs its own copy on import, so callers don't need to
-     * handle it being missing.
+     * dataset matching the installed mame version. Optional, same as genreIniPath: null until a
+     * starting pack import installs it; Home.vue hides the player-count display entirely when
+     * this is null, instead of showing a default value as if it were known.
      */
     public get nplayersIniPath() {
         return Helpers.getFirstExistingDirectory(

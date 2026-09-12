@@ -40,11 +40,17 @@
 
             try {
                 if (!database.exist()) {
-                    // Create and fill database file if not existing
-                    await database.install(gameService);
+                    // Create database file if not existing
+                    await database.install();
                 } else {
                     await database.update();
                 }
+
+                // (Re)seed categories from genre.ini before syncing games below: it may have
+                // been added (or replaced) after the database already existed, and games are
+                // synced with an id_category that must already exist in this table (see
+                // Database.syncCategories()'s own comment).
+                await database.syncCategories(gameService);
 
                 // Save new games
                 const romList = mameService.getRomListFromFavorites();
