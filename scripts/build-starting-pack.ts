@@ -147,13 +147,15 @@ interface MameLocations {
     flyerPath: string | null;
     logoPath: string | null;
     favoritesPath: string | null;
+    genreIniPath: string | null;
+    nplayersIniPath: string | null;
 }
 
 /**
  * Read-only variant of boServer.ts's getMameLocations(): unlike that one (which creates the
- * marquees/flyers/logos directories via ensureFirstDirectory so downloads always have
- * somewhere to land), this script only ever reads from the user's MAME home and must not
- * create anything.
+ * marquees/flyers/logos/categorypath directories via ensureFirstDirectory so downloads/imports
+ * always have somewhere to land), this script only ever reads from the user's MAME home and
+ * must not create anything.
  */
 function getMameLocationsReadOnly(iniPath: string): MameLocations {
     const uiIniPath = join(iniPath, 'ui.ini');
@@ -166,16 +168,16 @@ function getMameLocationsReadOnly(iniPath: string): MameLocations {
         ? getFirstExistingDirectory(uiIni.logos_directory, iniPath) : null;
     const favoritesPath = uiIni.ui_path
         ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
-    return {uiIni, marqueePath, flyerPath, logoPath, favoritesPath};
+    // ui.ini's categorypath points at the "folders" directory holding genre.ini/Multiplayer.ini
+    // - the real, per-mame-version categorization/player-count datasets (see
+    // importStartingPack()'s own comment for why these - not the app's old bundled
+    // public/data/genre_206.ini/nplayers_206.ini - are now the source of truth).
+    const genreIniPath = uiIni.categorypath
+        ? getFirstExistingDirectory(uiIni.categorypath, iniPath, 'genre.ini') : null;
+    const nplayersIniPath = uiIni.categorypath
+        ? getFirstExistingDirectory(uiIni.categorypath, iniPath, 'Multiplayer.ini') : null;
+    return {uiIni, marqueePath, flyerPath, logoPath, favoritesPath, genreIniPath, nplayersIniPath};
 }
-
-// Same genre/nplayers ini lookup as GameService.class.ts, minus the numeric category id (not
-// portable across installs - the pack stores the category by name instead) and resolved
-// relative to the repo instead of webpack's __static (unavailable outside the Electron build).
-const genreIni: { [genre: string]: { [romName: string]: boolean } } =
-    iniParse(readFileSync(join(__dirname, '..', 'public', 'data', 'genre_206.ini'), 'utf8'));
-const nplayersIni: { [nplayers: string]: { [romName: string]: boolean } } =
-    iniParse(readFileSync(join(__dirname, '..', 'public', 'data', 'nplayers_206.ini'), 'utf8'));
 
 const nplayersTranslation: { [k: string]: { sim: number; alt: number } } = {
     '12P sim': {sim: 12, alt: 0},
@@ -196,7 +198,10 @@ const nplayersTranslation: { [k: string]: { sim: number; alt: number } } = {
     '9P alt': {sim: 0, alt: 9},
 };
 
-function getGameCategoryName(romName: string): string | null {
+function getGameCategoryName(
+    genreIni: { [genre: string]: { [romName: string]: boolean } },
+    romName: string,
+): string | null {
     for (const category of Object.keys(genreIni)) {
         if (genreIni[category][romName]) {
             return category;
@@ -205,7 +210,10 @@ function getGameCategoryName(romName: string): string | null {
     return null;
 }
 
-function getGameNplayers(romName: string): { sim: number; alt: number } {
+function getGameNplayers(
+    nplayersIni: { [nplayers: string]: { [romName: string]: boolean } },
+    romName: string,
+): { sim: number; alt: number } {
     for (const nplayers of Object.keys(nplayersIni)) {
         if (nplayersIni[nplayers][romName]) {
             return nplayersTranslation[nplayers] || {sim: 0, alt: 0};
@@ -262,16 +270,33 @@ function main() {
         fail('Impossible de lire la configuration mame ("-showconfig" a échoué).');
     }
 
-    const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocationsReadOnly(iniPath);
+    const {
+        marqueePath, flyerPath, logoPath, favoritesPath, genreIniPath, nplayersIniPath,
+    } = getMameLocationsReadOnly(iniPath);
     if (!favoritesPath) {
         fail('Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu) '
             + 'avant de générer un starting pack.');
+    }
+    if (!genreIniPath) {
+        fail('genre.ini introuvable (categorypath dans ui.ini) - installez le pack "folders" de '
+            + 'cette version de MAME avant de générer un starting pack : il doit être embarqué '
+            + 'dans le pack, jamais absent.');
+    }
+    if (!nplayersIniPath) {
+        fail('Multiplayer.ini introuvable (categorypath dans ui.ini) - installez le pack '
+            + '"folders" de cette version de MAME avant de générer un starting pack : il doit '
+            + 'être embarqué dans le pack, jamais absent.');
     }
 
     const romNames = getFavoriteRomNames(favoritesPath);
     if (!romNames.length) {
         fail('favorites.ini ne contient aucun favori.');
     }
+
+    const genreIni: { [genre: string]: { [romName: string]: boolean } } =
+        iniParse(readFileSync(genreIniPath, 'utf8'));
+    const nplayersIni: { [nplayers: string]: { [romName: string]: boolean } } =
+        iniParse(readFileSync(nplayersIniPath, 'utf8'));
 
     const romPaths = mameIni.rompath || [];
     const zip = new AdmZip();
@@ -338,7 +363,7 @@ function main() {
             zip.addLocalFile(logoFile!, 'logos');
         }
 
-        const players = getGameNplayers(romName);
+        const players = getGameNplayers(nplayersIni, romName);
         games.push({
             romName,
             fullname,
@@ -346,7 +371,7 @@ function main() {
             subname,
             manufacturer: xmlInfo.manufacturer,
             year: xmlInfo.year,
-            categoryName: getGameCategoryName(romName),
+            categoryName: getGameCategoryName(genreIni, romName),
             player_alt: players.alt,
             player_sim: players.sim,
             biosName: xmlInfo.biosName,
@@ -371,6 +396,10 @@ function main() {
     };
     zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
     zip.addFile('favorites.ini', readFileSync(favoritesPath));
+    // Bundled so an import always has genre.ini/Multiplayer.ini available to install (see
+    // importStartingPack() in boServer.ts) - neither must ever be absent from a pack.
+    zip.addFile('genre.ini', readFileSync(genreIniPath));
+    zip.addFile('Multiplayer.ini', readFileSync(nplayersIniPath));
 
     zip.writeZip(args.output);
 

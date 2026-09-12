@@ -156,6 +156,35 @@ export default class MameService {
     }
 
     /**
+     * Path to genre.ini inside ui.ini's categorypath directory - the game categorization
+     * dataset matching the installed mame version. Unlike marquees/flyers/logos, which may
+     * legitimately not exist yet, genre.ini is guaranteed present: every starting pack bundles
+     * and (re)installs its own copy on import (see boServer.ts's importStartingPack()), so
+     * callers don't need to handle it being missing.
+     */
+    public get genreIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'genre.ini',
+        );
+    }
+
+    /**
+     * Path to Multiplayer.ini inside ui.ini's categorypath directory - the game player-count
+     * dataset matching the installed mame version. Same guarantee as genreIniPath: every
+     * starting pack bundles and (re)installs its own copy on import, so callers don't need to
+     * handle it being missing.
+     */
+    public get nplayersIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'Multiplayer.ini',
+        );
+    }
+
+    /**
      * Start game on mame
      * @param romName
      */

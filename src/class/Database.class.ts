@@ -38,6 +38,20 @@ export default class Database {
     }
 
     public async install(gameService: GameService) {
+        // Categories are seeded from genre.ini (see GameService.getGameCategories()), and the
+        // rom sync that immediately follows install() (Init.vue) needs Multiplayer.ini too (see
+        // GameService.getGameNplayers()) - neither is ever bundled with the app, only installed
+        // by a starting pack import (see boServer.ts's importStartingPack()). Check both are
+        // there before touching the database at all, rather than syncing tables and then failing
+        // partway through seeding/sync.
+        if (!gameService.genreIniPath || !gameService.nplayersIniPath) {
+            throw new Error(
+                'genre.ini et/ou Multiplayer.ini introuvable(s) (categorypath de ui.ini) - '
+                + 'importez un starting pack depuis le BO avant de lancer mame-awesome-ui pour '
+                + 'la première fois.',
+            );
+        }
+
         await this.sequelize.sync();
 
         const records: Array<{id_category: number, name: string}> = [];

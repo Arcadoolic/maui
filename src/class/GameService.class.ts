@@ -1,4 +1,3 @@
-import {join} from 'path';
 import {readFileSync, readdirSync} from 'fs';
 import {parse as iniParse} from 'ini';
 import Game from '@/model/Game.model';
@@ -6,9 +5,6 @@ import MameService from '@/class/MameService.class';
 import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
 import Log from 'electron-log';
-
-
-declare const __static: string;
 
 export default class GameService {
     protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
@@ -40,6 +36,21 @@ export default class GameService {
     public constructor(mameService: MameService, hiService: HiscoreService) {
         this.mameService = mameService;
         this.hiService = hiService;
+    }
+
+    /**
+     * Passthrough to MameService.genreIniPath - lets Database.install() check it's present
+     * before seeding categories, without exposing the whole (protected) mameService.
+     */
+    public get genreIniPath() {
+        return this.mameService.genreIniPath;
+    }
+
+    /**
+     * Passthrough to MameService.nplayersIniPath - same purpose as genreIniPath.
+     */
+    public get nplayersIniPath() {
+        return this.mameService.nplayersIniPath;
     }
 
     /**
@@ -104,11 +115,14 @@ export default class GameService {
     }
 
     /**
-     * Load and parse genre.ini file
+     * Load and parse genre.ini - the real, per-mame-version categorization dataset
+     * (MameService.genreIniPath, resolved from ui.ini's categorypath), never the app's own
+     * bundled data. Guaranteed present by the starting pack (see genreIniPath's own comment),
+     * so no fallback/missing-file handling here.
      */
     public getGameCategories() {
         if (!GameService.genreIni) {
-            GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
+            GameService.genreIni = iniParse(readFileSync(this.mameService.genreIniPath!, 'utf8'));
         }
         return GameService.genreIni;
     }
@@ -119,7 +133,7 @@ export default class GameService {
      */
     public getGameCategoryId(romName: string) {
         if (!GameService.genreIni) {
-            GameService.genreIni = iniParse(readFileSync(join(__static, 'data/genre_206.ini'), 'utf8'));
+            GameService.genreIni = iniParse(readFileSync(this.mameService.genreIniPath!, 'utf8'));
         }
         const categories = Object.keys(GameService.genreIni);
         for (const category in GameService.genreIni) {
@@ -130,12 +144,14 @@ export default class GameService {
     }
 
     /**
-     * Get a game nplayers from nplayers.ini
+     * Load and parse Multiplayer.ini - the real, per-mame-version player-count dataset
+     * (MameService.nplayersIniPath, resolved from ui.ini's categorypath), never the app's own
+     * bundled data. Guaranteed present by the starting pack, so no fallback here either.
      * @param romName
      */
     public getGameNplayers(romName: string): Nplayers {
         if (!GameService.nplayersIni) {
-            GameService.nplayersIni = iniParse(readFileSync(join(__static, 'data/nplayers_206.ini'), 'utf8'));
+            GameService.nplayersIni = iniParse(readFileSync(this.mameService.nplayersIniPath!, 'utf8'));
         }
         for (const nplayers in GameService.nplayersIni) {
             if (GameService.nplayersIni[nplayers][romName]) {
