@@ -28,7 +28,7 @@ import {UniqueConstraintError, ValidationError} from 'sequelize';
 
 declare const __static: string;
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import' | 'maui';
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui';
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -1156,7 +1156,6 @@ function renderPageHead(active: Tab = 'mame'): string {
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Users</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
-            <a href="/import" class="${active === 'import' ? 'active' : ''}">Import</a>
             <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
         </nav>
     </header>
@@ -1257,14 +1256,14 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Fichier des genres (genre.ini, categorypath)</dt>
                     <dd>${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
-                        : '<em>Introuvable — importez un starting pack (onglet Import) pour '
+                        : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
                             + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier du nombre de joueurs (Multiplayer.ini, categorypath)</dt>
                     <dd>${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
-                        : '<em>Introuvable — importez un starting pack (onglet Import) pour '
+                        : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
                             + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
                 </div>
             </dl>
@@ -1330,10 +1329,15 @@ function renderForm(
     error?: string,
     info?: string,
     mameInfoMessage?: string,
+    importError?: string,
 ): string {
     return renderPage(
         renderConfigCard(values, error, info)
-        + renderMameInfoCard(mameInfo, mameInfoMessage),
+        + renderMameInfoCard(mameInfo, mameInfoMessage)
+        // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
+        // counts, all resolved from this same MAME install) - kept on this tab instead of its
+        // own, next to the MAME info it depends on and updates.
+        + renderImportCard(importError),
         'mame',
     );
 }
@@ -1547,10 +1551,6 @@ function renderImportSummary(summary: ImportSummary): string {
         ${categoriesHtml}
         ${issuesHtml}
     `;
-}
-
-function renderImportPage(error?: string): string {
-    return renderPage(renderImportCard(error), 'import');
 }
 
 function renderUserStatusBadge(active: boolean): string {
@@ -1943,16 +1943,19 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    // Starting packs are MAME-only content, imported from the MAME tab (see renderForm()) -
+    // kept as a redirect rather than a 404 for anyone with the old standalone page bookmarked.
     app.get('/import', (req, res) => {
-        res.send(renderImportPage());
+        res.redirect('/');
     });
 
     app.post('/import', upload.single('pack'), async (req, res) => {
         const config = new Config();
         config.load();
+        const values: ConfigFormValues = {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)};
 
         if (!req.file) {
-            res.status(400).send(renderImportPage('Aucun fichier reçu.'));
+            res.status(400).send(renderForm(values, getMameInfo(config), undefined, undefined, undefined, 'Aucun fichier reçu.'));
             return;
         }
 
@@ -1970,7 +1973,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : 'erreur inattendue';
-            res.status(422).send(renderImportPage(`ZIP invalide : ${message}`));
+            res.status(422).send(renderForm(
+                values, getMameInfo(config), undefined, undefined, undefined, `ZIP invalide : ${message}`,
+            ));
             return;
         }
 
@@ -1978,15 +1983,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const {marqueePath, flyerPath, logoPath, categoryDir} = getMameLocations(iniPath);
         const mameInfo = getMameInfo(config);
         if (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath || !categoryDir) {
-            res.status(422).send(renderImportPage(
-                'Configuration MAME incomplète - configurez MAME (onglet MAME) avant d\'importer.',
+            res.status(422).send(renderForm(
+                values, mameInfo, undefined, undefined, undefined,
+                'Configuration MAME incomplète - configurez MAME ci-dessus avant d\'importer.',
             ));
             return;
         }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('import'));
+        res.write(renderPageHead('mame'));
         res.write('<section class="card"><h2>Import en cours…</h2><ul class="progress-log">');
 
         try {
@@ -2003,7 +2009,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }</p>`);
         }
 
-        res.write('<p><a class="button-link" href="/import">Retour</a></p>');
+        // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
+        // above reflect what the import just installed, instead of a "Retour" link to a
+        // separate page.
+        res.write(renderConfigCard(values));
+        res.write(renderMameInfoCard(getMameInfo(config)));
+        res.write(renderImportCard());
         res.write(renderPageTail());
         res.end();
     });
