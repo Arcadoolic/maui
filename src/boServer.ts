@@ -1,7 +1,7 @@
 import express from 'express';
 import {Server} from 'http';
 import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
-import {join, dirname, sep, basename} from 'path';
+import {join, dirname, sep, basename, resolve} from 'path';
 import * as os from 'os';
 import {execFile, execFileSync} from 'child_process';
 import multer from 'multer';
@@ -40,6 +40,32 @@ interface ScreenScraperValues {
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
+
+/**
+ * mame.ini/ui.ini directory settings eligible for a plain folder import (as opposed to the
+ * starting pack roms/manifest.json flow below): each holds files mame itself reads/writes there,
+ * with no per-file metadata to interpret, so unlike a rom a manifest is never needed to import
+ * one - the zip just needs a top-level folder named after `zipFolder` (mame's own conventional
+ * basename for that directory), copied wholesale into wherever `iniKey` currently resolves to on
+ * this mame home. Deliberately a fixed table, not "every ini key": most other settings are
+ * multi-path search lists (rompath, artpath, cheatpath...) or non-directory values, and blindly
+ * matching a zip folder name against any of those wouldn't be safe or meaningful. Only the
+ * *value* each key resolves to is dynamic (read from mame.ini's own -showconfig output and
+ * ui.ini, merged - see the /import route) - the key names and their zip folder names stay fixed
+ * here. `categorypath`/`folders` is ui.ini's own directory (default name "folders") for
+ * genre.ini/Multiplayer.ini/category.ini - the one from the original "importer des folders/"
+ * ask; the rest come from mame.ini.
+ */
+const IMPORTABLE_MAME_DIRECTORIES: {zipFolder: string; iniKey: string}[] = [
+    {zipFolder: 'cfg', iniKey: 'cfg_directory'},
+    {zipFolder: 'nvram', iniKey: 'nvram_directory'},
+    {zipFolder: 'diff', iniKey: 'diff_directory'},
+    {zipFolder: 'comments', iniKey: 'comment_directory'},
+    {zipFolder: 'inp', iniKey: 'input_directory'},
+    {zipFolder: 'sta', iniKey: 'state_directory'},
+    {zipFolder: 'snap', iniKey: 'snapshot_directory'},
+    {zipFolder: 'folders', iniKey: 'categorypath'},
+];
 
 function findMameBinary(mamePath: string): string|null {
     for (const name of MAME_BINARY_NAMES) {
@@ -404,6 +430,10 @@ interface MameInfo {
     windowed: boolean;
     pluginsPath: string | null;
     missingPlugins: string[];
+    // Full `-showconfig` output, kept around (beyond the rompath it's parsed here for) so the
+    // /import route can resolve IMPORTABLE_MAME_DIRECTORIES' iniKeys without re-running mame a
+    // second time. Null whenever -showconfig itself couldn't run (see the catch branch below).
+    showConfig: { [key: string]: string[] } | null;
     error?: string;
 }
 
@@ -423,7 +453,7 @@ function getMameInfo(config: Config): MameInfo {
     if (!config.mamePath || !config.mameBinaryName) {
         return {
             iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
     }
@@ -432,7 +462,7 @@ function getMameInfo(config: Config): MameInfo {
     if (!existsSync(mameBinary)) {
         return {
             iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -447,12 +477,12 @@ function getMameInfo(config: Config): MameInfo {
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
         return {
             iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: parsed,
         };
     } catch {
         return {
             iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
@@ -718,8 +748,91 @@ interface ImportSummary {
     genreIniReplaced: boolean;
     nplayersIniReplaced: boolean;
     categoriesCreated: string[];
+    // One entry per IMPORTABLE_MAME_DIRECTORIES folder actually found in the ZIP - see
+    // importMameDirectories(). Empty when the pack carried no such folder (the common case for a
+    // manifest-driven starting pack import).
+    directoriesImported: {zipFolder: string; filesWritten: number}[];
     warnings: string[];
     errors: string[];
+}
+
+/**
+ * Builds a zero-valued ImportSummary, used as the base for a folder-only import (no
+ * manifest.json, so none of importStartingPack()'s counters apply).
+ */
+function createEmptyImportSummary(): ImportSummary {
+    return {
+        gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0,
+        flyersWritten: 0, logosWritten: 0, favoritesReplaced: false, genreIniReplaced: false,
+        nplayersIniReplaced: false, categoriesCreated: [], directoriesImported: [], warnings: [], errors: [],
+    };
+}
+
+/**
+ * True as soon as the zip has at least one non-directory entry under `${zipFolder}/`, for
+ * whichever zipFolder from IMPORTABLE_MAME_DIRECTORIES is being checked.
+ */
+function zipHasFolder(zip: AdmZip, zipFolder: string): boolean {
+    const prefix = `${zipFolder}/`;
+    return zip.getEntries().some(entry => !entry.isDirectory && entry.entryName.startsWith(prefix));
+}
+
+/**
+ * Copies every file entry under `${zipFolder}/` into targetDir, preserving whatever
+ * subdirectories sit under it (e.g. snapshot_directory's per-game subfolders). Guards against
+ * zip-slip: an entry whose relative path would resolve outside targetDir (via a `../` segment)
+ * is skipped rather than written, the same way a malformed entry is.
+ */
+function extractZipFolder(zip: AdmZip, zipFolder: string, targetDir: string): number {
+    const prefix = `${zipFolder}/`;
+    const resolvedTarget = resolve(targetDir);
+    let filesWritten = 0;
+    for (const entry of zip.getEntries()) {
+        if (entry.isDirectory || !entry.entryName.startsWith(prefix)) {
+            continue;
+        }
+        const relativePath = entry.entryName.slice(prefix.length);
+        const destination = resolve(targetDir, relativePath);
+        if (destination !== resolvedTarget && !destination.startsWith(resolvedTarget + sep)) {
+            continue;
+        }
+        mkdirSync(dirname(destination), {recursive: true});
+        writeFileSync(destination, entry.getData());
+        filesWritten++;
+    }
+    return filesWritten;
+}
+
+/**
+ * Imports whichever IMPORTABLE_MAME_DIRECTORIES folders are present in the zip - unlike
+ * importStartingPack()'s roms/manifest.json flow, no manifest is needed here: each folder is
+ * copied wholesale into wherever its iniKey currently resolves to on this mame home, per
+ * `resolvedIni` - the mame.ini (-showconfig) and ui.ini settings merged together by the /import
+ * route, since IMPORTABLE_MAME_DIRECTORIES' keys are split across both files (categorypath is
+ * ui.ini's, the rest are mame.ini's). A key missing from `resolvedIni` (should only happen
+ * against a mame build old enough not to report it) is logged as a warning and skipped rather
+ * than failing the whole import.
+ */
+function importMameDirectories(
+    zip: AdmZip,
+    resolvedIni: { [key: string]: string[] } | null,
+    iniPath: string,
+    summary: ImportSummary,
+    onProgress: (line: string) => void,
+): void {
+    for (const {zipFolder, iniKey} of IMPORTABLE_MAME_DIRECTORIES) {
+        if (!zipHasFolder(zip, zipFolder)) {
+            continue;
+        }
+        const targetDir = resolvedIni ? ensureFirstDirectory(resolvedIni[iniKey], iniPath) : null;
+        if (!targetDir) {
+            summary.warnings.push(`${zipFolder}/ : "${iniKey}" introuvable dans la configuration mame, ignoré.`);
+            continue;
+        }
+        const filesWritten = extractZipFolder(zip, zipFolder, targetDir);
+        summary.directoriesImported.push({zipFolder, filesWritten});
+        onProgress(`${zipFolder}/ : ${filesWritten} fichier(s) copié(s) vers ${targetDir}.`);
+    }
 }
 
 /**
@@ -741,11 +854,7 @@ async function importStartingPack(
     iniPath: string,
     onProgress: (line: string) => void,
 ): Promise<ImportSummary> {
-    const summary: ImportSummary = {
-        gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0,
-        flyersWritten: 0, logosWritten: 0, favoritesReplaced: false, genreIniReplaced: false,
-        nplayersIniReplaced: false, categoriesCreated: [], warnings: [], errors: [],
-    };
+    const summary = createEmptyImportSummary();
     const categoryIds = new Map<string, number>();
 
     // genre.ini/Multiplayer.ini first, before touching the database at all: on a genuinely
@@ -1212,10 +1321,20 @@ function renderConfigCard(values: ConfigFormValues, error?: string, info?: strin
 }
 
 function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
+    // mameInfo.error means the binary isn't configured yet, or -showconfig failed against it -
+    // every field/form below is resolved from that same -showconfig/ui.ini read, so none of it
+    // is meaningful (or in some cases even present) until the binary's set and validated.
+    if (mameInfo.error) {
+        return `
+            <section class="card">
+                <h2>Informations MAME</h2>
+                <p class="error">${escapeHtml(mameInfo.error)}</p>
+            </section>
+        `;
+    }
     return `
         <section class="card">
             <h2>Informations MAME</h2>
-            ${mameInfo.error ? `<p class="error">${escapeHtml(mameInfo.error)}</p>` : ''}
             ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
             <dl>
                 <div class="info-field">
@@ -1308,9 +1427,9 @@ function getHiscorePath(iniPath: string): string {
  * config/database, on the "maui" tab) so each zone only ever deletes what its own tab is about.
  */
 function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
-    // No apostrophes/accents in the JS string literals built in onsubmit below (same pattern
-    // the user-delete confirm() already used): they're embedded in single-quoted JS strings
-    // inside an HTML attribute, so keeping them plain ASCII avoids any escaping headache.
+    // No apostrophes/accents in the JS string literals built in onsubmit/onchange below (same
+    // pattern the user-delete confirm() already used): they're embedded in single-quoted JS
+    // strings inside an HTML attribute, so keeping them plain ASCII avoids any escaping headache.
     return `
         <section class="card">
             <h2>Zone dangereuse</h2>
@@ -1321,8 +1440,12 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
             ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
-                if (this.deleteHiscores.checked) items.push('les hiscores');
-                if (this.deleteGamesMedia.checked) items.push('les roms et medias des jeux (roms, marquees, flyers, logos)');
+                if (this.deleteMameHome.checked) {
+                    items.push('tout le repertoire .mame et son contenu (configuration mame.ini/ui.ini, roms, medias, hiscores, cfg, nvram, snapshots...)');
+                } else {
+                    if (this.deleteHiscores.checked) items.push('les hiscores');
+                    if (this.deleteGamesMedia.checked) items.push('les roms et medias des jeux (roms, marquees, flyers, logos)');
+                }
                 if (!items.length) { return true; }
                 return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
             ">
@@ -1334,6 +1457,17 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteGamesMedia">
                     Supprimer les roms et médias des jeux (roms, marquees, flyers, logos)
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="deleteMameHome" onchange="
+                        this.form.deleteHiscores.checked = this.checked || this.form.deleteHiscores.checked;
+                        this.form.deleteHiscores.disabled = this.checked;
+                        this.form.deleteGamesMedia.checked = this.checked || this.form.deleteGamesMedia.checked;
+                        this.form.deleteGamesMedia.disabled = this.checked;
+                    ">
+                    Supprimer tout le répertoire <code>${escapeHtml(mameInfo.iniPath)}</code> et son
+                    contenu (englobe les deux options ci-dessus, plus la configuration mame.ini/ui.ini
+                    elle-même, cfg, nvram, snapshots...) - MAME la recréera au prochain lancement
                 </label>
                 <button type="submit">Supprimer la sélection</button>
             </form>
@@ -1387,14 +1521,20 @@ function renderForm(
     importError?: string,
     dangerZoneInfo?: string,
 ): string {
+    // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
+    // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
+    // configured and validated (mameInfo.error unset), those paths don't exist, so neither
+    // section has anything meaningful to show or act on.
     return renderPage(
         renderConfigCard(values, error, info)
         + renderMameInfoCard(mameInfo, mameInfoMessage)
-        // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
-        // counts, all resolved from this same MAME install) - kept on this tab instead of its
-        // own, next to the MAME info it depends on and updates.
-        + renderImportCard(importError)
-        + renderMameDangerZoneCard(mameInfo, dangerZoneInfo),
+        + (mameInfo.error ? '' : (
+            // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
+            // counts, all resolved from this same MAME install) - kept on this tab instead of
+            // its own, next to the MAME info it depends on and updates.
+            renderImportCard(importError)
+            + renderMameDangerZoneCard(mameInfo, dangerZoneInfo)
+        )),
         'mame',
     );
 }
@@ -1615,6 +1755,9 @@ function renderImportCard(error?: string): string {
             <h2>Importer un starting pack</h2>
             <p class="info">Remplace intégralement les jeux/roms/artwork/favoris présents dans
             le pack. Les autres jeux, utilisateurs et scores ne sont pas touchés.</p>
+            <p class="info">Un ZIP peut aussi ne contenir que des dossiers ${IMPORTABLE_MAME_DIRECTORIES
+                .map(d => escapeHtml(d.zipFolder)).join(', ')} (copiés tels quels dans la
+            configuration mame courante) - dans ce cas, pas besoin de manifest.json.</p>
             ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/import" enctype="multipart/form-data">
                 <label for="pack">Fichier ZIP</label>
@@ -1641,6 +1784,11 @@ function renderImportSummary(summary: ImportSummary): string {
     const categoriesHtml = summary.categoriesCreated.length
         ? `<p class="info">Catégorie(s) créée(s) : ${escapeHtml(summary.categoriesCreated.join(', '))}</p>`
         : '';
+    const directoriesHtml = summary.directoriesImported.length
+        ? `<p class="info">Dossier(s) importé(s) : ${escapeHtml(
+            summary.directoriesImported.map(d => `${d.zipFolder} (${d.filesWritten})`).join(', '),
+        )}</p>`
+        : '';
     const issues = [...summary.warnings, ...summary.errors];
     const issuesHtml = issues.length
         ? `<ul>${issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
@@ -1648,6 +1796,7 @@ function renderImportSummary(summary: ImportSummary): string {
     return `
         <p class="info">${escapeHtml(parts.join(' — '))}</p>
         ${categoriesHtml}
+        ${directoriesHtml}
         ${issuesHtml}
     `;
 }
@@ -2059,16 +2208,29 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         let zip: AdmZip;
-        let manifest: StartingPackManifest;
+        // manifest.json is only needed for the rom/game part of a pack - the metadata it carries
+        // (category, player counts, bios linking) has nothing to interpret for a plain
+        // IMPORTABLE_MAME_DIRECTORIES folder (cfg, nvram...), so a zip made only of those doesn't
+        // need one. null here means "this zip is a folder-only import", not an error.
+        let manifest: StartingPackManifest | null;
         try {
             zip = new AdmZip(req.file.buffer);
             const manifestEntry = zip.getEntry('manifest.json');
-            if (!manifestEntry) {
-                throw new Error('manifest.json manquant.');
-            }
-            manifest = JSON.parse(zip.readAsText(manifestEntry));
-            if (manifest.formatVersion !== 1) {
-                throw new Error(`version de pack non supportée (${manifest.formatVersion}).`);
+            if (manifestEntry) {
+                manifest = JSON.parse(zip.readAsText(manifestEntry));
+                if (manifest!.formatVersion !== 1) {
+                    throw new Error(`version de pack non supportée (${manifest!.formatVersion}).`);
+                }
+            } else {
+                manifest = null;
+                const hasImportableDirectory = IMPORTABLE_MAME_DIRECTORIES
+                    .some(({zipFolder}) => zipHasFolder(zip, zipFolder));
+                if (!hasImportableDirectory) {
+                    throw new Error(
+                        'manifest.json manquant, et aucun dossier reconnu '
+                        + `(${IMPORTABLE_MAME_DIRECTORIES.map(d => d.zipFolder).join(', ')}) dans le ZIP.`,
+                    );
+                }
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : 'erreur inattendue';
@@ -2079,9 +2241,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         const iniPath = getMameHomePath();
-        const {marqueePath, flyerPath, logoPath, categoryDir} = getMameLocations(iniPath);
+        const {marqueePath, flyerPath, logoPath, categoryDir, uiIni} = getMameLocations(iniPath);
         const mameInfo = getMameInfo(config);
-        if (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath || !categoryDir) {
+        // IMPORTABLE_MAME_DIRECTORIES' keys are split across mame.ini (-showconfig, mameInfo.
+        // showConfig) and ui.ini (categorypath, from getMameLocations() above) - merge both so
+        // importMameDirectories() can resolve either kind by iniKey alone.
+        const resolvedIni = {...(mameInfo.showConfig ?? {}), ...uiIni};
+        // The rom/game part's own destinations are only required when there's a manifest to
+        // drive it - a folder-only import just needs iniPath and resolvedIni, already built
+        // above regardless of manifest presence.
+        if (manifest && (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath || !categoryDir)) {
             res.status(422).send(renderForm(
                 values, mameInfo, undefined, undefined, undefined,
                 'Configuration MAME incomplète - configurez MAME ci-dessus avant d\'importer.',
@@ -2095,9 +2264,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write('<section class="card"><h2>Import en cours…</h2><ul class="progress-log">');
 
         try {
-            const summary = await importStartingPack(
-                zip, manifest, mameInfo.romPath, marqueePath, flyerPath, logoPath, categoryDir, iniPath,
-                line => res.write(`<li>${escapeHtml(line)}</li>`),
+            const summary = manifest
+                ? await importStartingPack(
+                    zip, manifest, mameInfo.romPath!, marqueePath!, flyerPath!, logoPath!, categoryDir!, iniPath,
+                    line => res.write(`<li>${escapeHtml(line)}</li>`),
+                )
+                : createEmptyImportSummary();
+            importMameDirectories(
+                zip, resolvedIni, iniPath, summary, line => res.write(`<li>${escapeHtml(line)}</li>`),
             );
             res.write('</ul></section>');
             res.write(renderImportSummary(summary));
@@ -2111,9 +2285,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
         // above reflect what the import just installed, instead of a "Retour" link to a
         // separate page.
+        const refreshedMameInfo = getMameInfo(config);
         res.write(renderConfigCard(values));
-        res.write(renderMameInfoCard(getMameInfo(config)));
-        res.write(renderImportCard());
+        res.write(renderMameInfoCard(refreshedMameInfo));
+        // Same gating as renderForm(): import only makes sense once the binary's configured and
+        // validated (see there for why).
+        if (!refreshedMameInfo.error) {
+            res.write(renderImportCard());
+        }
         res.write(renderPageTail());
         res.end();
     });
@@ -2335,8 +2514,21 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.mameBinaryName = mameBinaryName;
         config.save();
 
-        res.send(renderPage('<section class="card"><h2>Configuration enregistrée</h2><p>'
-            + 'L\'application redémarre automatiquement.</p></section>'));
+        res.send(renderPage(
+            '<section class="card"><h2>Configuration enregistrée</h2><p>'
+            + 'L\'application redémarre automatiquement.</p>'
+            + '<p>Retour à la configuration MAME dans <span id="redirect-countdown">5</span> '
+            + 'seconde(s)… <a href="/">Y aller maintenant</a>.</p></section>'
+            + '<script>'
+            + 'var secondsLeft = 5;'
+            + 'var countdownEl = document.getElementById("redirect-countdown");'
+            + 'setInterval(function () {'
+            + 'secondsLeft -= 1;'
+            + 'countdownEl.textContent = Math.max(secondsLeft, 0);'
+            + '}, 1000);'
+            + 'setTimeout(function () { window.location.href = "/"; }, 5000);'
+            + '</script>',
+        ));
 
         onConfigured();
     });
@@ -2465,12 +2657,30 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // only mame-awesome-ui's own, regardless of what a request might otherwise contain.
         const zone = req.body.zone === 'maui' ? 'maui' : 'mame';
 
-        const deleteHiscores = zone === 'mame' && req.body.deleteHiscores === 'on';
-        const deleteGamesMedia = zone === 'mame' && req.body.deleteGamesMedia === 'on';
+        // deleteMameHome wipes mameInfo.iniPath (~/.mame) wholesale, which already contains
+        // everything deleteHiscores/deleteGamesMedia would otherwise remove - so those two are
+        // skipped when it's checked, rather than redundantly rm'ing paths about to disappear
+        // anyway (the danger-zone card's onchange also ticks+disables both when this one is
+        // checked, purely to communicate that they're included).
+        const deleteMameHome = zone === 'mame' && req.body.deleteMameHome === 'on';
+        const deleteHiscores = zone === 'mame' && !deleteMameHome && req.body.deleteHiscores === 'on';
+        const deleteGamesMedia = zone === 'mame' && !deleteMameHome && req.body.deleteGamesMedia === 'on';
         const deleteConfig = zone === 'maui' && req.body.deleteConfig === 'on';
         const deleteDatabase = zone === 'maui' && req.body.deleteDatabase === 'on';
 
         const deleted: string[] = [];
+
+        if (deleteMameHome) {
+            try {
+                rmSync(mameInfo.iniPath, {recursive: true, force: true});
+                deleted.push(
+                    `tout le répertoire ${mameInfo.iniPath} et son contenu (configuration, roms, médias, `
+                    + 'hiscores, cfg, nvram, snapshots...)',
+                );
+            } catch (error) {
+                console.error(`[boServer] Failed to remove mame home directory "${mameInfo.iniPath}":`, error);
+            }
+        }
 
         if (deleteHiscores) {
             try {
@@ -2526,8 +2736,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // (see store.ts's initServices), same reason the previous all-in-one reset always
         // closed the app - only a full process restart clears that in-memory state. Hiscores
         // and media are just files/directories MameService/HiscoreService re-resolve on every
-        // access, so those two don't need it.
-        const needsRestart = deleteConfig || deleteDatabase;
+        // access, so those two don't need it. deleteMameHome does need it too: it takes
+        // mame.ini/ui.ini down with it, and MameService's constructor only ever parses those
+        // once, at app startup - a restart is what makes it re-bootstrap them from scratch.
+        const needsRestart = deleteConfig || deleteDatabase || deleteMameHome;
         const backHref = zone === 'mame' ? '/' : '/maui';
 
         res.send(renderPage(
@@ -2540,6 +2752,27 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                     + 'production) - recharger cette page ou l\'application ne suffit pas : le '
                     + 'renderer garde en mémoire les services construits sur l\'ancienne '
                     + 'configuration tant que le process n\'a pas complètement redémarré.</p>'
+                    + '<p id="restart-wait-message" class="info">En attente du redémarrage… '
+                    + 'cette page vous ramènera automatiquement à l\'accueil dès que le serveur '
+                    + 'sera de nouveau disponible.</p>'
+                    + `<script>${
+                        // Polls the BO server itself (the same process this reset just told to
+                        // exit - see onReset below) until it answers again, then redirects -
+                        // rather than relying on the user to remember to come back once they've
+                        // relaunched it manually. Only trusts a successful response *after* one
+                        // has already failed: right after this page loads the old process may
+                        // still be up for a moment (see the 300ms exit delay below), and an
+                        // immediate success there would just bounce straight back with nothing
+                        // actually restarted yet.
+                        'var backHref = ' + JSON.stringify(backHref) + ';'
+                        + 'var sawDown = false;'
+                        + 'var poll = function () {'
+                        + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
+                        + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
+                        + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
+                        + '};'
+                        + 'setTimeout(poll, 1000);'
+                    }</script>`
                 : `<p><a href="${backHref}">Retour</a></p>`)
             + '</section>',
             zone,
