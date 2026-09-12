@@ -1291,33 +1291,88 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
     `;
 }
 
-function renderDangerZoneCard(mameInfo: MameInfo): string {
-    // No apostrophes in these messages: embedded in single-quoted JS string literals inside the
-    // onsubmit attribute below (same pattern as the user-delete confirm()).
-    const confirmMessage = 'Supprimer definitivement la configuration de mame-awesome-ui et tout '
-        + 'le dossier home de mame (roms, marquees, flyers, favoris, sauvegardes, scores) ? '
-        + 'Cette action est irreversible.';
-    const confirmMessageWithDb = 'Supprimer definitivement la configuration de mame-awesome-ui, '
-        + 'tout le dossier home de mame (roms, marquees, flyers, favoris, sauvegardes, scores) '
-        + 'ET la base de donnees (jeux, utilisateurs, scores) ? Cette action est irreversible.';
+/**
+ * Directory mame's hiscore plugin writes .hi files into (see HiscoreService.class.ts, which
+ * symlinks iniPath/hi -> iniPath/hiscore since mame-hi-extractor hardcodes reading from "hi").
+ * Duplicated here rather than imported for the same @electron/remote reason as the rest of this
+ * file's helpers.
+ */
+function getHiscorePath(iniPath: string): string {
+    return join(iniPath, 'hiscore');
+}
+
+/**
+ * Danger zone for MAME's own data (hiscores, roms/media - everything under mameInfo.iniPath and
+ * the game media directories). Rendered on the "mame" tab, next to the MAME info this data
+ * belongs to. Kept separate from renderMauiDangerZoneCard() below (mame-awesome-ui's own
+ * config/database, on the "maui" tab) so each zone only ever deletes what its own tab is about.
+ */
+function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
+    // No apostrophes/accents in the JS string literals built in onsubmit below (same pattern
+    // the user-delete confirm() already used): they're embedded in single-quoted JS strings
+    // inside an HTML attribute, so keeping them plain ASCII avoids any escaping headache.
     return `
         <section class="card">
             <h2>Zone dangereuse</h2>
-            <p class="error">Réinitialise complètement mame-awesome-ui pour repartir de zéro :
-            supprime le fichier de configuration (mame-awesome-ui-config.json) et tout le dossier
-            home de mame - <strong>${escapeHtml(mameInfo.iniPath)}</strong> - donc ses roms,
-            marquees, flyers, favoris, sauvegardes et scores. La base de données (jeux,
-            utilisateurs, scores) n'est pas touchée, sauf si vous cochez la case ci-dessous.
-            Cette action est irréversible. L'application se ferme ensuite - il faudra la relancer
-            manuellement (<code>just serve</code> en développement) pour terminer la
-            réinitialisation.</p>
-            <form method="post" action="/reset"
-                onsubmit="return confirm(this.deleteDatabase.checked ? '${confirmMessageWithDb}' : '${confirmMessage}')">
+            <p class="error">Suppressions ciblées et irréversibles, portant sur les données de
+            MAME lui-même. Chaque case agit indépendamment des autres - cochez ce que vous voulez
+            supprimer puis validez. La suppression des roms/médias supprime aussi les roms
+            elles-mêmes, pas seulement les visuels.</p>
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="post" action="/reset" onsubmit="
+                var items = [];
+                if (this.deleteHiscores.checked) items.push('les hiscores');
+                if (this.deleteGamesMedia.checked) items.push('les roms et medias des jeux (roms, marquees, flyers, logos)');
+                if (!items.length) { return true; }
+                return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
+            ">
+                <input type="hidden" name="zone" value="mame">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="deleteHiscores">
+                    Supprimer les hiscores (<code>${escapeHtml(getHiscorePath(mameInfo.iniPath))}</code>)
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="deleteGamesMedia">
+                    Supprimer les roms et médias des jeux (roms, marquees, flyers, logos)
+                </label>
+                <button type="submit">Supprimer la sélection</button>
+            </form>
+        </section>
+    `;
+}
+
+/**
+ * Danger zone for mame-awesome-ui's own data (config file, database - see Config.class.ts /
+ * Database.class.ts). Rendered on the "maui" tab. See renderMameDangerZoneCard() above for the
+ * MAME-side counterpart on the "mame" tab.
+ */
+function renderMauiDangerZoneCard(info?: string): string {
+    return `
+        <section class="card">
+            <h2>Zone dangereuse</h2>
+            <p class="error">Suppressions ciblées et irréversibles, portant sur mame-awesome-ui
+            lui-même. Chaque case agit indépendamment des autres - cochez ce que vous voulez
+            supprimer puis validez. Supprimer la configuration ou la base de données ferme
+            l'application ensuite ; il faudra la relancer manuellement (<code>just serve</code>
+            en développement) pour terminer l'opération.</p>
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="post" action="/reset" onsubmit="
+                var items = [];
+                if (this.deleteConfig.checked) items.push('la configuration de mame-awesome-ui');
+                if (this.deleteDatabase.checked) items.push('la base de donnees (jeux, utilisateurs, scores)');
+                if (!items.length) { return true; }
+                return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
+            ">
+                <input type="hidden" name="zone" value="maui">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="deleteConfig">
+                    Supprimer la configuration de mame-awesome-ui (mame-awesome-ui-config.json)
+                </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteDatabase">
-                    Supprimer aussi la base de données (jeux, utilisateurs, scores)
+                    Supprimer la base de données (jeux, utilisateurs, scores)
                 </label>
-                <button type="submit">Réinitialiser l'application</button>
+                <button type="submit">Supprimer la sélection</button>
             </form>
         </section>
     `;
@@ -1330,6 +1385,7 @@ function renderForm(
     info?: string,
     mameInfoMessage?: string,
     importError?: string,
+    dangerZoneInfo?: string,
 ): string {
     return renderPage(
         renderConfigCard(values, error, info)
@@ -1337,7 +1393,8 @@ function renderForm(
         // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
         // counts, all resolved from this same MAME install) - kept on this tab instead of its
         // own, next to the MAME info it depends on and updates.
-        + renderImportCard(importError),
+        + renderImportCard(importError)
+        + renderMameDangerZoneCard(mameInfo, dangerZoneInfo),
         'mame',
     );
 }
@@ -1362,8 +1419,50 @@ function renderMauiCard(config: Config, info?: string): string {
     `;
 }
 
-function renderMauiPage(config: Config, mameInfo: MameInfo, info?: string): string {
-    return renderPage(renderMauiCard(config, info) + renderDangerZoneCard(mameInfo), 'maui');
+function renderMauiImportExportCard(error?: string, info?: string): string {
+    return `
+        <section class="card">
+            <h2>Import / export mame-awesome-ui</h2>
+            <p class="info">Sauvegarde ou restaure la configuration
+            (mame-awesome-ui-config.json) et/ou la base de données (jeux, utilisateurs, scores)
+            de mame-awesome-ui - pas les roms ni les données de mame lui-même.</p>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="get" action="/maui/export">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="json" checked>
+                    Configuration (JSON)
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="db">
+                    Base de données (DB)
+                </label>
+                <button type="submit">Exporter</button>
+            </form>
+            <form method="post" action="/maui/import" enctype="multipart/form-data"
+                onsubmit="return confirm('Ecraser la configuration et/ou la base de donnees actuelle avec ce fichier ? Cette action est irreversible.')">
+                <label for="mauiImportFile">Fichier à importer (.json, .sqlite/.db, ou .zip contenant les deux)</label>
+                <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
+                <button type="submit">Importer</button>
+            </form>
+        </section>
+    `;
+}
+
+interface MauiPageMessages {
+    mauiInfo?: string;
+    importExportError?: string;
+    importExportInfo?: string;
+    dangerZoneInfo?: string;
+}
+
+function renderMauiPage(config: Config, messages: MauiPageMessages = {}): string {
+    return renderPage(
+        renderMauiCard(config, messages.mauiInfo)
+        + renderMauiImportExportCard(messages.importExportError, messages.importExportInfo)
+        + renderMauiDangerZoneCard(messages.dangerZoneInfo),
+        'maui',
+    );
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -2022,7 +2121,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.get('/maui', (req, res) => {
         const config = new Config();
         config.load();
-        res.send(renderMauiPage(config, getMameInfo(config)));
+        res.send(renderMauiPage(config));
     });
 
     app.post('/maui/save', (req, res) => {
@@ -2031,7 +2130,131 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.openDevTools = req.body.openDevTools === 'on';
         config.fullscreen = req.body.fullscreen === 'on';
         config.save();
-        res.send(renderMauiPage(config, getMameInfo(config), 'Configuration enregistrée.'));
+        res.send(renderMauiPage(config, {mauiInfo: 'Configuration enregistrée.'}));
+    });
+
+    app.get('/maui/export', (req, res) => {
+        const config = new Config();
+        const exportConfigFile = req.query.json === 'on';
+        const exportDatabase = req.query.db === 'on';
+
+        if (!exportConfigFile && !exportDatabase) {
+            config.load();
+            res.send(renderMauiPage(config, {
+                importExportError: 'Cochez au moins une case (JSON et/ou DB) avant d\'exporter.',
+            }));
+            return;
+        }
+
+        const files: {path: string; name: string}[] = [];
+        if (exportConfigFile && existsSync(config.configPath)) {
+            files.push({path: config.configPath, name: basename(config.configPath)});
+        }
+        if (exportDatabase && existsSync(getDatabasePath())) {
+            files.push({path: getDatabasePath(), name: basename(getDatabasePath())});
+        }
+
+        if (!files.length) {
+            config.load();
+            res.send(renderMauiPage(config, {
+                importExportError: 'Rien à exporter : le(s) fichier(s) sélectionné(s) n\'existe(nt) pas encore.',
+            }));
+            return;
+        }
+
+        if (files.length === 1) {
+            res.download(files[0].path, files[0].name);
+            return;
+        }
+
+        const zip = new AdmZip();
+        files.forEach(file => zip.addLocalFile(file.path));
+        const date = new Date().toISOString().slice(0, 10);
+        res.set('Content-Type', 'application/zip');
+        res.set('Content-Disposition', `attachment; filename="mame-awesome-ui-export-${date}.zip"`);
+        res.send(zip.toBuffer());
+    });
+
+    app.post('/maui/import', upload.single('file'), (req, res) => {
+        const config = new Config();
+        config.load();
+
+        if (!req.file) {
+            res.send(renderMauiPage(config, {importExportError: 'Aucun fichier fourni.'}));
+            return;
+        }
+
+        const originalName = req.file.originalname.toLowerCase();
+        const restored: string[] = [];
+
+        try {
+            if (originalName.endsWith('.zip')) {
+                const zip = new AdmZip(req.file.buffer);
+                const configEntry = zip.getEntries()
+                    .find(entry => basename(entry.entryName) === 'mame-awesome-ui-config.json');
+                const dbEntry = zip.getEntries()
+                    .find(entry => basename(entry.entryName) === 'mame-awesome-ui.sqlite');
+
+                if (!configEntry && !dbEntry) {
+                    res.send(renderMauiPage(config, {
+                        importExportError: 'Le ZIP ne contient ni mame-awesome-ui-config.json ni '
+                            + 'mame-awesome-ui.sqlite.',
+                    }));
+                    return;
+                }
+                if (configEntry) {
+                    writeFileSync(config.configPath, configEntry.getData());
+                    restored.push('la configuration');
+                }
+                if (dbEntry) {
+                    writeFileSync(getDatabasePath(), dbEntry.getData());
+                    restored.push('la base de données');
+                }
+            } else if (originalName.endsWith('.json')) {
+                // Throws on malformed JSON, caught below - avoids overwriting the current
+                // config with a file the app would then fail to load on next start.
+                JSON.parse(req.file.buffer.toString('utf8'));
+                writeFileSync(config.configPath, req.file.buffer);
+                restored.push('la configuration');
+            } else if (originalName.endsWith('.sqlite') || originalName.endsWith('.db')) {
+                // Same sqlite file header every real .sqlite file starts with - cheap sanity
+                // check against uploading an unrelated file under this extension.
+                if (req.file.buffer.subarray(0, 16).toString('utf8') !== 'SQLite format 3\0') {
+                    res.send(renderMauiPage(config, {
+                        importExportError: 'Ce fichier ne ressemble pas à une base de données '
+                            + 'sqlite valide.',
+                    }));
+                    return;
+                }
+                writeFileSync(getDatabasePath(), req.file.buffer);
+                restored.push('la base de données');
+            } else {
+                res.send(renderMauiPage(config, {
+                    importExportError: 'Format non reconnu : utilisez un .json, un .sqlite/.db ou '
+                        + 'un .zip contenant les deux.',
+                }));
+                return;
+            }
+        } catch (error) {
+            res.send(renderMauiPage(config, {
+                importExportError: `Import échoué : ${error instanceof Error ? error.message : String(error)}`,
+            }));
+            return;
+        }
+
+        // Same reasoning as /reset's config/database branches: the renderer's long-lived Vuex
+        // store instances (see store.ts's initServices) were built from the files just
+        // overwritten, so only a full process restart picks up the import.
+        res.send(renderPage(
+            '<section class="card"><h2>Import effectué</h2>'
+            + `<p class="error">Restauré : ${restored.join(', ')}. L'application va se fermer `
+            + 'dans un instant. <strong>Relancez-la manuellement</strong> pour prendre en compte '
+            + 'les fichiers importés (<code>just serve</code> en développement, ou l\'exécutable '
+            + 'habituel en production).</p></section>',
+            'maui',
+        ));
+
+        setTimeout(onReset, 300);
     });
 
     app.post('/screenscraper/save', (req, res) => {
@@ -2234,40 +2457,100 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/reset', (req, res) => {
         const config = new Config();
         config.load();
-        config.delete();
+        const mameInfo = getMameInfo(config);
 
-        const deleteDatabase = req.body.deleteDatabase === 'on';
+        // Each danger-zone card (renderMameDangerZoneCard/renderMauiDangerZoneCard) posts its
+        // own hidden "zone" field alongside only its own checkboxes - gating on it here means a
+        // MAME-zone submission can only ever delete MAME's own data, and a maui-zone submission
+        // only mame-awesome-ui's own, regardless of what a request might otherwise contain.
+        const zone = req.body.zone === 'maui' ? 'maui' : 'mame';
 
-        try {
-            rmSync(getMameHomePath(), {recursive: true, force: true});
-        } catch (error) {
-            console.error('[boServer] Failed to remove mame home directory:', error);
+        const deleteHiscores = zone === 'mame' && req.body.deleteHiscores === 'on';
+        const deleteGamesMedia = zone === 'mame' && req.body.deleteGamesMedia === 'on';
+        const deleteConfig = zone === 'maui' && req.body.deleteConfig === 'on';
+        const deleteDatabase = zone === 'maui' && req.body.deleteDatabase === 'on';
+
+        const deleted: string[] = [];
+
+        if (deleteHiscores) {
+            try {
+                rmSync(getHiscorePath(mameInfo.iniPath), {recursive: true, force: true});
+                deleted.push('les hiscores');
+            } catch (error) {
+                console.error('[boServer] Failed to remove hiscore directory:', error);
+            }
+        }
+
+        if (deleteGamesMedia) {
+            [mameInfo.romPath, mameInfo.marqueePath, mameInfo.flyerPath, mameInfo.logoPath].forEach((gamesPath) => {
+                if (!gamesPath) {
+                    return;
+                }
+                try {
+                    rmSync(gamesPath, {recursive: true, force: true});
+                } catch (error) {
+                    console.error(`[boServer] Failed to remove games directory "${gamesPath}":`, error);
+                }
+            });
+            deleted.push('les roms et médias des jeux (roms, marquees, flyers, logos)');
+        }
+
+        if (deleteConfig) {
+            config.delete();
+            deleted.push('la configuration de mame-awesome-ui');
         }
 
         if (deleteDatabase) {
             try {
                 rmSync(getDatabasePath(), {force: true});
+                deleted.push('la base de données');
             } catch (error) {
                 console.error('[boServer] Failed to remove database file:', error);
             }
         }
 
-        res.send(renderPage('<section class="card"><h2>Réinitialisation effectuée</h2>'
-            + `<p class="error">Configuration${deleteDatabase ? ', base de données' : ''} et `
-            + 'dossier home de mame supprimés. L\'application va se fermer dans un instant.</p>'
-            + '<p><strong>Relancez-la manuellement</strong> pour terminer la réinitialisation '
-            + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
-            + 'production) - recharger cette page ou l\'application ne suffit pas : le '
-            + 'renderer garde en mémoire les services construits sur l\'ancienne configuration '
-            + 'tant que le process n\'a pas complètement redémarré.</p></section>', 'maui'));
+        if (!deleted.length) {
+            if (zone === 'mame') {
+                res.send(renderForm(
+                    {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo,
+                    undefined, undefined, undefined, undefined,
+                    'Aucune case cochée : rien à supprimer.',
+                ));
+            } else {
+                res.send(renderMauiPage(config, {dangerZoneInfo: 'Aucune case cochée : rien à supprimer.'}));
+            }
+            return;
+        }
 
-        // Only closes the app (see onReset in background.ts) - it does NOT relaunch it.
-        // Reloading the window to /init (like onConfigured() does after a normal config save)
-        // is not enough here: the renderer's Vuex store holds long-lived Config/MameService/
-        // GameService instances (see store.ts's initServices) built from the files we just
-        // deleted, and only a real process restart clears that in-memory state. Delayed
-        // slightly so this response finishes flushing to the browser before the process exits.
-        setTimeout(onReset, 300);
+        // Config/database deletion invalidates the renderer's long-lived Vuex store instances
+        // (see store.ts's initServices), same reason the previous all-in-one reset always
+        // closed the app - only a full process restart clears that in-memory state. Hiscores
+        // and media are just files/directories MameService/HiscoreService re-resolve on every
+        // access, so those two don't need it.
+        const needsRestart = deleteConfig || deleteDatabase;
+        const backHref = zone === 'mame' ? '/' : '/maui';
+
+        res.send(renderPage(
+            '<section class="card"><h2>Suppression effectuée</h2>'
+            + `<p class="error">Supprimé : ${deleted.join(', ')}.</p>`
+            + (needsRestart
+                ? '<p>L\'application va se fermer dans un instant. '
+                    + '<strong>Relancez-la manuellement</strong> pour terminer l\'opération '
+                    + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
+                    + 'production) - recharger cette page ou l\'application ne suffit pas : le '
+                    + 'renderer garde en mémoire les services construits sur l\'ancienne '
+                    + 'configuration tant que le process n\'a pas complètement redémarré.</p>'
+                : `<p><a href="${backHref}">Retour</a></p>`)
+            + '</section>',
+            zone,
+        ));
+
+        if (needsRestart) {
+            // Only closes the app (see onReset in background.ts) - it does NOT relaunch it.
+            // Delayed slightly so this response finishes flushing to the browser before the
+            // process exits.
+            setTimeout(onReset, 300);
+        }
     });
 
     return app.listen(port, () => {
