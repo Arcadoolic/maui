@@ -28,7 +28,7 @@ import {UniqueConstraintError, ValidationError} from 'sequelize';
 
 declare const __static: string;
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'import' | 'maui';
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui';
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -217,9 +217,12 @@ function ensureFirstDirectory(paths: string[] | undefined, parentPath: string): 
 }
 
 /**
- * Resolves the directories/file ui.ini points mame-awesome-ui at: marquees, flyers
- * (created if missing, see ensureFirstDirectory) and favorites.ini (never created -
- * mame itself writes it the first time a favorite is added).
+ * Resolves the directories/file ui.ini points mame-awesome-ui at: marquees, flyers, logos and
+ * the categorypath folder (created if missing, see ensureFirstDirectory) - and favorites.ini /
+ * genre.ini / Multiplayer.ini within it (never created themselves: mame itself writes
+ * favorites.ini the first time a favorite is added, and genre.ini/Multiplayer.ini are only
+ * ever written by a starting pack import - see importStartingPack() - which every pack bundles
+ * a copy of both).
  */
 interface MameLocations {
     uiIni: { [key: string]: string[] };
@@ -227,6 +230,11 @@ interface MameLocations {
     flyerPath: string | null;
     logoPath: string | null;
     favoritesPath: string | null;
+    // Directory genre.ini/Multiplayer.ini live (or will be written) in - always created if
+    // missing, so a starting pack import always has somewhere to write them into.
+    categoryDir: string | null;
+    genreIniPath: string | null;
+    nplayersIniPath: string | null;
 }
 
 function getMameLocations(iniPath: string): MameLocations {
@@ -237,7 +245,20 @@ function getMameLocations(iniPath: string): MameLocations {
     // ui.ini's own name for mame's game-logo ("wheel") art directory - defaults to "logo".
     const logoPath = ensureFirstDirectory(uiIni.logos_directory, iniPath);
     const favoritesPath = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
-    return {uiIni, marqueePath, flyerPath, logoPath, favoritesPath};
+    // ui.ini's categorypath points at the "folders" directory holding genre.ini,
+    // Multiplayer.ini, category.ini, etc. - the same per-version datasets mame-awesome-ui used
+    // to bundle stale copies of (public/data/genre_206.ini, nplayers_206.ini) instead of
+    // reading from here.
+    const categoryDir = ensureFirstDirectory(uiIni.categorypath, iniPath);
+    const genreIniPath = categoryDir && existsSync(join(categoryDir, 'genre.ini'))
+        ? join(categoryDir, 'genre.ini')
+        : null;
+    const nplayersIniPath = categoryDir && existsSync(join(categoryDir, 'Multiplayer.ini'))
+        ? join(categoryDir, 'Multiplayer.ini')
+        : null;
+    return {
+        uiIni, marqueePath, flyerPath, logoPath, favoritesPath, categoryDir, genreIniPath, nplayersIniPath,
+    };
 }
 
 /**
@@ -378,6 +399,8 @@ interface MameInfo {
     flyerPath: string | null;
     logoPath: string | null;
     favoritesPath: string | null;
+    genreIniPath: string | null;
+    nplayersIniPath: string | null;
     windowed: boolean;
     pluginsPath: string | null;
     missingPlugins: string[];
@@ -389,7 +412,9 @@ function getMameInfo(config: Config): MameInfo {
     const mameIniPath = join(iniPath, 'mame.ini');
     const uiIniPath = join(iniPath, 'ui.ini');
     const pluginIniPath = join(iniPath, 'plugin.ini');
-    const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
+    const {
+        marqueePath, flyerPath, logoPath, favoritesPath, genreIniPath, nplayersIniPath,
+    } = getMameLocations(iniPath);
     const windowed = getMameIniValue(mameIniPath, 'window') === '1';
     const pluginsPath = getMameIniValue(mameIniPath, 'pluginspath');
     const resolvedPluginsPath = pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : null;
@@ -398,7 +423,7 @@ function getMameInfo(config: Config): MameInfo {
     if (!config.mamePath || !config.mameBinaryName) {
         return {
             iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
             error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
         };
     }
@@ -407,7 +432,7 @@ function getMameInfo(config: Config): MameInfo {
     if (!existsSync(mameBinary)) {
         return {
             iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -422,12 +447,12 @@ function getMameInfo(config: Config): MameInfo {
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
         return {
             iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, logoPath, favoritesPath,
-            windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
         };
     } catch {
         return {
             iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            windowed, pluginsPath, missingPlugins,
+            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
@@ -509,49 +534,60 @@ interface FavoritesInfo {
     error?: string;
 }
 
-function getFavoritesInfo(config: Config): FavoritesInfo {
+interface FavoritesContext {
+    romNames: string[];
+    mameBinary: string;
+    iniPath: string;
+    marqueePath: string | null;
+    flyerPath: string | null;
+    logoPath: string | null;
+}
+
+/**
+ * Every cheap (fs/config) check getFavoritesInfo used to do up front, split out on its own so a
+ * caller can start streaming a response immediately after this resolves, instead of only after
+ * every favorite's slow, blocking `mame -lx` lookup (see resolveFavoriteRow()) has also run.
+ */
+function getFavoritesContext(config: Config): FavoritesContext | {error: string} {
     const iniPath = getMameHomePath();
     const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
 
     if (!favoritesPath) {
-        return {
-            rows: [],
-            error: 'Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu).',
-        };
+        return {error: 'Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu).'};
     }
 
     const romNames = getFavoriteRomNames(favoritesPath);
     if (!romNames.length) {
-        return {
-            rows: [],
-            error: 'Le fichier favorites.ini ne contient aucun favori pour l\'instant.',
-        };
+        return {error: 'Le fichier favorites.ini ne contient aucun favori pour l\'instant.'};
     }
 
     if (!config.mamePath || !config.mameBinaryName) {
-        return {
-            rows: [],
-            error: 'Configurez le binaire mame dans l\'onglet MAME pour afficher le nom des favoris.',
-        };
+        return {error: 'Configurez le binaire mame dans l\'onglet MAME pour afficher le nom des favoris.'};
     }
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
-        return {rows: [], error: `Le binaire "${mameBinary}" est introuvable.`};
+        return {error: `Le binaire "${mameBinary}" est introuvable.`};
     }
 
-    const rows: FavoriteRow[] = romNames.map((romName) => {
-        const {description, biosName} = getGameXmlInfo(mameBinary, iniPath, romName);
-        return {
-            romName,
-            fullname: description || romName,
-            biosName,
-            hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
-            hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
-            hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
-        };
-    });
+    return {romNames, mameBinary, iniPath, marqueePath, flyerPath, logoPath};
+}
 
-    return {rows};
+/**
+ * Resolves a single favorite's row - the slow part (a blocking `mame -lx` process spawn per
+ * call, see getGameXmlInfo()) callers should interleave with res.write() progress so a long
+ * favorites list streams in instead of blocking the whole response.
+ */
+function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
+    const {mameBinary, iniPath, marqueePath, flyerPath, logoPath} = context;
+    const {description, biosName} = getGameXmlInfo(mameBinary, iniPath, romName);
+    return {
+        romName,
+        fullname: description || romName,
+        biosName,
+        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
+        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
+        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+    };
 }
 
 function hasScreenScraperCredentials(config: Config): boolean {
@@ -679,6 +715,8 @@ interface ImportSummary {
     flyersWritten: number;
     logosWritten: number;
     favoritesReplaced: boolean;
+    genreIniReplaced: boolean;
+    nplayersIniReplaced: boolean;
     categoriesCreated: string[];
     warnings: string[];
     errors: string[];
@@ -699,14 +737,45 @@ async function importStartingPack(
     marqueePath: string,
     flyerPath: string,
     logoPath: string,
+    categoryDir: string,
     iniPath: string,
     onProgress: (line: string) => void,
 ): Promise<ImportSummary> {
     const summary: ImportSummary = {
         gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0,
-        flyersWritten: 0, logosWritten: 0, favoritesReplaced: false, categoriesCreated: [], warnings: [], errors: [],
+        flyersWritten: 0, logosWritten: 0, favoritesReplaced: false, genreIniReplaced: false,
+        nplayersIniReplaced: false, categoriesCreated: [], warnings: [], errors: [],
     };
     const categoryIds = new Map<string, number>();
+
+    // genre.ini/Multiplayer.ini first, before touching the database at all: on a genuinely
+    // fresh install (no sqlite file yet, e.g. importing a pack before ever launching the
+    // Electron app), sequelize.sync() below is what creates the category/game tables in the
+    // first place - and Database.install() (the app's own first-run path, see Database.class.ts)
+    // now refuses to run without these two files present, so the pack importing them is the
+    // only way they ever get there on such an install.
+    const genreEntry = zip.getEntry('genre.ini');
+    if (genreEntry) {
+        writeFileSync(join(categoryDir, 'genre.ini'), zip.readAsText(genreEntry), 'utf8');
+        summary.genreIniReplaced = true;
+    } else {
+        summary.warnings.push('genre.ini absent du ZIP (pack invalide ou obsolète) - catégories inchangées.');
+    }
+
+    const nplayersEntry = zip.getEntry('Multiplayer.ini');
+    if (nplayersEntry) {
+        writeFileSync(join(categoryDir, 'Multiplayer.ini'), zip.readAsText(nplayersEntry), 'utf8');
+        summary.nplayersIniReplaced = true;
+    } else {
+        summary.warnings.push(
+            'Multiplayer.ini absent du ZIP (pack invalide ou obsolète) - nombre de joueurs inchangé.',
+        );
+    }
+
+    // Creates the category/game/user/hiscore tables if this is a fresh sqlite file with none
+    // yet (no-op otherwise - sync() without force/alter never touches existing tables/data).
+    // Category.sequelize is the single connection createSequelize() registered at BO startup.
+    await Category.sequelize!.sync();
 
     for (const biosName of manifest.biosRoms) {
         const entry = zip.getEntry(`roms/${biosName}.zip`);
@@ -1087,7 +1156,6 @@ function renderPageHead(active: Tab = 'mame'): string {
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Users</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
-            <a href="/import" class="${active === 'import' ? 'active' : ''}">Import</a>
             <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
         </nav>
     </header>
@@ -1184,6 +1252,20 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                         ? escapeHtml(mameInfo.favoritesPath)
                         : '<em>Aucun favori pour l\'instant — ajoutez-en depuis le menu de MAME (Tab en jeu).</em>'}</dd>
                 </div>
+                <div class="info-field">
+                    <dt>Fichier des genres (genre.ini, categorypath)</dt>
+                    <dd>${mameInfo.genreIniPath
+                        ? escapeHtml(mameInfo.genreIniPath)
+                        : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
+                            + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
+                </div>
+                <div class="info-field">
+                    <dt>Fichier du nombre de joueurs (Multiplayer.ini, categorypath)</dt>
+                    <dd>${mameInfo.nplayersIniPath
+                        ? escapeHtml(mameInfo.nplayersIniPath)
+                        : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
+                            + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
+                </div>
             </dl>
             <form method="post" action="/mame-options/save">
                 <label for="pluginsPath">Dossier des plugins MAME (pluginspath)</label>
@@ -1247,10 +1329,15 @@ function renderForm(
     error?: string,
     info?: string,
     mameInfoMessage?: string,
+    importError?: string,
 ): string {
     return renderPage(
         renderConfigCard(values, error, info)
-        + renderMameInfoCard(mameInfo, mameInfoMessage),
+        + renderMameInfoCard(mameInfo, mameInfoMessage)
+        // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
+        // counts, all resolved from this same MAME install) - kept on this tab instead of its
+        // own, next to the MAME info it depends on and updates.
+        + renderImportCard(importError),
         'mame',
     );
 }
@@ -1448,6 +1535,8 @@ function renderImportSummary(summary: ImportSummary): string {
         `${summary.flyersWritten} flyer(s)`,
         `${summary.logosWritten} logo(s)`,
         summary.favoritesReplaced ? 'favoris remplacés' : 'favoris inchangés',
+        summary.genreIniReplaced ? 'genre.ini remplacé' : 'genre.ini inchangé',
+        summary.nplayersIniReplaced ? 'Multiplayer.ini remplacé' : 'Multiplayer.ini inchangé',
         `${summary.errors.length} erreur(s)`,
     ];
     const categoriesHtml = summary.categoriesCreated.length
@@ -1462,10 +1551,6 @@ function renderImportSummary(summary: ImportSummary): string {
         ${categoriesHtml}
         ${issuesHtml}
     `;
-}
-
-function renderImportPage(error?: string): string {
-    return renderPage(renderImportCard(error), 'import');
 }
 
 function renderUserStatusBadge(active: boolean): string {
@@ -1661,7 +1746,36 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.get('/favorites', (req, res) => {
         const config = new Config();
         config.load();
-        res.send(renderFavoritesPage(getFavoritesInfo(config), hasScreenScraperCredentials(config)));
+        const context = getFavoritesContext(config);
+
+        if ('error' in context) {
+            res.send(renderFavoritesPage({rows: [], error: context.error}, hasScreenScraperCredentials(config)));
+            return;
+        }
+
+        // Stream the page as favorites are resolved instead of blocking on the whole list: each
+        // one is a blocking `mame -lx` process spawn (see resolveFavoriteRow()), so with enough
+        // favorites the unstreamed version could take a long time to send anything at all -
+        // same fix already applied to /favorites/download-media below.
+        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+        res.socket?.setNoDelay(true);
+        res.write(renderPageHead('favorites'));
+        res.write(`
+            <section class="card">
+                <h2>Chargement des favoris (${context.romNames.length})…</h2>
+                <ul class="progress-log">
+        `);
+
+        const rows: FavoriteRow[] = context.romNames.map((romName) => {
+            const row = resolveFavoriteRow(context, romName);
+            res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+            return row;
+        });
+
+        res.write('</ul></section>');
+        res.write(renderFavoritesCard({rows}, hasScreenScraperCredentials(config)));
+        res.write(renderPageTail());
+        res.end();
     });
 
     app.get('/users', async (req, res) => {
@@ -1765,18 +1879,23 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/favorites/download-media', async (req, res) => {
         const config = new Config();
         config.load();
+        const context = getFavoritesContext(config);
 
-        if (!hasScreenScraperCredentials(config)) {
-            res.send(renderFavoritesPage(getFavoritesInfo(config), false));
+        if ('error' in context) {
+            res.send(renderFavoritesPage({rows: [], error: context.error}, hasScreenScraperCredentials(config)));
             return;
         }
 
-        const iniPath = getMameHomePath();
-        const {marqueePath, flyerPath, logoPath} = getMameLocations(iniPath);
-        const favoritesInfo = getFavoritesInfo(config);
+        const rows = context.romNames.map(romName => resolveFavoriteRow(context, romName));
 
-        if (favoritesInfo.error || !marqueePath || !flyerPath || !logoPath) {
-            res.send(renderFavoritesPage(favoritesInfo, true));
+        if (!hasScreenScraperCredentials(config)) {
+            res.send(renderFavoritesPage({rows}, false));
+            return;
+        }
+
+        const {marqueePath, flyerPath, logoPath} = context;
+        if (!marqueePath || !flyerPath || !logoPath) {
+            res.send(renderFavoritesPage({rows}, true));
             return;
         }
 
@@ -1806,7 +1925,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 marqueePath,
                 flyerPath,
                 logoPath,
-                favoritesInfo.rows,
+                rows,
                 line => res.write(`<li>${escapeHtml(line)}</li>`),
             );
 
@@ -1824,16 +1943,19 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    // Starting packs are MAME-only content, imported from the MAME tab (see renderForm()) -
+    // kept as a redirect rather than a 404 for anyone with the old standalone page bookmarked.
     app.get('/import', (req, res) => {
-        res.send(renderImportPage());
+        res.redirect('/');
     });
 
     app.post('/import', upload.single('pack'), async (req, res) => {
         const config = new Config();
         config.load();
+        const values: ConfigFormValues = {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)};
 
         if (!req.file) {
-            res.status(400).send(renderImportPage('Aucun fichier reçu.'));
+            res.status(400).send(renderForm(values, getMameInfo(config), undefined, undefined, undefined, 'Aucun fichier reçu.'));
             return;
         }
 
@@ -1851,28 +1973,31 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }
         } catch (error) {
             const message = error instanceof Error ? error.message : 'erreur inattendue';
-            res.status(422).send(renderImportPage(`ZIP invalide : ${message}`));
+            res.status(422).send(renderForm(
+                values, getMameInfo(config), undefined, undefined, undefined, `ZIP invalide : ${message}`,
+            ));
             return;
         }
 
         const iniPath = getMameHomePath();
-        const {marqueePath, flyerPath, logoPath} = getMameLocations(iniPath);
+        const {marqueePath, flyerPath, logoPath, categoryDir} = getMameLocations(iniPath);
         const mameInfo = getMameInfo(config);
-        if (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath) {
-            res.status(422).send(renderImportPage(
-                'Configuration MAME incomplète - configurez MAME (onglet MAME) avant d\'importer.',
+        if (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath || !categoryDir) {
+            res.status(422).send(renderForm(
+                values, mameInfo, undefined, undefined, undefined,
+                'Configuration MAME incomplète - configurez MAME ci-dessus avant d\'importer.',
             ));
             return;
         }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('import'));
+        res.write(renderPageHead('mame'));
         res.write('<section class="card"><h2>Import en cours…</h2><ul class="progress-log">');
 
         try {
             const summary = await importStartingPack(
-                zip, manifest, mameInfo.romPath, marqueePath, flyerPath, logoPath, iniPath,
+                zip, manifest, mameInfo.romPath, marqueePath, flyerPath, logoPath, categoryDir, iniPath,
                 line => res.write(`<li>${escapeHtml(line)}</li>`),
             );
             res.write('</ul></section>');
@@ -1884,7 +2009,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }</p>`);
         }
 
-        res.write('<p><a class="button-link" href="/import">Retour</a></p>');
+        // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
+        // above reflect what the import just installed, instead of a "Retour" link to a
+        // separate page.
+        res.write(renderConfigCard(values));
+        res.write(renderMameInfoCard(getMameInfo(config)));
+        res.write(renderImportCard());
         res.write(renderPageTail());
         res.end();
     });

@@ -11,12 +11,12 @@
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
                 <h1>{{selectedGame.shortname}}</h1>
-                <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
+                <p>({{selectedGame.year}}<template v-if="hasPlayerInfo">, {{selectedGame.players}}</template>)</p>
             </div>
         </transition>
 
         <transition name="category">
-            <div class="categoryTitle" v-show="showTitle">
+            <div class="categoryTitle" v-if="hasCategories" v-show="showTitle">
                 <h1>{{category.name}}</h1>
             </div>
         </transition>
@@ -31,7 +31,7 @@
             </div>
         </transition>
 
-        <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
+        <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
@@ -76,6 +76,7 @@
 
         protected categories: Category[] = [];
         protected selectedCategoryIndex: number = 0;
+        protected hasPlayerInfo: boolean = false;
 
         protected timeouts: {
             quit?: number,
@@ -114,6 +115,7 @@
             this.gameService = this.$store.getters.gameService;
             this.categories = await this.gameService.loadCategories();
             this.games = await this.gameService.loadGames();
+            this.hasPlayerInfo = !!mameService.nplayersIniPath;
 
             Gamepads.init();
             this.registerKeyMapping();
@@ -143,10 +145,14 @@
                     this.onGameChange(false);
                     break;
                 case 'ArrowLeft':
-                    this.onCategoryChange(true);
+                    if (this.hasCategories) {
+                        this.onCategoryChange(true);
+                    }
                     break;
                 case 'ArrowRight':
-                    this.onCategoryChange(false);
+                    if (this.hasCategories) {
+                        this.onCategoryChange(false);
+                    }
                     break;
                 case 'Space':
                     this.showHiscores = !this.showHiscores;
@@ -274,6 +280,10 @@
                 return this.categories[this.selectedCategoryIndex - 1];
             }
             return {name: 'All Games'};
+        }
+
+        protected get hasCategories(): boolean {
+            return this.categories.length > 0;
         }
     }
 </script>

@@ -13,7 +13,7 @@ export interface StartingPackGameEntry {
     manufacturer: string | null;
     year: string | null;
     // Resolved by category NAME, never by Category.id_category: that numeric id depends on
-    // genre_206.ini's key order at seed time and isn't guaranteed portable across installs.
+    // genre.ini's key order at seed time and isn't guaranteed portable across installs.
     categoryName: string | null;
     player_alt: number;
     player_sim: number;

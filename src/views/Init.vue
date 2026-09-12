@@ -1,5 +1,7 @@
 <template>
-    <div></div>
+    <div>
+        <p v-if="error" class="error">{{ error }}</p>
+    </div>
 </template>
 
 <script lang="ts">
@@ -11,7 +13,7 @@
 
     @Component
     export default class Init extends Vue {
-        protected msg: string = 'Chargement';
+        protected error: string | null = null;
 
         public created() {
             remote.getCurrentWindow().setResizable(true);
@@ -36,23 +38,36 @@
             const userService = this.$store.getters.userService;
             const hiService = this.$store.getters.hiscoreService;
 
-            if (!database.exist()) {
-                // Create and fill database file if not existing
-                await database.install(gameService);
-            } else {
-                await database.update();
+            try {
+                if (!database.exist()) {
+                    // Create database file if not existing
+                    await database.install();
+                } else {
+                    await database.update();
+                }
+
+                // (Re)seed categories from genre.ini before syncing games below: it may have
+                // been added (or replaced) after the database already existed, and games are
+                // synced with an id_category that must already exist in this table (see
+                // Database.syncCategories()'s own comment).
+                await database.syncCategories(gameService);
+
+                // Save new games
+                const romList = mameService.getRomListFromFavorites();
+                await gameService.saveGamesFromRomNames(romList);
+
+                await userService.loadUsers();
+                hiService.saveHiscores(await gameService.loadGames()).then(() => {
+                    EventBus.$emit('hiscores-loaded');
+                });
+
+                this.$router.push({name: 'home'});
+            } catch (error) {
+                // e.g. Database.install() refusing to run because genre.ini hasn't been
+                // installed yet by a starting pack import - stay on this screen with the
+                // message instead of silently hanging on a blank splash.
+                this.error = error instanceof Error ? error.message : 'Erreur inattendue au démarrage.';
             }
-
-            // Save new games
-            const romList = mameService.getRomListFromFavorites();
-            await gameService.saveGamesFromRomNames(romList);
-
-            await userService.loadUsers();
-            hiService.saveHiscores(await gameService.loadGames()).then(() => {
-                EventBus.$emit('hiscores-loaded');
-            });
-
-            this.$router.push({name: 'home'});
         }
     }
 </script>
@@ -67,5 +82,12 @@
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
+    }
+    .error {
+        margin: 0;
+        padding: 24px 16px;
+        color: #ff6b6b;
+        font-family: sans-serif;
+        text-align: center;
     }
 </style>

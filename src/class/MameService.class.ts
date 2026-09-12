@@ -156,6 +156,35 @@ export default class MameService {
     }
 
     /**
+     * Path to genre.ini inside ui.ini's categorypath directory - the game categorization
+     * dataset matching the installed mame version. Optional, like marquees/flyers/logos: null
+     * until a starting pack import installs it (see boServer.ts's importStartingPack()); callers
+     * (GameService.getGameCategories()) treat a missing file as "no categories" rather than
+     * failing, which is how the UI falls back to a flat game list (see Home.vue).
+     */
+    public get genreIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'genre.ini',
+        );
+    }
+
+    /**
+     * Path to Multiplayer.ini inside ui.ini's categorypath directory - the game player-count
+     * dataset matching the installed mame version. Optional, same as genreIniPath: null until a
+     * starting pack import installs it; Home.vue hides the player-count display entirely when
+     * this is null, instead of showing a default value as if it were known.
+     */
+    public get nplayersIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'Multiplayer.ini',
+        );
+    }
+
+    /**
      * Start game on mame
      * @param romName
      */
