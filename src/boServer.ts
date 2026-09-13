@@ -522,6 +522,23 @@ function extractXmlAttribute(xml: string, tagName: string, attributeName: string
     return attrMatch ? attrMatch[1] : null;
 }
 
+/**
+ * `.zip` filenames (extension stripped) directly inside romPath, sorted for a stable <select>
+ * order. Deliberately readdirSync, not Game.findAll(): renderForm()/its call sites are all
+ * synchronous, and the input-probe dropdown (see renderInputProbeCard()) only needs romName, not
+ * Game's fullname.
+ */
+function listRomNames(romPath: string): string[] {
+    try {
+        return readdirSync(romPath)
+            .filter(name => name.toLowerCase().endsWith('.zip'))
+            .map(name => name.slice(0, -4))
+            .sort((a, b) => a.localeCompare(b));
+    } catch {
+        return [];
+    }
+}
+
 interface GameXmlInfo {
     description: string | null;
     // The name of the separate BIOS set this game needs (mame -lx's `romof` attribute on
@@ -1074,7 +1091,7 @@ function renderPageHead(active: Tab = 'mame'): string {
             display: block;
             margin-top: 16px;
         }
-        input {
+        input, select {
             width: 100%;
             box-sizing: border-box;
             padding: 8px;
@@ -1475,6 +1492,200 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
     `;
 }
 
+interface InputProbeRow {
+    player: 1 | 2;
+    // MAME's own display name for the field, e.g. "P1 Up" / "P2 Button 3" - see
+    // public/lua/input-probe.lua's is_wanted_field().
+    fieldName: string;
+    defaultText: string;
+    currentText: string;
+}
+
+interface InputProbeState {
+    selectedRom?: string;
+    result?: InputProbeRow[];
+    error?: string;
+}
+
+/**
+ * Maps MAME's own field display name (e.g. "P1 Up", "P2 Button 3") to a French label, stripping
+ * the "P<n> " prefix. Falls back to the raw suffix for anything unexpected instead of throwing -
+ * defensive only, input-probe.lua's own filter should never let anything else through.
+ */
+function labelForProbeFieldName(fieldName: string): string {
+    const suffix = fieldName.replace(/^P[12] /, '');
+    const directions: { [key: string]: string } = {Up: 'Haut', Down: 'Bas', Left: 'Gauche', Right: 'Droite'};
+    if (directions[suffix]) {
+        return directions[suffix];
+    }
+    const buttonMatch = /^Button (\d+)$/.exec(suffix);
+    return buttonMatch ? `Bouton ${buttonMatch[1]}` : suffix;
+}
+
+/**
+ * Line-based parse of input-probe.lua's stdout, captured amid MAME's normal boot chatter (menu
+ * hints, warnings, etc. on other lines - anything not starting with the marker is ignored).
+ * Format, one line per wanted field: MAUI_INPUT_ROW|<field name>|<default text>|<current text>
+ * e.g. "MAUI_INPUT_ROW|P1 Up|KEYCODE_UP|KEYCODE_UP or Joy1 Up". seq_name() never emits "|", so a
+ * plain split is safe. Row order isn't guaranteed here (mirrors the Lua script's own pairs()
+ * iteration) - renderInputProbeCard() sorts by player then a fixed direction/button order.
+ */
+function parseInputProbeOutput(stdout: string): InputProbeRow[] {
+    const rows: InputProbeRow[] = [];
+    for (const line of stdout.split('\n')) {
+        if (!line.startsWith('MAUI_INPUT_ROW|')) {
+            continue;
+        }
+        const [, fieldName, defaultText, currentText] = line.split('|');
+        const playerMatch = /^P([12]) /.exec(fieldName || '');
+        if (!playerMatch) {
+            continue;
+        }
+        rows.push({
+            player: Number(playerMatch[1]) as 1 | 2,
+            fieldName,
+            defaultText: defaultText ?? '',
+            currentText: currentText ?? '',
+        });
+    }
+    return rows;
+}
+
+/**
+ * Boots `romName` headlessly just long enough for input-probe.lua to dump P1/P2's default vs.
+ * current input sequences and exit the machine, then parses the captured stdout. -skip_gameinfo
+ * avoids an extra keypress-wait; -video none/-sound none skip creating a window or touching the
+ * audio device entirely (no emulation beyond machine start is meant to be seen or heard). timeout
+ * is a hard backstop in case a driver never reaches "running" (bad rom, missing BIOS) - the Lua
+ * script's own machine:exit() should fire in well under a second normally. killSignal SIGKILL
+ * (not the default SIGTERM) because a hung mame process can ignore SIGTERM under some video
+ * backends. maxBuffer covers MAME's boot-time stdout chatter, which stays well under a few KB per
+ * run in practice.
+ */
+function runInputProbe(mameBinary: string, iniPath: string, romName: string): InputProbeRow[] {
+    const stdout = execFileSync(
+        mameBinary,
+        [
+            romName,
+            '-video', 'none',
+            '-sound', 'none',
+            '-skip_gameinfo',
+            '-autoboot_delay', '0',
+            '-autoboot_script', join(__static, 'lua', 'input-probe.lua'),
+            '-inipath', iniPath,
+            '-homepath', iniPath,
+        ],
+        {
+            cwd: iniPath,
+            encoding: 'utf8',
+            timeout: 15000,
+            killSignal: 'SIGKILL',
+            maxBuffer: 4 * 1024 * 1024,
+        },
+    );
+    return parseInputProbeOutput(stdout);
+}
+
+/**
+ * On-demand MAME Lua probe for P1/P2 controller bindings: an admin picks a rom, mame boots it
+ * headlessly with input-probe.lua (-autoboot_script), and this renders what that script printed -
+ * MAME's own hardcoded default *and* its current effective (merged, post-cfg-override) value for
+ * each field, side by side. Unlike a static default.cfg viewer, this reflects per-game
+ * <romname>.cfg overrides too, because that's exactly what MAME itself just resolved while
+ * booting that rom - see input-probe.lua and runInputProbe() above.
+ */
+function renderInputProbeCard(romNames: string[], state?: InputProbeState): string {
+    if (!romNames.length) {
+        return `
+            <section class="card">
+                <h2>Touches et manettes (sondage MAME)</h2>
+                <p class="info">Aucune rom trouvée dans le dossier des roms - importez un starting
+                pack ou déposez au moins un fichier .zip dans ce dossier pour pouvoir sonder une
+                configuration d'entrées.</p>
+            </section>
+        `;
+    }
+
+    const options = romNames.map(romName => `
+        <option value="${escapeHtml(romName)}" ${state?.selectedRom === romName ? 'selected' : ''}>
+            ${escapeHtml(romName)}
+        </option>
+    `).join('');
+
+    const renderPlayerTable = (player: 1 | 2): string => {
+        const directionOrder = ['Up', 'Down', 'Left', 'Right'];
+        const rank = (fieldName: string): [number, number] => {
+            const suffix = fieldName.replace(/^P[12] /, '');
+            const directionIndex = directionOrder.indexOf(suffix);
+            if (directionIndex !== -1) {
+                return [0, directionIndex];
+            }
+            const buttonMatch = /^Button (\d+)$/.exec(suffix);
+            if (buttonMatch) {
+                return [1, Number(buttonMatch[1])];
+            }
+            if (suffix === 'Start') {
+                return [2, 0];
+            }
+            if (suffix === 'Coin') {
+                return [3, 0];
+            }
+            return [4, 0];
+        };
+        const rows = (state?.result ?? [])
+            .filter(row => row.player === player)
+            .sort((a, b) => {
+                const [groupA, orderA] = rank(a.fieldName);
+                const [groupB, orderB] = rank(b.fieldName);
+                return groupA - groupB || orderA - orderB;
+            })
+            .map((row) => {
+                const overridden = row.currentText !== row.defaultText;
+                const currentCell = overridden
+                    ? `<strong>${escapeHtml(row.currentText)}</strong>`
+                    : escapeHtml(row.currentText);
+                return `
+                    <tr>
+                        <td>${escapeHtml(labelForProbeFieldName(row.fieldName))}</td>
+                        <td>${escapeHtml(row.defaultText)}</td>
+                        <td>${currentCell}</td>
+                    </tr>
+                `;
+            }).join('');
+        return `
+            <h3>Joueur ${player}</h3>
+            ${rows ? `
+                <div class="table-wrap">
+                    <table class="favorites-table">
+                        <thead><tr><th>Commande</th><th>Défaut</th><th>Actuel</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            ` : '<p class="info">Aucune association trouvée pour ce joueur.</p>'}
+        `;
+    };
+
+    return `
+        <section class="card">
+            <h2>Touches et manettes (sondage MAME)</h2>
+            <p class="info">Lance la rom sélectionnée en arrière-plan (sans vidéo ni son) pour
+            demander à MAME lui-même sa configuration d'entrées P1/P2 (stick directionnel,
+            boutons, start et coin) - <strong>Défaut</strong> est la valeur d'origine de MAME,
+            <strong>Actuel</strong> est la valeur effective une fois les réglages globaux et
+            propres à ce jeu appliqués (en <strong>gras</strong> quand elle diffère du défaut).
+            <code>KEYCODE_*</code> = touche clavier, <code>JOYCODE_&lt;n&gt;_*</code> = manette
+            n° n ; plusieurs associations peuvent être combinées avec OR/AND/NOT.</p>
+            ${state?.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
+            <form method="post" action="/input-probe">
+                <label for="probeRomName">Rom</label>
+                <select id="probeRomName" name="romName">${options}</select>
+                <button type="submit">Sonder</button>
+            </form>
+            ${state?.result ? `${renderPlayerTable(1)}${renderPlayerTable(2)}` : ''}
+        </section>
+    `;
+}
+
 /**
  * Danger zone for mame-awesome-ui's own data (config file, database - see Config.class.ts /
  * Database.class.ts). Rendered on the "maui" tab. See renderMameDangerZoneCard() above for the
@@ -1520,6 +1731,7 @@ function renderForm(
     mameInfoMessage?: string,
     importError?: string,
     dangerZoneInfo?: string,
+    inputProbeState?: InputProbeState,
 ): string {
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
@@ -1532,7 +1744,8 @@ function renderForm(
             // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
             // counts, all resolved from this same MAME install) - kept on this tab instead of
             // its own, next to the MAME info it depends on and updates.
-            renderImportCard(importError)
+            renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
+            + renderImportCard(importError)
             + renderMameDangerZoneCard(mameInfo, dangerZoneInfo)
         )),
         'mame',
@@ -2644,6 +2857,55 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 ? `${added} plugin(s) ajouté(s) à plugin.ini (valeurs par défaut de mame).`
                 : 'Rien à réparer : plugin.ini contient déjà tous les plugins détectés (ou aucun plugin trouvé - vérifiez le dossier des plugins ci-dessus).',
         ));
+    });
+
+    app.post('/input-probe', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+
+        const romName: string = (req.body.romName || '').trim();
+
+        if (mameInfo.error) {
+            // Shouldn't normally be reachable (renderForm() only renders the probe card once
+            // mameInfo.error is unset), but the config could have changed underneath a stale
+            // form submission (e.g. mamePath cleared in another tab/request).
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo,
+            ));
+            return;
+        }
+
+        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+        if (!romName || !romNames.includes(romName)) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+                undefined, undefined, undefined, undefined, undefined,
+                {selectedRom: romName, error: 'Rom invalide ou introuvable dans le dossier des roms.'},
+            ));
+            return;
+        }
+
+        try {
+            const result = runInputProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+            res.send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+                undefined, undefined, undefined, undefined, undefined,
+                {selectedRom: romName, result},
+            ));
+        } catch (error) {
+            console.error(`[boServer] Input probe failed for "${romName}":`, error);
+            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            res.status(500).send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+                undefined, undefined, undefined, undefined, undefined,
+                {
+                    selectedRom: romName,
+                    error: `Échec du sondage de "${romName}" : ${message}`
+                        + ' (timeout, code de sortie non nul, ou binaire introuvable).',
+                },
+            ));
+        }
     });
 
     app.post('/reset', (req, res) => {
