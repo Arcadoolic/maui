@@ -52,6 +52,16 @@ There is no test suite in this repo.
 
 **Dev vs. production paths differ throughout**, gated on `process.env.NODE_ENV === 'development'`: config JSON, the SQLite file, and migrations resolve to the project root/`./migrations` in dev vs. `remote.app.getPath('userData')`/`process.resourcesPath` in production; `Home.vue` only forces `setFullScreen(true)` outside development. When changing path or window logic, check both branches.
 
+## Git workflow
+
+`refacto-2026` is the main branch for all ongoing work right now, not `develop` (the repo's
+nominal default branch). Concretely:
+- Never commit directly to `refacto-2026`. Every change goes on its own dedicated branch cut from
+  `refacto-2026`.
+- Every PR targets `refacto-2026` as its base branch.
+- Never open a PR into `develop`, and never merge anything into `develop`, unless explicitly asked
+  to do that specific thing in that moment.
+
 ## Style
 
 - Linting is **eslint** (flat config, `eslint.config.js`): `@eslint/js` + `typescript-eslint` + `eslint-plugin-vue` (`vue2-essential`) + `@stylistic` for formatting. 4-space indent, single quotes, fields-before-methods member ordering. Every rule reports at `warn` severity (ported from tslint's `defaultSeverity`), so `npm run lint` never fails the build.
