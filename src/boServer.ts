@@ -1280,7 +1280,7 @@ function renderPageHead(active: Tab = 'mame'): string {
         <nav class="tabs">
             <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
-            <a href="/users" class="${active === 'users' ? 'active' : ''}">Users</a>
+            <a href="/users" class="${active === 'users' ? 'active' : ''}">Players</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
             <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
         </nav>
@@ -1704,7 +1704,7 @@ function renderMauiDangerZoneCard(info?: string): string {
             <form method="post" action="/reset" onsubmit="
                 var items = [];
                 if (this.deleteConfig.checked) items.push('la configuration de mame-awesome-ui');
-                if (this.deleteDatabase.checked) items.push('la base de donnees (jeux, utilisateurs, scores)');
+                if (this.deleteDatabase.checked) items.push('la base de donnees (jeux, joueurs, scores)');
                 if (!items.length) { return true; }
                 return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
             ">
@@ -1715,7 +1715,7 @@ function renderMauiDangerZoneCard(info?: string): string {
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteDatabase">
-                    Supprimer la base de données (jeux, utilisateurs, scores)
+                    Supprimer la base de données (jeux, joueurs, scores)
                 </label>
                 <button type="submit">Supprimer la sélection</button>
             </form>
@@ -1777,7 +1777,7 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
         <section class="card">
             <h2>Import / export mame-awesome-ui</h2>
             <p class="info">Sauvegarde ou restaure la configuration
-            (mame-awesome-ui-config.json) et/ou la base de données (jeux, utilisateurs, scores)
+            (mame-awesome-ui-config.json) et/ou la base de données (jeux, joueurs, scores)
             de mame-awesome-ui - pas les roms ni les données de mame lui-même.</p>
             ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
@@ -1967,7 +1967,7 @@ function renderImportCard(error?: string): string {
         <section class="card">
             <h2>Importer un starting pack</h2>
             <p class="info">Remplace intégralement les jeux/roms/artwork/favoris présents dans
-            le pack. Les autres jeux, utilisateurs et scores ne sont pas touchés.</p>
+            le pack. Les autres jeux, joueurs et scores ne sont pas touchés.</p>
             <p class="info">Un ZIP peut aussi ne contenir que des dossiers ${IMPORTABLE_MAME_DIRECTORIES
                 .map(d => escapeHtml(d.zipFolder)).join(', ')} (copiés tels quels dans la
             configuration mame courante) - dans ce cas, pas besoin de manifest.json.</p>
@@ -2021,7 +2021,7 @@ function renderUserStatusBadge(active: boolean): string {
 function renderCreateUserCard(): string {
     return `
         <section class="card">
-            <h2>Ajouter un utilisateur</h2>
+            <h2>Ajouter un joueur</h2>
             <form method="post" action="/users/create">
                 <label for="pseudo_3">Pseudo 3 lettres (requis, unique)</label>
                 <input type="text" id="pseudo_3" name="pseudo_3" maxlength="3" required>
@@ -2075,7 +2075,7 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
 
     return `
         <section class="card">
-            <h2>Utilisateurs (${users.length})</h2>
+            <h2>Joueurs (${users.length})</h2>
             ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
             <div class="table-wrap">
@@ -2090,7 +2090,7 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows || '<tr><td colspan="6"><em>Aucun utilisateur</em></td></tr>'}</tbody>
+                    <tbody>${rows || '<tr><td colspan="6"><em>Aucun joueur</em></td></tr>'}</tbody>
                 </table>
             </div>
         </section>
@@ -2107,7 +2107,7 @@ function renderUsersPage(users: User[], avatarFilenames: string[], error?: strin
  */
 function describeUserError(error: unknown): string {
     if (error instanceof UniqueConstraintError) {
-        return 'Un utilisateur avec ce pseudo existe déjà.';
+        return 'Un joueur avec ce pseudo existe déjà.';
     }
     if (error instanceof ValidationError) {
         return error.errors.map(e => e.message).join(' ');
@@ -2246,7 +2246,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             res.send(renderUsersPage(users, avatarFilenames));
         } catch {
             res.send(renderUsersPage([], avatarFilenames, 'Base de données introuvable ou pas encore initialisée - '
-                + 'lancez l\'application une première fois avant de gérer les utilisateurs.'));
+                + 'lancez l\'application une première fois avant de gérer les joueurs.'));
         }
     });
 
@@ -2265,7 +2265,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 active,
             } as User);
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users, avatarFilenames, undefined, `Utilisateur "${pseudo3}" créé.`));
+            res.send(renderUsersPage(users, avatarFilenames, undefined, `Joueur "${pseudo3}" créé.`));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
             res.status(422).send(renderUsersPage(users, avatarFilenames, describeUserError(error)));
@@ -2281,7 +2281,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(renderUsersPage(
             users, getAvatarFilenames(new Config()), undefined,
-            user ? `Utilisateur "${user.pseudo_3}" mis à jour.` : undefined,
+            user ? `Joueur "${user.pseudo_3}" mis à jour.` : undefined,
         ));
     });
 
@@ -2293,7 +2293,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(renderUsersPage(
             users, getAvatarFilenames(new Config()), undefined,
-            user ? `Utilisateur "${user.pseudo_3}" supprimé.` : undefined,
+            user ? `Joueur "${user.pseudo_3}" supprimé.` : undefined,
         ));
     });
 
@@ -2303,7 +2303,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
 
         if (!user) {
-            res.status(404).send(renderUsersPage(users, getAvatarFilenames(config), 'Utilisateur introuvable.'));
+            res.status(404).send(renderUsersPage(users, getAvatarFilenames(config), 'Joueur introuvable.'));
             return;
         }
         if (!req.file) {

@@ -1,8 +1,8 @@
 <template>
     <modal>
-        <div class="user-registration-success" v-if="success">User created</div>
+        <div class="user-registration-success" v-if="success">Player created</div>
         <div class="user-registration" v-else>
-            <p>Please select a username. It will be used to extract and display your hiscores.</p>
+            <p>Please select a player name. It will be used to extract and display your hiscores.</p>
             <div class="letters">
                 <div class="first-letter" :class="{selected: selectedLetter === 0}">
                     <span>{{username[0]}}</span>
@@ -14,7 +14,7 @@
                     <span>{{username[2]}}</span>
                 </div>
             </div>
-            <div class="error" v-if="error">Username already used</div>
+            <div class="error" v-if="error">Player name already used</div>
             <div class="validate">
                 Press
                 <span class="arcadeButton">
