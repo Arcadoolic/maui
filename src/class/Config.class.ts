@@ -40,6 +40,10 @@ export default class Config {
     public ssUserId: string = '';
     public ssUserPassword: string = '';
 
+    // Preferred bezel aspect ratio when fetching bezel artwork from ScreenScraper - 16:9 default
+    // since new cabinet builds mostly use widescreen LCD monitors rather than 4:3 CRTs.
+    public bezelAspect: '4:3' | '16:9' = '16:9';
+
     // Whether to auto-open Chromium DevTools on startup, in dev mode (electron:serve). Defaults
     // to false - opt in explicitly, either via the BO config form or by editing the config file.
     public openDevTools: boolean = false;
@@ -73,6 +77,8 @@ export default class Config {
             this.ssUserId = configFile.ssUserId || '';
             this.ssUserPassword = configFile.ssUserPassword || '';
 
+            this.bezelAspect = configFile.bezelAspect === '4:3' ? '4:3' : '16:9';
+
             this.openDevTools = configFile.openDevTools === true;
             this.fullscreen = configFile.fullscreen !== false;
 
@@ -93,6 +99,7 @@ export default class Config {
                 ssSoftName: this.ssSoftName,
                 ssUserId: this.ssUserId,
                 ssUserPassword: this.ssUserPassword,
+                bezelAspect: this.bezelAspect,
                 openDevTools: this.openDevTools,
                 fullscreen: this.fullscreen,
             }),

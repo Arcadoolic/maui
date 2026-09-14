@@ -37,6 +37,7 @@ interface ScreenScraperValues {
     ssSoftName: string;
     ssUserId: string;
     ssUserPassword: string;
+    bezelAspect: '4:3' | '16:9';
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -126,6 +127,50 @@ function getDatabasePath(): string {
         mkdirSync(appDataPath, {recursive: true});
     }
     return join(appDataPath, 'mame-awesome-ui.sqlite');
+}
+
+/**
+ * Same fixed <home>/.mame-awesome-ui path as getDatabasePath(), for the favorites name/BIOS
+ * cache (see FavoritesCache below) - resolving a favorite's fullname/BIOS is a blocking `mame
+ * -lx` process spawn per rom (see getGameXmlInfo()), so the favorites tab reads this cache
+ * instead of re-running it on every page load; only "Mettre à jour les favoris" re-resolves and
+ * rewrites it.
+ */
+function getFavoritesCachePath(): string {
+    const appDataPath = join(os.homedir(), '.mame-awesome-ui');
+    if (!existsSync(appDataPath)) {
+        mkdirSync(appDataPath, {recursive: true});
+    }
+    return join(appDataPath, 'favorites-cache.json');
+}
+
+interface FavoritesCacheEntry {
+    fullname: string;
+    biosName: string | null;
+}
+
+interface FavoritesCache {
+    updatedAt: string;
+    entries: { [romName: string]: FavoritesCacheEntry };
+}
+
+function readFavoritesCache(): FavoritesCache | null {
+    const cachePath = getFavoritesCachePath();
+    if (!existsSync(cachePath)) {
+        return null;
+    }
+    try {
+        return JSON.parse(readFileSync(cachePath, 'utf8'));
+    } catch {
+        // Corrupt/unreadable cache file - treat as absent rather than failing the whole tab.
+        return null;
+    }
+}
+
+function writeFavoritesCache(entries: { [romName: string]: FavoritesCacheEntry }): FavoritesCache {
+    const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
+    writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
+    return cache;
 }
 
 /**
@@ -567,18 +612,29 @@ function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): G
     }
 }
 
-interface FavoriteRow {
-    romName: string;
-    fullname: string;
-    biosName: string | null;
+interface FavoriteMediaStatus {
     hasMarquee: boolean;
     hasFlyer: boolean;
     hasLogo: boolean;
 }
 
+interface FavoriteRow extends FavoriteMediaStatus {
+    romName: string;
+    fullname: string;
+    biosName: string | null;
+    // False when this rom has no entry in the favorites cache yet (added since the last "Mettre
+    // à jour les favoris") - fullname then just falls back to romName and biosName to null,
+    // rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
+    cached: boolean;
+}
+
 interface FavoritesInfo {
     rows: FavoriteRow[];
     error?: string;
+    // ISO timestamp of the favorites cache this list's names/BIOS came from - null when the
+    // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
+    // always live, regardless of cache age - see getFavoriteMediaStatus().
+    cacheUpdatedAt?: string | null;
 }
 
 interface FavoritesContext {
@@ -620,20 +676,51 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
 }
 
 /**
+ * Cheap (fs-only, no `mame -lx`) marquee/flyer/logo presence check for one favorite - shared by
+ * both the cached favorites list and resolveFavoriteRow() below, so badges are always live even
+ * when the name/BIOS cache is stale.
+ */
+function getFavoriteMediaStatus(context: FavoritesContext, romName: string): FavoriteMediaStatus {
+    const {marqueePath, flyerPath, logoPath} = context;
+    return {
+        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
+        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
+        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+    };
+}
+
+/**
  * Resolves a single favorite's row - the slow part (a blocking `mame -lx` process spawn per
  * call, see getGameXmlInfo()) callers should interleave with res.write() progress so a long
- * favorites list streams in instead of blocking the whole response.
+ * favorites list streams in instead of blocking the whole response. Only used by "Mettre à jour
+ * les favoris" (POST /favorites/refresh) now - the normal favorites tab reads the cache this
+ * populates instead (see favoriteRowFromCache()).
  */
 function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
-    const {mameBinary, iniPath, marqueePath, flyerPath, logoPath} = context;
+    const {mameBinary, iniPath} = context;
     const {description, biosName} = getGameXmlInfo(mameBinary, iniPath, romName);
     return {
         romName,
         fullname: description || romName,
         biosName,
-        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
-        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
-        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+        cached: true,
+        ...getFavoriteMediaStatus(context, romName),
+    };
+}
+
+/**
+ * Same shape as resolveFavoriteRow(), but reads fullname/biosName from the favorites cache
+ * (no `mame -lx` call) - falls back to the bare romName/null when this rom isn't in the cache
+ * yet (cached: false), same as before any refresh has ever run.
+ */
+function favoriteRowFromCache(context: FavoritesContext, romName: string, cache: FavoritesCache | null): FavoriteRow {
+    const entry = cache?.entries[romName];
+    return {
+        romName,
+        fullname: entry?.fullname || romName,
+        biosName: entry?.biosName ?? null,
+        cached: !!entry,
+        ...getFavoriteMediaStatus(context, romName),
     };
 }
 
@@ -661,7 +748,7 @@ async function downloadMissingFavoriteMedia(
     marqueePath: string,
     flyerPath: string,
     logoPath: string,
-    rows: FavoriteRow[],
+    rows: ({romName: string} & FavoriteMediaStatus)[],
     onProgress: (line: string) => void = () => {},
 ): Promise<DownloadSummary> {
     const summary: DownloadSummary = {
@@ -1838,14 +1925,61 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
                 <input type="text" id="ssDevId" name="ssDevId" value="${escapeHtml(values.ssDevId)}" autocomplete="off">
                 <label for="ssDevPassword">Mot de passe développeur (devpassword)</label>
                 <input type="password" id="ssDevPassword" name="ssDevPassword" value="${escapeHtml(values.ssDevPassword)}" autocomplete="off">
+
+                <label for="bezelAspect">Format des bezels (aspect_ratio de l'écran cible)</label>
+                <select id="bezelAspect" name="bezelAspect">
+                    <option value="16:9" ${values.bezelAspect === '16:9' ? 'selected' : ''}>16:9 (écran large)</option>
+                    <option value="4:3" ${values.bezelAspect === '4:3' ? 'selected' : ''}>4:3 (écran classique)</option>
+                </select>
                 <button type="submit">Enregistrer</button>
             </form>
         </section>
     `;
 }
 
-function renderScreenScraperPage(values: ScreenScraperValues, error?: string, info?: string): string {
-    return renderPage(renderScreenScraperCard(values, error, info), 'screenscraper');
+/**
+ * Media-download trigger, moved here from the favorites tab (see renderFavoritesCard()) since
+ * it's a ScreenScraper action, not a favorites-list concern - the favorites table stays there,
+ * showing per-rom marquee/flyer/logo status, with a pointer back to this tab for the button.
+ */
+function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summary?: DownloadSummary): string {
+    if (!hasCreds) {
+        return `
+            <section class="card">
+                <h2>Récupération des médias</h2>
+                <p class="error">Identifiants ScreenScraper manquants : renseignez-les ci-dessus avant de
+                lancer un téléchargement.</p>
+            </section>
+        `;
+    }
+    return `
+        <section class="card">
+            <h2>Récupération des médias</h2>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${summary ? renderDownloadSummary(summary) : ''}
+            <form method="post" action="/favorites/download-media">
+                <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour tous
+                les favoris. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de favoris
+                (délai imposé entre chaque appel) - ne fermez pas cette page pendant le téléchargement.</p>
+                <button type="submit">Télécharger les visuels manquants</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderScreenScraperPage(
+    values: ScreenScraperValues,
+    hasCreds: boolean,
+    error?: string,
+    info?: string,
+    downloadError?: string,
+    summary?: DownloadSummary,
+): string {
+    return renderPage(
+        renderScreenScraperCard(values, error, info)
+        + renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
+        'screenscraper',
+    );
 }
 
 function renderFavoriteBadge(found: boolean): string {
@@ -1901,7 +2035,7 @@ function renderDownloadSummary(summary: DownloadSummary): string {
     `;
 }
 
-function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, summary?: DownloadSummary): string {
+function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     if (favoritesInfo.error) {
         return `
             <section class="card">
@@ -1914,30 +2048,30 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
     const rows = favoritesInfo.rows.map(row => `
         <tr>
             <td>${escapeHtml(row.romName)}</td>
-            <td>${renderGameName(row.fullname)}</td>
-            <td>${row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
+            <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
+            <td>${row.cached && row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
             <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
             <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
             <td class="center">${renderFavoriteBadge(row.hasLogo)}</td>
         </tr>
     `).join('');
 
-    const downloadSection = hasCreds
-        ? `
-            ${summary ? renderDownloadSummary(summary) : ''}
-            <form method="post" action="/favorites/download-media">
-                <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour les
-                favoris ci-dessous. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de
-                favoris (délai imposé entre chaque appel) - ne fermez pas cette page pendant le
-                téléchargement.</p>
-                <button type="submit">Télécharger les visuels manquants</button>
-            </form>
-        `
-        : '<p class="error">Identifiants ScreenScraper manquants : configurez-les dans l\'onglet ScreenScraper.</p>';
+    const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
+    const cacheStatus = favoritesInfo.cacheUpdatedAt
+        ? `Noms à jour au ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('fr-FR', {
+            dateStyle: 'short', timeStyle: 'short',
+        }))}.`
+        : 'Noms jamais mis à jour.';
 
     return `
         <section class="card">
             <h2>Favoris (${favoritesInfo.rows.length})</h2>
+            <p class="info">${cacheStatus}${unresolvedCount
+                ? ` ${unresolvedCount} favori(s) ajouté(s) depuis - pas encore résolu(s).`
+                : ''}</p>
+            <form method="post" action="/favorites/refresh">
+                <button type="submit">Mettre à jour les favoris</button>
+            </form>
             <div class="table-wrap">
                 <table class="favorites-table">
                     <thead>
@@ -1953,13 +2087,14 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
                     <tbody>${rows}</tbody>
                 </table>
             </div>
-            ${downloadSection}
+            <p class="info">Pour télécharger les visuels manquants (marquees, flyers, logos) depuis
+            ScreenScraper, utilisez le bouton de l'onglet <a href="/screenscraper">ScreenScraper</a>.</p>
         </section>
     `;
 }
 
-function renderFavoritesPage(favoritesInfo: FavoritesInfo, hasCreds: boolean, summary?: DownloadSummary): string {
-    return renderPage(renderFavoritesCard(favoritesInfo, hasCreds, summary), 'favorites');
+function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
+    return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
 }
 
 function renderImportCard(error?: string): string {
@@ -2201,7 +2336,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ssSoftName: config.ssSoftName,
             ssUserId: config.ssUserId,
             ssUserPassword: config.ssUserPassword,
-        }));
+            bezelAspect: config.bezelAspect,
+        }, hasScreenScraperCredentials(config)));
     });
 
     app.get('/favorites', (req, res) => {
@@ -2210,7 +2346,27 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const context = getFavoritesContext(config);
 
         if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}, hasScreenScraperCredentials(config)));
+            res.send(renderFavoritesPage({rows: [], error: context.error}));
+            return;
+        }
+
+        // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
+        // otherwise costs a blocking `mame -lx` process spawn - see resolveFavoriteRow()), so this
+        // tab loads instantly regardless of favorites count. Media badges stay live either way
+        // (getFavoriteMediaStatus() is a cheap fs check). See POST /favorites/refresh below for
+        // the button that re-resolves everything and rewrites the cache.
+        const cache = readFavoritesCache();
+        const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
+        res.send(renderFavoritesPage({rows, cacheUpdatedAt: cache?.updatedAt ?? null}));
+    });
+
+    app.post('/favorites/refresh', (req, res) => {
+        const config = new Config();
+        config.load();
+        const context = getFavoritesContext(config);
+
+        if ('error' in context) {
+            res.send(renderFavoritesPage({rows: [], error: context.error}));
             return;
         }
 
@@ -2223,18 +2379,21 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write(renderPageHead('favorites'));
         res.write(`
             <section class="card">
-                <h2>Chargement des favoris (${context.romNames.length})…</h2>
+                <h2>Mise à jour des favoris (${context.romNames.length})…</h2>
                 <ul class="progress-log">
         `);
 
+        const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
         const rows: FavoriteRow[] = context.romNames.map((romName) => {
             const row = resolveFavoriteRow(context, romName);
+            cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName};
             res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
             return row;
         });
+        const cache = writeFavoritesCache(cacheEntries);
 
         res.write('</ul></section>');
-        res.write(renderFavoritesCard({rows}, hasScreenScraperCredentials(config)));
+        res.write(renderFavoritesCard({rows, cacheUpdatedAt: cache.updatedAt}));
         res.write(renderPageTail());
         res.end();
     });
@@ -2340,23 +2499,38 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/favorites/download-media', async (req, res) => {
         const config = new Config();
         config.load();
+        const ssValues: ScreenScraperValues = {
+            ssDevId: config.ssDevId,
+            ssDevPassword: config.ssDevPassword,
+            ssSoftName: config.ssSoftName,
+            ssUserId: config.ssUserId,
+            ssUserPassword: config.ssUserPassword,
+            bezelAspect: config.bezelAspect,
+        };
+        const hasCreds = hasScreenScraperCredentials(config);
         const context = getFavoritesContext(config);
 
         if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}, hasScreenScraperCredentials(config)));
+            res.send(renderScreenScraperPage(ssValues, hasCreds, undefined, undefined, context.error));
             return;
         }
 
-        const rows = context.romNames.map(romName => resolveFavoriteRow(context, romName));
+        // Only romName + media status is needed here (see downloadMissingFavoriteMedia() below) -
+        // a cheap fs check, unlike resolveFavoriteRow()'s `mame -lx` spawn per rom, which this
+        // route has no use for (progress lines below only ever print row.romName).
+        const rows = context.romNames.map(romName => ({romName, ...getFavoriteMediaStatus(context, romName)}));
 
-        if (!hasScreenScraperCredentials(config)) {
-            res.send(renderFavoritesPage({rows}, false));
+        if (!hasCreds) {
+            res.send(renderScreenScraperPage(ssValues, false));
             return;
         }
 
         const {marqueePath, flyerPath, logoPath} = context;
         if (!marqueePath || !flyerPath || !logoPath) {
-            res.send(renderFavoritesPage({rows}, true));
+            res.send(renderScreenScraperPage(
+                ssValues, hasCreds, undefined, undefined,
+                'Dossiers marquees/flyers/logos introuvables - configurez et validez le binaire mame ci-dessus.',
+            ));
             return;
         }
 
@@ -2367,7 +2541,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Disable Nagle's algorithm so each res.write() below reaches the browser as soon as
         // it's flushed, instead of being buffered and coalesced with the next one.
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('favorites'));
+        res.write(renderPageHead('screenscraper'));
         res.write(`
             <section class="card">
                 <h2>Téléchargement en cours…</h2>
@@ -2399,7 +2573,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }</p>`);
         }
 
-        res.write('<p><a class="button-link" href="/favorites">Retour aux favoris</a></p>');
+        res.write('<p><a class="button-link" href="/screenscraper">Retour à ScreenScraper</a></p>');
         res.write(renderPageTail());
         res.end();
     });
@@ -2656,6 +2830,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ssSoftName: (req.body.ssSoftName || '').trim(),
             ssUserId: (req.body.ssUserId || '').trim(),
             ssUserPassword: (req.body.ssUserPassword || '').trim(),
+            bezelAspect: req.body.bezelAspect === '4:3' ? '4:3' : '16:9',
         };
 
         const config = new Config();
@@ -2665,9 +2840,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.ssSoftName = values.ssSoftName;
         config.ssUserId = values.ssUserId;
         config.ssUserPassword = values.ssUserPassword;
+        config.bezelAspect = values.bezelAspect;
         config.save();
 
-        res.send(renderScreenScraperPage(values, undefined, 'Configuration ScreenScraper enregistrée.'));
+        res.send(renderScreenScraperPage(
+            values, hasScreenScraperCredentials(config), undefined, 'Configuration ScreenScraper enregistrée.',
+        ));
     });
 
     app.get('/browse', (req, res) => {
