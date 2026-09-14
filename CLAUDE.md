@@ -14,6 +14,8 @@ The project must run on both:
 
 Keep path handling, shell/process invocation, and packaging (Electron build targets, native module rebuilds) working on both platforms. When changing anything platform-sensitive (paths, `execFile`/shell calls, `mame -showconfig`/`ui.ini` parsing, `justfile` recipes, native module builds), verify it holds on both macOS and Linux — don't assume macOS-only behavior.
 
+Requires **Node 24 LTS** or later (pinned via `engines.node` in `package.json` and `.nvmrc`) — `npm install` warns on older runtimes.
+
 ## Commands
 
 Prefer the `justfile` recipes; they wrap the npm scripts:
