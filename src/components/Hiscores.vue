@@ -2,7 +2,7 @@
     <div class="hiscores">
         <p v-if="loading">Loading hiscores...</p>
         <template v-else>
-            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores">
+            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores" :key="score.id_hiscore">
                 <div class="icon">
                     <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
                     <img v-else src="../assets/defaultPlayer.png" alt="">
@@ -19,56 +19,51 @@
     </div>
 </template>
 
-<script lang="ts">
-    import ControllableVue from '@/ControllableVue';
-    import {Component, Prop, Watch} from 'vue-property-decorator';
-    import Game from '@/model/Game.model';
-    import Hiscore from '@/model/Hiscore.model';
-    import User from '@/model/User.model';
-    import Config from '@/class/Config.class';
-    import {join} from 'path';
-    import {format} from 'url';
-    import {EventBus} from '@/EventBus';
+<script setup lang="ts">
+import {ref, watch, onMounted} from 'vue';
+import Game from '@/model/Game.model';
+import Hiscore from '@/model/Hiscore.model';
+import User from '@/model/User.model';
+import {join} from 'path';
+import {format} from 'url';
+import {emitter} from '@/emitter';
+import {getConfiguration, getUserService} from '@/services';
 
-    @Component
-    export default class Hiscores extends ControllableVue {
-        @Prop({required: true, type: Game})
-        protected game!: Game;
+const props = defineProps<{game: Game}>();
 
-        protected scores: Hiscore[] = [];
-        protected loading = true;
-        protected avatars: string[] = [];
-        protected config!: Config;
+const scores = ref<Hiscore[]>([]);
+const loading = ref(true);
+const avatars = ref<string[]>([]);
 
-        public async mounted() {
-            this.avatars = this.$store.getters.userService.getAvatars();
-            this.config = this.$store.getters.configuration;
-            await this.onGameChange();
+async function onGameChange() {
+    loading.value = true;
+    scores.value = await props.game.$get(
+        'hiscores',
+        {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
+    ) as Hiscore[] || [];
+    loading.value = false;
+}
 
-            EventBus.$on('game-quit', this.onGameChange);
-        }
-
-        @Watch('game')
-        public async onGameChange() {
-            this.loading = true;
-            this.scores = await this.game.$get(
-                'hiscores',
-                {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
-            ) as Hiscore[] || [];
-            this.loading = false;
-        }
-
-        public getAvatar(user: User) {
-            if (this.avatars.indexOf(user.pseudo_3 + '.png') >= 0) {
-                return format({
-                    pathname: join(this.config.avatarsPath, user.pseudo_3 + '.png'),
-                    protocol: 'file',
-                    slashes: true,
-                });
-            }
-            return false;
-        }
+function getAvatar(user: User) {
+    if (avatars.value.indexOf(user.pseudo_3 + '.png') >= 0) {
+        return format({
+            pathname: join(getConfiguration().avatarsPath, user.pseudo_3 + '.png'),
+            protocol: 'file',
+            slashes: true,
+        });
     }
+    return false;
+}
+
+watch(() => props.game, onGameChange);
+
+onMounted(async () => {
+    avatars.value = getUserService().getAvatars();
+    await onGameChange();
+
+    // Preserved as-is, same reasoning as Champions.vue: no EventBus.$off in the original either.
+    emitter.on('game-quit', onGameChange);
+});
 </script>
 
 <style scoped>
