@@ -10,19 +10,16 @@
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Vue, Watch} from 'vue-property-decorator';
+<script setup lang="ts">
+import {ref, onMounted} from 'vue';
 
-    @Component
-    export default class Gamepads extends Vue {
-        protected gamepadCount: number = 0;
+const gamepadCount = ref(0);
 
-        public mounted() {
-            window.addEventListener('gamepadCountUpdate', (e) => {
-                this.gamepadCount = (e as CustomEvent).detail.gamepadCount;
-            });
-        }
-    }
+onMounted(() => {
+    window.addEventListener('gamepadCountUpdate', (e) => {
+        gamepadCount.value = (e as CustomEvent).detail.gamepadCount;
+    });
+});
 </script>
 
 <style scoped>

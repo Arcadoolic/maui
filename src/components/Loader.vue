@@ -14,33 +14,21 @@
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Prop, Vue} from 'vue-property-decorator';
+<script setup lang="ts">
+import {computed} from 'vue';
 
-    @Component
-    export default class Loader extends Vue {
-        @Prop({default: 2})
-        protected duration!: number;
+const props = withDefaults(defineProps<{duration?: number}>(), {duration: 2});
 
-        public created() {
-            console.log(this.duration);
-        }
+console.log(props.duration);
 
-        protected get leftPieStyle() {
-            return {
-                'animation-duration': ['-webkit-', this.duration / 2 + 's'],
-            };
-        }
+const leftPieStyle = computed(() => ({
+    'animation-duration': ['-webkit-', props.duration / 2 + 's'],
+}));
 
-        protected get rightPieStyle() {
-            return {
-                'animation-duration': ['-webkit-', this.duration / 2 + 's'],
-                'animation-delay': ['-webkit-', this.duration / 2 + 's'],
-            };
-        }
-
-
-    }
+const rightPieStyle = computed(() => ({
+    'animation-duration': ['-webkit-', props.duration / 2 + 's'],
+    'animation-delay': ['-webkit-', props.duration / 2 + 's'],
+}));
 </script>
 
 <style scoped>
