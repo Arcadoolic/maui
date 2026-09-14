@@ -95,6 +95,12 @@
         height: 100%;
     }
 
+    .champion img {
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 50%;
+    }
+
     .default {
         position: absolute;
         right: 0;
