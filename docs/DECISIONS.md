@@ -158,6 +158,55 @@ Every check in this migration (Tasks 1-10) ran on Linux only, because that is
 the only platform available in this environment. This is named here, and in
 the relevant commits, as an explicit open gap, not silently treated as done.
 
+**`src/shims-vue.d.ts` is not deleted by Task 13, correcting the design doc's
+section 4.** The design doc listed it as part of the legacy removed by this
+migration. Spec step 2's plumbing probe had already found, before this task
+started, that `tsc --noEmit` needs this file to resolve any
+`import Foo from './Foo.vue'` at all (there is no other type declaration for
+the `.vue` extension), and had rewritten its content to the Vue 3
+`DefineComponent<{}, {}, any>` shape instead of leaving the Vue 2 one.
+Deleting it would break every `.vue` import in `tsc --noEmit`. This was
+already accounted for by the time Task 13's brief was written; recorded here
+as the formal correction to the design doc's removal list.
+
+**The `@electron/remote` Vitest alias/stub (`tests/stubs/electron-remote.ts`)
+was dead by the time Task 13 ran.** Its comment said `Helpers.class.ts`
+imports `@electron/remote` at module scope, which stopped being true earlier
+in this plan (`grep -rn "@electron/remote" src/class` finds nothing).
+Temporarily removing the alias from `vitest.config.ts` and running `npm test`
+still passed all 51 tests, confirming nothing in the current test import
+graph needs it (the remaining `@electron/remote` imports are in
+`background.ts`, `boServer.ts`, `App.vue`, and the views, none of which any
+test imports). Both the stub file and the alias were deleted.
+
+**The packaged production build (`electron-vite build && electron-builder`)
+has never actually succeeded for the real app, on any commit in this
+migration, and this was not caught until Task 13's final verification.**
+Tasks 1-12 (in particular Task 12, "wire the real app through electron-vite")
+only ever ran `tsc`/`lint`/`test` as verification gates; the packaged-build
+path was exercised only against the throwaway `src/probe/*` app (step 2), not
+against the real renderer. Task 13's own `npm install` (removing the vue-cli
+dependency chain) surfaced one self-inflicted regression: `postcss.config.js`
+(a pre-existing, untouched file that predates this migration and still
+applies to every `<style>` block Vite processes in every `.vue` file) depends
+on `autoprefixer`, which was only ever present transitively through
+`@vue/cli-service`. Once that chain was removed, `autoprefixer` disappeared
+from `node_modules` and the renderer build failed at the CSS-transform stage.
+Fixed by adding `autoprefixer` as a direct devDependency (it was not carried
+over anywhere else). With that fixed, the renderer build progresses further
+and fails on a second, unrelated, pre-existing problem, confirmed present
+identically on the pre-Task-13 commit (`16fa890`) by temporarily reverting
+and re-testing: `src/class/Config.class.ts`'s `fs`/`path`/`os` imports get
+externalized to a browser stub (`__vite-browser-external`) by
+`electron.vite.config.ts`'s `renderer` build, which has no mechanism (unlike
+`main`) to keep Node builtins real for a `nodeIntegration: true` renderer.
+This is not something Task 13's scope (deletions and dependency cleanup)
+covers or should attempt to fix unilaterally: it needs a deliberate decision
+about how the renderer's Vite config should treat Node builtins (e.g.
+`build.rollupOptions.external`, a polyfill/externalization plugin, or
+reconsidering the `nodeIntegration: true` boundary). **Not fixed.** Recorded
+as a new, previously-unknown open gap; see `docs/PROGRESSION.md`.
+
 ## Rebasing decision (mid-migration)
 
 Partway through Phase B, a colleague's ongoing work on `refacto-2026` (the

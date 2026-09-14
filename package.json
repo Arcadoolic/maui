@@ -5,14 +5,9 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
-        "serve": "vue-cli-service serve",
-        "build": "vue-cli-service build",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "test": "vitest run",
-        "probe:dev": "electron-vite dev",
-        "probe:build": "electron-vite build",
-        "probe:package": "electron-vite build && electron-builder --config electron-builder.yml",
         "test:watch": "vitest",
         "electron:build": "electron-vite build && electron-builder --config electron-builder.yml",
         "electron:serve": "electron-vite dev",
@@ -38,10 +33,7 @@
         "sqlite3": "^5.1.7",
         "velocity-animate": "^2.0.5",
         "vue": "^3.5.42",
-        "vue-class-component": "^6.0.0",
-        "vue-property-decorator": "^7.0.0",
-        "vue-router": "^5.3.1",
-        "vuex": "^3.0.1"
+        "vue-router": "^5.3.1"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
@@ -54,8 +46,7 @@
         "@types/umzug": "^2.2.2",
         "@types/validator": "^10.11.0",
         "@vitejs/plugin-vue": "^6.0.8",
-        "@vue/cli-plugin-typescript": "^3.4.0",
-        "@vue/cli-service": "^3.4.0",
+        "autoprefixer": "^10.6.0",
         "electron": "^44.3.0",
         "electron-builder": "^26.15.3",
         "electron-log": "^3.0.6",
@@ -72,15 +63,10 @@
         "umzug": "^2.2.0",
         "vite": "^7.3.6",
         "vitest": "^5.0.0",
-        "vue-cli-plugin-electron-builder": "^1.0.0-rc.10",
-        "vue-eslint-parser": "^10.4.1",
-        "vue-template-compiler": "^2.5.21"
+        "vue-eslint-parser": "^10.4.1"
     },
     "overrides": {
-        "electron-chromedriver": "44.3.0",
-        "vuex": {
-            "vue": "$vue"
-        }
+        "electron-chromedriver": "44.3.0"
     },
     "main": "./out/main/index.js"
 }

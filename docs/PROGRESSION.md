@@ -6,7 +6,7 @@ and plan, see `docs/superpowers/specs/2026-09-10-vue3-migration-design.md`
 and `docs/superpowers/plans/2026-09-11-vue3-migration-safety-net-and-plumbing.md`.
 
 **Branch:** `chore/migrate-vue2-to-vue3`, based on `refacto-2026`.
-**Last updated:** 2026-09-14, after Task 10.
+**Last updated:** 2026-09-14, after Task 13.
 
 ## Status: Phase B complete. Not shippable yet.
 
@@ -16,15 +16,9 @@ The spec's five-step sequencing (design doc, section 5):
 |---|---|---|
 | 1 | Vitest safety net (characterization tests) | **Done** |
 | 2 | Plumbing: electron-vite + Vue 3 probe proves native/decorator integration | **Done** |
-| 3 | Port the Vue-free layers (`class/`, `model/`, `api/`, new `services.ts`) | Not started |
-| 4 | Port the 12 SFC to `<script setup>` | Not started |
-| 5 | Delete the legacy (vue-cli, Vuex, decorator libraries, the probe) | Not started |
-
-**The app does not run via `just serve` right now.** Installing Vue 3 (needed
-for step 2) took the vue-cli pipeline down, as planned and accepted in
-`docs/DECISIONS.md` (D6). It comes back once step 4 ports the real components.
-Only the throwaway probe (`npm run probe:dev`, `npm run probe:package`) proves
-anything currently.
+| 3 | Port the Vue-free layers (`class/`, `model/`, `api/`, new `services.ts`) | **Done** |
+| 4 | Port the 12 SFC to `<script setup>` | **Done** |
+| 5 | Delete the legacy (vue-cli, Vuex, decorator libraries, the probe) | **Done** |
 
 ## What exists today
 
@@ -48,18 +42,18 @@ process, proving:
 - a real `electron-builder` package (`npm run probe:package`) boots and
   passes all the same checks against production paths
 
-None of `src/probe/*` or `electron.vite.config.ts`'s probe-specific pieces are
-meant to survive step 5: they get deleted once the real app is ported. Two
-pieces of code that *do* survive, because the probe's checks forced real fixes
-in production files, not just probe scaffolding:
+Neither `src/probe/*` nor `electron.vite.config.ts`'s probe-specific comment
+survived step 5 (Task 13): both were deleted once the real app was fully
+ported (steps 3-4). Two pieces of code that *do* survive, because the probe's
+checks forced real fixes in production files, not just probe scaffolding:
 - `src/staticPath.ts`, replaces the `__static` global (see DECISIONS.md)
 - `src/model/*.ts`'s six `InstanceType<typeof X>` retypes, fixes a real
   circular-import crash under Rollup (see DECISIONS.md)
 
 **Packaging:** `electron-builder.yml` (new, replaces `vue.config.js`'s
 `builderOptions` for the packaged-build path), `electron-builder` upgraded to
-26.15.3. `vue.config.js` itself is untouched and still needed by the (currently
-broken) `vue-cli` scripts until step 5.
+26.15.3. `vue.config.js` itself, and the `vue-cli` scripts that used it, were
+deleted at step 5 (Task 13).
 
 ## Known gaps, carried forward explicitly
 
@@ -72,15 +66,17 @@ broken) `vue-cli` scripts until step 5.
   unprivileged user namespaces (this dev machine, and potentially real user
   machines on the same Ubuntu 24.04+/Debian 13+ floor) without `--no-sandbox`.
   Not fixed. Needs a real decision before release, see DECISIONS.md.
-- **`npx tsc --noEmit` is not clean and is not expected to be until step 4.**
-  Baseline is exactly 6 errors, all in un-ported Vue 2 code
-  (`ControllableVue.ts`, `EventBus.ts`, `main.ts` ×2, `router.ts`, `store.ts`).
-  If a change to this branch produces a *different* error count or set,
-  something regressed; if it's still these same 6, that's the expected state.
-- **`.npmrc`/`overrides` note:** `package.json`'s `overrides` carries
-  `"vuex": {"vue": "$vue"}` to resolve a peer-dependency conflict between
-  `vuex@3` (which declares `vue: ^2`) and the now-installed `vue@3`. This goes
-  away when Vuex is deleted at step 5 (D3).
+- **The packaged production build (`electron-vite build && electron-builder`,
+  i.e. `just build`) does not currently succeed for the real app.** Discovered
+  during Task 13's final verification, the first point in this migration where
+  that path was actually exercised against the real renderer rather than the
+  throwaway probe. `src/class/Config.class.ts`'s `fs`/`path`/`os` imports get
+  externalized to a browser stub by `electron.vite.config.ts`'s `renderer`
+  build, which has no mechanism to keep Node builtins real for this app's
+  `nodeIntegration: true` renderer. Confirmed pre-existing (present identically
+  on the pre-Task-13 commit, unrelated to this task's deletions). Not fixed;
+  needs a deliberate decision about the renderer's Vite config, see
+  DECISIONS.md.
 
 ## How to resume
 
