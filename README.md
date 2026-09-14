@@ -5,6 +5,8 @@ This project is a Frontend for the emulation framework MAME.
 
 ## Project setup
 Built with [electron-vite](https://electron-vite.org/) and Vue 3.
+
+Requires Node 24 LTS or later (see `.nvmrc`).
 ```
 npm install
 ```
