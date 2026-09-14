@@ -37,6 +37,10 @@ module.exports = tseslint.config(
             'dist/**',
             'dist_electron/**',
             'build/**',
+            // electron-vite's build output, the Phase B counterpart of the
+            // three above. Without this, `npm run lint` reports on generated
+            // bundles and its warning count moves with every probe build.
+            'out/**',
             'migrations/**',
             'public/**',
             'src/background.ts',
