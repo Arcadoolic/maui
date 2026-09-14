@@ -11,7 +11,7 @@
 </template>
 
 <script setup lang="ts">
-import {ref, watch, onMounted} from 'vue';
+import {ref, watch, onMounted, onUnmounted} from 'vue';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
@@ -62,10 +62,18 @@ onMounted(async () => {
     avatars.value = getUserService().getAvatars();
     await onGameChange();
 
-    // Preserved as-is: the original never called EventBus.$off here either. Not fixed in this
-    // migration - out of scope (only the ControllableVue leak from D2 is an approved fix).
     emitter.on('game-quit', onGameChange);
     emitter.on('hiscores-loaded', onGameChange);
+});
+
+// `emitter` is a module-level mitt singleton, so it outlives every component instance that
+// subscribes to it. Without this, each mount leaves behind a handler closed over a destroyed
+// component's props and refs, and they accumulate for the life of the process. The Vue 2 original
+// never called `EventBus.$off` either, but there the bus was a Vue instance torn down with the
+// app; here nothing ever removes the handler but this.
+onUnmounted(() => {
+    emitter.off('game-quit', onGameChange);
+    emitter.off('hiscores-loaded', onGameChange);
 });
 </script>
 

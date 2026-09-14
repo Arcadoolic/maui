@@ -20,7 +20,7 @@
 </template>
 
 <script setup lang="ts">
-import {ref, watch, onMounted} from 'vue';
+import {ref, watch, onMounted, onUnmounted} from 'vue';
 import Game from '@/model/Game.model';
 import Hiscore from '@/model/Hiscore.model';
 import User from '@/model/User.model';
@@ -61,8 +61,13 @@ onMounted(async () => {
     avatars.value = getUserService().getAvatars();
     await onGameChange();
 
-    // Preserved as-is, same reasoning as Champions.vue: no EventBus.$off in the original either.
     emitter.on('game-quit', onGameChange);
+});
+
+// See Champions.vue: `emitter` is a module-level mitt singleton and outlives this component, so
+// the handler has to be removed explicitly or every mount leaks one.
+onUnmounted(() => {
+    emitter.off('game-quit', onGameChange);
 });
 </script>
 

@@ -19,7 +19,6 @@ import {computed} from 'vue';
 
 const props = withDefaults(defineProps<{duration?: number}>(), {duration: 2});
 
-console.log(props.duration);
 
 const leftPieStyle = computed(() => ({
     'animation-duration': ['-webkit-', props.duration / 2 + 's'],
