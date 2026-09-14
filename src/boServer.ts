@@ -37,6 +37,7 @@ interface ScreenScraperValues {
     ssSoftName: string;
     ssUserId: string;
     ssUserPassword: string;
+    bezelAspect: '4:3' | '16:9';
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -1838,6 +1839,12 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
                 <input type="text" id="ssDevId" name="ssDevId" value="${escapeHtml(values.ssDevId)}" autocomplete="off">
                 <label for="ssDevPassword">Mot de passe développeur (devpassword)</label>
                 <input type="password" id="ssDevPassword" name="ssDevPassword" value="${escapeHtml(values.ssDevPassword)}" autocomplete="off">
+
+                <label for="bezelAspect">Format des bezels (aspect_ratio de l'écran cible)</label>
+                <select id="bezelAspect" name="bezelAspect">
+                    <option value="16:9" ${values.bezelAspect === '16:9' ? 'selected' : ''}>16:9 (écran large)</option>
+                    <option value="4:3" ${values.bezelAspect === '4:3' ? 'selected' : ''}>4:3 (écran classique)</option>
+                </select>
                 <button type="submit">Enregistrer</button>
             </form>
         </section>
@@ -2201,6 +2208,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ssSoftName: config.ssSoftName,
             ssUserId: config.ssUserId,
             ssUserPassword: config.ssUserPassword,
+            bezelAspect: config.bezelAspect,
         }));
     });
 
@@ -2656,6 +2664,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ssSoftName: (req.body.ssSoftName || '').trim(),
             ssUserId: (req.body.ssUserId || '').trim(),
             ssUserPassword: (req.body.ssUserPassword || '').trim(),
+            bezelAspect: req.body.bezelAspect === '4:3' ? '4:3' : '16:9',
         };
 
         const config = new Config();
@@ -2665,6 +2674,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.ssSoftName = values.ssSoftName;
         config.ssUserId = values.ssUserId;
         config.ssUserPassword = values.ssUserPassword;
+        config.bezelAspect = values.bezelAspect;
         config.save();
 
         res.send(renderScreenScraperPage(values, undefined, 'Configuration ScreenScraper enregistrée.'));
