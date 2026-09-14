@@ -7,12 +7,13 @@
                     <div class="marquee"
                          :style="{
                              marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
-                             backgroundImage: getMarquee(game.romName)
                          }"
                     >
-                        <div v-if="hasFlyerLogoFallback(game.romName)" class="flyerLogoFallback">
-                            <div class="flyerBackground" :style="{backgroundImage: getFlyer(game.romName)}"></div>
-                            <img class="logoOverlay" :src="getLogo(game.romName)" alt="">
+                        <div class="marqueeArt" :style="{backgroundImage: getMarquee(game.romName)}">
+                            <div v-if="hasFlyerLogoFallback(game.romName)" class="flyerLogoFallback">
+                                <div class="flyerBackground" :style="{backgroundImage: getFlyer(game.romName)}"></div>
+                                <img class="logoOverlay" :src="getLogo(game.romName)" alt="">
+                            </div>
                         </div>
                         <Champions v-if='game.hi' :game='game'></Champions>
                     </div>
@@ -111,7 +112,6 @@
         height: 100%;
         overflow: hidden;
         position: relative;
-        filter: saturate(2);
     }
 
     .selectedGameBackground {
@@ -159,10 +159,6 @@
         display: inline-block;
         width: 35%;
         height: 90%;
-        background-repeat: no-repeat;
-        background-image: url(../assets/default_marquee.jpg);
-        background-size: cover;
-        background-position: center;
         border-radius: 5px;
         box-shadow: 0 0 30px #000000;
         margin-left: -100%;
@@ -173,6 +169,18 @@
     .games ul li.selected .marquee {
         width: 100%;
         height: 80%;
+    }
+
+    .marqueeArt {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        background-repeat: no-repeat;
+        background-image: url(../assets/default_marquee.jpg);
+        background-size: cover;
+        background-position: center;
+        border-radius: 5px;
+        filter: saturate(2);
     }
 
     .flyerLogoFallback {

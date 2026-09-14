@@ -107,8 +107,10 @@
     }
 
     .icon img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
         border-radius: 50%;
-        max-width: 100%;
     }
 
     .info {
@@ -117,15 +119,16 @@
 
     .info > * {
         display: inline-block;
+        vertical-align: middle;
     }
 
     .info .place {
-        font-size: 2vw;
+        font-size: 2.5vw;
         letter-spacing: -10px;
     }
 
     .info .score_name {
-        margin-left: .6vw;
+        margin-left: 1.2vw;
     }
 
     .info .score {
@@ -148,8 +151,7 @@
     }
 
     .hiscore.first .icon img {
-        border-radius: 0;
-        max-width: 6vw;
+        width: 6vw;
     }
 
     .hiscore.first .info {
