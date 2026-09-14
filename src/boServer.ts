@@ -1851,8 +1851,49 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
     `;
 }
 
-function renderScreenScraperPage(values: ScreenScraperValues, error?: string, info?: string): string {
-    return renderPage(renderScreenScraperCard(values, error, info), 'screenscraper');
+/**
+ * Media-download trigger, moved here from the favorites tab (see renderFavoritesCard()) since
+ * it's a ScreenScraper action, not a favorites-list concern - the favorites table stays there,
+ * showing per-rom marquee/flyer/logo status, with a pointer back to this tab for the button.
+ */
+function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summary?: DownloadSummary): string {
+    if (!hasCreds) {
+        return `
+            <section class="card">
+                <h2>Récupération des médias</h2>
+                <p class="error">Identifiants ScreenScraper manquants : renseignez-les ci-dessus avant de
+                lancer un téléchargement.</p>
+            </section>
+        `;
+    }
+    return `
+        <section class="card">
+            <h2>Récupération des médias</h2>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${summary ? renderDownloadSummary(summary) : ''}
+            <form method="post" action="/favorites/download-media">
+                <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour tous
+                les favoris. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de favoris
+                (délai imposé entre chaque appel) - ne fermez pas cette page pendant le téléchargement.</p>
+                <button type="submit">Télécharger les visuels manquants</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderScreenScraperPage(
+    values: ScreenScraperValues,
+    hasCreds: boolean,
+    error?: string,
+    info?: string,
+    downloadError?: string,
+    summary?: DownloadSummary,
+): string {
+    return renderPage(
+        renderScreenScraperCard(values, error, info)
+        + renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
+        'screenscraper',
+    );
 }
 
 function renderFavoriteBadge(found: boolean): string {
@@ -1908,7 +1949,7 @@ function renderDownloadSummary(summary: DownloadSummary): string {
     `;
 }
 
-function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, summary?: DownloadSummary): string {
+function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     if (favoritesInfo.error) {
         return `
             <section class="card">
@@ -1929,19 +1970,6 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
         </tr>
     `).join('');
 
-    const downloadSection = hasCreds
-        ? `
-            ${summary ? renderDownloadSummary(summary) : ''}
-            <form method="post" action="/favorites/download-media">
-                <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour les
-                favoris ci-dessous. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de
-                favoris (délai imposé entre chaque appel) - ne fermez pas cette page pendant le
-                téléchargement.</p>
-                <button type="submit">Télécharger les visuels manquants</button>
-            </form>
-        `
-        : '<p class="error">Identifiants ScreenScraper manquants : configurez-les dans l\'onglet ScreenScraper.</p>';
-
     return `
         <section class="card">
             <h2>Favoris (${favoritesInfo.rows.length})</h2>
@@ -1960,13 +1988,14 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, hasCreds: boolean, su
                     <tbody>${rows}</tbody>
                 </table>
             </div>
-            ${downloadSection}
+            <p class="info">Pour télécharger les visuels manquants (marquees, flyers, logos) depuis
+            ScreenScraper, utilisez le bouton de l'onglet <a href="/screenscraper">ScreenScraper</a>.</p>
         </section>
     `;
 }
 
-function renderFavoritesPage(favoritesInfo: FavoritesInfo, hasCreds: boolean, summary?: DownloadSummary): string {
-    return renderPage(renderFavoritesCard(favoritesInfo, hasCreds, summary), 'favorites');
+function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
+    return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
 }
 
 function renderImportCard(error?: string): string {
@@ -2209,7 +2238,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ssUserId: config.ssUserId,
             ssUserPassword: config.ssUserPassword,
             bezelAspect: config.bezelAspect,
-        }));
+        }, hasScreenScraperCredentials(config)));
     });
 
     app.get('/favorites', (req, res) => {
@@ -2218,7 +2247,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const context = getFavoritesContext(config);
 
         if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}, hasScreenScraperCredentials(config)));
+            res.send(renderFavoritesPage({rows: [], error: context.error}));
             return;
         }
 
@@ -2242,7 +2271,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         });
 
         res.write('</ul></section>');
-        res.write(renderFavoritesCard({rows}, hasScreenScraperCredentials(config)));
+        res.write(renderFavoritesCard({rows}));
         res.write(renderPageTail());
         res.end();
     });
@@ -2348,23 +2377,35 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/favorites/download-media', async (req, res) => {
         const config = new Config();
         config.load();
+        const ssValues: ScreenScraperValues = {
+            ssDevId: config.ssDevId,
+            ssDevPassword: config.ssDevPassword,
+            ssSoftName: config.ssSoftName,
+            ssUserId: config.ssUserId,
+            ssUserPassword: config.ssUserPassword,
+            bezelAspect: config.bezelAspect,
+        };
+        const hasCreds = hasScreenScraperCredentials(config);
         const context = getFavoritesContext(config);
 
         if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}, hasScreenScraperCredentials(config)));
+            res.send(renderScreenScraperPage(ssValues, hasCreds, undefined, undefined, context.error));
             return;
         }
 
         const rows = context.romNames.map(romName => resolveFavoriteRow(context, romName));
 
-        if (!hasScreenScraperCredentials(config)) {
-            res.send(renderFavoritesPage({rows}, false));
+        if (!hasCreds) {
+            res.send(renderScreenScraperPage(ssValues, false));
             return;
         }
 
         const {marqueePath, flyerPath, logoPath} = context;
         if (!marqueePath || !flyerPath || !logoPath) {
-            res.send(renderFavoritesPage({rows}, true));
+            res.send(renderScreenScraperPage(
+                ssValues, hasCreds, undefined, undefined,
+                'Dossiers marquees/flyers/logos introuvables - configurez et validez le binaire mame ci-dessus.',
+            ));
             return;
         }
 
@@ -2375,7 +2416,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Disable Nagle's algorithm so each res.write() below reaches the browser as soon as
         // it's flushed, instead of being buffered and coalesced with the next one.
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('favorites'));
+        res.write(renderPageHead('screenscraper'));
         res.write(`
             <section class="card">
                 <h2>Téléchargement en cours…</h2>
@@ -2407,7 +2448,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }</p>`);
         }
 
-        res.write('<p><a class="button-link" href="/favorites">Retour aux favoris</a></p>');
+        res.write('<p><a class="button-link" href="/screenscraper">Retour à ScreenScraper</a></p>');
         res.write(renderPageTail());
         res.end();
     });
@@ -2677,7 +2718,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.bezelAspect = values.bezelAspect;
         config.save();
 
-        res.send(renderScreenScraperPage(values, undefined, 'Configuration ScreenScraper enregistrée.'));
+        res.send(renderScreenScraperPage(
+            values, hasScreenScraperCredentials(config), undefined, 'Configuration ScreenScraper enregistrée.',
+        ));
     });
 
     app.get('/browse', (req, res) => {
