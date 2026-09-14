@@ -130,6 +130,50 @@ function getDatabasePath(): string {
 }
 
 /**
+ * Same fixed <home>/.mame-awesome-ui path as getDatabasePath(), for the favorites name/BIOS
+ * cache (see FavoritesCache below) - resolving a favorite's fullname/BIOS is a blocking `mame
+ * -lx` process spawn per rom (see getGameXmlInfo()), so the favorites tab reads this cache
+ * instead of re-running it on every page load; only "Mettre à jour les favoris" re-resolves and
+ * rewrites it.
+ */
+function getFavoritesCachePath(): string {
+    const appDataPath = join(os.homedir(), '.mame-awesome-ui');
+    if (!existsSync(appDataPath)) {
+        mkdirSync(appDataPath, {recursive: true});
+    }
+    return join(appDataPath, 'favorites-cache.json');
+}
+
+interface FavoritesCacheEntry {
+    fullname: string;
+    biosName: string | null;
+}
+
+interface FavoritesCache {
+    updatedAt: string;
+    entries: { [romName: string]: FavoritesCacheEntry };
+}
+
+function readFavoritesCache(): FavoritesCache | null {
+    const cachePath = getFavoritesCachePath();
+    if (!existsSync(cachePath)) {
+        return null;
+    }
+    try {
+        return JSON.parse(readFileSync(cachePath, 'utf8'));
+    } catch {
+        // Corrupt/unreadable cache file - treat as absent rather than failing the whole tab.
+        return null;
+    }
+}
+
+function writeFavoritesCache(entries: { [romName: string]: FavoritesCacheEntry }): FavoritesCache {
+    const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
+    writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
+    return cache;
+}
+
+/**
  * Filenames currently sitting in Config's fixed avatarsPath (<home>/.mame-awesome-ui/avatars,
  * created eagerly by Config's constructor). Matches the "<pseudo_3>.png" lookup
  * UserService.class.ts/Champions.vue/Hiscores.vue use in the Electron app itself.
@@ -568,18 +612,29 @@ function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): G
     }
 }
 
-interface FavoriteRow {
-    romName: string;
-    fullname: string;
-    biosName: string | null;
+interface FavoriteMediaStatus {
     hasMarquee: boolean;
     hasFlyer: boolean;
     hasLogo: boolean;
 }
 
+interface FavoriteRow extends FavoriteMediaStatus {
+    romName: string;
+    fullname: string;
+    biosName: string | null;
+    // False when this rom has no entry in the favorites cache yet (added since the last "Mettre
+    // à jour les favoris") - fullname then just falls back to romName and biosName to null,
+    // rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
+    cached: boolean;
+}
+
 interface FavoritesInfo {
     rows: FavoriteRow[];
     error?: string;
+    // ISO timestamp of the favorites cache this list's names/BIOS came from - null when the
+    // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
+    // always live, regardless of cache age - see getFavoriteMediaStatus().
+    cacheUpdatedAt?: string | null;
 }
 
 interface FavoritesContext {
@@ -621,20 +676,51 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
 }
 
 /**
+ * Cheap (fs-only, no `mame -lx`) marquee/flyer/logo presence check for one favorite - shared by
+ * both the cached favorites list and resolveFavoriteRow() below, so badges are always live even
+ * when the name/BIOS cache is stale.
+ */
+function getFavoriteMediaStatus(context: FavoritesContext, romName: string): FavoriteMediaStatus {
+    const {marqueePath, flyerPath, logoPath} = context;
+    return {
+        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
+        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
+        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+    };
+}
+
+/**
  * Resolves a single favorite's row - the slow part (a blocking `mame -lx` process spawn per
  * call, see getGameXmlInfo()) callers should interleave with res.write() progress so a long
- * favorites list streams in instead of blocking the whole response.
+ * favorites list streams in instead of blocking the whole response. Only used by "Mettre à jour
+ * les favoris" (POST /favorites/refresh) now - the normal favorites tab reads the cache this
+ * populates instead (see favoriteRowFromCache()).
  */
 function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
-    const {mameBinary, iniPath, marqueePath, flyerPath, logoPath} = context;
+    const {mameBinary, iniPath} = context;
     const {description, biosName} = getGameXmlInfo(mameBinary, iniPath, romName);
     return {
         romName,
         fullname: description || romName,
         biosName,
-        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
-        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
-        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+        cached: true,
+        ...getFavoriteMediaStatus(context, romName),
+    };
+}
+
+/**
+ * Same shape as resolveFavoriteRow(), but reads fullname/biosName from the favorites cache
+ * (no `mame -lx` call) - falls back to the bare romName/null when this rom isn't in the cache
+ * yet (cached: false), same as before any refresh has ever run.
+ */
+function favoriteRowFromCache(context: FavoritesContext, romName: string, cache: FavoritesCache | null): FavoriteRow {
+    const entry = cache?.entries[romName];
+    return {
+        romName,
+        fullname: entry?.fullname || romName,
+        biosName: entry?.biosName ?? null,
+        cached: !!entry,
+        ...getFavoriteMediaStatus(context, romName),
     };
 }
 
@@ -662,7 +748,7 @@ async function downloadMissingFavoriteMedia(
     marqueePath: string,
     flyerPath: string,
     logoPath: string,
-    rows: FavoriteRow[],
+    rows: ({romName: string} & FavoriteMediaStatus)[],
     onProgress: (line: string) => void = () => {},
 ): Promise<DownloadSummary> {
     const summary: DownloadSummary = {
@@ -1962,17 +2048,30 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     const rows = favoritesInfo.rows.map(row => `
         <tr>
             <td>${escapeHtml(row.romName)}</td>
-            <td>${renderGameName(row.fullname)}</td>
-            <td>${row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
+            <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
+            <td>${row.cached && row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
             <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
             <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
             <td class="center">${renderFavoriteBadge(row.hasLogo)}</td>
         </tr>
     `).join('');
 
+    const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
+    const cacheStatus = favoritesInfo.cacheUpdatedAt
+        ? `Noms à jour au ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('fr-FR', {
+            dateStyle: 'short', timeStyle: 'short',
+        }))}.`
+        : 'Noms jamais mis à jour.';
+
     return `
         <section class="card">
             <h2>Favoris (${favoritesInfo.rows.length})</h2>
+            <p class="info">${cacheStatus}${unresolvedCount
+                ? ` ${unresolvedCount} favori(s) ajouté(s) depuis - pas encore résolu(s).`
+                : ''}</p>
+            <form method="post" action="/favorites/refresh">
+                <button type="submit">Mettre à jour les favoris</button>
+            </form>
             <div class="table-wrap">
                 <table class="favorites-table">
                     <thead>
@@ -2251,6 +2350,26 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
 
+        // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
+        // otherwise costs a blocking `mame -lx` process spawn - see resolveFavoriteRow()), so this
+        // tab loads instantly regardless of favorites count. Media badges stay live either way
+        // (getFavoriteMediaStatus() is a cheap fs check). See POST /favorites/refresh below for
+        // the button that re-resolves everything and rewrites the cache.
+        const cache = readFavoritesCache();
+        const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
+        res.send(renderFavoritesPage({rows, cacheUpdatedAt: cache?.updatedAt ?? null}));
+    });
+
+    app.post('/favorites/refresh', (req, res) => {
+        const config = new Config();
+        config.load();
+        const context = getFavoritesContext(config);
+
+        if ('error' in context) {
+            res.send(renderFavoritesPage({rows: [], error: context.error}));
+            return;
+        }
+
         // Stream the page as favorites are resolved instead of blocking on the whole list: each
         // one is a blocking `mame -lx` process spawn (see resolveFavoriteRow()), so with enough
         // favorites the unstreamed version could take a long time to send anything at all -
@@ -2260,18 +2379,21 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write(renderPageHead('favorites'));
         res.write(`
             <section class="card">
-                <h2>Chargement des favoris (${context.romNames.length})…</h2>
+                <h2>Mise à jour des favoris (${context.romNames.length})…</h2>
                 <ul class="progress-log">
         `);
 
+        const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
         const rows: FavoriteRow[] = context.romNames.map((romName) => {
             const row = resolveFavoriteRow(context, romName);
+            cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName};
             res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
             return row;
         });
+        const cache = writeFavoritesCache(cacheEntries);
 
         res.write('</ul></section>');
-        res.write(renderFavoritesCard({rows}));
+        res.write(renderFavoritesCard({rows, cacheUpdatedAt: cache.updatedAt}));
         res.write(renderPageTail());
         res.end();
     });
@@ -2393,7 +2515,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
 
-        const rows = context.romNames.map(romName => resolveFavoriteRow(context, romName));
+        // Only romName + media status is needed here (see downloadMissingFavoriteMedia() below) -
+        // a cheap fs check, unlike resolveFavoriteRow()'s `mame -lx` spawn per rom, which this
+        // route has no use for (progress lines below only ever print row.romName).
+        const rows = context.romNames.map(romName => ({romName, ...getFavoriteMediaStatus(context, romName)}));
 
         if (!hasCreds) {
             res.send(renderScreenScraperPage(ssValues, false));
