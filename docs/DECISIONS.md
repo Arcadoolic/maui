@@ -204,8 +204,24 @@ This is not something Task 13's scope (deletions and dependency cleanup)
 covers or should attempt to fix unilaterally: it needs a deliberate decision
 about how the renderer's Vite config should treat Node builtins (e.g.
 `build.rollupOptions.external`, a polyfill/externalization plugin, or
-reconsidering the `nodeIntegration: true` boundary). **Not fixed.** Recorded
-as a new, previously-unknown open gap; see `docs/PROGRESSION.md`.
+reconsidering the `nodeIntegration: true` boundary).
+
+**Fixed in a follow-up pass (Task 13, fix 1).** The chosen approach is
+`build.rollupOptions.external` on the `renderer` config: `node:module`'s
+`builtinModules` list is expanded to both bare (`fs`) and `node:`-prefixed
+(`node:fs`) forms and passed as `external`, so Rollup leaves every
+`import ... from 'fs'`-style statement untouched in the production output
+instead of substituting `__vite-browser-external`. This is the same set of
+imports the renderer already resolves correctly in dev mode (confirmed
+working there since before this gap was found), so the fix makes the
+production build match dev behavior rather than introducing new behavior; it
+touches only `electron.vite.config.ts` and does not reconsider the
+`nodeIntegration: true` / `contextIsolation: false` boundary (D4 stands
+as-is). Verified via `npx electron-vite build && npx electron-builder
+--config electron-builder.yml` completing successfully and the resulting
+`dist_electron/linux-unpacked/mame-awesome-ui` binary launching (with
+`--no-sandbox`, see the pre-existing `chrome-sandbox` gap below) without
+crashing. See `docs/PROGRESSION.md` for the corresponding gap removal.
 
 ## Rebasing decision (mid-migration)
 

@@ -1,4 +1,5 @@
 import {resolve} from 'path';
+import {builtinModules} from 'node:module';
 import {defineConfig, swcPlugin} from 'electron-vite';
 import vue from '@vitejs/plugin-vue';
 
@@ -43,6 +44,16 @@ const swcOptions = {
     },
 };
 
+// The renderer runs with nodeIntegration: true (see DECISIONS.md D4), so it can resolve real
+// Node builtins (fs, path, os, child_process, ...) at runtime exactly like the main process can -
+// confirmed working in dev mode. Vite's production build doesn't know this: by default it treats
+// the renderer as a pure browser target and substitutes an empty stub for any Node builtin it
+// can't bundle, which breaks on the first named import (e.g. `import {join} from 'path'`) the
+// stub doesn't provide. Marking every builtin external keeps the renderer's production output
+// identical in spirit to what already works in dev - untouched `import ... from 'fs'`-style
+// statements the Electron runtime resolves itself.
+const nodeBuiltins = builtinModules.flatMap((mod) => [mod, `node:${mod}`]);
+
 const alias = {
     // Force the real Node build of sequelize-typescript instead of the no-op
     // "browser" stub, which the default mainFields resolution picks up and
@@ -69,6 +80,7 @@ export default defineConfig({
         resolve: {alias},
         build: {
             rollupOptions: {
+                external: nodeBuiltins,
                 input: {index: resolve(__dirname, 'src/index.html')},
             },
         },

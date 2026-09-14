@@ -66,17 +66,6 @@ deleted at step 5 (Task 13).
   unprivileged user namespaces (this dev machine, and potentially real user
   machines on the same Ubuntu 24.04+/Debian 13+ floor) without `--no-sandbox`.
   Not fixed. Needs a real decision before release, see DECISIONS.md.
-- **The packaged production build (`electron-vite build && electron-builder`,
-  i.e. `just build`) does not currently succeed for the real app.** Discovered
-  during Task 13's final verification, the first point in this migration where
-  that path was actually exercised against the real renderer rather than the
-  throwaway probe. `src/class/Config.class.ts`'s `fs`/`path`/`os` imports get
-  externalized to a browser stub by `electron.vite.config.ts`'s `renderer`
-  build, which has no mechanism to keep Node builtins real for this app's
-  `nodeIntegration: true` renderer. Confirmed pre-existing (present identically
-  on the pre-Task-13 commit, unrelated to this task's deletions). Not fixed;
-  needs a deliberate decision about the renderer's Vite config, see
-  DECISIONS.md.
 
 ## How to resume
 
