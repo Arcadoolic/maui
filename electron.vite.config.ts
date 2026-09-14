@@ -43,6 +43,20 @@ const swcOptions = {
     },
 };
 
+// A related hazard the plumbing probe (src/probe/, deleted at spec step 5) found
+// while proving the above: a decorated class declared inline inside a
+// `<script setup lang="ts">` block loses its decorator metadata specifically on
+// Vite's dev-server path. `@vitejs/plugin-vue`'s `canInlineMain` inlines such a
+// script straight into the `.vue` module id when serving dev, and that id never
+// matches `swcPlugin`'s `/\.(m?ts|[jt]sx)$/` filter, so Vue's own Babel-based
+// compiler handles the decorators there instead of swc, without emitting
+// `design:type` metadata. It does not threaten this codebase: Sequelize models
+// live in separate `.ts` files, always imported, never declared inline in an
+// SFC, and spec decision D2 rules out any decorator library for ported Vue
+// components. It would matter again only if a future `@Column`, `@Prop`,
+// `@Inject` or similar decorator were declared directly inside a
+// `<script setup>` block; keep decorated classes in their own `.ts` file.
+
 const alias = {
     // Force the real Node build of sequelize-typescript instead of the no-op
     // "browser" stub, which the default mainFields resolution picks up and

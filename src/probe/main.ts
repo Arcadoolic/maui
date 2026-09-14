@@ -1,6 +1,8 @@
 import {app, BrowserWindow} from 'electron';
 import {enable, initialize} from '@electron/remote/main';
 import {join} from 'path';
+import {startBoServer} from '@/boServer';
+import {BO_SERVER_PORT} from '@/boServerPort';
 
 // Throwaway entry for the Phase B plumbing proof. It mirrors the window options
 // of src/background.ts so the probe exercises the same integration surface:
@@ -51,6 +53,12 @@ function createWindow(): void {
 initialize();
 
 app.whenReady().then(() => {
+    // boServer imports sequelize-typescript and the models in the main process.
+    // Starting it here is what proves the main bundle externalizes the native
+    // modules, not just the renderer one.
+    startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
+        process.stdout.write(`probe: BO server listening on ${BO_SERVER_PORT}\n`);
+    });
     createWindow();
 }).catch((error: unknown) => {
     // Without this the promise floats. The checks Tasks 7 to 9 add can throw,
