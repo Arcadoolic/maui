@@ -139,7 +139,10 @@ describe('Helpers.getMameHomePath', () => {
     });
 
     it('returns a path under the stubbed home directory and creates it', () => {
-        const expected = join(fakeHome, '.mame-awesome-ui', 'mame-home');
+        // Renamed from .mame-awesome-ui/mame-home to a plain .mame on refacto-2026,
+        // to separate mame's own home directory from this app's own config/database
+        // directory (~/.mame-awesome-ui, see Config.class.ts).
+        const expected = join(fakeHome, '.mame');
 
         const path = Helpers.getMameHomePath();
 

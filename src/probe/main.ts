@@ -55,10 +55,14 @@ initialize();
 app.whenReady().then(() => {
     // boServer imports sequelize-typescript and the models in the main process.
     // Starting it here is what proves the main bundle externalizes the native
-    // modules, not just the renderer one.
-    startBoServer(app.getPath('userData'), BO_SERVER_PORT, () => {
+    // modules, not just the renderer one. userDataPath is gone from the real
+    // signature on refacto-2026: Config.class.ts now fixes its own directory at
+    // os.homedir()/.mame-awesome-ui internally, so startBoServer no longer needs
+    // it passed in. onReset is a no-op here; the probe never drives a factory
+    // reset, only the startup path.
+    startBoServer(BO_SERVER_PORT, () => {
         process.stdout.write(`probe: BO server listening on ${BO_SERVER_PORT}\n`);
-    });
+    }, () => {});
     createWindow();
 }).catch((error: unknown) => {
     // Without this the promise floats. The checks Tasks 7 to 9 add can throw,
