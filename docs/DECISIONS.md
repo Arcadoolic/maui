@@ -206,22 +206,93 @@ about how the renderer's Vite config should treat Node builtins (e.g.
 `build.rollupOptions.external`, a polyfill/externalization plugin, or
 reconsidering the `nodeIntegration: true` boundary).
 
-**Fixed in a follow-up pass (Task 13, fix 1).** The chosen approach is
-`build.rollupOptions.external` on the `renderer` config: `node:module`'s
-`builtinModules` list is expanded to both bare (`fs`) and `node:`-prefixed
-(`node:fs`) forms and passed as `external`, so Rollup leaves every
-`import ... from 'fs'`-style statement untouched in the production output
-instead of substituting `__vite-browser-external`. This is the same set of
-imports the renderer already resolves correctly in dev mode (confirmed
-working there since before this gap was found), so the fix makes the
-production build match dev behavior rather than introducing new behavior; it
-touches only `electron.vite.config.ts` and does not reconsider the
-`nodeIntegration: true` / `contextIsolation: false` boundary (D4 stands
-as-is). Verified via `npx electron-vite build && npx electron-builder
---config electron-builder.yml` completing successfully and the resulting
-`dist_electron/linux-unpacked/mame-awesome-ui` binary launching (with
-`--no-sandbox`, see the pre-existing `chrome-sandbox` gap below) without
-crashing. See `docs/PROGRESSION.md` for the corresponding gap removal.
+**First attempted fix (Task 13, fix 1): `build.rollupOptions.external`. It did
+not work, and the verification that passed it did not look at the renderer.**
+The approach was to expand `node:module`'s `builtinModules` into bare (`fs`)
+and `node:`-prefixed (`node:fs`) forms and pass them as `external`, so Rollup
+would leave every `import ... from 'fs'` statement untouched instead of
+substituting `__vite-browser-external`. Rollup does leave them untouched, but
+that is not enough: the renderer's output is ES modules loaded through
+`<script type="module">`, and Chromium's own ESM loader cannot resolve a bare
+specifier like `"child_process"` at all, whatever `nodeIntegration` permits
+at runtime. `external` only exchanged one failure for another, from an empty
+browser stub to `Failed to resolve module specifier "child_process"`.
+
+It was recorded as verified because of how it was checked: `electron-vite
+build && electron-builder` returning 0, and the packaged binary launching
+without the process dying. Neither observes the renderer. The renderer's own
+JS never ran, the window stayed blank, and nothing in that evidence could
+have shown it. The claim in the `electron.vite.config.ts` comment that the
+same imports were "confirmed working in dev mode" was wrong for the same
+reason: the dev smoke test only checked the main process and the BO server.
+Re-running dev with the renderer console forwarded shows dev was broken
+identically the whole time (`Module "path" has been externalized for browser
+compatibility` followed by `Uncaught TypeError: path.join is not a
+function`), with `#app` empty.
+
+This is precisely the silent failure D5 was written to catch, and it slipped
+through because no verification anywhere in this migration read the
+renderer's console until the final whole-branch review did. An exit code and
+a live process are not evidence that a GUI application works.
+
+**D7: Node builtins in the renderer are resolved by
+`vite-plugin-electron-renderer`, not by `external`.**
+Vite has no equivalent of the webpack `target: 'electron-renderer'` that made
+this work under the old vue-cli pipeline, and electron-vite's own
+documentation states plainly that it "does not support `nodeIntegration`" and
+that a polyfill plugin must be supplied for it. `vite-plugin-electron-renderer`
+(from the same `electron-vite` GitHub organisation) is the ecosystem's answer
+to exactly this case, and is the renderer's counterpart to the dependency
+externalization electron-vite already performs for `main`. It aliases every
+`(node:)?<builtin>` specifier to a small generated ES module that calls the
+real runtime `require()` and re-exports its members, so `import {join} from
+'path'` becomes a genuine `require('path').join`. Because the mechanism is a
+plain `resolve.alias`, `electron-vite dev` and `electron-vite build` get the
+identical rewrite, which is what makes the two modes comparable for the first
+time in this migration.
+
+Version note, and a gap in this migration's plan: the version matrix drawn up
+at design time did not anticipate needing a renderer-side plugin at all, so it
+never checked one. `vite-plugin-electron-renderer@1.x` requires Vite 8, while
+electron-vite 5 peers on Vite 5/6/7 and this project is on Vite 7.3.6. The
+pinned version is therefore `0.14.7`, the last release of the line supporting
+Vite < 8. It declares no peer dependencies and uses only long-stable Vite
+config surface (`resolve.alias`, `optimizeDeps.exclude`, `base`,
+`build.commonjsOptions.ignore`), which is why it works against Vite 7
+unmodified. Whenever electron-vite is upgraded to a Vite 8 line, this pin
+should move to 1.x in the same change.
+
+Two npm packages are additionally kept on runtime `require()` through the
+plugin's `resolve` option, each because a concrete failure was observed, not
+as a precaution. Both are production `dependencies`, so electron-builder ships
+them and the runtime `require()` resolves; this mirrors the main-process
+bundle, which already emits `require('sequelize-typescript')` verbatim.
+- `sqlite3` is a native C++ addon that locates `node_sqlite3.node` relative to
+  its own directory. Bundled, the lookup resolved against the project root:
+  `Could not locate the bindings file`.
+- `sequelize` pulled its entire CommonJS dependency graph into the single
+  renderer chunk, and Rollup hoists those modules' top-level declarations into
+  one shared scope. `uuid` declares `var URL = '6ba7b811-...'` there, which
+  then shadowed the global `URL` for the whole bundle, so Vite's own asset
+  helper (`new URL(asset, import.meta.url)`) ran against an undefined binding
+  and threw `URL is not a constructor` before Vue ever mounted. Externalizing
+  the package keeps its scope out of the chunk. As a side effect the renderer
+  bundle went from 4.05 MB to 782 kB.
+`sequelize-typescript` is externalized alongside them, which also lets the
+renderer drop the `resolve.alias` that forced its real Node build: `require()`
+uses Node's resolution and ignores the `browser` field the alias existed to
+defeat. The alias is kept for `main`, unchanged.
+
+**Verified, this time by reading the renderer.** `win.webContents.on(
+'console-message', ...)` was temporarily forwarded to stdout (reverted before
+commit) for both `electron-vite dev` and the packaged
+`dist_electron/linux-unpacked/mame-awesome-ui --no-sandbox`. In both, and
+identically: no uncaught errors, the router reaches `#/config`, the real
+first-run screen renders its actual content, `require('sqlite3')` returns the
+native addon and completes a real in-memory create/insert/select round-trip,
+and `require('sequelize-typescript')` returns the real Node build
+(`Sequelize.prototype.addModels` present, not the no-op browser stub). D4
+stands as-is: `src/background.ts`'s `webPreferences` were not touched.
 
 ## Rebasing decision (mid-migration)
 
