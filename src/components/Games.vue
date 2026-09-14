@@ -3,7 +3,7 @@
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList">
-                <li v-for="(game, index) in games" :class="{selected: selectedGameIndex === index}">
+                <li v-for="(game, index) in games" :key="game.id_game" :class="{selected: selectedGameIndex === index}">
                     <div class="marquee"
                          :style="{
                              marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
@@ -23,87 +23,72 @@
     </div>
 </template>
 
-<script lang='ts'>
-    import {Component, Prop, Watch} from 'vue-property-decorator';
-    import ControllableVue from '@/ControllableVue';
-    import Champions from '@/components/Champions.vue';
-    import Game from '@/model/Game.model';
-    import {join} from 'path';
-    import {format} from 'url';
+<script setup lang="ts">
+import {ref, watch, useTemplateRef} from 'vue';
+import Champions from '@/components/Champions.vue';
+import Game from '@/model/Game.model';
+import {join} from 'path';
+import {format} from 'url';
+import {getMameService, getGameService} from '@/services';
 
-    @Component({
-        components: {Champions},
-    })
-    export default class Games extends ControllableVue {
-        @Prop({required: true})
-        protected readonly games!: Game[];
+const props = withDefaults(defineProps<{
+    games: Game[];
+    selectedGameIndex?: number;
+    focused?: boolean;
+}>(), {selectedGameIndex: 0, focused: true});
 
-        @Prop({required: true, type: Number, default: 0})
-        protected readonly selectedGameIndex!: number;
+const gameListRef = useTemplateRef<HTMLUListElement>('gameList');
 
-        protected marqueesPath: string = '';
-        protected marquees: string[] = [];
-        protected flyersPath: string = '';
-        protected flyers: string[] = [];
-        protected logosPath: string = '';
-        protected logos: string[] = [];
+const mameService = getMameService();
+const gameService = getGameService();
 
-        @Prop({type: Boolean, default: true}) protected focused!: boolean;
+const marqueesPath = ref(mameService.marqueePath);
+const marquees = ref<string[]>(gameService.loadMarquees());
+const flyersPath = ref(mameService.flyerPath);
+const flyers = ref<string[]>(gameService.loadFlyers());
+const logosPath = ref(mameService.logoPath);
+const logos = ref<string[]>(gameService.loadLogos());
 
-        public created() {
-            const mameService = this.$store.getters.mameService;
-            const gameService = this.$store.getters.gameService;
-
-            this.marqueesPath = mameService.marqueePath;
-            this.marquees = gameService.loadMarquees();
-            this.flyersPath = mameService.flyerPath;
-            this.flyers = gameService.loadFlyers();
-            this.logosPath = mameService.logoPath;
-            this.logos = gameService.loadLogos();
-        }
-
-        @Watch('selectedGameIndex')
-        protected updateGamesPosition(val: number, prevValue: number) {
-            if (this.$refs.gameList) {
-                (this.$refs.gameList as HTMLElement).style.top = (-10 * val) + '%';
-            }
-        }
-
-        protected findMediaPath(dirPath: string, filenames: string[], romName: string): string|null {
-            const i = filenames.indexOf(romName + '.png');
-            return i < 0 ? null : join(dirPath, filenames[i]);
-        }
-
-        protected toFileUrl(path: string): string {
-            return format({pathname: path, protocol: 'file', slashes: true});
-        }
-
-        protected getMarquee(romName: string) {
-            const path = this.findMediaPath(this.marqueesPath, this.marquees, romName);
-            return path ? `url(${this.toFileUrl(path)})` : '';
-        }
-
-        protected getFlyer(romName: string) {
-            const path = this.findMediaPath(this.flyersPath, this.flyers, romName);
-            return path ? `url(${this.toFileUrl(path)})` : '';
-        }
-
-        protected getLogo(romName: string) {
-            const path = this.findMediaPath(this.logosPath, this.logos, romName);
-            return path ? this.toFileUrl(path) : '';
-        }
-
-        /**
-         * When a game has no marquee, show its (blurred) flyer with the logo overlaid on top
-         * instead - only when both are actually available, otherwise fall back to the default
-         * marquee background image from CSS.
-         */
-        protected hasFlyerLogoFallback(romName: string): boolean {
-            return !this.findMediaPath(this.marqueesPath, this.marquees, romName)
-                && !!this.findMediaPath(this.flyersPath, this.flyers, romName)
-                && !!this.findMediaPath(this.logosPath, this.logos, romName);
-        }
+watch(() => props.selectedGameIndex, (val) => {
+    if (gameListRef.value) {
+        gameListRef.value.style.top = (-10 * val) + '%';
     }
+});
+
+function findMediaPath(dirPath: string, filenames: string[], romName: string): string | null {
+    const i = filenames.indexOf(romName + '.png');
+    return i < 0 ? null : join(dirPath, filenames[i]);
+}
+
+function toFileUrl(path: string): string {
+    return format({pathname: path, protocol: 'file', slashes: true});
+}
+
+function getMarquee(romName: string) {
+    const path = findMediaPath(marqueesPath.value, marquees.value, romName);
+    return path ? `url(${toFileUrl(path)})` : '';
+}
+
+function getFlyer(romName: string) {
+    const path = findMediaPath(flyersPath.value, flyers.value, romName);
+    return path ? `url(${toFileUrl(path)})` : '';
+}
+
+function getLogo(romName: string) {
+    const path = findMediaPath(logosPath.value, logos.value, romName);
+    return path ? toFileUrl(path) : '';
+}
+
+/**
+ * When a game has no marquee, show its (blurred) flyer with the logo overlaid on top instead -
+ * only when both are actually available, otherwise fall back to the default marquee background
+ * image from CSS.
+ */
+function hasFlyerLogoFallback(romName: string): boolean {
+    return !findMediaPath(marqueesPath.value, marquees.value, romName)
+        && !!findMediaPath(flyersPath.value, flyers.value, romName)
+        && !!findMediaPath(logosPath.value, logos.value, romName);
+}
 </script>
 
 <style scoped>

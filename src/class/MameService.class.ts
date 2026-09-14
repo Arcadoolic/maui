@@ -2,11 +2,12 @@ import {existsSync, readFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
+import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 
 export default class MameService {
-    public mameIni: { [key: string]: any } = {} = {};
-    public uiIni: any = {};
+    public mameIni: { [key: string]: string[] } = {};
+    public uiIni: { [key: string]: string[] } = {};
     public iniPath!: string;
 
     protected config!: Config;
@@ -39,10 +40,10 @@ export default class MameService {
             ['-showconfig', ...this.mameHomeArgs],
             {cwd: this.iniPath},
         );
-        MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni);
+        this.mameIni = parseMameIni(mameIniContent.toString());
 
         const uiIniContent = readFileSync(uiIniPath, 'utf8');
-        MameService.parseMameIniFile(uiIniContent, this.uiIni);
+        this.uiIni = parseMameIni(uiIniContent);
     }
 
     public get mameBinary() {
@@ -58,26 +59,6 @@ export default class MameService {
     }
 
     /**
-     * Parse a mame ini file
-     * @param fileContent
-     * @param TargetObject
-     */
-    protected static parseMameIniFile(fileContent: string, TargetObject: { [key: string]: any }) {
-        const regex = new RegExp(/^([a-z_]+)\s+(.+)$/);
-        const file = fileContent.split('\n');
-        file.forEach((line) => {
-            if (line[0] === '#') { // Skip comments
-                return true;
-            }
-            const data = regex.exec(line.trim());
-            if (data) {
-                TargetObject[data[1]] = data[2].replace(/^"(.*)"$/, '$1').split(';');
-            }
-        });
-        return true;
-    }
-
-    /**
      * Read, parse and extract romNames from mame favorites.ini file
      */
     public getRomListFromFavorites() {
@@ -90,20 +71,7 @@ export default class MameService {
             // No favorites.ini yet (e.g. fresh MAME install, no favorite added) - treat as empty list
             return [];
         }
-        // No 'g' flag: a global regexp's .test() keeps lastIndex state between calls, which
-        // silently skips every other line when reused across forEach iterations like this.
-        const regexp = /^(?![0-9]$)[a-z0-9]+$/;
-        const file = readFileSync(favoritePath!, 'utf8').split('\n');
-        const retArray: string[] = [];
-        const existing: { [key: string]: boolean } = {};
-        file.forEach((line: string) => {
-            line = line.trim();
-            if (regexp.test(line) && !existing[line]) {
-                existing[line] = true;
-                retArray.push(line);
-            }
-        });
-        return retArray;
+        return parseFavorites(readFileSync(favoritePath, 'utf8'));
     }
 
     /**

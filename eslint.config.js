@@ -37,6 +37,10 @@ module.exports = tseslint.config(
             'dist/**',
             'dist_electron/**',
             'build/**',
+            // electron-vite's build output, the Phase B counterpart of the
+            // three above. Without this, `npm run lint` reports on generated
+            // bundles and its warning count moves with every probe build.
+            'out/**',
             'migrations/**',
             'public/**',
             'src/background.ts',
@@ -47,7 +51,7 @@ module.exports = tseslint.config(
     asWarnings([
         js.configs.recommended,
         ...tseslint.configs.recommended,
-        ...pluginVue.configs['flat/vue2-essential'],
+        ...pluginVue.configs['flat/essential'],
     ]),
 
     {
@@ -60,8 +64,6 @@ module.exports = tseslint.config(
             globals: {
                 ...globals.browser,
                 ...globals.node,
-                // Injected by vue-cli-plugin-electron-builder.
-                __static: 'readonly',
             },
             parserOptions: {
                 // .vue files are read by vue-eslint-parser, which delegates
@@ -104,6 +106,16 @@ module.exports = tseslint.config(
         files: ['**/*.vue'],
         rules: {
             '@stylistic/indent': 'off',
+        },
+    },
+
+    {
+        // Vitest injects its own globals into test files.
+        files: ['tests/**/*.ts'],
+        languageOptions: {
+            globals: {
+                ...globals.vitest,
+            },
         },
     },
 );

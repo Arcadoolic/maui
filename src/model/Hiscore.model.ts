@@ -36,7 +36,7 @@ export default class Hiscore extends Model<Hiscore> {
     public id_game!: number;
 
     @BelongsTo(() => Game)
-    public game!: Game;
+    public game!: InstanceType<typeof Game>;
 
     @ForeignKey(() => User)
     @Column({
@@ -45,7 +45,7 @@ export default class Hiscore extends Model<Hiscore> {
     public id_user!: number;
 
     @BelongsTo(() => User, 'id_user')
-    public user!: User;
+    public user!: InstanceType<typeof User>;
 
     @Column({
         type: DataType.INTEGER,

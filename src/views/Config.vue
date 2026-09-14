@@ -5,25 +5,17 @@
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Vue} from 'vue-property-decorator';
-    import {BO_SERVER_PORT} from '@/boServerPort';
-    import * as remote from '@electron/remote';
+<script setup lang="ts">
+import {BO_SERVER_PORT} from '@/boServerPort';
+import * as remote from '@electron/remote';
 
-    @Component
-    export default class Config extends Vue {
-        protected boServerPort = BO_SERVER_PORT;
+const configUrl = `http://localhost:${BO_SERVER_PORT}`;
 
-        protected get configUrl() {
-            return `http://localhost:${this.boServerPort}`;
-        }
-
-        // Opened in the OS's default browser (not navigated to in this frameless kiosk window)
-        // - the whole point is to configure the app from a real browser, per the message above.
-        protected openConfigUrl() {
-            remote.shell.openExternal(this.configUrl);
-        }
-    }
+// Opened in the OS's default browser (not navigated to in this frameless kiosk window) - the
+// whole point is to configure the app from a real browser, per the message above.
+function openConfigUrl() {
+    remote.shell.openExternal(configUrl);
+}
 </script>
 
 <style scoped>

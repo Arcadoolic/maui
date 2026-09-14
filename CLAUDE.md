@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An Electron + Vue 2 (TypeScript) frontend ("arcade cabinet" front-end) for the MAME emulator. It shells out to a locally installed `mame` binary to list/launch ROMs, mirrors game/user/hiscore data into a local SQLite database via Sequelize, and drives everything with a gamepad-friendly UI.
+An Electron + Vue 3 (TypeScript) frontend ("arcade cabinet" front-end) for the MAME emulator. It shells out to a locally installed `mame` binary to list/launch ROMs, mirrors game/user/hiscore data into a local SQLite database via Sequelize, and drives everything with a gamepad-friendly UI.
 
 ## Platform support
 
@@ -27,28 +27,30 @@ just install  # npm install only
 
 Only ever run **one** `serve`/`build` at a time — both trigger `npm install`, and concurrent installs race on rebuilding the native `sqlite3` module (corrupts the `node-gyp`/`make` build directory).
 
+`just serve`/`just build` wrap `electron:serve`/`electron:build`, which run `electron-vite dev` and `electron-vite build && electron-builder` respectively (not `vue-cli-service`, removed during the Vue 3 migration).
+
 Other useful commands (no `just` recipe):
 ```bash
+npm test                                              # run the Vitest characterization tests
 npx sequelize-cli migration:generate --name=<name>   # new file in migrations/
 electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3 native binding
 ```
-There is no test suite in this repo.
 
 ## Architecture
 
 **Process split, no preload/contextBridge.** `src/background.ts` is the Electron main process; it creates a single frameless `BrowserWindow` with `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`, and calls `@electron/remote/main`'s `enable()` on it. Every renderer view therefore uses `@electron/remote` and Node builtins (`fs`, `child_process`, `path`, `os`) directly — there is no IPC/preload boundary to maintain. `src/api/*` (Express-based REST controllers) exists but is currently disabled (commented out in `background.ts`).
 
-**Routing is a 3-screen flow** (`src/router.ts`): `/init` (`Init.vue`, splash) → `/config` (`Config.vue`, first-run setup) → `/home` (`Home.vue`, main browser UI). `Init.vue` loads `Config`, and if no valid config file exists redirects to `/config`; otherwise it commits the Vuex `initServices` mutation and pushes to `/home`.
+**Routing is a 3-screen flow** (`src/router.ts`, `vue-router` 5): `/init` (`Init.vue`, splash) → `/config` (`Config.vue`, first-run setup) → `/home` (`Home.vue`, main browser UI). `Init.vue` loads `Config`, and if no valid config file exists redirects to `/config`; otherwise it calls `initServices()` from `src/services.ts` and pushes to `/home`.
 
-**Vuex store as a service container, not state** (`src/store.ts`). State holds a `Config` and `Database` instance created eagerly, plus `mameService`/`gameService`/`userService`/`hiscoreService` created once (in that dependency order) by the `initServices` mutation. Views pull these out via getters (`this.$store.getters.mameService`, etc.) and call methods on them directly — treat these as plain service classes wired through Vuex, not reactive state.
+**`src/services.ts` as a service container, not a state store.** A plain TS module (replaced Vuex, which held zero reactive state to begin with): holds a `Config` and `Database` instance created eagerly, plus `mameService`/`gameService`/`userService`/`hiscoreService` created once (in that dependency order) by `initServices()`. Views pull these out via `getMameService()`/`getGameService()`/etc. and `getIsInit()`, and call methods on them directly: treat these as plain service classes with a lazy-init guard, not reactive state.
 
 **Service classes** (`src/class/*.class.ts`):
 - `Config.class.ts` — loads/saves `mame-awesome-ui-config.json` (mame path, mame binary filename, avatars path).
 - `MameService.class.ts` — the boundary to the external `mame` binary. Constructor runs `mame -showconfig` and parses it plus `ui.ini` (paths come from MAME's own ini search order); throws if either is unparseable. Reads `favorites.ini` for the ROM list (missing file = empty list, not an error), runs `mame -lx <rom>` for per-game metadata, and launches/stops games via `execFile`.
-- `GameService.class.ts` — syncs the ROM list into the `Game` Sequelize model, and reads static `genre_206.ini`/`nplayers_206.ini` from `public/data` (via the `__static` global) for categories/player counts.
+- `GameService.class.ts` — syncs the ROM list into the `Game` Sequelize model, and reads `genre.ini`/`Multiplayer.ini` for categories/player counts from `MameService.genreIniPath`/`nplayersIniPath` (resolved from `ui.ini`'s `categorypath`, populated by a starting-pack import; absent until then, not an error).
 - `Database.class.ts` — wraps a `sequelize-typescript` `Sequelize` (SQLite) instance over the `Category`/`Game`/`User`/`Hiscore` models, and runs pending migrations from `./migrations` through `Umzug` on every start (`update()`), or seeds categories on first run (`install()`).
 - `UserService.class.ts` / `HiscoreService.class.ts` — user/avatar and high-score bookkeeping.
-- `Gamepads.class.ts` + `ControllableVue.ts` — gamepad polling dispatched as `gamepadKeydown`/`gamepadKeyup` window `CustomEvent`s; `ControllableVue` is a base class views extend to register combined keyboard+gamepad handlers.
+- `Gamepads.class.ts` + `src/composables/useControllable.ts` — gamepad polling dispatched as `gamepadKeydown`/`gamepadKeyup` window `CustomEvent`s; `useControllable()` is a composable that components call to register combined keyboard and gamepad handlers (`const {onKeydown, onKeyup} = useControllable()`), with cleanup handled automatically in `onUnmounted`.
 
 **Dev vs. production paths differ throughout**, gated on `process.env.NODE_ENV === 'development'`: config JSON, the SQLite file, and migrations resolve to the project root/`./migrations` in dev vs. `remote.app.getPath('userData')`/`process.resourcesPath` in production; `Home.vue` only forces `setFullScreen(true)` outside development. When changing path or window logic, check both branches.
 
@@ -64,5 +66,5 @@ nominal default branch). Concretely:
 
 ## Style
 
-- Linting is **eslint** (flat config, `eslint.config.js`): `@eslint/js` + `typescript-eslint` + `eslint-plugin-vue` (`vue2-essential`) + `@stylistic` for formatting. 4-space indent, single quotes, fields-before-methods member ordering. Every rule reports at `warn` severity (ported from tslint's `defaultSeverity`), so `npm run lint` never fails the build.
-- Vue components are class-based (`vue-property-decorator`/`vue-class-component`), not the Composition API.
+- Linting is **eslint** (flat config, `eslint.config.js`): `@eslint/js` + `typescript-eslint` + `eslint-plugin-vue` (`essential`, Vue 3 preset) + `@stylistic` for formatting. 4-space indent, single quotes, fields-before-methods member ordering. Every rule reports at `warn` severity (ported from tslint's `defaultSeverity`), so `npm run lint` never fails the build.
+- Vue components use `<script setup>` + the Composition API, no decorator library.

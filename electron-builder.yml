@@ -1,0 +1,15 @@
+appId: mame-awesome-ui
+productName: mame-awesome-ui
+asar: true
+directories:
+  output: dist_electron
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: migrations/
+    to: migrations/
+  - from: public/
+    to: public/
+linux:
+  category: Game

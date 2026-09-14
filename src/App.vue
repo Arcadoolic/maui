@@ -4,28 +4,24 @@
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Vue} from 'vue-property-decorator';
-    import * as remote from '@electron/remote';
-    import Gamepads from '@/class/Gamepads.class';
+<script setup lang="ts">
+import {ref, onMounted} from 'vue';
+import * as remote from '@electron/remote';
+import Gamepads from '@/class/Gamepads.class';
 
-    @Component
-    export default class App extends Vue {
-        protected focused = true;
+const focused = ref(true);
 
-        public mounted() {
-            // Electron event
-            remote.getCurrentWindow().on('blur', () => {
-                Gamepads.stopGamepadsListeners();
-                this.focused = false;
-            });
-            remote.getCurrentWindow().on('focus', () => {
-                this.focused = true;
-                Gamepads.init();
-            });
-        }
-
-    }
+onMounted(() => {
+    // Electron event
+    remote.getCurrentWindow().on('blur', () => {
+        Gamepads.stopGamepadsListeners();
+        focused.value = false;
+    });
+    remote.getCurrentWindow().on('focus', () => {
+        focused.value = true;
+        Gamepads.init();
+    });
+});
 </script>
 
 <style src="./assets/font-awesome/css/all.min.css"></style>
