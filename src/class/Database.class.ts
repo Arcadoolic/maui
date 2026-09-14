@@ -1,5 +1,5 @@
 import {existsSync, mkdirSync} from 'fs';
-import {join, basename} from 'path';
+import {join} from 'path';
 import * as os from 'os';
 import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
@@ -85,7 +85,7 @@ export default class Database {
                     path: process.env.NODE_ENV === 'development' ? './migrations' : join(process.resourcesPath!, 'migrations'),
                     pattern: /\.js$/,
                     customResolver(path: string): { up: () => PromiseLike<any>; down?: () => PromiseLike<any> } {
-                        return require('../../migrations/' + basename(path, '.js'));
+                        return require(path);
                     },
                 },
             });
