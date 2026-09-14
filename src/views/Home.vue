@@ -329,7 +329,7 @@ onMounted(() => {
         transition: margin-bottom .3s ease-out 0s;
     }
 
-    .slide-enter, .slide-leave-to {
+    .slide-enter-from, .slide-leave-to {
         margin-bottom: -100%;
     }
 
@@ -349,11 +349,11 @@ onMounted(() => {
         background-size: cover;
     }
 
-    .flyer-enter, .flyer-leave-to {
+    .flyer-enter-from, .flyer-leave-to {
         margin-right: -100%;
     }
 
-    .games-enter, .games-leave-to {
+    .games-enter-from, .games-leave-to {
         margin-left: -100%;
     }
 
@@ -365,11 +365,11 @@ onMounted(() => {
         transition: all .3s ease-out 0s;
     }
 
-    .title-enter, .title-leave-to {
+    .title-enter-from, .title-leave-to {
         margin-top: -100%;
     }
 
-    .category.enter, .category-leave-to {
+    .category-enter-from, .category-leave-to {
         margin-bottom: -100%;
     }
 
