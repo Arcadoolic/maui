@@ -3,7 +3,7 @@
         <p v-if="loading">Loading hiscores...</p>
         <template v-else>
             <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores">
-                <div class="icon" v-if="score.rank !== '1'">
+                <div class="icon">
                     <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
                     <img v-else src="../assets/defaultPlayer.png" alt="">
                 </div>
@@ -13,10 +13,6 @@
                         <p class="name">{{score.user.pseudo_3}}</p>
                         <p class="score">{{score.score}}</p>
                     </div>
-                </div>
-                <div class="icon" v-if="score.rank === '1'">
-                    <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
-                    <img v-else src="../assets/defaultPlayer.png" alt="">
                 </div>
             </div>
         </template>
@@ -139,17 +135,21 @@
     }
 
     .hiscore.first {
-        width: 0;
         position: absolute;
-        top: -20%;
+        top: 0;
+        left: 50%;
+        transform: translate(-50%, -50%);
         font-size: 2vh;
-        left: -50%;
-        right: 0;
-        margin: 0 auto;
+        white-space: nowrap;
+    }
+
+    .hiscore.first .icon {
+        width: auto;
     }
 
     .hiscore.first .icon img {
         border-radius: 0;
+        max-width: 6vw;
     }
 
     .hiscore.first .info {
