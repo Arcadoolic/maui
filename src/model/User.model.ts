@@ -55,7 +55,7 @@ export default class User extends Model<User> {
     public active!: boolean;
 
     @HasMany(() => Hiscore)
-    public hiscores!: Hiscore[];
+    public hiscores!: InstanceType<typeof Hiscore>[];
 
     @CreatedAt
     public creationDate!: Date;
