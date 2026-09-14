@@ -1,19 +1,15 @@
-import Vue from 'vue';
-import Router, {Route} from 'vue-router';
+import {createRouter, createWebHashHistory} from 'vue-router';
 import Home from './views/Home.vue';
 import Init from './views/Init.vue';
-import store from '@/store';
 import Config from '@/views/Config.vue';
+import {getIsInit} from '@/services';
 
-Vue.use(Router);
-
-const router = new Router({
+const router = createRouter({
+    history: createWebHashHistory(),
     routes: [
         {
             path: '/',
-            beforeEnter(to: Route, from: Route, next) {
-                return next({name: 'init'});
-            },
+            redirect: {name: 'init'},
         },
         {
             path: '/init',
@@ -33,15 +29,14 @@ const router = new Router({
     ],
 });
 
-// Home relies on mameService/gameService/... having been set up by Init's mounted() hook
-// (store's initServices mutation). Landing directly on /home with those still null - e.g. a
-// dev-server full reload that keeps the current #/home hash instead of a hot patch - crashes
-// Games.vue and friends. Send anything but /init and /config back through /init first.
-router.beforeEach((to, from, next) => {
-    if (to.name !== 'init' && to.name !== 'config' && !store.getters.isInit) {
-        return next({name: 'init'});
+// Home relies on the services module having been set up by Init's onMounted (services.ts's
+// initServices()) - landing directly on /home with that not yet done (e.g. a dev-server full
+// reload that keeps the current #/home hash instead of a hot patch) crashes Games.vue and
+// friends. Send anything but /init and /config back through /init first.
+router.beforeEach((to) => {
+    if (to.name !== 'init' && to.name !== 'config' && !getIsInit()) {
+        return {name: 'init'};
     }
-    next();
 });
 
 export default router;

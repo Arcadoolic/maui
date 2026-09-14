@@ -68,33 +68,22 @@ const alias = {
 
 export default defineConfig({
     main: {
-        // No externalizeDepsPlugin: it is deprecated in electron-vite 5 and
-        // replaced by `build.externalizeDeps`, which defaults to true for the
-        // main and preload bundles. sqlite3 (a native addon) and sequelize
-        // therefore stay external without any configuration, which is what
-        // `externals: ['sqlite3', 'sequelize']` did in vue.config.js.
         plugins: [swcPlugin(swcOptions)],
         resolve: {alias},
         build: {
             rollupOptions: {
-                input: {index: resolve(__dirname, 'src/probe/main.ts')},
+                input: {index: resolve(__dirname, 'src/background.ts')},
             },
         },
     },
     renderer: {
-        // electron-vite defaults the renderer root to ./src/renderer and looks
-        // for index.html there. The probe lives elsewhere, so point both the
-        // root and the entry at it.
-        root: resolve(__dirname, 'src/probe'),
-        // `RendererBuildOptions` has no `externalizeDeps` in electron-vite 5:
-        // the renderer is a web-target bundle and dependencies are bundled.
-        // Node and native modules are reached at runtime through the
-        // nodeIntegration `require` instead, which is what the probe checks.
+        root: resolve(__dirname, 'src'),
+        publicDir: resolve(__dirname, 'public'),
         plugins: [vue(), swcPlugin(swcOptions)],
         resolve: {alias},
         build: {
             rollupOptions: {
-                input: {index: resolve(__dirname, 'src/probe/index.html')},
+                input: {index: resolve(__dirname, 'src/index.html')},
             },
         },
     },

@@ -51,7 +51,7 @@ module.exports = tseslint.config(
     asWarnings([
         js.configs.recommended,
         ...tseslint.configs.recommended,
-        ...pluginVue.configs['flat/vue2-essential'],
+        ...pluginVue.configs['flat/essential'],
     ]),
 
     {

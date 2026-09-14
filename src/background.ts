@@ -1,14 +1,10 @@
 'use strict';
 
-import {app, protocol, BrowserWindow, ipcMain} from 'electron';
+import {app, BrowserWindow} from 'electron';
 import * as remoteMain from '@electron/remote/main';
-import {
-    createProtocol,
-    installVueDevtools
-} from 'vue-cli-plugin-electron-builder/lib';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
+import {join} from 'path';
 import {Server} from 'http';
-import api from '@/api/api';
 import {startBoServer} from '@/boServer';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import Config from '@/class/Config.class';
@@ -19,19 +15,13 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
-let createdAppProtocol = false;
-let win: BrowserWindow|null;
-let boServer: Server|undefined;
-
-// Standard scheme must be registered before the app is ready
-protocol.registerSchemesAsPrivileged([
-    {scheme: 'app', privileges: {secure: true, standard: true}}
-]);
+let win: BrowserWindow | null;
+let boServer: Server | undefined;
 
 function loadPath(winVar: BrowserWindow, path: string) {
-    if (process.env.WEBPACK_DEV_SERVER_URL) {
+    if (process.env.ELECTRON_RENDERER_URL) {
         // Load the url of the dev server if in development mode
-        winVar.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string + '#/' + path);
+        winVar.loadURL(process.env.ELECTRON_RENDERER_URL + '#/' + path);
         if (!process.env.IS_TEST) {
             const config = new Config();
             config.load();
@@ -40,18 +30,13 @@ function loadPath(winVar: BrowserWindow, path: string) {
             }
         }
     } else {
-        if (!createdAppProtocol) {
-            createProtocol('app');
-            createdAppProtocol = true;
-        }
-        // Load the index.html when not in development
-        winVar.loadURL('app://./index.html');
+        winVar.loadFile(join(__dirname, '../renderer/index.html'), {hash: '/' + path});
     }
 }
 
-function createWindow(options: BrowserWindowConstructorOptions, path): BrowserWindow {
+function createWindow(options: BrowserWindowConstructorOptions, path: string): BrowserWindow {
     // Create the browser window.
-    let winVar: BrowserWindow|null = new BrowserWindow(options);
+    let winVar: BrowserWindow | null = new BrowserWindow(options);
     remoteMain.enable(winVar.webContents);
 
     loadPath(winVar, path);
@@ -83,15 +68,7 @@ app.on('activate', () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.on('ready', async () => {
-    if (isDevelopment && !process.env.IS_TEST) {
-        // Install Vue Devtools (non-blocking: the installer's promise can hang
-        // indefinitely against the current Chrome Web Store, so don't await it)
-        installVueDevtools().catch(error => {
-            console.error('Failed to install Vue Devtools:', error);
-        });
-    }
     win = createSplashWin();
-    // api(app.getPath('userData'), ipcMain, win);
 
     boServer = startBoServer(BO_SERVER_PORT, () => {
         if (win) {
@@ -99,17 +76,16 @@ app.on('ready', async () => {
         }
     }, () => {
         // Unlike onConfigured() above (a route reload is enough after a normal config save), a
-        // reset needs a real process restart: the renderer's Vuex store only ever builds its
-        // MameService/GameService/... once (see store.ts's initServices), so those would keep
-        // serving stale data - parsed from the mame home files /reset just deleted - even after
-        // reloading to /init and going through first-run setup again.
+        // reset needs a real process restart: services.ts only ever builds its
+        // MameService/GameService/... once (see services.ts's initServices()), so those would
+        // keep serving stale data - parsed from the mame home files /reset just deleted - even
+        // after reloading to /init and going through first-run setup again.
         //
-        // app.relaunch() is NOT used here: under `electron:serve` the app is a child process
-        // orchestrated by vue-cli-plugin-electron-builder's dev server (WEBPACK_DEV_SERVER_URL
-        // and friends), and relaunch()'s re-spawn doesn't reconnect to that setup - the process
-        // just exits and nothing comes back. So the /reset response tells the user to close and
-        // restart manually (`just serve` in dev; relaunching the packaged app otherwise), and
-        // this just performs the actual exit.
+        // app.relaunch() is NOT used here: under `electron-vite dev` the app is a child process
+        // orchestrated by electron-vite's dev server, and relaunch()'s re-spawn doesn't reconnect
+        // to that setup - the process just exits and nothing comes back. So the /reset response
+        // tells the user to close and restart manually (`just serve` in dev; relaunching the
+        // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
     });
 });
@@ -128,8 +104,8 @@ if (isDevelopment) {
         });
     } else {
         process.on('SIGTERM', () => {
-            app.quit()
-        })
+            app.quit();
+        });
     }
 }
 
@@ -139,7 +115,7 @@ function createSplashWin() {
             webSecurity: false,
             nodeIntegration: true,
             contextIsolation: false,
-            sandbox: false
+            sandbox: false,
         },
         backgroundColor: '#000000',
         frame: false,
