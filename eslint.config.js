@@ -64,8 +64,6 @@ module.exports = tseslint.config(
             globals: {
                 ...globals.browser,
                 ...globals.node,
-                // Injected by vue-cli-plugin-electron-builder.
-                __static: 'readonly',
             },
             parserOptions: {
                 // .vue files are read by vue-eslint-parser, which delegates

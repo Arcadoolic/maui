@@ -13,6 +13,7 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {StartingPackManifest} from '@/types/StartingPackManifest';
+import {getStaticPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
 // -> Helpers.class.ts's @electron/remote import at module scope, which would break this
@@ -25,8 +26,6 @@ import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
 import {UniqueConstraintError, ValidationError} from 'sequelize';
-
-declare const __static: string;
 
 type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui';
 type PathField = 'mamePath' | 'pluginsPath';
@@ -1658,7 +1657,7 @@ function runInputProbe(mameBinary: string, iniPath: string, romName: string): In
             '-sound', 'none',
             '-skip_gameinfo',
             '-autoboot_delay', '0',
-            '-autoboot_script', join(__static, 'lua', 'input-probe.lua'),
+            '-autoboot_script', join(getStaticPath(), 'lua', 'input-probe.lua'),
             '-inipath', iniPath,
             '-homepath', iniPath,
         ],
@@ -2305,11 +2304,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     createSequelize();
 
     app.get('/background.jpg', (req, res) => {
-        res.sendFile(join(__static, 'img/background.jpg'));
+        res.sendFile(join(getStaticPath(), 'img/background.jpg'));
     });
 
     app.get('/mame-logo.svg', (req, res) => {
-        res.sendFile(join(__static, 'img/mame-logo.svg'));
+        res.sendFile(join(getStaticPath(), 'img/mame-logo.svg'));
     });
 
     app.get('/', (req, res) => {
