@@ -42,9 +42,7 @@ _check-sandbox:
     # to the setuid helper, node_modules/electron/dist/chrome-sandbox. npm
     # cannot set a setuid-root bit, so a fresh install leaves that helper mode
     # 755 and Electron aborts during process startup -- before background.ts
-    # runs, so no window ever appears. vue-cli-plugin-electron-builder does not
-    # forward the child's stderr, which turns the abort into a silent hang
-    # after "Launching Electron...".
+    # runs, so no window ever appears.
     helper="node_modules/electron/dist/chrome-sandbox"
     [ "$(uname -s)" = "Linux" ] || exit 0
     [ -e "$helper" ] || exit 0
@@ -77,10 +75,6 @@ _check-sandbox:
 # Run the app in development mode (Electron, hot-reload)
 serve: install _check-sandbox
     npm run electron:serve
-
-# Run the Phase B plumbing probe (electron-vite + Vue 3)
-probe: install _check-sandbox
-    npm run probe:dev
 
 # Build production Electron app
 build: install
