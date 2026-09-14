@@ -146,6 +146,7 @@ function getFavoritesCachePath(): string {
 interface FavoritesCacheEntry {
     fullname: string;
     biosName: string | null;
+    deviceRoms: string[];
 }
 
 interface FavoritesCache {
@@ -588,6 +589,34 @@ interface GameXmlInfo {
     // The name of the separate BIOS set this game needs (mame -lx's `romof` attribute on
     // <machine>), e.g. "neogeo" - null when the game is self-contained.
     biosName: string | null;
+    // Names of device romsets this game needs beyond its own zip and biosName's parent set,
+    // e.g. "ym2413" for pang - null when the game is self-contained.
+    deviceRoms: string[];
+}
+
+/**
+ * `mame -lx <romName>` lists the target <machine> first, then one <machine isdevice="yes">
+ * block per device it uses (device_ref on the target machine names them by tag). Most devices
+ * (cpus, screen, speaker, ...) have no <rom> children and don't need a zip of their own - only
+ * ones that do (e.g. ym2413's internal instrument ROM) are actual romset dependencies, distinct
+ * from biosName's parent-set relationship (e.g. puckman -> pacman).
+ */
+function getDeviceRomNames(xmlContent: string): string[] {
+    const machineBlocks = xmlContent.match(/<machine\b[^>]*>[\s\S]*?<\/machine>/g);
+    if (!machineBlocks || machineBlocks.length < 2) {
+        return [];
+    }
+    const [targetBlock, ...deviceBlocks] = machineBlocks;
+    const refNames = [...targetBlock.matchAll(/<device_ref\b[^>]*\bname="([^"]*)"/g)].map(match => match[1]);
+
+    const hasRomsByName = new Map<string, boolean>();
+    for (const block of deviceBlocks) {
+        const nameMatch = /^<machine\b[^>]*\bname="([^"]*)"/.exec(block);
+        if (nameMatch) {
+            hasRomsByName.set(nameMatch[1], /<rom\b/.test(block));
+        }
+    }
+    return refNames.filter(name => hasRomsByName.get(name));
 }
 
 /**
@@ -605,9 +634,10 @@ function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): G
         return {
             description: extractXmlTagContent(xmlContent, 'description'),
             biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
+            deviceRoms: getDeviceRomNames(xmlContent),
         };
     } catch {
-        return {description: null, biosName: null};
+        return {description: null, biosName: null, deviceRoms: []};
     }
 }
 
@@ -621,9 +651,10 @@ interface FavoriteRow extends FavoriteMediaStatus {
     romName: string;
     fullname: string;
     biosName: string | null;
+    deviceRoms: string[];
     // False when this rom has no entry in the favorites cache yet (added since the last "Mettre
-    // à jour les favoris") - fullname then just falls back to romName and biosName to null,
-    // rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
+    // à jour les favoris") - fullname then just falls back to romName and biosName/deviceRoms to
+    // empty, rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
     cached: boolean;
 }
 
@@ -697,20 +728,21 @@ function getFavoriteMediaStatus(context: FavoritesContext, romName: string): Fav
  */
 function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
     const {mameBinary, iniPath} = context;
-    const {description, biosName} = getGameXmlInfo(mameBinary, iniPath, romName);
+    const {description, biosName, deviceRoms} = getGameXmlInfo(mameBinary, iniPath, romName);
     return {
         romName,
         fullname: description || romName,
         biosName,
+        deviceRoms,
         cached: true,
         ...getFavoriteMediaStatus(context, romName),
     };
 }
 
 /**
- * Same shape as resolveFavoriteRow(), but reads fullname/biosName from the favorites cache
- * (no `mame -lx` call) - falls back to the bare romName/null when this rom isn't in the cache
- * yet (cached: false), same as before any refresh has ever run.
+ * Same shape as resolveFavoriteRow(), but reads fullname/biosName/deviceRoms from the favorites
+ * cache (no `mame -lx` call) - falls back to the bare romName/null/empty when this rom isn't in
+ * the cache yet (cached: false), same as before any refresh has ever run.
  */
 function favoriteRowFromCache(context: FavoritesContext, romName: string, cache: FavoritesCache | null): FavoriteRow {
     const entry = cache?.entries[romName];
@@ -718,6 +750,7 @@ function favoriteRowFromCache(context: FavoritesContext, romName: string, cache:
         romName,
         fullname: entry?.fullname || romName,
         biosName: entry?.biosName ?? null,
+        deviceRoms: entry?.deviceRoms ?? [],
         cached: !!entry,
         ...getFavoriteMediaStatus(context, romName),
     };
@@ -2034,6 +2067,19 @@ function renderDownloadSummary(summary: DownloadSummary): string {
     `;
 }
 
+/**
+ * Bios column content: the parent romset (biosName, e.g. "pacman" for a puckman clone) and any
+ * device romsets (deviceRoms, e.g. "ym2413") are distinct dependencies a favorite can be missing
+ * independently of each other, so both show up here, comma-separated.
+ */
+function renderBiosCell(row: FavoriteRow): string {
+    if (!row.cached) {
+        return '<em>-</em>';
+    }
+    const parts = [...(row.biosName ? [row.biosName] : []), ...row.deviceRoms];
+    return parts.length ? escapeHtml(parts.join(', ')) : '<em>-</em>';
+}
+
 function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     if (favoritesInfo.error) {
         return `
@@ -2048,7 +2094,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
         <tr>
             <td>${escapeHtml(row.romName)}</td>
             <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
-            <td>${row.cached && row.biosName ? escapeHtml(row.biosName) : '<em>-</em>'}</td>
+            <td>${renderBiosCell(row)}</td>
             <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
             <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
             <td class="center">${renderFavoriteBadge(row.hasLogo)}</td>
@@ -2077,7 +2123,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                         <tr>
                             <th>Shortname</th>
                             <th>Name</th>
-                            <th>Bios</th>
+                            <th>Bios / Devices</th>
                             <th class="center">Marquee</th>
                             <th class="center">Flyer</th>
                             <th class="center">Logo</th>
@@ -2385,7 +2431,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
         const rows: FavoriteRow[] = context.romNames.map((romName) => {
             const row = resolveFavoriteRow(context, romName);
-            cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName};
+            cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
             res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
             return row;
         });
