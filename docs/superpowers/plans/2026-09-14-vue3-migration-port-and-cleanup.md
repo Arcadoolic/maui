@@ -949,10 +949,12 @@ git commit -m "refactor(vue3): port the Config view to script setup"
 
 ### Task 10: `src/views/Init.vue`
 
-Needs `services.ts` (`initServices`, all the getters) and `vue-router`'s `useRouter()` (the real
-`vue-router` 5 dependency arrives in Task 12, but the composable's public API - `useRouter()`
-returning an object with `.push()` - is unchanged from v3, so this file is written against it now
-and will simply work once Task 12 swaps the dependency).
+Needs `services.ts` (`initServices`, all the getters) and router navigation. **Do not use
+`useRouter()`** here: that composable does not exist in `vue-router` 3 (the version still
+installed until Task 12), so importing it now would break `tsc --noEmit` before Task 12 ever
+runs. Import the router singleton directly instead - `import router from '@/router'` - which
+exports the same `.push()`-bearing instance under both the current `vue-router` 3 and the
+`vue-router` 5 Task 12 installs, so this file needs no changes when that dependency bump happens.
 
 **Files:**
 - Modify: `src/views/Init.vue`
@@ -968,7 +970,7 @@ and will simply work once Task 12 swaps the dependency).
 <script setup lang="ts">
 import * as remote from '@electron/remote';
 import {ref, onMounted} from 'vue';
-import {useRouter} from 'vue-router';
+import router from '@/router';
 import {emitter} from '@/emitter';
 import {
     getConfiguration,
@@ -980,7 +982,6 @@ import {
     getHiscoreService,
 } from '@/services';
 
-const router = useRouter();
 const error = ref<string | null>(null);
 
 remote.getCurrentWindow().setResizable(true);
@@ -1058,7 +1059,9 @@ git commit -m "refactor(vue3): port the Init view to script setup"
 ### Task 11: `src/views/Home.vue`
 
 The largest view. Needs `services.ts`, `emitter`, `useControllable()`, and all the already-ported
-child components.
+child components. **Do not use `useRouter()`** - same reasoning as Task 10: that composable does
+not exist in `vue-router` 3, still installed until Task 12. Import the router singleton directly:
+`import router from '@/router'`.
 
 **Files:**
 - Modify: `src/views/Home.vue`
@@ -1077,7 +1080,7 @@ The template is unchanged (still references `Categories`, `Games`, `Hiscores`, `
 ```vue
 <script setup lang="ts">
 import {ref, computed, onMounted} from 'vue';
-import {useRouter} from 'vue-router';
+import router from '@/router';
 import Categories from '@/components/Categories.vue';
 import Games from '@/components/Games.vue';
 import Gamepads from '@/class/Gamepads.class';
@@ -1095,8 +1098,6 @@ import * as Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
-
-const router = useRouter();
 
 let gameService: GameService;
 
