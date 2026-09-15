@@ -25,6 +25,7 @@ just serve    # npm install, then electron:serve (dev, hot-reload)
 just build    # npm install, then electron:build (packaged app)
 just lint     # npm run lint:fix (eslint --fix)
 just install  # npm install only
+just starting-pack  # build a starting pack ZIP (favorites + roms + artwork) from the local MAME home
 ```
 
 Only ever run **one** `serve`/`build` at a time — both trigger `npm install`, and concurrent installs race on rebuilding the native `sqlite3` module (corrupts the `node-gyp`/`make` build directory).
@@ -56,6 +57,28 @@ electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3
 
 **Dev vs. production paths differ throughout**, gated on `process.env.NODE_ENV === 'development'`: config JSON, the SQLite file, and migrations resolve to the project root/`./migrations` in dev vs. `remote.app.getPath('userData')`/`process.resourcesPath` in production; `Home.vue` only forces `setFullScreen(true)` outside development. When changing path or window logic, check both branches.
 
+## Gotchas
+
+- **sqlite3 native build on Python 3.12+**: node-gyp's gyp imports `distutils`,
+  removed from Python's stdlib in 3.12. `just install` auto-resolves a Python
+  interpreter that still provides `distutils` (via `PYTHON` env var) before
+  running `npm install`. Running `npm install` directly on a system whose
+  default `python3` is 3.12+ without `distutils`/`setuptools` will fail the
+  sqlite3 build — use `just install` or export `PYTHON` yourself first.
+- **Electron setuid sandbox on Ubuntu 24.04**: with
+  `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu 24.04 default),
+  Chromium falls back to the setuid sandbox helper
+  (`node_modules/electron/dist/chrome-sandbox`), which npm cannot set to
+  setuid-root. A fresh install leaves it mode 755, and Electron aborts
+  *before* `background.ts` runs — no window appears, no visible error. Fix
+  after every Electron reinstall/version bump:
+  ```bash
+  sudo chown root:root node_modules/electron/dist/chrome-sandbox
+  sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+  ```
+  `just serve` checks this automatically (`_check-sandbox` recipe) and prints
+  this fix if misconfigured; `just build` does not run the check.
+
 ## Git workflow
 
 `refacto-2026` is the main branch for all ongoing work right now, not `develop` (the repo's
@@ -65,6 +88,14 @@ nominal default branch). Concretely:
 - Every PR targets `refacto-2026` as its base branch.
 - Never open a PR into `develop`, and never merge anything into `develop`, unless explicitly asked
   to do that specific thing in that moment.
+
+### Versioning & releases
+
+Version bumps, `CHANGELOG.md`, git tags and GitHub releases are automated by
+semantic-release (`.releaserc.json`), triggered by
+`.github/workflows/release.yml` on every push to `refacto-2026`. The next
+version is derived from Conventional Commits since the last release — never
+bump `version` in `package.json` by hand.
 
 ## Style
 
