@@ -39,6 +39,7 @@
         "vue-router": "^5.3.1"
     },
     "devDependencies": {
+        "@electron/rebuild": "^4.2.0",
         "@eslint/js": "^10.0.1",
         "@stylistic/eslint-plugin": "^5.10.0",
         "@swc/core": "^1.16.2",
@@ -53,7 +54,6 @@
         "electron": "^44.3.0",
         "electron-builder": "^26.15.3",
         "electron-log": "^3.0.6",
-        "electron-rebuild": "^2.0.3",
         "electron-vite": "5.0.0",
         "eslint": "^10.10.0",
         "eslint-plugin-vue": "^10.11.0",
