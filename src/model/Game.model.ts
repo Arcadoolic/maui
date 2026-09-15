@@ -21,7 +21,7 @@ export default class Game extends Model<Game> {
     public id_category!: number;
 
     @BelongsTo(() => Category, 'id_category')
-    public category!: Category;
+    public category!: InstanceType<typeof Category>;
 
     @Column({
         type: DataType.TEXT,
@@ -72,7 +72,7 @@ export default class Game extends Model<Game> {
     public player_sim!: number;
 
     @HasMany(() => Hiscore)
-    public hiscores!: Hiscore[];
+    public hiscores!: InstanceType<typeof Hiscore>[];
 
     public get players() {
         let str: string|null = null;

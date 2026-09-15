@@ -4,7 +4,9 @@ This project is a Frontend for the emulation framework MAME.
 
 
 ## Project setup
-Use [Vue CLI Plugin Electron Builder](https://nklayman.github.io/vue-cli-plugin-electron-builder/)
+Built with [electron-vite](https://electron-vite.org/) and Vue 3.
+
+Requires Node 24 LTS or later (see `.nvmrc`).
 ```
 npm install
 ```
@@ -20,7 +22,6 @@ Lints and fixes files
 ```
 npm run lint
 ```
-[Configuration Reference](https://cli.vuejs.org/config/).
 
 ## HELP
 * [Compilation](docs/COMPILATION.md)

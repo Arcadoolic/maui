@@ -11,12 +11,12 @@
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
                 <h1>{{selectedGame.shortname}}</h1>
-                <p>({{selectedGame.year}}, {{selectedGame.players}})</p>
+                <p>({{selectedGame.year}}<template v-if="hasPlayerInfo">, {{selectedGame.players}}</template>)</p>
             </div>
         </transition>
 
         <transition name="category">
-            <div class="categoryTitle" v-show="showTitle">
+            <div class="categoryTitle" v-if="hasCategories" v-show="showTitle">
                 <h1>{{category.name}}</h1>
             </div>
         </transition>
@@ -31,7 +31,7 @@
             </div>
         </transition>
 
-        <Categories :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
+        <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
@@ -40,239 +40,235 @@
 
 </template>
 
-<script lang="ts">
-    import {Component} from 'vue-property-decorator';
-    import Categories from '@/components/Categories.vue';
-    import Games from '@/components/Games.vue';
-    import Gamepads from '@/class/Gamepads.class';
-    import Hiscores from '@/components/Hiscores.vue';
-    import ControllableVue from '@/ControllableVue';
-    import {remote} from 'electron';
-    import Game from '@/model/Game.model';
-    import Category from '@/model/Category.model';
-    import {join} from 'path';
-    import {format} from 'url';
-    import {EventBus} from '@/EventBus';
-    import GameService from '@/class/GameService.class';
-    import * as Log from 'electron-log';
-    import UserRegistration from "@/components/userRegistration.vue";
-    import Loader from "@/components/Loader.vue";
-    import Modal from "@/components/Modal.vue";
+<script setup lang="ts">
+import {ref, computed, onMounted} from 'vue';
+import router from '@/router';
+import Categories from '@/components/Categories.vue';
+import Games from '@/components/Games.vue';
+import Gamepads from '@/class/Gamepads.class';
+import GameService from '@/class/GameService.class';
+import Hiscores from '@/components/Hiscores.vue';
+import {useControllable} from '@/composables/useControllable';
+import * as remote from '@electron/remote';
+import Game from '@/model/Game.model';
+import Category from '@/model/Category.model';
+import {join} from 'path';
+import {format} from 'url';
+import {emitter} from '@/emitter';
+import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService} from '@/services';
+import * as Log from 'electron-log';
+import UserRegistration from '@/components/userRegistration.vue';
+import Loader from '@/components/Loader.vue';
+import Modal from '@/components/Modal.vue';
 
-    @Component({
-        components: {
-            Categories,
-            Games,
-            Hiscores,
-            UserRegistration,
-            Loader,
-            Modal
-        },
-    })
-    export default class Home extends ControllableVue {
-        protected gameService!: GameService;
-        protected games: Game[] = [];
-        protected selectedGameIndex: number = 0;
+let gameService: GameService;
 
-        protected categories: Category[] = [];
-        protected selectedCategoryIndex: number = 0;
+const games = ref<Game[]>([]);
+const selectedGameIndex = ref(0);
 
-        protected timeouts: {
-            quit?: number,
-            showGame?: number,
-            showFlyer?: number,
-            addPlayer?: number,
-        } = {};
+const categories = ref<Category[]>([]);
+const selectedCategoryIndex = ref(0);
+const hasPlayerInfo = ref(false);
 
-        protected showHiscores: boolean = false;
-        protected flyersPath: string = '';
-        protected flyers: string [] = [];
-        protected flyer: string = '';
+const timeouts: {
+    quit?: number,
+    showGame?: number,
+    showFlyer?: number,
+    addPlayer?: number,
+} = {};
 
-        protected showGames: boolean = true;
-        protected showTitle: boolean = true;
-        protected showFlyer: boolean = true;
-        protected showLoader: boolean = false;
-        protected showAddUser: boolean = false;
+const showHiscores = ref(false);
+const flyersPath = ref('');
+const flyers = ref<string[]>([]);
+const flyer = ref('');
 
-        protected loaderDuration: number = 2;
-        protected loaderTitle: string = 'Button pressing';
+const showGames = ref(true);
+const showTitle = ref(true);
+const showFlyer = ref(true);
+const showLoader = ref(false);
+const showAddUser = ref(false);
 
-        public async created() {
-            if (!this.$store.getters.isInit) {
-                return this.$router.push({name: 'init'});
-            }
+const loaderDuration = ref(2);
+const loaderTitle = ref('Button pressing');
 
-            if (process.env.NODE_ENV !== 'development') {
-                remote.getCurrentWindow().setFullScreen(true);
-            }
+const selectedGame = computed(() => games.value[selectedGameIndex.value] || null);
 
-            const mameService = this.$store.getters.mameService;
-            this.gameService = this.$store.getters.gameService;
-            this.categories = await this.gameService.loadCategories();
-            this.games = await this.gameService.loadGames();
+const category = computed(() => {
+    if (selectedCategoryIndex.value) {
+        return categories.value[selectedCategoryIndex.value - 1];
+    }
+    return {name: 'All Games'};
+});
 
-            Gamepads.init();
-            this.registerKeyMapping();
+const hasCategories = computed(() => categories.value.length > 0);
 
-            this.flyersPath = mameService.flyerPath;
-            this.flyers = this.gameService.loadFlyers();
-            this.flyer = this.generateFlyerPath();
-        }
-
-        public mounted() {
-            if (process.env.NODE_ENV !== 'development') {
-                remote.getCurrentWindow().setFullScreen(true);
-            }
-        }
-
-        protected registerKeyMapping() {
-            this.onKeydown((e, isGamepad) => {
-                if (this.showAddUser) {
-                    return;
-                }
-                const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-                switch (key) {
-                    case 'ArrowUp':
-                        this.onGameChange(true);
-                        break;
-                    case 'ArrowDown':
-                        this.onGameChange(false);
-                        break;
-                    case 'ArrowLeft':
-                        this.onCategoryChange(true);
-                        break;
-                    case 'ArrowRight':
-                        this.onCategoryChange(false);
-                        break;
-                    case 'Space':
-                        this.showHiscores = !this.showHiscores;
-                        this.timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
-                        break;
-                    case 'Enter':
-                        this.startGame();
-                        break;
-                    case 'KeyP':
-                        this.addPlayer();
-                        break;
-
-                }
-            });
-
-            this.onKeyup((e, isGamepad) => {
-                if (this.showAddUser) {
-                    return;
-                }
-                const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-                switch (key) {
-                    case 'Space':
-                        clearTimeout(this.timeouts.quit);
-                        break;
-                    case 'KeyP':
-                        this.showLoader = false;
-                        clearTimeout(this.timeouts.addPlayer);
-                        break;
-                }
-            });
-        }
-
-        protected onGameChange(previous: boolean) {
-            const showFlyerFn = () => {
-                this.flyer = this.generateFlyerPath();
-                this.showFlyer = true;
-            };
-            this.showFlyer = false;
-            clearTimeout(this.timeouts.showFlyer);
-            this.timeouts.showFlyer = window.setTimeout(showFlyerFn, 300);
-            this.selectedGameIndex = previous ?
-                ((this.selectedGameIndex <= 0) ? this.games.length - 1 : this.selectedGameIndex - 1) :
-                ((this.selectedGameIndex >= this.games.length - 1) ? 0 : this.selectedGameIndex + 1);
-        }
-
-        protected onCategoryChange(previous: boolean) {
-            const showGameFn = async () => {
-                // Load games
-                this.games = (!this.selectedCategoryIndex) ? await this.gameService.loadGames() :
-                    await this.categories[this.selectedCategoryIndex - 1].$get('games') as Game[] || [];
-
-                this.selectedGameIndex = 0;
-                this.flyer = this.generateFlyerPath();
-
-                this.showGames = true;
-                this.showTitle = true;
-                this.showFlyer = true;
-            };
-            this.showHiscores = false;
-            this.showTitle = false;
-            this.showFlyer = false;
-            this.showGames = false;
-            clearTimeout(this.timeouts.showGame); // Clear timeout if already exist
-            this.timeouts.showGame = window.setTimeout(showGameFn, 300); // In 300, execute all logic and show everyt
-            this.selectedCategoryIndex = previous ?
-                ((this.selectedCategoryIndex <= 0) ? this.categories.length : this.selectedCategoryIndex - 1) :
-                ((this.selectedCategoryIndex >= this.categories.length) ? 0 : this.selectedCategoryIndex + 1);
-        }
-
-        protected get selectedGame() {
-            return this.games[this.selectedGameIndex] || null;
-        }
-
-        protected generateFlyerPath(): string {
-            if (this.selectedGame) {
-                const i = this.flyers.indexOf(this.selectedGame.romName + '.png');
-                const path = i < 0 ? null : join(this.flyersPath, this.flyers[i]);
-                if (!path) {
-                    return '';
-                }
-                return format({
-                    pathname: path,
-                    protocol: 'file',
-                    slashes: true,
-                });
-            }
+function generateFlyerPath(): string {
+    if (selectedGame.value) {
+        const i = flyers.value.indexOf(selectedGame.value.romName + '.png');
+        const path = i < 0 ? null : join(flyersPath.value, flyers.value[i]);
+        if (!path) {
             return '';
         }
-
-        protected startGame() {
-            const mameService = this.$store.getters.mameService;
-            const hiService = this.$store.getters.hiscoreService;
-            mameService.startGame(this.selectedGame.romName).then(
-                (gameProcess) => {
-                    gameProcess.on('close', (e) => {
-                        hiService.saveHiscores(this.selectedGame).then(() => {
-                            EventBus.$emit('game-quit');
-                        });
-                    });
-                },
-                (error) => {
-                    Log.error('[Home] Error on game ' + this.selectedGame.id_game + ' launch.');
-                    Log.error(error);
-                }
-            );
-        }
-
-        protected get isGameStarted() {
-            const mameService = this.$store.getters.mameService;
-            return mameService.isGameStarted;
-        }
-
-        protected addPlayer() {
-            this.loaderDuration = 2;
-            this.showLoader = true;
-            this.loaderTitle = 'Add new player ?';
-            this.timeouts.addPlayer = window.setTimeout(() => {
-                this.showLoader = false;
-                this.showAddUser = true;
-            }, 2000)
-        }
-
-        protected get category() {
-            if (this.selectedCategoryIndex) {
-                return this.categories[this.selectedCategoryIndex - 1];
-            }
-            return {name: 'All Games'};
-        }
+        return format({pathname: path, protocol: 'file', slashes: true});
     }
+    return '';
+}
+
+function onGameChange(previous: boolean) {
+    const showFlyerFn = () => {
+        flyer.value = generateFlyerPath();
+        showFlyer.value = true;
+    };
+    showFlyer.value = false;
+    clearTimeout(timeouts.showFlyer);
+    timeouts.showFlyer = window.setTimeout(showFlyerFn, 300);
+    selectedGameIndex.value = previous ?
+        ((selectedGameIndex.value <= 0) ? games.value.length - 1 : selectedGameIndex.value - 1) :
+        ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1);
+}
+
+function onCategoryChange(previous: boolean) {
+    const showGameFn = async () => {
+        games.value = (!selectedCategoryIndex.value) ? await gameService.loadGames() :
+            await categories.value[selectedCategoryIndex.value - 1].$get('games') as Game[] || [];
+
+        selectedGameIndex.value = 0;
+        flyer.value = generateFlyerPath();
+
+        showGames.value = true;
+        showTitle.value = true;
+        showFlyer.value = true;
+    };
+    showHiscores.value = false;
+    showTitle.value = false;
+    showFlyer.value = false;
+    showGames.value = false;
+    clearTimeout(timeouts.showGame);
+    timeouts.showGame = window.setTimeout(showGameFn, 300);
+    selectedCategoryIndex.value = previous ?
+        ((selectedCategoryIndex.value <= 0) ? categories.value.length : selectedCategoryIndex.value - 1) :
+        ((selectedCategoryIndex.value >= categories.value.length) ? 0 : selectedCategoryIndex.value + 1);
+}
+
+function startGame() {
+    const mameService = getMameService();
+    const hiService = getHiscoreService();
+    const game = selectedGame.value;
+    if (!game) {
+        return;
+    }
+    mameService.startGame(game.romName).then(
+        (gameProcess) => {
+            gameProcess.on('close', () => {
+                hiService.saveHiscores(game).then(() => {
+                    emitter.emit('game-quit');
+                });
+            });
+        },
+        (err) => {
+            Log.error('[Home] Error on game ' + game.id_game + ' launch.');
+            Log.error(err);
+        },
+    );
+}
+
+function addPlayer() {
+    loaderDuration.value = 2;
+    showLoader.value = true;
+    loaderTitle.value = 'Add new player ?';
+    timeouts.addPlayer = window.setTimeout(() => {
+        showLoader.value = false;
+        showAddUser.value = true;
+    }, 2000);
+}
+
+const {onKeydown, onKeyup} = useControllable();
+
+function registerKeyMapping() {
+    onKeydown((e, isGamepad) => {
+        if (showAddUser.value) {
+            return;
+        }
+        const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        switch (key) {
+        case 'ArrowUp':
+            onGameChange(true);
+            break;
+        case 'ArrowDown':
+            onGameChange(false);
+            break;
+        case 'ArrowLeft':
+            if (hasCategories.value) {
+                onCategoryChange(true);
+            }
+            break;
+        case 'ArrowRight':
+            if (hasCategories.value) {
+                onCategoryChange(false);
+            }
+            break;
+        case 'Space':
+            showHiscores.value = !showHiscores.value;
+            timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
+            break;
+        case 'Enter':
+            startGame();
+            break;
+        case 'KeyP':
+            addPlayer();
+            break;
+        }
+    });
+
+    onKeyup((e, isGamepad) => {
+        if (showAddUser.value) {
+            return;
+        }
+        const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        switch (key) {
+        case 'Space':
+            clearTimeout(timeouts.quit);
+            break;
+        case 'KeyP':
+            showLoader.value = false;
+            clearTimeout(timeouts.addPlayer);
+            break;
+        }
+    });
+}
+
+if (!getIsInit()) {
+    router.push({name: 'init'});
+} else {
+    if (getConfiguration().fullscreen) {
+        remote.getCurrentWindow().setFullScreen(true);
+    } else if (process.env.NODE_ENV === 'development') {
+        remote.getCurrentWindow().setSize(1280, 720);
+        remote.getCurrentWindow().center();
+    }
+
+    const mameService = getMameService();
+    gameService = getGameService();
+
+    onMounted(async () => {
+        categories.value = await gameService.loadCategories();
+        games.value = await gameService.loadGames();
+        hasPlayerInfo.value = !!mameService.nplayersIniPath;
+
+        Gamepads.init();
+        registerKeyMapping();
+
+        flyersPath.value = mameService.flyerPath;
+        flyers.value = gameService.loadFlyers();
+        flyer.value = generateFlyerPath();
+    });
+}
+
+onMounted(() => {
+    if (getConfiguration().fullscreen) {
+        remote.getCurrentWindow().setFullScreen(true);
+    }
+});
 </script>
 
 <style scoped>
@@ -333,7 +329,7 @@
         transition: margin-bottom .3s ease-out 0s;
     }
 
-    .slide-enter, .slide-leave-to {
+    .slide-enter-from, .slide-leave-to {
         margin-bottom: -100%;
     }
 
@@ -353,11 +349,11 @@
         background-size: cover;
     }
 
-    .flyer-enter, .flyer-leave-to {
+    .flyer-enter-from, .flyer-leave-to {
         margin-right: -100%;
     }
 
-    .games-enter, .games-leave-to {
+    .games-enter-from, .games-leave-to {
         margin-left: -100%;
     }
 
@@ -369,11 +365,11 @@
         transition: all .3s ease-out 0s;
     }
 
-    .title-enter, .title-leave-to {
+    .title-enter-from, .title-leave-to {
         margin-top: -100%;
     }
 
-    .category.enter, .category-leave-to {
+    .category-enter-from, .category-leave-to {
         margin-bottom: -100%;
     }
 

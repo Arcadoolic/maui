@@ -2,8 +2,8 @@
     <div class="hiscores">
         <p v-if="loading">Loading hiscores...</p>
         <template v-else>
-            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores">
-                <div class="icon" v-if="score.rank !== '1'">
+            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores" :key="score.id_hiscore">
+                <div class="icon">
                     <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
                     <img v-else src="../assets/defaultPlayer.png" alt="">
                 </div>
@@ -14,65 +14,61 @@
                         <p class="score">{{score.score}}</p>
                     </div>
                 </div>
-                <div class="icon" v-if="score.rank === '1'">
-                    <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
-                    <img v-else src="../assets/defaultPlayer.png" alt="">
-                </div>
             </div>
         </template>
     </div>
 </template>
 
-<script lang="ts">
-    import ControllableVue from '@/ControllableVue';
-    import {Component, Prop, Watch} from 'vue-property-decorator';
-    import Game from '@/model/Game.model';
-    import Hiscore from '@/model/Hiscore.model';
-    import User from '@/model/User.model';
-    import Config from '@/class/Config.class';
-    import {join} from 'path';
-    import {format} from 'url';
-    import {EventBus} from '@/EventBus';
+<script setup lang="ts">
+import {ref, watch, onMounted, onUnmounted} from 'vue';
+import Game from '@/model/Game.model';
+import Hiscore from '@/model/Hiscore.model';
+import User from '@/model/User.model';
+import {join} from 'path';
+import {format} from 'url';
+import {emitter} from '@/emitter';
+import {getConfiguration, getUserService} from '@/services';
 
-    @Component
-    export default class Hiscores extends ControllableVue {
-        @Prop({required: true, type: Game})
-        protected game!: Game;
+const props = defineProps<{game: Game}>();
 
-        protected scores: Hiscore[] = [];
-        protected loading = true;
-        protected avatars: string[] = [];
-        protected config!: Config;
+const scores = ref<Hiscore[]>([]);
+const loading = ref(true);
+const avatars = ref<string[]>([]);
 
-        public async mounted() {
-            this.avatars = this.$store.getters.userService.getAvatars();
-            this.config = this.$store.getters.configuration;
-            await this.onGameChange();
+async function onGameChange() {
+    loading.value = true;
+    scores.value = await props.game.$get(
+        'hiscores',
+        {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
+    ) as Hiscore[] || [];
+    loading.value = false;
+}
 
-            EventBus.$on('game-quit', this.onGameChange);
-        }
-
-        @Watch('game')
-        public async onGameChange() {
-            this.loading = true;
-            this.scores = await this.game.$get(
-                'hiscores',
-                {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
-            ) as Hiscore[] || [];
-            this.loading = false;
-        }
-
-        public getAvatar(user: User) {
-            if (this.avatars.indexOf(user.pseudo_3 + '.png') >= 0) {
-                return format({
-                    pathname: join(this.config.avatarsPath, user.pseudo_3 + '.png'),
-                    protocol: 'file',
-                    slashes: true,
-                });
-            }
-            return false;
-        }
+function getAvatar(user: User) {
+    if (avatars.value.indexOf(user.pseudo_3 + '.png') >= 0) {
+        return format({
+            pathname: join(getConfiguration().avatarsPath, user.pseudo_3 + '.png'),
+            protocol: 'file',
+            slashes: true,
+        });
     }
+    return false;
+}
+
+watch(() => props.game, onGameChange);
+
+onMounted(async () => {
+    avatars.value = getUserService().getAvatars();
+    await onGameChange();
+
+    emitter.on('game-quit', onGameChange);
+});
+
+// See Champions.vue: `emitter` is a module-level mitt singleton and outlives this component, so
+// the handler has to be removed explicitly or every mount leaks one.
+onUnmounted(() => {
+    emitter.off('game-quit', onGameChange);
+});
 </script>
 
 <style scoped>
@@ -111,8 +107,10 @@
     }
 
     .icon img {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
         border-radius: 50%;
-        max-width: 100%;
     }
 
     .info {
@@ -121,15 +119,16 @@
 
     .info > * {
         display: inline-block;
+        vertical-align: middle;
     }
 
     .info .place {
-        font-size: 2vw;
+        font-size: 2.5vw;
         letter-spacing: -10px;
     }
 
     .info .score_name {
-        margin-left: .6vw;
+        margin-left: 1.2vw;
     }
 
     .info .score {
@@ -139,17 +138,20 @@
     }
 
     .hiscore.first {
-        width: 0;
         position: absolute;
-        top: -20%;
+        top: 0;
+        left: 50%;
+        transform: translate(-50%, -50%);
         font-size: 2vh;
-        left: -50%;
-        right: 0;
-        margin: 0 auto;
+        white-space: nowrap;
+    }
+
+    .hiscore.first .icon {
+        width: auto;
     }
 
     .hiscore.first .icon img {
-        border-radius: 0;
+        width: 6vw;
     }
 
     .hiscore.first .info {

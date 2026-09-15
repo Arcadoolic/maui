@@ -1,60 +1,78 @@
 <template>
-    <div></div>
+    <div>
+        <p v-if="error" class="error">{{ error }}</p>
+    </div>
 </template>
 
-<script lang="ts">
-    import {Component, Vue} from 'vue-property-decorator';
-    import {remote} from 'electron';
-    import Database from '@/class/Database.class';
-    import User from '@/model/User.model';
-    import {EventBus} from '@/EventBus';
+<script setup lang="ts">
+import * as remote from '@electron/remote';
+import {ref, onMounted} from 'vue';
+import router from '@/router';
+import {emitter} from '@/emitter';
+import {
+    getConfiguration,
+    getDatabase,
+    initServices,
+    getMameService,
+    getGameService,
+    getUserService,
+    getHiscoreService,
+} from '@/services';
 
-    @Component
-    export default class Init extends Vue {
-        protected msg: string = 'Chargement';
+const error = ref<string | null>(null);
 
-        public created() {
-            remote.getCurrentWindow().setResizable(true);
-            remote.getCurrentWindow().setFullScreen(false);
-            remote.getCurrentWindow().setSize(346, 354);
-            remote.getCurrentWindow().center();
-        }
+remote.getCurrentWindow().setResizable(true);
+remote.getCurrentWindow().setFullScreen(false);
+remote.getCurrentWindow().setSize(346, 354);
+remote.getCurrentWindow().center();
 
-        public async mounted() {
-            const config = this.$store.getters.configuration;
-            const database = this.$store.getters.database as Database;
+onMounted(async () => {
+    const config = getConfiguration();
+    const database = getDatabase();
 
-
-            config.load();
-            if (!config.loaded()) {
-                // If no config or not valid, redirect to config page
-                return this.$router.push({name: 'config'});
-            }
-            this.$store.commit('initServices');
-            const mameService = this.$store.getters.mameService;
-            const gameService = this.$store.getters.gameService;
-            const userService = this.$store.getters.userService;
-            const hiService = this.$store.getters.hiscoreService;
-
-            if (!database.exist()) {
-                // Create and fill database file if not existing
-                await database.install(gameService);
-            } else {
-                await database.update();
-            }
-
-            // Save new games
-            const romList = mameService.getRomListFromFavorites();
-            await gameService.saveGamesFromRomNames(romList);
-
-            await userService.loadUsers();
-            hiService.saveHiscores(await gameService.loadGames()).then(() => {
-                EventBus.$emit('hiscores-loaded');
-            });
-
-            this.$router.push({name: 'home'});
-        }
+    config.load();
+    if (!config.loaded()) {
+        // If no config or not valid, redirect to config page
+        router.push({name: 'config'});
+        return;
     }
+    initServices();
+    const mameService = getMameService();
+    const gameService = getGameService();
+    const userService = getUserService();
+    const hiService = getHiscoreService();
+
+    try {
+        if (!database.exist()) {
+            // Create database file if not existing
+            await database.install();
+        } else {
+            await database.update();
+        }
+
+        // (Re)seed categories from genre.ini before syncing games below: it may have been added
+        // (or replaced) after the database already existed, and games are synced with an
+        // id_category that must already exist in this table (see Database.syncCategories()'s own
+        // comment).
+        await database.syncCategories(gameService);
+
+        // Save new games
+        const romList = mameService.getRomListFromFavorites();
+        await gameService.saveGamesFromRomNames(romList);
+
+        await userService.loadUsers();
+        hiService.saveHiscores(await gameService.loadGames()).then(() => {
+            emitter.emit('hiscores-loaded');
+        });
+
+        router.push({name: 'home'});
+    } catch (e) {
+        // e.g. Database.install() refusing to run because genre.ini hasn't been installed yet by
+        // a starting pack import - stay on this screen with the message instead of silently
+        // hanging on a blank splash.
+        error.value = e instanceof Error ? e.message : 'Erreur inattendue au démarrage.';
+    }
+});
 </script>
 
 <style scoped>
@@ -67,5 +85,12 @@
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
+    }
+    .error {
+        margin: 0;
+        padding: 24px 16px;
+        color: #ff6b6b;
+        font-family: sans-serif;
+        text-align: center;
     }
 </style>

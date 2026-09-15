@@ -1,7 +1,7 @@
 <template>
     <div class="champions">
         <div class="championsContainer" v-if="champions.length">
-            <div v-for="(champion, index) of champions" class="champion" :style="{right: (index * 10) + '%'}">
+            <div v-for="(champion, index) of champions" :key="champion.id_hiscore" class="champion" :style="{right: (index * 10) + '%'}">
                 <img v-if="getAvatar(champion.user)" :src="getAvatar(champion.user)" alt="">
                 <img v-else src="../assets/defaultPlayer.png" alt="">
             </div>
@@ -10,58 +10,71 @@
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Prop, Vue, Watch} from 'vue-property-decorator';
-    import Game from '@/model/Game.model';
-    import User from '@/model/User.model';
-    import Hiscore from '@/model/Hiscore.model';
-    import Config from '@/class/Config.class';
-    import {join} from 'path';
-    import {format} from 'url';
-    import {EventBus} from '@/EventBus';
-    import {Sequelize} from 'sequelize-typescript';
+<script setup lang="ts">
+import {ref, watch, onMounted, onUnmounted} from 'vue';
+import Game from '@/model/Game.model';
+import User from '@/model/User.model';
+import Hiscore from '@/model/Hiscore.model';
+import {join} from 'path';
+import {format} from 'url';
+import {emitter} from '@/emitter';
+import {getConfiguration, getUserService} from '@/services';
+import * as SequelizeTS from 'sequelize-typescript';
 
-    @Component
-    export default class Champions extends Vue {
-        @Prop({required: true, type: Game})
-        protected game!: Game;
+const Sequelize = SequelizeTS.Sequelize;
 
-        protected champions: Hiscore[] = [];
-        protected loading = true;
-        protected avatars: string[] = [];
-        protected config!: Config;
+const props = defineProps<{game: Game}>();
 
-        public async mounted() {
-            this.avatars = this.$store.getters.userService.getAvatars();
-            this.config = this.$store.getters.configuration;
-            await this.onGameChange();
+const champions = ref<Hiscore[]>([]);
+const loading = ref(true);
+const avatars = ref<string[]>([]);
 
-            EventBus.$on('game-quit', this.onGameChange);
-            EventBus.$on('hiscores-loaded', this.onGameChange);
-        }
+async function onGameChange() {
+    loading.value = true;
+    const result = await props.game.$get(
+        'hiscores',
+        {
+            include: [{model: User}],
+            attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]},
+            limit: 3,
+            order: [['score', 'DESC']],
+            group: ['user.id_user'],
+        },
+    ) as Hiscore[] || [];
+    champions.value = result.reverse();
+    loading.value = false;
+}
 
-        @Watch('game')
-        public async onGameChange() {
-            this.loading = true;
-            this.champions = await this.game.$get(
-                'hiscores',
-                {include: [{model: User}], attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]}, limit: 3, order: [['score', 'DESC']], group: ['user.id_user']},
-            ) as Hiscore[] || [];
-            this.champions = this.champions.reverse();
-            this.loading = false;
-        }
-
-        public getAvatar(user: User) {
-            if (this.avatars.indexOf(user.pseudo_3 + '.png') >= 0) {
-                return format({
-                    pathname: join(this.config.avatarsPath, user.pseudo_3 + '.png'),
-                    protocol: 'file',
-                    slashes: true,
-                });
-            }
-            return false;
-        }
+function getAvatar(user: User) {
+    if (avatars.value.indexOf(user.pseudo_3 + '.png') >= 0) {
+        return format({
+            pathname: join(getConfiguration().avatarsPath, user.pseudo_3 + '.png'),
+            protocol: 'file',
+            slashes: true,
+        });
     }
+    return false;
+}
+
+watch(() => props.game, onGameChange);
+
+onMounted(async () => {
+    avatars.value = getUserService().getAvatars();
+    await onGameChange();
+
+    emitter.on('game-quit', onGameChange);
+    emitter.on('hiscores-loaded', onGameChange);
+});
+
+// `emitter` is a module-level mitt singleton, so it outlives every component instance that
+// subscribes to it. Without this, each mount leaves behind a handler closed over a destroyed
+// component's props and refs, and they accumulate for the life of the process. The Vue 2 original
+// never called `EventBus.$off` either, but there the bus was a Vue instance torn down with the
+// app; here nothing ever removes the handler but this.
+onUnmounted(() => {
+    emitter.off('game-quit', onGameChange);
+    emitter.off('hiscores-loaded', onGameChange);
+});
 </script>
 
 <style scoped>
@@ -92,6 +105,12 @@
 
     img {
         height: 100%;
+    }
+
+    .champion img {
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 50%;
     }
 
     .default {

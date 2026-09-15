@@ -1,8 +1,8 @@
 <template>
     <modal>
-        <div class="user-registration-success" v-if="success">User created</div>
+        <div class="user-registration-success" v-if="success">Player created</div>
         <div class="user-registration" v-else>
-            <p>Please select a username. It will be used to extract and display your hiscores.</p>
+            <p>Please select a player name. It will be used to extract and display your hiscores.</p>
             <div class="letters">
                 <div class="first-letter" :class="{selected: selectedLetter === 0}">
                     <span>{{username[0]}}</span>
@@ -14,7 +14,7 @@
                     <span>{{username[2]}}</span>
                 </div>
             </div>
-            <div class="error" v-if="error">Username already used</div>
+            <div class="error" v-if="error">Player name already used</div>
             <div class="validate">
                 Press
                 <span class="arcadeButton">
@@ -31,107 +31,96 @@
     </modal>
 </template>
 
-<script lang="ts">
-    import {Component} from "vue-property-decorator";
-    import ControllableVue from "../ControllableVue";
-    import User from "@/model/User.model";
-    import {ValidationError} from 'sequelize';
-    import Modal from "@/components/Modal.vue";
+<script setup lang="ts">
+import {ref, computed} from 'vue';
+import {useControllable} from '@/composables/useControllable';
+import {getUserService} from '@/services';
+import Modal from '@/components/Modal.vue';
 
-    @Component({
-        components: {
-            Modal
-        }
-    })
-    export default class UserRegistration extends ControllableVue {
-        protected username: {[key: number]: string} = {0: 'A', 1: 'A', 2: 'A'};
-        protected selectedLetter: number = 0;
-        protected success: boolean = false;
-        protected error: boolean = false;
-        protected loading: boolean = false;
+const emit = defineEmits<{quit: []}>();
 
-        protected prisitine: boolean = true;
+const username = ref<{[key: number]: string}>({0: 'A', 1: 'A', 2: 'A'});
+const selectedLetter = ref(0);
+const success = ref(false);
+const error = ref(false);
+const loading = ref(false);
+const pristine = ref(true);
 
-        public created() {
-            this.onKeydown((e, isGamepad) => {
-                const key = (isGamepad) ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-                switch (key) {
-                    case 'ArrowUp':
-                        this.previousLetter();
-                        break;
-                    case 'ArrowDown':
-                        this.nextLetter();
-                        break;
-                    case 'ArrowLeft':
-                        this.previousSelectedLetter();
-                        break;
-                    case 'ArrowRight':
-                        this.nextSelectedLetter();
-                        break;
-                    case 'KeyP':
-                        this.addUser();
-                        break;
-                    case 'Space':
-                        this.$emit('quit');
-                        break;
-                }
-                this.prisitine = false;
-            });
+const usernameString = computed(() => username.value[0] + username.value[1] + username.value[2]);
 
-            this.onKeyup((e, isGamepad) => { });
-        }
-
-        protected nextLetter() {
-            if (!this.loading) {
-                this.username[this.selectedLetter] = this.username[this.selectedLetter] === 'Z' ? 'A' :
-                    String.fromCharCode(this.username[this.selectedLetter].charCodeAt(0) + 1);
-            }
-        }
-
-        protected previousLetter() {
-            if (!this.loading) {
-                this.username[this.selectedLetter] = this.username[this.selectedLetter] === 'A' ? 'Z' :
-                    String.fromCharCode(this.username[this.selectedLetter].charCodeAt(0) - 1);
-            }
-        }
-
-        protected nextSelectedLetter(isEnter: boolean = false) {
-            if (!this.loading) {
-                this.selectedLetter = this.selectedLetter === 2 ? 0 : this.selectedLetter + 1;
-            }
-        }
-
-        protected previousSelectedLetter() {
-            if (!this.loading) {
-                this.selectedLetter = this.selectedLetter === 0 ? 2 : this.selectedLetter - 1;
-            }
-        }
-
-        protected addUser() {
-            if (this.loading || this.prisitine) {
-                return;
-            }
-            this.error = false;
-            this.loading = true;
-            User.findOrCreate({where: {pseudo_3: this.usernameString}, defaults: {active: false}})
-                .then(([user, created]) => {
-                    if (created) {
-                        this.success = true;
-                    } else if (user) {
-                        this.error = true;
-                    }
-                    this.loading = false;
-                });
-        }
-
-        protected get usernameString() {
-            return this.username[0] + this.username[1] + this.username[2]
-        }
-
-        protected beforeDestroy() {
-            super.beforeDestroy();
-        }
+function nextLetter() {
+    if (!loading.value) {
+        username.value[selectedLetter.value] = username.value[selectedLetter.value] === 'Z' ? 'A' :
+            String.fromCharCode(username.value[selectedLetter.value].charCodeAt(0) + 1);
     }
+}
+
+function previousLetter() {
+    if (!loading.value) {
+        username.value[selectedLetter.value] = username.value[selectedLetter.value] === 'A' ? 'Z' :
+            String.fromCharCode(username.value[selectedLetter.value].charCodeAt(0) - 1);
+    }
+}
+
+function nextSelectedLetter() {
+    if (!loading.value) {
+        selectedLetter.value = selectedLetter.value === 2 ? 0 : selectedLetter.value + 1;
+    }
+}
+
+function previousSelectedLetter() {
+    if (!loading.value) {
+        selectedLetter.value = selectedLetter.value === 0 ? 2 : selectedLetter.value - 1;
+    }
+}
+
+function addUser() {
+    if (loading.value || pristine.value) {
+        return;
+    }
+    error.value = false;
+    loading.value = true;
+    getUserService().registerUser(usernameString.value)
+        .then(({created}) => {
+            if (created) {
+                success.value = true;
+            } else {
+                error.value = true;
+            }
+            loading.value = false;
+        });
+}
+
+const {onKeydown, onKeyup} = useControllable();
+
+onKeydown((e, isGamepad) => {
+    const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+    switch (key) {
+    case 'ArrowUp':
+        previousLetter();
+        break;
+    case 'ArrowDown':
+        nextLetter();
+        break;
+    case 'ArrowLeft':
+        previousSelectedLetter();
+        break;
+    case 'ArrowRight':
+        nextSelectedLetter();
+        break;
+    case 'KeyP':
+        addUser();
+        break;
+    case 'Space':
+        emit('quit');
+        break;
+    }
+    pristine.value = false;
+});
+
+onKeyup(() => {
+    // No-op: keyup is handled by the keydown listener above.
+});
 </script>
 
 <style scoped>

@@ -7,17 +7,15 @@
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Vue} from "vue-property-decorator";
+<script setup lang="ts">
+import {onMounted, useTemplateRef} from 'vue';
 
-    @Component
-    export default class Modal extends Vue {
-        public mounted() {
-            const modal = this.$refs.modal as HTMLElement;
-            modal.style.top = (window.innerHeight / 2) - (modal.clientHeight / 2) + 'px';
-        }
+const modalRef = useTemplateRef<HTMLDivElement>('modal');
 
-    }
+onMounted(() => {
+    const modal = modalRef.value!;
+    modal.style.top = (window.innerHeight / 2) - (modal.clientHeight / 2) + 'px';
+});
 </script>
 
 <style>

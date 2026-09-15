@@ -1,0 +1,13 @@
+{
+    "extends": "../tsconfig.json",
+    "compilerOptions": {
+        "module": "commonjs",
+        "noEmit": true,
+        "types": []
+    },
+    "include": [
+        "build-starting-pack.ts",
+        "../src/class/Config.class.ts",
+        "../src/types/StartingPackManifest.ts"
+    ]
+}

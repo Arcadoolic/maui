@@ -1,12 +1,13 @@
-import {readFileSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
+import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 
 export default class MameService {
-    public mameIni: { [key: string]: any } = {} = {};
-    public uiIni: any = {};
+    public mameIni: { [key: string]: string[] } = {};
+    public uiIni: { [key: string]: string[] } = {};
     public iniPath!: string;
 
     protected config!: Config;
@@ -20,22 +21,48 @@ export default class MameService {
      */
     public constructor(config: Config) {
         this.config = config;
-        const mameIniContent = execFileSync(this.mameBinary, ['-showconfig']);
-        if (!MameService.parseMameIniFile(mameIniContent.toString(), this.mameIni)) {
-            throw new Error('File missing or failed parsing ' + join(this.config.mamePath, 'mame.ini'));
+        // Force mame to read/write everything (ini files, cfg, nvram, snapshots, ...) from a
+        // dedicated, stable directory instead of wherever it happens to be launched from.
+        this.iniPath = Helpers.getMameHomePath();
+
+        const uiIniPath = join(this.iniPath, 'ui.ini');
+        if (!existsSync(uiIniPath)) {
+            // -createconfig always writes mame.ini/ui.ini next to cwd, ignoring -inipath/-homepath,
+            // so bootstrap the dedicated home directory by running it from there.
+            execFileSync(this.mameBinary, ['-createconfig'], {cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe']});
+            MameService.forceFullscreenDefault(join(this.iniPath, 'mame.ini'));
         }
-        if (!this.mameIni.inipath) {
-            throw new Error('ui value is missing in mame.ini');
+        if (!existsSync(uiIniPath)) {
+            throw new Error('File missing or failed parsing ' + uiIniPath);
         }
-        const iniPath = Helpers.getFirstExistingDirectory(this.mameIni.inipath, this.config.mamePath) || '';
-        if (!iniPath) {
-            throw new Error('File missing or failed parsing ui.ini');
+
+        const mameIniContent = execFileSync(
+            this.mameBinary,
+            ['-showconfig', ...this.mameHomeArgs],
+            {cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe']},
+        );
+        this.mameIni = parseMameIni(mameIniContent.toString());
+
+        const uiIniContent = readFileSync(uiIniPath, 'utf8');
+        this.uiIni = parseMameIni(uiIniContent);
+    }
+
+    /**
+     * `-createconfig`'s own default for `window` isn't guaranteed to be fullscreen (0) across
+     * mame versions/platforms, so force it once, right after a fresh mame.ini is generated - a
+     * new cabinet install then boots straight into fullscreen. Only runs on this
+     * just-bootstrapped file: once mame.ini exists, this bootstrap branch never runs again, so a
+     * later choice (e.g. the BO's "Configuration mame" tab) is never overwritten.
+     */
+    protected static forceFullscreenDefault(mameIniPath: string): void {
+        if (!existsSync(mameIniPath)) {
+            return;
         }
-        this.iniPath = iniPath;
-        const uiIniContent = readFileSync(join(this.iniPath, 'ui.ini'), 'utf8');
-        if (!MameService.parseMameIniFile(uiIniContent, this.uiIni)) {
-            throw new Error('File missing or failed parsing ' + join(this.iniPath, 'ui.ini'));
-        }
+        const content = readFileSync(mameIniPath, 'utf8');
+        const updated = /^window\s+\S+/m.test(content)
+            ? content.replace(/^(window\s+)\S+/m, '$10')
+            : `${content.replace(/\s*$/, '')}\nwindow                     0\n`;
+        writeFileSync(mameIniPath, updated);
     }
 
     public get mameBinary() {
@@ -43,23 +70,11 @@ export default class MameService {
     }
 
     /**
-     * Parse a mame ini file
-     * @param fileContent
-     * @param TargetObject
+     * CLI args forcing mame to use the dedicated home directory for both ini lookup
+     * and everything it would otherwise write relative to its own cwd.
      */
-    protected static parseMameIniFile(fileContent: string, TargetObject: { [key: string]: any }) {
-        const regex = new RegExp(/^([a-z_]+)\s+(.+)$/);
-        const file = fileContent.split('\n');
-        file.forEach((line) => {
-            if (line[0] === '#') { // Skip comments
-                return true;
-            }
-            const data = regex.exec(line.trim());
-            if (data) {
-                TargetObject[data[1]] = data[2].replace(/^"(.*)"$/, '$1').split(';');
-            }
-        });
-        return true;
+    protected get mameHomeArgs(): string[] {
+        return ['-inipath', this.iniPath, '-homepath', this.iniPath];
     }
 
     /**
@@ -72,20 +87,10 @@ export default class MameService {
             'favorites.ini',
         );
         if (!favoritePath) {
-            throw new Error('Unable to read or parse favorites.ini - ' + favoritePath);
+            // No favorites.ini yet (e.g. fresh MAME install, no favorite added) - treat as empty list
+            return [];
         }
-        const regexp = new RegExp(/^(?![0-9]$)[a-z0-9]+$/, 'gm');
-        const file = readFileSync(favoritePath!, 'utf8').split('\n');
-        const retArray: string[] = [];
-        const existing: { [key: string]: boolean } = {};
-        file.forEach((line: string) => {
-            line = line.trim(); // FIXME : Do not take first favorite !
-            if (regexp.test(line) && !existing[line]) {
-                existing[line] = true;
-                retArray.push(line);
-            }
-        });
-        return retArray;
+        return parseFavorites(readFileSync(favoritePath, 'utf8'));
     }
 
     /**
@@ -94,10 +99,12 @@ export default class MameService {
      */
     public getGameInformation(romName: string) {
         const parser = new DOMParser();
-        const xml = parser.parseFromString(
-            execFileSync(this.mameBinary, ['-lx', romName], {encoding: 'utf8'}),
-            'text/xml',
+        const xmlContent = execFileSync(
+            this.mameBinary,
+            ['-lx', romName, ...this.mameHomeArgs],
+            {encoding: 'utf8', cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe']},
         );
+        const xml = parser.parseFromString(xmlContent, 'text/xml');
         return {
             manufacturer: xml.getElementsByTagName('manufacturer')[0].innerHTML,
             year: parseInt(xml.getElementsByTagName('year')[0].innerHTML, 10),
@@ -126,13 +133,52 @@ export default class MameService {
     }
 
     /**
+     * Return logo ("wheel" art) path
+     */
+    public get logoPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.logos_directory,
+            this.iniPath,
+        );
+    }
+
+    /**
+     * Path to genre.ini inside ui.ini's categorypath directory - the game categorization
+     * dataset matching the installed mame version. Optional, like marquees/flyers/logos: null
+     * until a starting pack import installs it (see boServer.ts's importStartingPack()); callers
+     * (GameService.getGameCategories()) treat a missing file as "no categories" rather than
+     * failing, which is how the UI falls back to a flat game list (see Home.vue).
+     */
+    public get genreIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'genre.ini',
+        );
+    }
+
+    /**
+     * Path to Multiplayer.ini inside ui.ini's categorypath directory - the game player-count
+     * dataset matching the installed mame version. Optional, same as genreIniPath: null until a
+     * starting pack import installs it; Home.vue hides the player-count display entirely when
+     * this is null, instead of showing a default value as if it were known.
+     */
+    public get nplayersIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'Multiplayer.ini',
+        );
+    }
+
+    /**
      * Start game on mame
      * @param romName
      */
     public startGame(romName: string): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
-            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', romName], {
+            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', romName, ...this.mameHomeArgs], {
                 killSignal: 'SIGQUIT',
                 cwd: this.iniPath,
             }, (error, stdout, stderr) => {

@@ -33,5 +33,5 @@ export default class Category extends Model<Category> {
     public deletionDate!: Date;
 
     @HasMany(() => Game)
-    public games!: Game[];
+    public games!: InstanceType<typeof Game>[];
 }

@@ -1,11 +1,10 @@
 import {Request, Response} from 'express';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
-import Controller from "@/api/Controller";
-import {IpcMain, BrowserWindow} from 'electron'
+import Controller from '@/api/Controller';
+import {IpcMain, BrowserWindow} from 'electron';
 
-export default class UserController extends Controller
-{
+export default class UserController extends Controller {
     constructor(userDataPath: string, ipcMain: IpcMain, window: BrowserWindow) {
         super(userDataPath, ipcMain, window);
         this.getUsers = this.getUsers.bind(this);
@@ -15,7 +14,7 @@ export default class UserController extends Controller
 
     public getUsers(request: Request, response: Response) {
         User.findAll().then((users: User[]) => {
-            return response.json(users)
+            return response.json(users);
         });
     }
 
@@ -32,12 +31,12 @@ export default class UserController extends Controller
         Hiscore.findAll({
             where: {
                 id_user: request.params.id_user,
-                id_game: request.params.id_game
+                id_game: request.params.id_game,
             },
             order: [['score', 'DESC']],
-            group: ['score']
+            group: ['score'],
         }).then((scores: Hiscore[]) => {
             return response.json(scores);
-        })
+        });
     }
 }

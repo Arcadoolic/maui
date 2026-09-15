@@ -1,58 +1,56 @@
 <template>
     <div class="categories">
         <div class="category" :class="getCategoryClasses(0)"></div>
-        <div class="category" v-for="(category, index) in categories" :class="getCategoryClasses(index + 1)"></div>
+        <div
+            class="category"
+            v-for="(category, index) in categories"
+            :key="category.id_category"
+            :class="getCategoryClasses(index + 1)"
+        ></div>
     </div>
 </template>
 
-<script lang="ts">
-    import {Component, Prop} from 'vue-property-decorator';
-    import ControllableVue from '@/ControllableVue';
-    import Category from '@/model/Category.model';
+<script setup lang="ts">
+import Category from '@/model/Category.model';
 
-    @Component
-    export default class Categories extends ControllableVue {
-        @Prop({required: true})
-        protected readonly categories!: Category[];
+const props = withDefaults(defineProps<{
+    categories: Category[];
+    selectedCategoryIndex?: number;
+}>(), {selectedCategoryIndex: 0});
 
-        @Prop({required: true, type: Number, default: 0})
-        protected readonly selectedCategoryIndex!: number;
-
-        protected getCategoryClasses(index: number) {
-            const catLen = this.categories.length + 1;
-            let previous = this.selectedCategoryIndex - 1 === index;
-            let previous2 = this.selectedCategoryIndex - 2 === index;
-            let next2 = this.selectedCategoryIndex + 2 === index;
-            if (this.selectedCategoryIndex === 0) {
-                previous = index === catLen - 1;
-                previous2 = index === catLen - 2;
-            } else if (this.selectedCategoryIndex === 1) {
-                previous2 = catLen - 1 === index;
-            }
-
-            let next = this.selectedCategoryIndex + 1 === index;
-            if (this.selectedCategoryIndex === catLen - 1) {
-                next = 0 === index;
-                next2 = 1 === index;
-            } else if (this.selectedCategoryIndex === catLen - 2) {
-                next2 = 0 === index;
-            }
-
-            const classes = {
-                selected: this.selectedCategoryIndex === index,
-                previous,
-                next,
-                previous2,
-                next2,
-            };
-            if (index > 0) {
-                const classLogo = this.categories[index - 1].name.replace(/([\s\W]+)/, '_').toLowerCase();
-                classes[classLogo] = true;
-            }
-            return classes;
-        }
-
+function getCategoryClasses(index: number) {
+    const catLen = props.categories.length + 1;
+    let previous = props.selectedCategoryIndex - 1 === index;
+    let previous2 = props.selectedCategoryIndex - 2 === index;
+    let next2 = props.selectedCategoryIndex + 2 === index;
+    if (props.selectedCategoryIndex === 0) {
+        previous = index === catLen - 1;
+        previous2 = index === catLen - 2;
+    } else if (props.selectedCategoryIndex === 1) {
+        previous2 = catLen - 1 === index;
     }
+
+    let next = props.selectedCategoryIndex + 1 === index;
+    if (props.selectedCategoryIndex === catLen - 1) {
+        next = 0 === index;
+        next2 = 1 === index;
+    } else if (props.selectedCategoryIndex === catLen - 2) {
+        next2 = 0 === index;
+    }
+
+    const classes: {[key: string]: boolean} = {
+        selected: props.selectedCategoryIndex === index,
+        previous,
+        next,
+        previous2,
+        next2,
+    };
+    if (index > 0) {
+        const classLogo = props.categories[index - 1].name.replace(/([\s\W]+)/, '_').toLowerCase();
+        classes[classLogo] = true;
+    }
+    return classes;
+}
 </script>
 
 <style scoped>

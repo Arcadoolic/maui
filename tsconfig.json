@@ -1,6 +1,7 @@
 {
     "compilerOptions": {
         "noEmitOnError": false,
+        "skipLibCheck": true,
         "noImplicitAny": false,
         "target": "es6",
         "module": "es6",
@@ -15,9 +16,6 @@
         "resolveJsonModule": true,
         "sourceMap": true,
         "baseUrl": ".",
-        "types": [
-            "webpack-env"
-        ],
         "paths": {
             "@/*": [
                 "src/*"

@@ -8,7 +8,7 @@ import BrowserWindow = Electron.BrowserWindow;
 export default function(userDataPath: string, ipcMain: IpcMain, window: BrowserWindow) {
     const api: express.Application = express();
 
-    const db = new Database(userDataPath); // Init db
+    const db = new Database(); // Init db
 
     // Users routes
     const userController = new UserController(userDataPath, ipcMain, window);
@@ -25,7 +25,7 @@ export default function(userDataPath: string, ipcMain: IpcMain, window: BrowserW
         if (!db.exist()) {
             return res.end({
                 success: false,
-                message: 'Database do not exist'
+                message: 'Database do not exist',
             });
         }
         return next();
