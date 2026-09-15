@@ -2,6 +2,7 @@
     "branches": [
         "refacto-2026"
     ],
+    "tagFormat": "${version}",
     "plugins": [
         [
             "@semantic-release/commit-analyzer",

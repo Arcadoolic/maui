@@ -95,7 +95,15 @@ Version bumps, `CHANGELOG.md`, git tags and GitHub releases are automated by
 semantic-release (`.releaserc.json`), triggered by
 `.github/workflows/release.yml` on every push to `refacto-2026`. The next
 version is derived from Conventional Commits since the last release — never
-bump `version` in `package.json` by hand.
+bump `version` in `package.json` by hand. Tags use the bare `${version}`
+format (no `v` prefix, e.g. `2.0.0`), matching the existing `2.0.0-rc1` tag.
+
+**Before the first automated run**: semantic-release ignores prerelease tags
+like `2.0.0-rc1` on a non-prerelease branch, and always defaults a repo's
+first-ever release to `1.0.0` regardless of commit types. To have automation
+continue from the 2.0.0 line (this refactor's intended baseline), push a
+plain `2.0.0` tag on `refacto-2026` once the refactor is done, before relying
+on semantic-release — otherwise the next merge resets versioning to `1.0.0`.
 
 ## Style
 
