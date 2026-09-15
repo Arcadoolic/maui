@@ -16,6 +16,15 @@ Keep path handling, shell/process invocation, and packaging (Electron build targ
 
 Requires **Node 24 LTS** or later (pinned via `engines.node` in `package.json` and `.nvmrc`) — `npm install` warns on older runtimes.
 
+### Linux dev gotchas
+
+- **Native module build**: `sqlite3`'s pinned `node-gyp` needs a Python interpreter with `distutils` (removed from stdlib in 3.12+, Ubuntu 24.04's default `python3`). `just install` auto-resolves one and passes it via `PYTHON`; if it fails, install Python 3.11 or `setuptools` for your 3.12+ interpreter.
+- **Electron sandbox**: Ubuntu 24.04's `kernel.apparmor_restrict_unprivileged_userns=1` forces Electron onto the setuid `chrome-sandbox` helper. A fresh `npm install` leaves it mode 755, so Electron aborts before `background.ts` runs and no window appears (failure is swallowed by the dev-server plugin). `just serve` checks this and prints the fix; reapply after every Electron reinstall/version bump:
+  ```bash
+  sudo chown root:root node_modules/electron/dist/chrome-sandbox
+  sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+  ```
+
 ## Commands
 
 Prefer the `justfile` recipes; they wrap the npm scripts:
@@ -36,11 +45,12 @@ Other useful commands (no `just` recipe):
 npm test                                              # run the Vitest characterization tests
 npx sequelize-cli migration:generate --name=<name>   # new file in migrations/
 electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3 native binding
+just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+artwork ZIP from local MAME home
 ```
 
 ## Architecture
 
-**Process split, no preload/contextBridge.** `src/background.ts` is the Electron main process; it creates a single frameless `BrowserWindow` with `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`, and calls `@electron/remote/main`'s `enable()` on it. Every renderer view therefore uses `@electron/remote` and Node builtins (`fs`, `child_process`, `path`, `os`) directly — there is no IPC/preload boundary to maintain. `src/api/*` (Express-based REST controllers) exists but is currently disabled (commented out in `background.ts`).
+**Process split, no preload/contextBridge.** `src/background.ts` is the Electron main process; it creates a single frameless `BrowserWindow` with `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`, and calls `@electron/remote/main`'s `enable()` on it. Every renderer view therefore uses `@electron/remote` and Node builtins (`fs`, `child_process`, `path`, `os`) directly — there is no IPC/preload boundary to maintain. `src/api/*` (Express-based REST controllers) is dead code: not imported anywhere outside itself, no wiring in `background.ts` (removed, not commented out). Confirm before resurrecting.
 
 **Routing is a 3-screen flow** (`src/router.ts`, `vue-router` 5): `/init` (`Init.vue`, splash) → `/config` (`Config.vue`, first-run setup) → `/home` (`Home.vue`, main browser UI). `Init.vue` loads `Config`, and if no valid config file exists redirects to `/config`; otherwise it calls `initServices()` from `src/services.ts` and pushes to `/home`.
 
@@ -58,13 +68,12 @@ electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3
 
 ## Git workflow
 
-`refacto-2026` is the main branch for all ongoing work right now, not `develop` (the repo's
-nominal default branch). Concretely:
-- Never commit directly to `refacto-2026`. Every change goes on its own dedicated branch cut from
-  `refacto-2026`.
-- Every PR targets `refacto-2026` as its base branch.
-- Never open a PR into `develop`, and never merge anything into `develop`, unless explicitly asked
-  to do that specific thing in that moment.
+`develop` is the main branch for all ongoing work (the repo's nominal default branch). The
+`refacto-2026` Vue 3 migration branch was merged into `develop` via PR #36 (2026-09-15) and is
+done; do not resurrect it as a base branch. Concretely:
+- Never commit directly to `develop`. Every change goes on its own dedicated branch cut from
+  `develop`.
+- Every PR targets `develop` as its base branch.
 
 ## Style
 
