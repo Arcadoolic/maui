@@ -28,9 +28,11 @@ export default class Gamepads {
 
     /**
      * Registers the gamepadconnected/gamepaddisconnected listeners (once, ever - see
-     * boundOnGamepadconnected above) and (re)starts the polling loop if it isn't already
-     * running. Called on Home.vue's created() and on every Electron window focus (App.vue) -
-     * both of those need to be safe to call repeatedly without stacking anything.
+     * boundOnGamepadconnected above) and (re)starts the polling loop, but only if a gamepad is
+     * actually known to be connected. Called on Home.vue's created() and on every Electron
+     * window focus (App.vue) - both of those need to be safe to call repeatedly without
+     * stacking anything. Polling otherwise starts from onGamepadconnected() once a gamepad
+     * shows up - no point running a ~60Hz requestAnimationFrame loop with nothing to poll.
      */
     public static init() {
         if (!this.boundOnGamepadconnected) {
@@ -39,7 +41,9 @@ export default class Gamepads {
             window.addEventListener('gamepadconnected', this.boundOnGamepadconnected);
             window.addEventListener('gamepaddisconnected', this.boundOnGamepaddisconnected);
         }
-        this.resumePolling();
+        if (this.gamepadsIndex.length) {
+            this.resumePolling();
+        }
     }
 
     protected static resumePolling() {
