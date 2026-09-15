@@ -14,6 +14,7 @@ export default defineConfig({
             // class-definition time. Tests get stand-ins instead.
             '@/model/Game.model': resolve(__dirname, 'tests/stubs/game-model.ts'),
             '@/model/Category.model': resolve(__dirname, 'tests/stubs/category-model.ts'),
+            '@/model/User.model': resolve(__dirname, 'tests/stubs/user-model.ts'),
             // Same '@' alias the app uses, so test imports match source imports.
             '@': resolve(__dirname, 'src'),
         },

@@ -34,7 +34,7 @@
 <script setup lang="ts">
 import {ref, computed} from 'vue';
 import {useControllable} from '@/composables/useControllable';
-import User from '@/model/User.model';
+import {getUserService} from '@/services';
 import Modal from '@/components/Modal.vue';
 
 const emit = defineEmits<{quit: []}>();
@@ -80,11 +80,11 @@ function addUser() {
     }
     error.value = false;
     loading.value = true;
-    User.findOrCreate({where: {pseudo_3: usernameString.value}, defaults: {active: false}})
-        .then(([user, created]) => {
+    getUserService().registerUser(usernameString.value)
+        .then(({created}) => {
             if (created) {
                 success.value = true;
-            } else if (user) {
+            } else {
                 error.value = true;
             }
             loading.value = false;
