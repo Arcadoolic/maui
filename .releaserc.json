@@ -1,6 +1,6 @@
 {
     "branches": [
-        "refacto-2026"
+        "develop"
     ],
     "tagFormat": "${version}",
     "plugins": [

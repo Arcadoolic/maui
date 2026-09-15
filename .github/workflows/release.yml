@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     branches:
-      - refacto-2026
+      - develop
 
 permissions:
   contents: write
