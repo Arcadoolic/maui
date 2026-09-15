@@ -3,16 +3,18 @@
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList">
-                <li v-for="(game, index) in games" :key="game.id_game" :class="{selected: selectedGameIndex === index}">
+                <li v-if="windowStart > 0" aria-hidden="true" :style="{height: (windowStart * 10) + '%'}"></li>
+                <li v-for="{game, index} in visibleGames" :key="game.id_game" :class="{selected: selectedGameIndex === index}">
                     <div class="marquee"
                          :style="{
                              marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
                          }"
                     >
-                        <div class="marqueeArt" :style="{backgroundImage: getMarquee(game.romName)}">
+                        <div class="marqueeArt">
+                            <img class="marqueeImg" :src="getMarquee(game.romName)" loading="lazy" decoding="async" alt="">
                             <div v-if="hasFlyerLogoFallback(game.romName)" class="flyerLogoFallback">
-                                <div class="flyerBackground" :style="{backgroundImage: getFlyer(game.romName)}"></div>
-                                <img class="logoOverlay" :src="getLogo(game.romName)" alt="">
+                                <img class="flyerBackground" :src="getFlyer(game.romName)" loading="lazy" decoding="async" alt="">
+                                <img class="logoOverlay" :src="getLogo(game.romName)" loading="lazy" decoding="async" alt="">
                             </div>
                         </div>
                         <Champions v-if='game.hi' :game='game'></Champions>
@@ -24,12 +26,13 @@
 </template>
 
 <script setup lang="ts">
-import {ref, watch, useTemplateRef} from 'vue';
+import {ref, computed, watch, useTemplateRef} from 'vue';
 import Champions from '@/components/Champions.vue';
 import Game from '@/model/Game.model';
 import {join} from 'path';
 import {format} from 'url';
 import {getMameService, getGameService} from '@/services';
+import defaultMarqueeUrl from '@/assets/default_marquee.jpg';
 
 const props = withDefaults(defineProps<{
     games: Game[];
@@ -38,6 +41,17 @@ const props = withDefaults(defineProps<{
 }>(), {selectedGameIndex: 0, focused: true});
 
 const gameListRef = useTemplateRef<HTMLUListElement>('gameList');
+
+// Only the selected game and its immediate neighbours are ever visible (navigation moves the
+// selection by one at a time), so render a window around it instead of the full list - avoids
+// keeping hundreds/thousands of rows (each with costly CSS filters) alive in the DOM.
+const WINDOW_RADIUS = 20;
+
+const windowStart = computed(() => Math.max(0, props.selectedGameIndex - WINDOW_RADIUS));
+const windowEnd = computed(() => Math.min(props.games.length - 1, props.selectedGameIndex + WINDOW_RADIUS));
+const visibleGames = computed(() => props.games
+    .slice(windowStart.value, windowEnd.value + 1)
+    .map((game, i) => ({game, index: windowStart.value + i})));
 
 const mameService = getMameService();
 const gameService = getGameService();
@@ -66,12 +80,12 @@ function toFileUrl(path: string): string {
 
 function getMarquee(romName: string) {
     const path = findMediaPath(marqueesPath.value, marquees.value, romName);
-    return path ? `url(${toFileUrl(path)})` : '';
+    return path ? toFileUrl(path) : defaultMarqueeUrl;
 }
 
 function getFlyer(romName: string) {
     const path = findMediaPath(flyersPath.value, flyers.value, romName);
-    return path ? `url(${toFileUrl(path)})` : '';
+    return path ? toFileUrl(path) : '';
 }
 
 function getLogo(romName: string) {
@@ -81,8 +95,7 @@ function getLogo(romName: string) {
 
 /**
  * When a game has no marquee, show its (blurred) flyer with the logo overlaid on top instead -
- * only when both are actually available, otherwise fall back to the default marquee background
- * image from CSS.
+ * only when both are actually available, otherwise fall back to the default marquee image.
  */
 function hasFlyerLogoFallback(romName: string): boolean {
     return !findMediaPath(marqueesPath.value, marquees.value, romName)
@@ -145,26 +158,38 @@ function hasFlyerLogoFallback(romName: string): boolean {
         width: 35%;
         height: 90%;
         border-radius: 5px;
-        box-shadow: 0 0 30px #000000;
         margin-left: -100%;
         position: relative;
-        transition: height 0.3s ease, width 0.3s ease, margin-left 0.3s ease, margin-left 0.3s ease
+        transition: height 0.3s ease, width 0.3s ease, margin-left 0.3s ease, box-shadow 0.3s ease
     }
 
+    /*
+     * box-shadow/filter below are scoped to the selected row only: on a weak GPU (e.g. Raspberry
+     * Pi), applying blur/saturate to every row - not just the one that's visible full-size -
+     * forces the compositor to recompute them for the whole list on every frame.
+     */
     .games ul li.selected .marquee {
         width: 100%;
         height: 80%;
+        box-shadow: 0 0 30px #000000;
     }
 
     .marqueeArt {
         position: absolute;
         inset: 0;
         overflow: hidden;
-        background-repeat: no-repeat;
-        background-image: url(../assets/default_marquee.jpg);
-        background-size: cover;
-        background-position: center;
         border-radius: 5px;
+    }
+
+    .marqueeArt .marqueeImg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .games ul li.selected .marqueeArt {
         filter: saturate(2);
     }
 
@@ -179,9 +204,12 @@ function hasFlyerLogoFallback(romName: string): boolean {
         position: absolute;
         /* Overscan past the edges so the blur doesn't reveal them under overflow: hidden. */
         inset: -10px;
-        background-repeat: no-repeat;
-        background-size: cover;
-        background-position: center;
+        width: calc(100% + 20px);
+        height: calc(100% + 20px);
+        object-fit: cover;
+    }
+
+    .games ul li.selected .flyerLogoFallback .flyerBackground {
         filter: blur(8px) brightness(0.6);
     }
 
