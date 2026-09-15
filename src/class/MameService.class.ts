@@ -29,7 +29,7 @@ export default class MameService {
         if (!existsSync(uiIniPath)) {
             // -createconfig always writes mame.ini/ui.ini next to cwd, ignoring -inipath/-homepath,
             // so bootstrap the dedicated home directory by running it from there.
-            execFileSync(this.mameBinary, ['-createconfig'], {cwd: this.iniPath});
+            execFileSync(this.mameBinary, ['-createconfig'], {cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe']});
             MameService.forceFullscreenDefault(join(this.iniPath, 'mame.ini'));
         }
         if (!existsSync(uiIniPath)) {
@@ -39,7 +39,7 @@ export default class MameService {
         const mameIniContent = execFileSync(
             this.mameBinary,
             ['-showconfig', ...this.mameHomeArgs],
-            {cwd: this.iniPath},
+            {cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe']},
         );
         this.mameIni = parseMameIni(mameIniContent.toString());
 
@@ -102,7 +102,7 @@ export default class MameService {
         const xmlContent = execFileSync(
             this.mameBinary,
             ['-lx', romName, ...this.mameHomeArgs],
-            {encoding: 'utf8', cwd: this.iniPath},
+            {encoding: 'utf8', cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe']},
         );
         const xml = parser.parseFromString(xmlContent, 'text/xml');
         return {
