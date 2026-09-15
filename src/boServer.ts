@@ -93,7 +93,7 @@ function ensureMameConfigBootstrapped(mameBinary: string, iniPath: string): void
     // -createconfig always writes mame.ini/ui.ini next to cwd, ignoring -inipath/-homepath, so
     // bootstrap the dedicated home directory by running it from there (same trick
     // MameService.class.ts uses).
-    execFileSync(mameBinary, ['-createconfig'], {cwd: iniPath});
+    execFileSync(mameBinary, ['-createconfig'], {cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe']});
     if (!existsSync(uiIniPath)) {
         throw new Error(`"${uiIniPath}" introuvable après -createconfig.`);
     }
@@ -521,7 +521,7 @@ function getMameInfo(config: Config): MameInfo {
         const output = execFileSync(
             mameBinary,
             ['-showconfig', '-inipath', iniPath, '-homepath', iniPath],
-            {cwd: iniPath},
+            {cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe']},
         );
         const parsed = parseMameIniFile(output.toString());
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
@@ -634,7 +634,7 @@ function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): G
         const xmlContent = execFileSync(
             mameBinary,
             ['-lx', romName, '-inipath', iniPath, '-homepath', iniPath],
-            {encoding: 'utf8', cwd: iniPath},
+            {encoding: 'utf8', cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe']},
         );
         return {
             description: extractXmlTagContent(xmlContent, 'description'),
@@ -1705,6 +1705,7 @@ function runInputProbe(mameBinary: string, iniPath: string, romName: string): In
             timeout: 15000,
             killSignal: 'SIGKILL',
             maxBuffer: 4 * 1024 * 1024,
+            stdio: ['ignore', 'pipe', 'pipe'],
         },
     );
     return parseInputProbeOutput(stdout);
