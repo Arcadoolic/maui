@@ -97,6 +97,11 @@ function ensureMameConfigBootstrapped(mameBinary: string, iniPath: string): void
     if (!existsSync(uiIniPath)) {
         throw new Error(`"${uiIniPath}" introuvable après -createconfig.`);
     }
+    // Same forcing as MameService.class.ts's constructor (the Electron app's own bootstrap
+    // path) - see its forceFullscreenDefault() comment for why this can't be left to
+    // -createconfig's own default. setMameIniValue() only touches this just-created mame.ini,
+    // never a later user/BO preference.
+    setMameIniValue(join(iniPath, 'mame.ini'), 'window', '0');
 }
 
 /**

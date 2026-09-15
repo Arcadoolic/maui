@@ -1,4 +1,4 @@
-import {existsSync, readFileSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
@@ -30,6 +30,7 @@ export default class MameService {
             // -createconfig always writes mame.ini/ui.ini next to cwd, ignoring -inipath/-homepath,
             // so bootstrap the dedicated home directory by running it from there.
             execFileSync(this.mameBinary, ['-createconfig'], {cwd: this.iniPath});
+            MameService.forceFullscreenDefault(join(this.iniPath, 'mame.ini'));
         }
         if (!existsSync(uiIniPath)) {
             throw new Error('File missing or failed parsing ' + uiIniPath);
@@ -44,6 +45,24 @@ export default class MameService {
 
         const uiIniContent = readFileSync(uiIniPath, 'utf8');
         this.uiIni = parseMameIni(uiIniContent);
+    }
+
+    /**
+     * `-createconfig`'s own default for `window` isn't guaranteed to be fullscreen (0) across
+     * mame versions/platforms, so force it once, right after a fresh mame.ini is generated - a
+     * new cabinet install then boots straight into fullscreen. Only runs on this
+     * just-bootstrapped file: once mame.ini exists, this bootstrap branch never runs again, so a
+     * later choice (e.g. the BO's "Configuration mame" tab) is never overwritten.
+     */
+    protected static forceFullscreenDefault(mameIniPath: string): void {
+        if (!existsSync(mameIniPath)) {
+            return;
+        }
+        const content = readFileSync(mameIniPath, 'utf8');
+        const updated = /^window\s+\S+/m.test(content)
+            ? content.replace(/^(window\s+)\S+/m, '$10')
+            : `${content.replace(/\s*$/, '')}\nwindow                     0\n`;
+        writeFileSync(mameIniPath, updated);
     }
 
     public get mameBinary() {
