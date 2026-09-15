@@ -10,7 +10,11 @@ An Electron + Vue 3 (TypeScript) frontend ("arcade cabinet" front-end) for the M
 
 The project must run on both:
 - **macOS** 15.1 and later
-- **Linux**: Ubuntu 24.04 and later, Debian 13 and later
+- **Linux**: Ubuntu 24.04 and later, Debian 13 and later (Debian 13 "Trixie"
+  arm64 is the current target for Raspberry Pi 4 Model B support, tracked on
+  `perf/raspberry-pi-lag` — see `docs/RASPBERRY-PI-LAG.md`).
+  `electron-builder.yml` has no arm64 Linux target declared yet, and
+  `npm run rebuild` (sqlite3 native rebuild) is unverified on ARM toolchains.
 
 Keep path handling, shell/process invocation, and packaging (Electron build targets, native module rebuilds) working on both platforms. When changing anything platform-sensitive (paths, `execFile`/shell calls, `mame -showconfig`/`ui.ini` parsing, `justfile` recipes, native module builds), verify it holds on both macOS and Linux — don't assume macOS-only behavior.
 
@@ -88,6 +92,11 @@ just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+art
   ```
   `just serve` checks this automatically (`_check-sandbox` recipe) and prints
   this fix if misconfigured; `just build` does not run the check.
+- **Electron binary missing after install**: `electron-vite dev` fails with
+  `Error: Electron uninstall` (empty `node_modules/electron/dist/`) when
+  Electron's own postinstall download fails silently during `npm install`
+  (network hiccup, proxy). Fix: `node node_modules/electron/install.js`,
+  then reapply the sandbox chmod above (fresh binary resets it to 755).
 
 ## Git workflow
 
