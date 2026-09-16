@@ -100,28 +100,32 @@ just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+art
 
 ## Git workflow
 
-`develop` is the main branch for all ongoing work (the repo's nominal default branch). The
-`refacto-2026` Vue 3 migration branch was merged into `develop` via PR #36 (2026-09-15) and is
-done; do not resurrect it as a base branch. Concretely:
-- Never commit directly to `develop`. Every change goes on its own dedicated branch cut from
-  `develop`.
-- Every PR targets `develop` as its base branch.
+Git-flow, two permanent branches (adopted 2026-09-16, replacing the
+single-branch model used through tag `2.0.2`):
+- **`develop`** — integration branch. Every feature/fix branch is cut from
+  `develop` and every PR targets `develop` as its base branch. Never commit
+  directly to `develop`.
+- **`main`** — production branch. Only receives code via a promotion PR from
+  `develop` once `develop` is release-ready. Never commit directly to `main`.
+  Pushing to `main` (i.e. merging a promotion PR) is what triggers a release.
+
+The `refacto-2026` Vue 3 migration branch was merged into `develop` via PR #36
+(2026-09-15) and is done; do not resurrect it as a base branch.
 
 ### Versioning & releases
 
 Version bumps, `CHANGELOG.md`, git tags and GitHub releases are automated by
-semantic-release (`.releaserc.json`), triggered by
-`.github/workflows/release.yml` on every push to `refacto-2026`. The next
-version is derived from Conventional Commits since the last release — never
-bump `version` in `package.json` by hand. Tags use the bare `${version}`
-format (no `v` prefix, e.g. `2.0.0`), matching the existing `2.0.0-rc1` tag.
+semantic-release (`.releaserc.json`, branch `main` only), triggered by
+`.github/workflows/release.yml` on every push to `main`. Pushing to `develop`
+never triggers a release. The next version is derived from Conventional
+Commits accumulated on `develop` since the last release, applied when that
+work is promoted to `main` — never bump `version` in `package.json` by hand.
+Tags use the bare `${version}` format (no `v` prefix, e.g. `2.0.0`).
 
-**Before the first automated run**: semantic-release ignores prerelease tags
-like `2.0.0-rc1` on a non-prerelease branch, and always defaults a repo's
-first-ever release to `1.0.0` regardless of commit types. To have automation
-continue from the 2.0.0 line (this refactor's intended baseline), push a
-plain `2.0.0` tag on `refacto-2026` once the refactor is done, before relying
-on semantic-release — otherwise the next merge resets versioning to `1.0.0`.
+`main` was branched from `develop` at tag `2.0.2` (2026-09-16), carrying the
+full existing tag history (`1.0.0` → `2.0.2`) forward so semantic-release
+keeps computing the next version from that line instead of resetting to
+`1.0.0`.
 
 ## Style
 
