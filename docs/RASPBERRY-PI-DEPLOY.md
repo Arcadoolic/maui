@@ -294,3 +294,44 @@ Pi (vérifié).
 > hors shell interactif, il vit sous
 > `/home/linuxbrew/.linuxbrew/bin/pactl` (installé comme dépendance du
 > `mame` Homebrew, pas via `apt`).
+
+## 7. Mise à jour de l'application (nouvel AppImage)
+
+`~/squashfs-root` (référencé en dur par `~/.xinitrc`, §5.3) est une
+extraction figée de l'AppImage — une nouvelle version ne remplace rien
+automatiquement, il faut ré-extraire par-dessus.
+
+```bash
+# Depuis le poste de build, copier le nouvel AppImage sur le Pi
+scp mame-awesome-ui-X.Y.Z-arm64.AppImage puckman@<ip-du-pi>:~/
+
+# Sur le Pi : rendre exécutable et ré-extraire au même emplacement fixe
+chmod +x ~/mame-awesome-ui-X.Y.Z-arm64.AppImage
+rm -rf ~/squashfs-root
+cd ~ && ./mame-awesome-ui-X.Y.Z-arm64.AppImage --appimage-extract
+
+# Recharger la session graphique pour repartir sur le nouveau squashfs-root
+sudo systemctl restart getty@tty1
+```
+
+`~/.xinitrc` pointe vers `~/squashfs-root/AppRun` par chemin fixe, pas vers
+le nom du fichier AppImage — donc peu importe la version, aucune autre
+modification n'est nécessaire tant que ce chemin de sortie d'extraction
+reste le même. L'ancien `.AppImage` peut être supprimé une fois la nouvelle
+version validée (`rm ~/mame-awesome-ui-<ancienne-version>-arm64.AppImage`).
+
+**Ce qu'une mise à jour ne touche pas** (tout vit en dehors de
+`squashfs-root`, donc survit au `rm -rf` ci-dessus) :
+- Config MAUI : `~/.mame-awesome-ui/` (§3)
+- Home MAME (roms, favoris, cfg, nvram) : `~/.mame/`
+- Profil Electron (cache, localStorage, etc.) : `~/.config/mame-awesome-ui/`
+- Config audio système et sink PulseAudio par défaut (§6)
+
+**À revérifier après une mise à jour** : si la nouvelle version embarque une
+version d'Electron plus récente, elle peut introduire nouvelles dépendances
+système. Rejouer la vérification du §4 pour repérer d'éventuelles libs
+manquantes avant de considérer la mise à jour terminée :
+
+```bash
+ldd ~/squashfs-root/mame-awesome-ui | grep "not found"
+```
