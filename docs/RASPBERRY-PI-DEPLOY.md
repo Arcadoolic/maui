@@ -29,7 +29,7 @@ sudo apt-get install build-essential
 
 > ⚠️ Cette ligne dans `.bashrc` n'est lue que par les **shells interactifs**.
 > Une session non-interactive (`ssh host cmd`) ne voit pas `mame` dans son
-> `PATH`. Sans importance pour l'usage kiosk (cf. §4.4, `.bash_profile` source
+> `PATH`. Sans importance pour l'usage kiosk (cf. §5.4, `.bash_profile` source
 > `.profile` → `.bashrc`), mais à garder en tête si un script/service lance
 > `mame` directement.
 
@@ -41,11 +41,36 @@ brew install mame
 
 Compilation depuis les sources pour arm64 : **très long** (plusieurs heures
 sur un Pi 4). Le binaire se retrouve dans
-`/home/linuxbrew/.linuxbrew/Cellar/mame/0.289/bin` — c'est ce chemin qu'il
-faut renseigner dans la config MAUI (`mamePath` dans
-`mame-awesome-ui-config.json`).
+`/home/linuxbrew/.linuxbrew/Cellar/mame/0.289/bin` (versionné), avec un
+symlink stable `/home/linuxbrew/.linuxbrew/opt/mame/bin` qui pointe dessus —
+c'est ce second chemin qu'il faut renseigner dans la config MAUI (`mamePath`
+dans `mame-awesome-ui-config.json`), pour ne pas avoir à retoucher la config à
+chaque `brew upgrade mame` (voir §3).
 
-## 3. Dépendances système pour lancer l'AppImage
+## 3. Pré-configuration de MAUI (saute l'écran de setup initial)
+
+```bash
+mkdir -p ~/.mame-awesome-ui
+
+cat > ~/.mame-awesome-ui/mame-awesome-ui-config.json << 'EOF'
+{"mamePath":"/home/linuxbrew/.linuxbrew/opt/mame/bin","mameBinaryName":"mame","ssDevId":"","ssDevPassword":"","ssSoftName":"","ssUserId":"","ssUserPassword":"","bezelAspect":"16:9","openDevTools":false,"fullscreen":true}
+EOF
+```
+
+`Config.class.ts` (`getAppDataPath()`) résout toujours ce fichier à
+`~/.mame-awesome-ui/mame-awesome-ui-config.json`, en dev comme en production —
+donc déposer le JSON à cet endroit avant le premier lancement fait sauter
+l'écran `/config` du premier démarrage (`Init.vue` ne redirige vers `/config`
+que si ce fichier est absent). Les champs correspondent un à un à ceux
+attendus par `Config.load()` ; `mamePath` doit être le **dossier** contenant
+le binaire `mame`, pas le chemin du binaire lui-même.
+
+> 💡 `opt/mame/bin` plutôt que `Cellar/mame/0.289/bin` : Homebrew réécrit ce
+> symlink vers la nouvelle version à chaque `brew upgrade mame`, alors que le
+> chemin `Cellar` versionné casserait silencieusement `mamePath` au prochain
+> upgrade.
+
+## 4. Dépendances système pour lancer l'AppImage
 
 ```bash
 sudo apt install -y \
@@ -72,9 +97,9 @@ longue. Détail de ce que chaque groupe corrige :
 > ldd squashfs-root/mame-awesome-ui | grep "not found"
 > ```
 
-## 4. Préparation de l'affichage (mode kiosk)
+## 5. Préparation de l'affichage (mode kiosk)
 
-### 4.1 Extraction persistante de l'AppImage
+### 5.1 Extraction persistante de l'AppImage
 
 ```bash
 rm -rf squashfs-root
@@ -89,7 +114,7 @@ FUSE à chaque lancement : ça évite une dépendance à `/dev/fuse` / droits de
 montage utilisateur à chaque boot, et le démarrage est plus rapide (pas de
 ré-extraction).
 
-### 4.2 Serveur X minimal + gestionnaire de fenêtres
+### 5.2 Serveur X minimal + gestionnaire de fenêtres
 
 ```bash
 sudo apt install -y xserver-xorg xinit x11-xserver-utils matchbox-window-manager
@@ -106,7 +131,7 @@ sudo apt install -y xserver-xorg xinit x11-xserver-utils matchbox-window-manager
   petit carré au milieu de l'écran. `matchbox` est justement conçu pour de
   l'embarqué/kiosk single-app.
 
-### 4.3 `~/.xinitrc`
+### 5.3 `~/.xinitrc`
 
 ```bash
 cat > ~/.xinitrc << 'EOF'
@@ -129,7 +154,7 @@ chmod +x ~/.xinitrc
 - `exec` remplace le shell par `AppRun` : quand l'app se ferme, la session X
   se termine proprement avec elle (pas de shell zombie qui traîne).
 
-### 4.4 Démarrage automatique de X à la connexion (`~/.bash_profile`)
+### 5.4 Démarrage automatique de X à la connexion (`~/.bash_profile`)
 
 ```bash
 cat > ~/.bash_profile << 'EOF'
@@ -146,7 +171,7 @@ EOF
 - Le garde-fou `tty1` + `$DISPLAY` vide évite de redéclencher `startx` sur une
   session SSH classique (qui arrive sur un `pts/*`, pas `tty1`).
 
-### 4.5 Autologin systemd sur tty1
+### 5.5 Autologin systemd sur tty1
 
 ```bash
 sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
@@ -169,12 +194,12 @@ documenté dans `man systemd.service`, section *"assigning an empty string
 resets the list"*).
 
 > ⚠️ **Piège rencontré** : lancer `sudo systemctl restart getty@tty1` **avant**
-> d'avoir installé `xserver-xorg`/`xinit` (§4.2) fait échouer `startx`
+> d'avoir installé `xserver-xorg`/`xinit` (§5.2) fait échouer `startx`
 > instantanément dans `.bash_profile`. Comme il est appelé avec `exec`, la
 > session de login se termine aussitôt → `agetty` relance en boucle → systemd
 > bloque le service au bout de 5 tentatives (`start-limit-hit`) → tty1 affiche
 > juste un curseur clignotant, plus aucun `agetty` dessus.
-> **Respecter l'ordre des sections 4.2 → 4.3/4.4 → 4.5 évite ce piège.** Si ça
+> **Respecter l'ordre des sections 5.2 → 5.3/5.4 → 5.5 évite ce piège.** Si ça
 > arrive quand même (SSH reste toujours utilisable pour corriger) :
 > ```bash
 > sudo apt install -y xserver-xorg xinit x11-xserver-utils   # si pas déjà fait
