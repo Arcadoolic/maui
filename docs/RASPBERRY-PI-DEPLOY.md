@@ -206,3 +206,91 @@ resets the list"*).
 > sudo systemctl reset-failed getty@tty1
 > sudo systemctl restart getty@tty1
 > ```
+
+### 5.6 Garder un terminal de secours (`tty2`)
+
+`tty1` est entièrement pris par l'autologin + X — sans autre console active,
+un crash graphique ne laisse aucun moyen de reprendre la main au clavier sur
+la borne (`Ctrl+Alt+F2` ne fait rien sans `agetty` dessus). Garder un second
+tty disponible coûte rien et évite de dépendre du SSH pour intervenir :
+
+```bash
+sudo systemctl enable --now getty@tty2
+```
+
+`Ctrl+Alt+F2` donne alors un vrai prompt de connexion, indépendant de l'état
+de X/matchbox/l'app sur `tty1`.
+
+## 6. Audio (sortie HDMI)
+
+Le Pi 4 expose deux cartes ALSA HDMI (`vc4hdmi0`/`vc4hdmi1`, une par port
+physique) plus le jack analogique (`Headphones`) — **sans configuration
+explicite, le son par défaut ne sort ni sur l'une ni sur l'autre HDMI**, et
+il faut corriger **deux couches indépendantes** : ALSA au niveau système, et
+PulseAudio au niveau du binaire `mame` de Homebrew (qui embarque son propre
+PulseAudio, démarré à la demande, indépendant de toute config ALSA système).
+
+### 6.1 Identifier le port HDMI réellement branché
+
+```bash
+cat /proc/asound/cards
+for f in /sys/class/drm/*/status; do echo "$f: $(cat "$f")"; done
+```
+
+Sur ce Pi : écran branché sur le port HDMI0 physique → `card 1: vc4hdmi0` →
+`HDMI-A-1: connected`.
+
+### 6.2 Sortie par défaut ALSA (système)
+
+Sans `/etc/asound.conf`, ALSA retombe sur la première carte détectée
+(`card 0`, le jack). `hw:` en accès direct échoue avec `Sample format non
+available` sur ce chipset (il n'accepte en direct que de l'IEC958 trame par
+trame) — il faut passer par la couche `plug` pour la conversion automatique :
+
+```bash
+sudo tee /etc/asound.conf > /dev/null << 'EOF'
+pcm.!default {
+    type plug
+    slave.pcm "hw:vc4hdmi0,0"
+}
+ctl.!default {
+    type hw
+    card vc4hdmi0
+}
+EOF
+```
+
+Test : `aplay /usr/share/sounds/alsa/Front_Center.wav` (sans `-D`, donc via
+le device par défaut) doit être audible sur l'écran.
+
+### 6.3 Sink par défaut PulseAudio (MAME lui-même)
+
+Le `mame` compilé par Homebrew utilise PulseAudio (pas ALSA en direct) via
+son propre `pulseaudio` embarqué — confirmé par `mame -verbose` :
+```
+SDL Audio: Driver is pulseaudio
+SDL Audio: Sink device 2: device 'vc4-hdmi-0 Stereo'
+```
+Ce PulseAudio a **sa propre notion de sortie par défaut**, indépendante du
+`/etc/asound.conf` du §6.2 — le régler côté ALSA ne suffit donc pas pour le
+son en jeu. Par défaut il pointait ici vers `alsa_output.0.stereo-fallback`
+(le jack), pas le HDMI :
+
+```bash
+export PATH=/home/linuxbrew/.linuxbrew/bin:$PATH
+pactl list sinks short
+# 0  alsa_output.0.stereo-fallback   ...  (jack)
+# 1  alsa_output.1.stereo-fallback   ...  (vc4-hdmi-0, l'écran)
+
+pactl set-default-sink alsa_output.1.stereo-fallback
+```
+
+Ce choix est persisté par PulseAudio dans sa base d'état utilisateur
+(`~/.config/pulse/*-default-sink`) — pas besoin de le refaire après chaque
+redémarrage du démon Pulse (auto-spawné à la demande) ni après un reboot du
+Pi (vérifié).
+
+> 💡 Si `pactl` semble indisponible : il n'est pas dans le `PATH` par défaut
+> hors shell interactif, il vit sous
+> `/home/linuxbrew/.linuxbrew/bin/pactl` (installé comme dépendance du
+> `mame` Homebrew, pas via `apt`).
