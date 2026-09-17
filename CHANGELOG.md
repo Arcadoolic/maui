@@ -1,3 +1,9 @@
+## [2.1.1](https://github.com/Arcadoolic/maui/compare/2.1.0...2.1.1) (2026-09-17)
+
+### Bug Fixes
+
+* **ci:** attach release artifact in the same workflow run ([a34350b](https://github.com/Arcadoolic/maui/commit/a34350b718dad0e2bc28726833a475025a9bf456))
+
 ## [2.1.0](https://github.com/afronob/maui/compare/2.0.2...2.1.0) (2026-09-17)
 
 ### Features
