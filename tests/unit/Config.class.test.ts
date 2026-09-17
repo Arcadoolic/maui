@@ -116,6 +116,30 @@ describe('Config.load', () => {
         expect(config.ssUserPassword).toBe('');
     });
 
+    it('reads the starting-pack repo credentials, defaulting to empty strings when absent', () => {
+        new Config();
+        writeFileSync(configPath, JSON.stringify({
+            mamePath: '/opt/mame',
+            mameBinaryName: 'mame',
+            repoUrl: 'https://repo.maui.afronob.com',
+            repoUser: 'admin',
+            repoPassword: 'secret',
+        }));
+
+        const config = new Config();
+        config.load();
+        expect(config.repoUrl).toBe('https://repo.maui.afronob.com');
+        expect(config.repoUser).toBe('admin');
+        expect(config.repoPassword).toBe('secret');
+
+        const withoutRepo = new Config();
+        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
+        withoutRepo.load();
+        expect(withoutRepo.repoUrl).toBe('');
+        expect(withoutRepo.repoUser).toBe('');
+        expect(withoutRepo.repoPassword).toBe('');
+    });
+
     it('defaults bezelAspect to 16:9 unless the file says exactly 4:3', () => {
         // Implementation: `configFile.bezelAspect === '4:3' ? '4:3' : '16:9'`.
         const cases: Array<[unknown, '4:3' | '16:9']> = [
@@ -189,6 +213,9 @@ describe('Config.save', () => {
         written.mamePath = '/opt/mame';
         written.mameBinaryName = 'mame64';
         written.ssSoftName = 'mame-awesome-ui';
+        written.repoUrl = 'https://repo.maui.afronob.com';
+        written.repoUser = 'admin';
+        written.repoPassword = 'secret';
         written.bezelAspect = '4:3';
         written.openDevTools = true;
         written.fullscreen = false;
@@ -201,6 +228,9 @@ describe('Config.save', () => {
         expect(read.mamePath).toBe('/opt/mame');
         expect(read.mameBinaryName).toBe('mame64');
         expect(read.ssSoftName).toBe('mame-awesome-ui');
+        expect(read.repoUrl).toBe('https://repo.maui.afronob.com');
+        expect(read.repoUser).toBe('admin');
+        expect(read.repoPassword).toBe('secret');
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(false);
@@ -218,6 +248,9 @@ describe('Config.save', () => {
             'mameBinaryName',
             'mamePath',
             'openDevTools',
+            'repoPassword',
+            'repoUrl',
+            'repoUser',
             'ssDevId',
             'ssDevPassword',
             'ssSoftName',
