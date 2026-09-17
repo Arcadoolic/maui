@@ -245,7 +245,9 @@ if (!getIsInit()) {
 } else {
     if (getConfiguration().fullscreen) {
         remote.getCurrentWindow().setFullScreen(true);
-    } else if (process.env.NODE_ENV === 'development') {
+    } else {
+        // Not dev-only: without this, a packaged build left in windowed mode keeps whatever size
+        // Init.vue's splash screen set (346x354) instead of a usable default.
         remote.getCurrentWindow().setSize(1280, 720);
         remote.getCurrentWindow().center();
     }
