@@ -71,8 +71,10 @@ jobs:
             runner: ubuntu-24.04-arm
             build_args: --linux --arm64
             artifact_glob: dist_electron/*.AppImage
-      # macos-arm64 (macos-14) is next - add its matrix.include entry once
-      # the sqlite3 native build is verified there.
+          - name: macos-arm64
+            runner: macos-14
+            build_args: --mac --arm64
+            artifact_glob: dist_electron/*.zip
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout

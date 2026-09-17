@@ -6,8 +6,7 @@ name: Build
 # see its comment on why that can't be a separate `release: published`
 # triggered workflow.
 #
-# Matrix covers linux-x64 and linux-arm64 (Raspberry Pi). macos-arm64 is
-# planned next.
+# Matrix covers linux-x64, linux-arm64 (Raspberry Pi), and macos-arm64.
 
 on:
   push:
@@ -32,6 +31,10 @@ jobs:
             runner: ubuntu-24.04-arm
             build_args: --linux --arm64
             artifact_glob: dist_electron/*.AppImage
+          - name: macos-arm64
+            runner: macos-14
+            build_args: --mac --arm64
+            artifact_glob: dist_electron/*.zip
 
     runs-on: ${{ matrix.runner }}
     steps:
