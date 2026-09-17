@@ -30,7 +30,14 @@ export default class HiscoreService {
             // nothing at hiPath yet
         }
         try {
-            symlinkSync('hiscore', hiPath, 'dir');
+            // Windows: a 'dir' symlink needs Developer Mode or admin rights and fails with EPERM
+            // otherwise. A junction needs neither, but only resolves an absolute target - unlike
+            // the relative one used below, which junctions would silently misresolve.
+            if (process.platform === 'win32') {
+                symlinkSync(join(mamePath, 'hiscore'), hiPath, 'junction');
+            } else {
+                symlinkSync('hiscore', hiPath, 'dir');
+            }
         } catch (e) {
             Log.error('[HiscoreService] Failed to create the "hi" -> "hiscore" symlink.');
             Log.error(e);
