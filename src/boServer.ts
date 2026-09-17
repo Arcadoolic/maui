@@ -2,7 +2,7 @@ import express, {Response} from 'express';
 import session from 'express-session';
 import {Server} from 'http';
 import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
-import {join, dirname, sep, basename} from 'path';
+import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
 import {execFile, execFileSync, spawn} from 'child_process';
@@ -265,7 +265,11 @@ function parseMameIniFile(fileContent: string): { [key: string]: string[] } {
  */
 function resolveDirectoryPath(path: string, parentPath: string): string {
     path = path.replace(/\$HOME|~/, os.homedir);
-    if (path[0] === '/') {
+    // isAbsolute(), not path[0] === '/': a Windows absolute path (C:\..., \\server\share) never
+    // starts with '/', so that check let one fall through and get wrongly joined onto
+    // parentPath (e.g. pluginsPath "C:\MAME\plugins" becoming "<mame home>\C:\MAME\plugins",
+    // which never exists - silently emptying getAvailablePlugins() and skipping plugin.ini).
+    if (isAbsolute(path)) {
         return path;
     }
     parentPath = parentPath.replace('$HOME', os.homedir);
