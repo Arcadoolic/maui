@@ -23,3 +23,17 @@ export function getStaticPath(): string {
     }
     return join(process.resourcesPath, 'public');
 }
+
+/**
+ * Directory holding scripts/ (currently just import-starting-pack.py) - a separate
+ * process spawned by boServer.ts's /import/from-url route, so it needs a real file on
+ * disk and can't read anything packed into app.asar the way Node's own require() can.
+ * Same dev-vs-packaged split as getStaticPath() above, mirroring electron-builder.yml's
+ * extraResources entry for scripts/import-starting-pack.py.
+ */
+export function getScriptsPath(): string {
+    if (process.env.NODE_ENV === 'development') {
+        return join(__dirname, '..', '..', 'scripts');
+    }
+    return join(process.resourcesPath, 'scripts');
+}

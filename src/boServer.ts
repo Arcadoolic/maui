@@ -5,7 +5,7 @@ import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync}
 import {join, dirname, sep, basename, resolve} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
-import {execFile, execFileSync} from 'child_process';
+import {execFile, execFileSync, spawn} from 'child_process';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
 // Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
@@ -16,7 +16,7 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {StartingPackManifest} from '@/types/StartingPackManifest';
-import {getStaticPath} from '@/staticPath';
+import {getStaticPath, getScriptsPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
 // -> Helpers.class.ts's @electron/remote import at module scope, which would break this
@@ -51,6 +51,17 @@ interface ScreenScraperValues {
     ssUserId: string;
     ssUserPassword: string;
     bezelAspect: '4:3' | '16:9';
+}
+
+// One entry per pack on repo.maui.afronob.com's index.json (see
+// scripts/generate-repo-manifests.py) - only the fields the picker actually displays are typed
+// here, not the full manifest.
+interface RepoPack {
+    filename: string;
+    size: number;
+    mtime: number;
+    generatedAt?: string;
+    gameCount?: number;
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -1914,7 +1925,17 @@ function renderForm(
     importError?: string,
     dangerZoneInfo?: string,
     inputProbeState?: InputProbeState,
+    repoPacks?: RepoPack[],
+    repoError?: string,
+    repoInfo?: string,
 ): string {
+    // Loaded fresh rather than threaded through every renderForm() call site (there are many -
+    // see /save, /launch, /mame-options/save, /reset, etc.) purely for the repo card's
+    // credential fields; a sync JSON read is cheap and every route already re-loads Config at
+    // least once per request anyway.
+    const config = new Config();
+    config.load();
+
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
     // configured and validated (mameInfo.error unset), those paths don't exist, so neither
@@ -1929,6 +1950,7 @@ function renderForm(
             renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
             + renderImportCard(importError)
             // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
+            + (isAdmin ? renderRepoImportCard(config, repoPacks, repoError, repoInfo) : '')
             + (isAdmin ? renderMameDangerZoneCard(mameInfo, dangerZoneInfo) : '')
         )),
         'mame',
@@ -2257,6 +2279,75 @@ function renderImportSummary(summary: ImportSummary): string {
         ${categoriesHtml}
         ${directoriesHtml}
         ${issuesHtml}
+    `;
+}
+
+function humanFileSize(bytes: number): string {
+    let size = bytes;
+    for (const unit of ['o', 'Kio', 'Mio', 'Gio']) {
+        if (size < 1024) {
+            return `${size.toFixed(1)} ${unit}`;
+        }
+        size /= 1024;
+    }
+    return `${size.toFixed(1)} Tio`;
+}
+
+function renderRepoPackPicker(packs: RepoPack[]): string {
+    if (!packs.length) {
+        return '<p class="info">Aucun pack disponible sur ce dépôt.</p>';
+    }
+    const options = packs.map(pack => {
+        const details = [
+            humanFileSize(pack.size),
+            pack.gameCount !== undefined ? `${pack.gameCount} jeu(x)` : null,
+            pack.generatedAt ? new Date(pack.generatedAt).toLocaleDateString('fr-FR') : null,
+        ].filter((part): part is string => part !== null).join(' — ');
+        return `<option value="${escapeHtml(pack.filename)}">${escapeHtml(pack.filename)} (${escapeHtml(details)})</option>`;
+    }).join('');
+    return `
+        <form method="post" action="/import/from-url"
+            onsubmit="return confirm('Ceci écrase les roms/favoris/médias déjà présents pour les jeux du pack. Continuer ?')">
+            <label for="packFilename">Pack à importer</label>
+            <select id="packFilename" name="packFilename" required>${options}</select>
+            <button type="submit">Télécharger et importer</button>
+        </form>
+    `;
+}
+
+/**
+ * Settings form (POST /repo/save) for repo.maui.afronob.com's basic-auth credentials, plus -
+ * once repoUrl is set - a button to browse it (GET /import/from-url/packs) and, once packs have
+ * been fetched, the picker itself. Admin-only, same gating as renderMameDangerZoneCard() (see
+ * renderForm()): downloading and importing an arbitrary pack from a configured repo is no less
+ * consequential than the manual upload form right above it.
+ */
+function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string, info?: string): string {
+    return `
+        <section class="card">
+            <h2>Dépôt de starting packs</h2>
+            <p class="info">Parcourt et importe un starting pack directement depuis un dépôt HTTP
+            protégé par mot de passe (voir docs/STARTER-PACK-REPO.md), sans passer par l'upload
+            ci-dessus - utile pour un pack trop volumineux pour un formulaire navigateur.</p>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="post" action="/repo/save" novalidate>
+                <label for="repoUrl">URL du dépôt</label>
+                <input type="text" id="repoUrl" name="repoUrl" value="${escapeHtml(config.repoUrl)}"
+                    placeholder="https://repo.maui.afronob.com" autocomplete="off">
+                <label for="repoUser">Identifiant</label>
+                <input type="text" id="repoUser" name="repoUser" value="${escapeHtml(config.repoUser)}" autocomplete="off">
+                <label for="repoPassword">Mot de passe</label>
+                <input type="password" id="repoPassword" name="repoPassword" value="${escapeHtml(config.repoPassword)}" autocomplete="off">
+                <button type="submit">Enregistrer</button>
+            </form>
+            ${config.repoUrl ? `
+                <form method="get" action="/import/from-url/packs">
+                    <button type="submit">Parcourir les packs disponibles</button>
+                </form>
+                ${packs ? renderRepoPackPicker(packs) : ''}
+            ` : ''}
+        </section>
     `;
 }
 
@@ -2889,6 +2980,185 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
         res.write(renderPageTail());
         res.end();
+    });
+
+    // Same admin gating as renderRepoImportCard()'s visibility in renderForm(): configuring where
+    // packs come from, and importing an arbitrary one from there, is no less consequential than
+    // the manual upload right above it.
+    app.post('/repo/save', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        // Trailing slash trimmed once here so every consumer (index.json fetch, pack download
+        // URL) can always join with a bare '/', instead of each guarding against a possible
+        // double slash.
+        config.repoUrl = (req.body.repoUrl || '').trim().replace(/\/+$/, '');
+        config.repoUser = (req.body.repoUser || '').trim();
+        config.repoPassword = (req.body.repoPassword || '').trim();
+        config.save();
+
+        const values: ConfigFormValues = {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)};
+        res.send(renderForm(
+            values, getMameInfo(config), true, undefined, undefined, undefined, undefined, undefined,
+            undefined, undefined, undefined, 'Configuration du dépôt enregistrée.',
+        ));
+    });
+
+    // Proxied server-side (rather than the browser fetching index.json directly) so the repo's
+    // basic-auth credentials never need to reach the browser at all.
+    app.get('/import/from-url/packs', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const values: ConfigFormValues = {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)};
+        const mameInfo = getMameInfo(config);
+
+        if (!config.repoUrl) {
+            res.status(422).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, 'Renseignez l\'URL du dépôt avant de le parcourir.',
+            ));
+            return;
+        }
+
+        try {
+            const response = await fetch(`${config.repoUrl}/index.json`, {
+                headers: {
+                    Authorization: 'Basic '
+                        + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64'),
+                },
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const data = await response.json() as {packs?: RepoPack[]};
+            res.send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                data.packs ?? [],
+            ));
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            res.status(502).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, `Impossible de contacter le dépôt : ${message}`,
+            ));
+        }
+    });
+
+    app.post('/import/from-url', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const values: ConfigFormValues = {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)};
+        const mameInfo = getMameInfo(config);
+        // Flows into a URL and a child-process argv below - restricted to a bare filename (no
+        // path separators, no shell metacharacters) rather than trusting the <select> value.
+        const packFilename = typeof req.body.packFilename === 'string' ? req.body.packFilename : '';
+
+        if (!config.repoUrl) {
+            res.status(422).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, 'URL du dépôt non configurée.',
+            ));
+            return;
+        }
+        if (!/^[\w.-]+\.zip$/.test(packFilename)) {
+            res.status(422).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, 'Nom de pack invalide.',
+            ));
+            return;
+        }
+
+        // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below -
+        // macOS in particular doesn't always ship a working python3 without Xcode CLT installed.
+        execFile('python3', ['--version'], (probeError) => {
+            if (probeError) {
+                res.status(500).send(renderForm(
+                    values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined, 'python3 introuvable sur cette machine - impossible d\'importer depuis le dépôt.',
+                ));
+                return;
+            }
+
+            const packUrl = `${config.repoUrl}/${packFilename}`;
+            const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
+
+            res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+            res.socket?.setNoDelay(true);
+            res.write(renderPageHead('mame'));
+            res.write(`<section class="card"><h2>Import depuis le dépôt en cours… (${
+                escapeHtml(packFilename)})</h2><ul class="progress-log">`);
+
+            // spawn(), not the execFile already used for the preflight above: execFile's
+            // callback form still buffers internally up to maxBuffer (1 Mio default) even with
+            // listeners attached to its streams, which a verbose multi-hundred-game import could
+            // exceed. spawn() never buffers internally. Credentials go through env, never argv,
+            // so they don't leak via `ps`/`/proc/<pid>/cmdline` (they already sit in Config's
+            // plaintext JSON file at the same trust level as ssDevPassword).
+            const child = spawn('python3', [scriptPath, '--url', packUrl, '-y'], {
+                env: {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+            });
+
+            const writeLine = (line: string): void => {
+                if (line.trim()) {
+                    res.write(`<li>${escapeHtml(line)}</li>`);
+                }
+            };
+            // child.stdout/stderr 'data' chunks don't align to line boundaries - buffer each
+            // stream separately and only flush complete lines, same as tailing a log file.
+            const makeLineSplitter = (onLine: (line: string) => void) => {
+                let buffer = '';
+                return {
+                    push: (chunk: Buffer) => {
+                        buffer += chunk.toString('utf8');
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() ?? '';
+                        lines.forEach(onLine);
+                    },
+                    flush: () => {
+                        if (buffer.trim()) {
+                            onLine(buffer);
+                        }
+                    },
+                };
+            };
+            const stdoutSplitter = makeLineSplitter(writeLine);
+            const stderrSplitter = makeLineSplitter(writeLine);
+            child.stdout.on('data', stdoutSplitter.push);
+            child.stderr.on('data', stderrSplitter.push);
+
+            child.on('error', (error) => {
+                res.write(`</ul><p class="error">${escapeHtml(`Échec du lancement : ${error.message}`)}</p>`);
+                res.write(renderPageTail());
+                res.end();
+            });
+
+            child.on('close', () => {
+                stdoutSplitter.flush();
+                stderrSplitter.flush();
+                res.write('</ul></section>');
+
+                const refreshedMameInfo = getMameInfo(config);
+                res.write(renderConfigCard(values));
+                res.write(renderMameInfoCard(refreshedMameInfo));
+                if (!refreshedMameInfo.error) {
+                    res.write(renderImportCard());
+                    res.write(renderRepoImportCard(config));
+                }
+                res.write(renderPageTail());
+                res.end();
+            });
+        });
     });
 
     app.get('/maui', (req, res) => {
