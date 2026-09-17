@@ -1907,6 +1907,7 @@ function renderMauiDangerZoneCard(info?: string): string {
 function renderForm(
     values: ConfigFormValues,
     mameInfo: MameInfo,
+    isAdmin: boolean,
     error?: string,
     info?: string,
     mameInfoMessage?: string,
@@ -1927,7 +1928,8 @@ function renderForm(
             // its own, next to the MAME info it depends on and updates.
             renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
             + renderImportCard(importError)
-            + renderMameDangerZoneCard(mameInfo, dangerZoneInfo)
+            // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
+            + (isAdmin ? renderMameDangerZoneCard(mameInfo, dangerZoneInfo) : '')
         )),
         'mame',
     );
@@ -1990,11 +1992,13 @@ interface MauiPageMessages {
     dangerZoneInfo?: string;
 }
 
-function renderMauiPage(config: Config, messages: MauiPageMessages = {}): string {
+function renderMauiPage(config: Config, messages: MauiPageMessages = {}, isAdmin: boolean = false): string {
     return renderPage(
         renderMauiCard(config, messages.mauiInfo)
-        + renderMauiImportExportCard(messages.importExportError, messages.importExportInfo)
-        + renderMauiDangerZoneCard(messages.dangerZoneInfo),
+        // Import/export and the danger zone both act on the app's own config/database - only
+        // shown (and only actionable, see /maui/export, /maui/import and /reset) for admins.
+        + (isAdmin ? renderMauiImportExportCard(messages.importExportError, messages.importExportInfo) : '')
+        + (isAdmin ? renderMauiDangerZoneCard(messages.dangerZoneInfo) : ''),
         'maui',
     );
 }
@@ -2523,7 +2527,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
         res.send(renderForm(
-            {mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+            {mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, req.session.boRole === 'admin',
         ));
     });
 
@@ -2788,9 +2792,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)};
+        const isAdmin = req.session.boRole === 'admin';
 
         if (!req.file) {
-            res.status(400).send(renderForm(values, getMameInfo(config), undefined, undefined, undefined, 'Aucun fichier reçu.'));
+            res.status(400).send(renderForm(
+                values, getMameInfo(config), isAdmin, undefined, undefined, undefined, 'Aucun fichier reçu.',
+            ));
             return;
         }
 
@@ -2822,7 +2829,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         } catch (error) {
             const message = error instanceof Error ? error.message : 'erreur inattendue';
             res.status(422).send(renderForm(
-                values, getMameInfo(config), undefined, undefined, undefined, `ZIP invalide : ${message}`,
+                values, getMameInfo(config), isAdmin, undefined, undefined, undefined, `ZIP invalide : ${message}`,
             ));
             return;
         }
@@ -2839,7 +2846,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // above regardless of manifest presence.
         if (manifest && (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath || !categoryDir)) {
             res.status(422).send(renderForm(
-                values, mameInfo, undefined, undefined, undefined,
+                values, mameInfo, isAdmin, undefined, undefined, undefined,
                 'Configuration MAME incomplète - configurez MAME ci-dessus avant d\'importer.',
             ));
             return;
@@ -2887,7 +2894,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.get('/maui', (req, res) => {
         const config = new Config();
         config.load();
-        res.send(renderMauiPage(config));
+        res.send(renderMauiPage(config, {}, req.session.boRole === 'admin'));
     });
 
     app.post('/maui/save', (req, res) => {
@@ -2896,10 +2903,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.openDevTools = req.body.openDevTools === 'on';
         config.fullscreen = req.body.fullscreen === 'on';
         config.save();
-        res.send(renderMauiPage(config, {mauiInfo: 'Configuration enregistrée.'}));
+        res.send(renderMauiPage(config, {mauiInfo: 'Configuration enregistrée.'}, req.session.boRole === 'admin'));
     });
 
+    // Backup/restore of mame-awesome-ui's own config/database - admin only (see the "Import /
+    // export mame-awesome-ui" card, hidden from non-admins in renderMauiPage()).
     app.get('/maui/export', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
         const config = new Config();
         const exportConfigFile = req.query.json === 'on';
         const exportDatabase = req.query.db === 'on';
@@ -2908,7 +2921,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             config.load();
             res.send(renderMauiPage(config, {
                 importExportError: 'Cochez au moins une case (JSON et/ou DB) avant d\'exporter.',
-            }));
+            }, true));
             return;
         }
 
@@ -2924,7 +2937,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             config.load();
             res.send(renderMauiPage(config, {
                 importExportError: 'Rien à exporter : le(s) fichier(s) sélectionné(s) n\'existe(nt) pas encore.',
-            }));
+            }, true));
             return;
         }
 
@@ -2942,11 +2955,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.post('/maui/import', upload.single('file'), (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
         const config = new Config();
         config.load();
 
         if (!req.file) {
-            res.send(renderMauiPage(config, {importExportError: 'Aucun fichier fourni.'}));
+            res.send(renderMauiPage(config, {importExportError: 'Aucun fichier fourni.'}, true));
             return;
         }
 
@@ -2965,7 +2982,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                     res.send(renderMauiPage(config, {
                         importExportError: 'Le ZIP ne contient ni mame-awesome-ui-config.json ni '
                             + 'mame-awesome-ui.sqlite.',
-                    }));
+                    }, true));
                     return;
                 }
                 if (configEntry) {
@@ -2989,7 +3006,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                     res.send(renderMauiPage(config, {
                         importExportError: 'Ce fichier ne ressemble pas à une base de données '
                             + 'sqlite valide.',
-                    }));
+                    }, true));
                     return;
                 }
                 writeFileSync(getDatabasePath(), req.file.buffer);
@@ -2998,13 +3015,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 res.send(renderMauiPage(config, {
                     importExportError: 'Format non reconnu : utilisez un .json, un .sqlite/.db ou '
                         + 'un .zip contenant les deux.',
-                }));
+                }, true));
                 return;
             }
         } catch (error) {
             res.send(renderMauiPage(config, {
                 importExportError: `Import échoué : ${error instanceof Error ? error.message : String(error)}`,
-            }));
+            }, true));
             return;
         }
 
@@ -3075,17 +3092,20 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const mamePath: string = (req.body.mamePath || '').trim();
         const config = new Config();
         config.load();
+        const isAdmin = req.session.boRole === 'admin';
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Le dossier "${mamePath}" n'existe pas.`,
+                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), isAdmin,
+                `Le dossier "${mamePath}" n'existe pas.`,
             ));
             return;
         }
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), `Aucun binaire mame trouvé dans "${mamePath}".`,
+                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), isAdmin,
+                `Aucun binaire mame trouvé dans "${mamePath}".`,
             ));
             return;
         }
@@ -3094,7 +3114,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config),
+                {mamePath, isLocal: isLocalhostRequest(req)}, getMameInfo(config), isAdmin,
                 'Échec de l\'initialisation de mame ("-createconfig") : '
                     + `${error instanceof Error ? error.message : 'erreur inattendue'}.`,
             ));
@@ -3128,10 +3148,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         config.load();
 
+        const isAdmin = req.session.boRole === 'admin';
+
         if (!isLocalhostRequest(req)) {
             res.status(403).send(renderForm(
                 {mamePath: config.mamePath || '', isLocal: false},
-                getMameInfo(config),
+                getMameInfo(config), isAdmin,
                 'Le lancement de mame n\'est possible que depuis la machine qui héberge mame-awesome-ui.',
             ));
             return;
@@ -3140,7 +3162,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!config.mamePath || !config.mameBinaryName) {
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)},
-                getMameInfo(config),
+                getMameInfo(config), isAdmin,
                 'Aucune configuration valide enregistrée : impossible de lancer mame.',
             ));
             return;
@@ -3150,7 +3172,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!existsSync(mameBinary)) {
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
-                getMameInfo(config),
+                getMameInfo(config), isAdmin,
                 `Le binaire "${mameBinary}" est introuvable.`,
             ));
             return;
@@ -3174,7 +3196,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         res.send(renderForm(
             {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
-            getMameInfo(config),
+            getMameInfo(config), isAdmin,
             undefined,
             'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur cette machine.',
         ));
@@ -3205,7 +3227,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         res.send(renderForm(
             {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
-            getMameInfo(config),
+            getMameInfo(config), req.session.boRole === 'admin',
             undefined,
             undefined,
             saved
@@ -3228,7 +3250,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         res.send(renderForm(
             {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)},
-            getMameInfo(config),
+            getMameInfo(config), req.session.boRole === 'admin',
             undefined,
             undefined,
             added
@@ -3241,6 +3263,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
+        const isAdmin = req.session.boRole === 'admin';
 
         const romName: string = (req.body.romName || '').trim();
 
@@ -3249,7 +3272,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             // mameInfo.error is unset), but the config could have changed underneath a stale
             // form submission (e.g. mamePath cleared in another tab/request).
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo,
+                {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
             ));
             return;
         }
@@ -3257,7 +3280,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         if (!romName || !romNames.includes(romName)) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined,
                 {selectedRom: romName, error: 'Rom invalide ou introuvable dans le dossier des roms.'},
             ));
@@ -3267,7 +3290,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         try {
             const result = runInputProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
             res.send(renderForm(
-                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined,
                 {selectedRom: romName, result},
             ));
@@ -3275,7 +3298,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             console.error(`[boServer] Input probe failed for "${romName}":`, error);
             const message = error instanceof Error ? error.message : 'erreur inattendue';
             res.status(500).send(renderForm(
-                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo,
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined,
                 {
                     selectedRom: romName,
@@ -3287,6 +3310,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.post('/reset', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
@@ -3362,12 +3389,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!deleted.length) {
             if (zone === 'mame') {
                 res.send(renderForm(
-                    {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo,
+                    {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo, true,
                     undefined, undefined, undefined, undefined,
                     'Aucune case cochée : rien à supprimer.',
                 ));
             } else {
-                res.send(renderMauiPage(config, {dangerZoneInfo: 'Aucune case cochée : rien à supprimer.'}));
+                res.send(renderMauiPage(config, {dangerZoneInfo: 'Aucune case cochée : rien à supprimer.'}, true));
             }
             return;
         }
