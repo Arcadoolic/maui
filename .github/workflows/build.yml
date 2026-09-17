@@ -32,7 +32,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          # release: the published tag. pull_request: the PR branch's own commit, not GitHub's
+          # ephemeral refs/pull/N/merge (default for this event) - that ref gets GC'd if the PR is
+          # merged/closed before the runner fetches it, failing the checkout outright. push: the
+          # branch ref as normal.
+          ref: ${{ github.event.release.tag_name || github.event.pull_request.head.sha || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
