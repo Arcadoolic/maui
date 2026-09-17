@@ -1,10 +1,13 @@
 import express from 'express';
+import session from 'express-session';
 import {Server} from 'http';
 import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
 import {join, dirname, sep, basename, resolve} from 'path';
 import * as os from 'os';
+import {randomBytes} from 'crypto';
 import {execFile, execFileSync} from 'child_process';
 import multer from 'multer';
+import bcrypt from 'bcryptjs';
 // Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
 // syntax in methods/inflater.js that the main process's webpack build (older acorn parser)
 // fails to parse. Bumping this past 0.5.16 breaks `just serve`/`just build` with a
@@ -25,9 +28,20 @@ import Category from '@/model/Category.model';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
+import BoUser from '@/model/BoUser.model';
 import {UniqueConstraintError, ValidationError} from 'sequelize';
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui';
+// Augments express-session's own SessionData so req.session.boUserId/etc are typed, instead of
+// stashing BO login state in a bespoke cookie/JWT scheme.
+declare module 'express-session' {
+    interface SessionData {
+        boUserId?: number;
+        boUsername?: string;
+        boRole?: 'admin' | 'user';
+    }
+}
+
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui' | 'account';
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -210,7 +224,7 @@ function createSequelize(): Sequelize {
     return new Sequelize({
         dialect: 'sqlite',
         storage: getDatabasePath(),
-        models: [Category, Game, User, Hiscore],
+        models: [Category, Game, User, Hiscore, BoUser],
         logging: false,
     });
 }
@@ -1135,8 +1149,8 @@ function escapeHtml(value: string): string {
         .replace(/"/g, '&quot;');
 }
 
-function renderPage(body: string, active: Tab = 'mame'): string {
-    return renderPageHead(active) + body + renderPageTail();
+function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true): string {
+    return renderPageHead(active, authenticated) + body + renderPageTail();
 }
 
 /**
@@ -1144,7 +1158,7 @@ function renderPage(body: string, active: Tab = 'mame'): string {
  * chunks with res.write() (progress feedback for a long-running action) instead of building
  * the whole HTML string before sending anything.
  */
-function renderPageHead(active: Tab = 'mame'): string {
+function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): string {
     return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1401,13 +1415,14 @@ function renderPageHead(active: Tab = 'mame'): string {
 <body>
     <header>
         <h1>mame-awesome-ui</h1>
-        <nav class="tabs">
+        ${authenticated ? `<nav class="tabs">
             <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Players</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
             <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
-        </nav>
+            <a href="/account" class="${active === 'account' ? 'active' : ''}">Mon compte</a>
+        </nav>` : ''}
     </header>
     `;
 }
@@ -1416,6 +1431,47 @@ function renderPageTail(): string {
     return `
 </body>
 </html>`;
+}
+
+function renderLoginPage(error?: string): string {
+    return renderPage(`
+        <section class="card">
+            <h2>Connexion</h2>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            <form method="post" action="/login">
+                <label for="username">Identifiant</label>
+                <input type="text" id="username" name="username" required autofocus>
+                <label for="password">Mot de passe</label>
+                <input type="password" id="password" name="password" required>
+                <button type="submit">Se connecter</button>
+            </form>
+        </section>
+    `, 'mame', false);
+}
+
+function renderAccountPage(username: string, role: string, error?: string, info?: string): string {
+    return renderPage(`
+        <section class="card">
+            <h2>Mon compte</h2>
+            <p>Connecté en tant que <strong>${escapeHtml(username)}</strong> (${escapeHtml(role)}).</p>
+            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            <form method="post" action="/account/password">
+                <label for="currentPassword">Mot de passe actuel</label>
+                <input type="password" id="currentPassword" name="currentPassword" required>
+                <label for="newPassword">Nouveau mot de passe</label>
+                <input type="password" id="newPassword" name="newPassword" required minlength="4">
+                <label for="confirmPassword">Confirmer le nouveau mot de passe</label>
+                <input type="password" id="confirmPassword" name="confirmPassword" required minlength="4">
+                <button type="submit">Changer le mot de passe</button>
+            </form>
+        </section>
+        <section class="card">
+            <form method="post" action="/logout">
+                <button type="submit">Se déconnecter</button>
+            </form>
+        </section>
+    `, 'account');
 }
 
 interface ConfigFormValues {
@@ -2346,6 +2402,26 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
 export function startBoServer(port: number, onConfigured: () => void, onReset: () => void): Server {
     const app = express();
     app.use(express.urlencoded({extended: false}));
+    // A fresh secret per server start (rather than a persisted one) invalidates every session on
+    // restart - acceptable here since the BO already forces a full page reload/restart after any
+    // action (/reset, /maui/import) that would matter, and avoids storing a secret on disk.
+    app.use(session({
+        secret: randomBytes(32).toString('hex'),
+        resave: false,
+        saveUninitialized: false,
+        cookie: {maxAge: 7 * 24 * 60 * 60 * 1000},
+    }));
+    // The BO is reachable from the whole LAN (see isLocalhostRequest() above), so every route
+    // below this guard requires a logged-in session except the login page itself and the static
+    // assets it needs (background/logo) to render.
+    const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg']);
+    app.use((req, res, next) => {
+        if (PUBLIC_PATHS.has(req.path) || req.session.boUserId) {
+            next();
+            return;
+        }
+        res.redirect('/login');
+    });
     // Memory storage (not disk): the import route reads the upload straight into AdmZip, no
     // temp file to clean up afterwards.
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 500 * 1024 * 1024}});
@@ -2361,6 +2437,79 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.get('/mame-logo.svg', (req, res) => {
         res.sendFile(join(getStaticPath(), 'img/mame-logo.svg'));
+    });
+
+    app.get('/login', (req, res) => {
+        res.send(renderLoginPage());
+    });
+
+    app.post('/login', async (req, res) => {
+        const username: string = (req.body.username || '').trim();
+        const password: string = req.body.password || '';
+        let boUser: BoUser | null;
+        try {
+            boUser = await BoUser.findOne({where: {username}});
+        } catch {
+            // Same "not migrated yet" race /users already handles: this early in a fresh
+            // install, the Electron renderer's Init.vue may not have run Database.update() yet.
+            res.status(503).send(renderLoginPage(
+                'Base de données pas encore initialisée - lancez l\'application une première fois avant de vous connecter.',
+            ));
+            return;
+        }
+        if (!boUser || !bcrypt.compareSync(password, boUser.passwordHash)) {
+            res.status(401).send(renderLoginPage('Identifiant ou mot de passe incorrect.'));
+            return;
+        }
+        req.session.boUserId = boUser.id;
+        req.session.boUsername = boUser.username;
+        req.session.boRole = boUser.role;
+        res.redirect('/');
+    });
+
+    app.post('/logout', (req, res) => {
+        req.session.destroy(() => res.redirect('/login'));
+    });
+
+    app.get('/account', async (req, res) => {
+        const boUser = await BoUser.findByPk(req.session.boUserId);
+        if (!boUser) {
+            req.session.destroy(() => res.redirect('/login'));
+            return;
+        }
+        res.send(renderAccountPage(boUser.username, boUser.role));
+    });
+
+    app.post('/account/password', async (req, res) => {
+        const boUser = await BoUser.findByPk(req.session.boUserId);
+        if (!boUser) {
+            req.session.destroy(() => res.redirect('/login'));
+            return;
+        }
+        const currentPassword: string = req.body.currentPassword || '';
+        const newPassword: string = req.body.newPassword || '';
+        const confirmPassword: string = req.body.confirmPassword || '';
+
+        if (!bcrypt.compareSync(currentPassword, boUser.passwordHash)) {
+            res.status(401).send(renderAccountPage(boUser.username, boUser.role, 'Mot de passe actuel incorrect.'));
+            return;
+        }
+        if (newPassword.length < 4) {
+            res.status(422).send(renderAccountPage(
+                boUser.username, boUser.role, 'Le nouveau mot de passe doit contenir au moins 4 caractères.',
+            ));
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            res.status(422).send(renderAccountPage(
+                boUser.username, boUser.role, 'La confirmation ne correspond pas au nouveau mot de passe.',
+            ));
+            return;
+        }
+
+        boUser.passwordHash = bcrypt.hashSync(newPassword, 10);
+        await boUser.save();
+        res.send(renderAccountPage(boUser.username, boUser.role, undefined, 'Mot de passe mis à jour.'));
     });
 
     app.get('/', (req, res) => {
