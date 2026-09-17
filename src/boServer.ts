@@ -1,8 +1,8 @@
-import express from 'express';
+import express, {Response} from 'express';
 import session from 'express-session';
 import {Server} from 'http';
 import {existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
-import {join, dirname, sep, basename, resolve} from 'path';
+import {join, dirname, sep, basename} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
 import {execFile, execFileSync, spawn} from 'child_process';
@@ -15,7 +15,6 @@ import bcrypt from 'bcryptjs';
 import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
-import {StartingPackManifest} from '@/types/StartingPackManifest';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
@@ -321,9 +320,9 @@ function ensureFirstDirectory(paths: string[] | undefined, parentPath: string): 
  * Resolves the directories/file ui.ini points mame-awesome-ui at: marquees, flyers, logos and
  * the categorypath folder (created if missing, see ensureFirstDirectory) - and favorites.ini /
  * genre.ini / Multiplayer.ini within it (never created themselves: mame itself writes
- * favorites.ini the first time a favorite is added, and genre.ini/Multiplayer.ini are only
- * ever written by a starting pack import - see importStartingPack() - which every pack bundles
- * a copy of both).
+ * favorites.ini the first time a favorite is added, and genre.ini/Multiplayer.ini are only ever
+ * written by a starting pack import (see scripts/import-starting-pack.py), which every pack
+ * bundles a copy of both).
  */
 interface MameLocations {
     uiIni: { [key: string]: string[] };
@@ -360,27 +359,6 @@ function getMameLocations(iniPath: string): MameLocations {
     return {
         uiIni, marqueePath, flyerPath, logoPath, favoritesPath, categoryDir, genreIniPath, nplayersIniPath,
     };
-}
-
-/**
- * Same resolution as getMameLocations().favoritesPath, but - unlike that one, which stays null
- * on purpose when favorites.ini doesn't exist yet (mame itself is meant to be the only writer)
- * - creates the target ui_path directory when needed and returns where favorites.ini should be
- * written. Needed for importing a starting pack onto a brand new install that has no
- * favorites.ini at all yet.
- */
-function ensureFavoritesPath(iniPath: string): string {
-    const uiIniPath = join(iniPath, 'ui.ini');
-    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
-    const existing = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
-    if (existing) {
-        return existing;
-    }
-    const dir = ensureFirstDirectory(uiIni.ui_path, iniPath);
-    if (!dir) {
-        throw new Error('ui_path introuvable dans ui.ini.');
-    }
-    return join(dir, 'favorites.ini');
 }
 
 /**
@@ -505,9 +483,8 @@ interface MameInfo {
     windowed: boolean;
     pluginsPath: string | null;
     missingPlugins: string[];
-    // Full `-showconfig` output, kept around (beyond the rompath it's parsed here for) so the
-    // /import route can resolve IMPORTABLE_MAME_DIRECTORIES' iniKeys without re-running mame a
-    // second time. Null whenever -showconfig itself couldn't run (see the catch branch below).
+    // Full `-showconfig` output, kept around beyond the rompath it's parsed here for. Null
+    // whenever -showconfig itself couldn't run (see the catch branch below).
     showConfig: { [key: string]: string[] } | null;
     error?: string;
 }
@@ -903,261 +880,77 @@ async function downloadMissingFavoriteMedia(
     return summary;
 }
 
-interface ImportSummary {
-    gamesUpserted: number;
-    romFilesWritten: number;
-    biosFilesWritten: number;
-    marqueesWritten: number;
-    flyersWritten: number;
-    logosWritten: number;
-    favoritesReplaced: boolean;
-    genreIniReplaced: boolean;
-    nplayersIniReplaced: boolean;
-    categoriesCreated: string[];
-    // One entry per IMPORTABLE_MAME_DIRECTORIES folder actually found in the ZIP - see
-    // importMameDirectories(). Empty when the pack carried no such folder (the common case for a
-    // manifest-driven starting pack import).
-    directoriesImported: {zipFolder: string; filesWritten: number}[];
-    warnings: string[];
-    errors: string[];
-}
-
-/**
- * Builds a zero-valued ImportSummary, used as the base for a folder-only import (no
- * manifest.json, so none of importStartingPack()'s counters apply).
- */
-function createEmptyImportSummary(): ImportSummary {
-    return {
-        gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0,
-        flyersWritten: 0, logosWritten: 0, favoritesReplaced: false, genreIniReplaced: false,
-        nplayersIniReplaced: false, categoriesCreated: [], directoriesImported: [], warnings: [], errors: [],
-    };
-}
-
-/**
- * True as soon as the zip has at least one non-directory entry under `${zipFolder}/`, for
- * whichever zipFolder from IMPORTABLE_MAME_DIRECTORIES is being checked.
- */
-function zipHasFolder(zip: AdmZip, zipFolder: string): boolean {
-    const prefix = `${zipFolder}/`;
-    return zip.getEntries().some(entry => !entry.isDirectory && entry.entryName.startsWith(prefix));
-}
-
-/**
- * Copies every file entry under `${zipFolder}/` into targetDir, preserving whatever
- * subdirectories sit under it (e.g. snapshot_directory's per-game subfolders). Guards against
- * zip-slip: an entry whose relative path would resolve outside targetDir (via a `../` segment)
- * is skipped rather than written, the same way a malformed entry is.
- */
-function extractZipFolder(zip: AdmZip, zipFolder: string, targetDir: string): number {
-    const prefix = `${zipFolder}/`;
-    const resolvedTarget = resolve(targetDir);
-    let filesWritten = 0;
-    for (const entry of zip.getEntries()) {
-        if (entry.isDirectory || !entry.entryName.startsWith(prefix)) {
-            continue;
-        }
-        const relativePath = entry.entryName.slice(prefix.length);
-        const destination = resolve(targetDir, relativePath);
-        if (destination !== resolvedTarget && !destination.startsWith(resolvedTarget + sep)) {
-            continue;
-        }
-        mkdirSync(dirname(destination), {recursive: true});
-        writeFileSync(destination, entry.getData());
-        filesWritten++;
-    }
-    return filesWritten;
-}
-
-/**
- * Imports whichever IMPORTABLE_MAME_DIRECTORIES folders are present in the zip - unlike
- * importStartingPack()'s roms/manifest.json flow, no manifest is needed here: each folder is
- * copied wholesale into wherever its iniKey currently resolves to on this mame home, per
- * `resolvedIni` - the mame.ini (-showconfig) and ui.ini settings merged together by the /import
- * route, since IMPORTABLE_MAME_DIRECTORIES' keys are split across both files (categorypath is
- * ui.ini's, the rest are mame.ini's). A key missing from `resolvedIni` (should only happen
- * against a mame build old enough not to report it) is logged as a warning and skipped rather
- * than failing the whole import.
- */
-function importMameDirectories(
-    zip: AdmZip,
-    resolvedIni: { [key: string]: string[] } | null,
-    iniPath: string,
-    summary: ImportSummary,
-    onProgress: (line: string) => void,
-): void {
-    for (const {zipFolder, iniKey} of IMPORTABLE_MAME_DIRECTORIES) {
-        if (!zipHasFolder(zip, zipFolder)) {
-            continue;
-        }
-        const targetDir = resolvedIni ? ensureFirstDirectory(resolvedIni[iniKey], iniPath) : null;
-        if (!targetDir) {
-            summary.warnings.push(`${zipFolder}/ : "${iniKey}" introuvable dans la configuration mame, ignoré.`);
-            continue;
-        }
-        const filesWritten = extractZipFolder(zip, zipFolder, targetDir);
-        summary.directoriesImported.push({zipFolder, filesWritten});
-        onProgress(`${zipFolder}/ : ${filesWritten} fichier(s) copié(s) vers ${targetDir}.`);
-    }
-}
-
-/**
- * Ingests a starting pack ZIP (built by scripts/build-starting-pack.ts): for every rom present
- * in the pack, overwrites its Game row, rom file, marquee, flyer and logo (full-replacement, by
- * design - nothing outside the pack's scope is touched), then replaces favorites.ini wholesale
- * with the pack's copy. One rom failing (missing entry, DB error) is logged as a warning/error
- * and skipped rather than aborting the whole import, mirroring the pack builder's own
- * warn-and-continue policy.
- */
-async function importStartingPack(
-    zip: AdmZip,
-    manifest: StartingPackManifest,
-    romPath: string,
-    marqueePath: string,
-    flyerPath: string,
-    logoPath: string,
-    categoryDir: string,
-    iniPath: string,
-    onProgress: (line: string) => void,
-): Promise<ImportSummary> {
-    const summary = createEmptyImportSummary();
-    const categoryIds = new Map<string, number>();
-
-    // genre.ini/Multiplayer.ini first, before touching the database at all: on a genuinely
-    // fresh install (no sqlite file yet, e.g. importing a pack before ever launching the
-    // Electron app), sequelize.sync() below is what creates the category/game tables in the
-    // first place - and Database.install() (the app's own first-run path, see Database.class.ts)
-    // now refuses to run without these two files present, so the pack importing them is the
-    // only way they ever get there on such an install.
-    const genreEntry = zip.getEntry('genre.ini');
-    if (genreEntry) {
-        writeFileSync(join(categoryDir, 'genre.ini'), zip.readAsText(genreEntry), 'utf8');
-        summary.genreIniReplaced = true;
-    } else {
-        summary.warnings.push('genre.ini absent du ZIP (pack invalide ou obsolète) - catégories inchangées.');
-    }
-
-    const nplayersEntry = zip.getEntry('Multiplayer.ini');
-    if (nplayersEntry) {
-        writeFileSync(join(categoryDir, 'Multiplayer.ini'), zip.readAsText(nplayersEntry), 'utf8');
-        summary.nplayersIniReplaced = true;
-    } else {
-        summary.warnings.push(
-            'Multiplayer.ini absent du ZIP (pack invalide ou obsolète) - nombre de joueurs inchangé.',
-        );
-    }
-
-    // Creates the category/game/user/hiscore tables if this is a fresh sqlite file with none
-    // yet (no-op otherwise - sync() without force/alter never touches existing tables/data).
-    // Category.sequelize is the single connection createSequelize() registered at BO startup.
-    await Category.sequelize!.sync();
-
-    for (const biosName of manifest.biosRoms) {
-        const entry = zip.getEntry(`roms/${biosName}.zip`);
-        if (!entry) {
-            summary.warnings.push(`BIOS "${biosName}" : absent du ZIP, ignoré.`);
-            continue;
-        }
-        if (zip.extractEntryTo(entry, romPath, false, true)) {
-            summary.biosFilesWritten++;
-        } else {
-            summary.warnings.push(`BIOS "${biosName}" : échec de l'extraction.`);
-        }
-    }
-
-    for (const game of manifest.games) {
-        try {
-            let categoryId: number | null = null;
-            if (game.categoryName) {
-                categoryId = categoryIds.get(game.categoryName) ?? null;
-                if (categoryId === null) {
-                    const [category, created] = await Category.findOrCreate({
-                        where: {name: game.categoryName},
-                        defaults: {name: game.categoryName} as Category,
-                    });
-                    categoryId = category.id_category;
-                    categoryIds.set(game.categoryName, categoryId);
-                    if (created) {
-                        summary.categoriesCreated.push(game.categoryName);
-                    }
-                }
-            }
-
-            const romEntry = game.hasRomFile ? zip.getEntry(`roms/${game.romName}.zip`) : null;
-            if (romEntry) {
-                if (zip.extractEntryTo(romEntry, romPath, false, true)) {
-                    summary.romFilesWritten++;
-                } else {
-                    summary.warnings.push(`${game.romName} : échec de l'extraction de la rom.`);
-                }
-            } else if (game.hasRomFile) {
-                summary.warnings.push(`${game.romName} : rom annoncée dans le manifest mais absente du ZIP.`);
-            }
-
-            const marqueeEntry = game.hasMarquee ? zip.getEntry(`marquees/${game.romName}.png`) : null;
-            if (marqueeEntry && zip.extractEntryTo(marqueeEntry, marqueePath, false, true)) {
-                summary.marqueesWritten++;
-            }
-            const flyerEntry = game.hasFlyer ? zip.getEntry(`flyers/${game.romName}.png`) : null;
-            if (flyerEntry && zip.extractEntryTo(flyerEntry, flyerPath, false, true)) {
-                summary.flyersWritten++;
-            }
-            const logoEntry = game.hasLogo ? zip.getEntry(`logos/${game.romName}.png`) : null;
-            if (logoEntry && zip.extractEntryTo(logoEntry, logoPath, false, true)) {
-                summary.logosWritten++;
-            }
-
-            const gameFields = {
-                id_category: categoryId,
-                fullname: game.fullname,
-                shortname: game.shortname,
-                subname: game.subname,
-                manufacturer: game.manufacturer,
-                year: game.year ? parseInt(game.year, 10) : null,
-                hi: false,
-                player_alt: game.player_alt,
-                player_sim: game.player_sim,
-            };
-            // paranoid: true (see Game.model.ts) means a game GameService.saveGamesFromRomNames
-            // previously dropped (e.g. favorites.ini emptied by a reset) is only soft-deleted -
-            // its romName still occupies the unique constraint. A plain findOne() (which hides
-            // soft-deleted rows) would miss it and Game.create() would then collide with that
-            // constraint, so look it up with paranoid:false and restore() it if needed.
-            const existing = await Game.findOne({where: {romName: game.romName}, paranoid: false});
-            if (existing) {
-                await existing.restore();
-                await existing.update(gameFields);
-            } else {
-                await Game.create({romName: game.romName, ...gameFields} as Game);
-            }
-            summary.gamesUpserted++;
-            onProgress(`${game.romName} : ${game.fullname} importé.`);
-        } catch (error) {
-            const message = error instanceof ValidationError
-                ? error.errors.map(e => e.message).join(', ')
-                : (error instanceof Error ? error.message : 'erreur inattendue');
-            summary.errors.push(`${game.romName} : ${message}`);
-            onProgress(`${game.romName} : erreur (${message}).`);
-        }
-    }
-
-    const favoritesEntry = zip.getEntry('favorites.ini');
-    if (favoritesEntry) {
-        writeFileSync(ensureFavoritesPath(iniPath), zip.readAsText(favoritesEntry), 'utf8');
-        summary.favoritesReplaced = true;
-    } else {
-        summary.warnings.push('favorites.ini absent du ZIP, favoris inchangés.');
-    }
-
-    return summary;
-}
-
 function escapeHtml(value: string): string {
     return value
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+/**
+ * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs`, streaming its stdout/stderr
+ * line-by-line into an already-`res.writeHead()`'d, already-headed HTML response as a live
+ * progress log - shared by /import and /import/from-url, which only differ in the section title,
+ * the script args/env, and what they render once the import finishes.
+ *
+ * Caller must have already written the page head (renderPageHead()) before calling this. On a
+ * launch failure (`error` event, e.g. python3 vanishing mid-request), this writes the error
+ * block itself, closes out the response (renderPageTail() + res.end()) and resolves false so the
+ * caller skips its own post-import render; on a normal close, it only closes the `<section>` and
+ * resolves true, leaving the rest of the page (and res.end()) to the caller.
+ */
+function runImportScript(
+    res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+    const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
+    res.write(`<section class="card"><h2>${title}</h2><ul class="progress-log">`);
+
+    return new Promise(resolve => {
+        const child = spawn('python3', [scriptPath, ...scriptArgs], {env});
+
+        const writeLine = (line: string): void => {
+            if (line.trim()) {
+                res.write(`<li>${escapeHtml(line)}</li>`);
+            }
+        };
+        // child.stdout/stderr 'data' chunks don't align to line boundaries - buffer each stream
+        // separately and only flush complete lines, same as tailing a log file.
+        const makeLineSplitter = (onLine: (line: string) => void) => {
+            let buffer = '';
+            return {
+                push: (chunk: Buffer) => {
+                    buffer += chunk.toString('utf8');
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() ?? '';
+                    lines.forEach(onLine);
+                },
+                flush: () => {
+                    if (buffer.trim()) {
+                        onLine(buffer);
+                    }
+                },
+            };
+        };
+        const stdoutSplitter = makeLineSplitter(writeLine);
+        const stderrSplitter = makeLineSplitter(writeLine);
+        child.stdout.on('data', stdoutSplitter.push);
+        child.stderr.on('data', stderrSplitter.push);
+
+        child.on('error', (error) => {
+            res.write(`</ul><p class="error">${escapeHtml(`Échec du lancement : ${error.message}`)}</p></section>`);
+            res.write(renderPageTail());
+            res.end();
+            resolve(false);
+        });
+
+        child.on('close', () => {
+            stdoutSplitter.flush();
+            stderrSplitter.flush();
+            res.write('</ul></section>');
+            resolve(true);
+        });
+    });
 }
 
 function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true): string {
@@ -1948,6 +1741,7 @@ function renderForm(
             // counts, all resolved from this same MAME install) - kept on this tab instead of
             // its own, next to the MAME info it depends on and updates.
             renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
+            + renderPythonWarning()
             + renderImportCard(importError)
             // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
             + (isAdmin ? renderRepoImportCard(config, repoPacks, repoError, repoInfo) : '')
@@ -2230,6 +2024,34 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
     return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
 }
 
+/**
+ * Both import routes (manual upload and repo-url) shell out to
+ * scripts/import-starting-pack.py - a fast, local `--version` probe, same synchronous-external-
+ * process convention as getMameInfo()'s own execFileSync calls above, rather than an async
+ * execFile callback.
+ */
+function isPython3Available(): boolean {
+    try {
+        execFileSync('python3', ['--version'], {stdio: 'ignore'});
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Shown right above renderImportCard() wherever it renders (initial page load and both
+ * post-import re-renders), so a missing python3 surfaces proactively instead of only once an
+ * import is attempted.
+ */
+function renderPythonWarning(): string {
+    if (isPython3Available()) {
+        return '';
+    }
+    return '<p class="error">python3 introuvable sur cette machine - l\'import de starting pack '
+        + 'est indisponible.</p>';
+}
+
 function renderImportCard(error?: string): string {
     return `
         <section class="card">
@@ -2246,39 +2068,6 @@ function renderImportCard(error?: string): string {
                 <button type="submit">Importer</button>
             </form>
         </section>
-    `;
-}
-
-function renderImportSummary(summary: ImportSummary): string {
-    const parts = [
-        `${summary.gamesUpserted} jeu(x) importé(s)`,
-        `${summary.romFilesWritten} rom(s) écrite(s)`,
-        `${summary.biosFilesWritten} bios écrite(s)`,
-        `${summary.marqueesWritten} marquee(s)`,
-        `${summary.flyersWritten} flyer(s)`,
-        `${summary.logosWritten} logo(s)`,
-        summary.favoritesReplaced ? 'favoris remplacés' : 'favoris inchangés',
-        summary.genreIniReplaced ? 'genre.ini remplacé' : 'genre.ini inchangé',
-        summary.nplayersIniReplaced ? 'Multiplayer.ini remplacé' : 'Multiplayer.ini inchangé',
-        `${summary.errors.length} erreur(s)`,
-    ];
-    const categoriesHtml = summary.categoriesCreated.length
-        ? `<p class="info">Catégorie(s) créée(s) : ${escapeHtml(summary.categoriesCreated.join(', '))}</p>`
-        : '';
-    const directoriesHtml = summary.directoriesImported.length
-        ? `<p class="info">Dossier(s) importé(s) : ${escapeHtml(
-            summary.directoriesImported.map(d => `${d.zipFolder} (${d.filesWritten})`).join(', '),
-        )}</p>`
-        : '';
-    const issues = [...summary.warnings, ...summary.errors];
-    const issuesHtml = issues.length
-        ? `<ul>${issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
-        : '';
-    return `
-        <p class="info">${escapeHtml(parts.join(' — '))}</p>
-        ${categoriesHtml}
-        ${directoriesHtml}
-        ${issuesHtml}
     `;
 }
 
@@ -2517,9 +2306,17 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
         res.redirect('/login');
     });
-    // Memory storage (not disk): the import route reads the upload straight into AdmZip, no
-    // temp file to clean up afterwards.
-    const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 500 * 1024 * 1024}});
+    // Disk storage, not memory: the import route hands the upload straight to
+    // scripts/import-starting-pack.py by path, which streams it instead of buffering it in RAM -
+    // the whole reason that script exists (see its own docstring). The temp file is removed by
+    // the /import handler once the script finishes.
+    const upload = multer({
+        storage: multer.diskStorage({
+            destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+            filename: (_req, _file, cb) => cb(null, `${randomBytes(8).toString('hex')}.zip`),
+        }),
+        limits: {fileSize: 500 * 1024 * 1024},
+    });
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
@@ -2892,53 +2689,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
 
-        let zip: AdmZip;
-        // manifest.json is only needed for the rom/game part of a pack - the metadata it carries
-        // (category, player counts, bios linking) has nothing to interpret for a plain
-        // IMPORTABLE_MAME_DIRECTORIES folder (cfg, nvram...), so a zip made only of those doesn't
-        // need one. null here means "this zip is a folder-only import", not an error.
-        let manifest: StartingPackManifest | null;
-        try {
-            zip = new AdmZip(req.file.buffer);
-            const manifestEntry = zip.getEntry('manifest.json');
-            if (manifestEntry) {
-                manifest = JSON.parse(zip.readAsText(manifestEntry));
-                if (manifest!.formatVersion !== 1) {
-                    throw new Error(`version de pack non supportée (${manifest!.formatVersion}).`);
-                }
-            } else {
-                manifest = null;
-                const hasImportableDirectory = IMPORTABLE_MAME_DIRECTORIES
-                    .some(({zipFolder}) => zipHasFolder(zip, zipFolder));
-                if (!hasImportableDirectory) {
-                    throw new Error(
-                        'manifest.json manquant, et aucun dossier reconnu '
-                        + `(${IMPORTABLE_MAME_DIRECTORIES.map(d => d.zipFolder).join(', ')}) dans le ZIP.`,
-                    );
-                }
-            }
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'erreur inattendue';
-            res.status(422).send(renderForm(
-                values, getMameInfo(config), isAdmin, undefined, undefined, undefined, `ZIP invalide : ${message}`,
-            ));
-            return;
-        }
-
-        const iniPath = getMameHomePath();
-        const {marqueePath, flyerPath, logoPath, categoryDir, uiIni} = getMameLocations(iniPath);
-        const mameInfo = getMameInfo(config);
-        // IMPORTABLE_MAME_DIRECTORIES' keys are split across mame.ini (-showconfig, mameInfo.
-        // showConfig) and ui.ini (categorypath, from getMameLocations() above) - merge both so
-        // importMameDirectories() can resolve either kind by iniKey alone.
-        const resolvedIni = {...(mameInfo.showConfig ?? {}), ...uiIni};
-        // The rom/game part's own destinations are only required when there's a manifest to
-        // drive it - a folder-only import just needs iniPath and resolvedIni, already built
-        // above regardless of manifest presence.
-        if (manifest && (!mameInfo.romPath || !marqueePath || !flyerPath || !logoPath || !categoryDir)) {
-            res.status(422).send(renderForm(
-                values, mameInfo, isAdmin, undefined, undefined, undefined,
-                'Configuration MAME incomplète - configurez MAME ci-dessus avant d\'importer.',
+        // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below - macOS
+        // in particular doesn't always ship a working python3 without Xcode CLT installed.
+        if (!isPython3Available()) {
+            rmSync(req.file.path, {force: true});
+            res.status(500).send(renderForm(
+                values, getMameInfo(config), isAdmin, undefined, undefined, undefined,
+                'python3 introuvable sur cette machine - impossible d\'importer un starting pack.',
             ));
             return;
         }
@@ -2946,25 +2703,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('mame'));
-        res.write('<section class="card"><h2>Import en cours…</h2><ul class="progress-log">');
 
-        try {
-            const summary = manifest
-                ? await importStartingPack(
-                    zip, manifest, mameInfo.romPath!, marqueePath!, flyerPath!, logoPath!, categoryDir!, iniPath,
-                    line => res.write(`<li>${escapeHtml(line)}</li>`),
-                )
-                : createEmptyImportSummary();
-            importMameDirectories(
-                zip, resolvedIni, iniPath, summary, line => res.write(`<li>${escapeHtml(line)}</li>`),
-            );
-            res.write('</ul></section>');
-            res.write(renderImportSummary(summary));
-        } catch (error) {
-            console.error('[boServer] Import failed:', error);
-            res.write(`</ul><p class="error">${
-                escapeHtml(error instanceof Error ? error.message : 'Erreur inattendue.')
-            }</p>`);
+        // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
+        // the actual import both happen inside the script now - it mirrors this same logic and
+        // reports failures through its own stdout/stderr lines, same as /import/from-url below.
+        const started = await runImportScript(res, 'Import en cours…', [req.file.path], {...process.env});
+        rmSync(req.file.path, {force: true});
+        if (!started) {
+            return;
         }
 
         // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
@@ -2976,6 +2722,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Same gating as renderForm(): import only makes sense once the binary's configured and
         // validated (see there for why).
         if (!refreshedMameInfo.error) {
+            res.write(renderPythonWarning());
             res.write(renderImportCard());
         }
         res.write(renderPageTail());
@@ -3051,7 +2798,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
     });
 
-    app.post('/import/from-url', (req, res) => {
+    app.post('/import/from-url', async (req, res) => {
         if (req.session.boRole !== 'admin') {
             res.status(403).send('Action réservée aux administrateurs.');
             return;
@@ -3078,87 +2825,43 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ));
             return;
         }
-
         // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below -
         // macOS in particular doesn't always ship a working python3 without Xcode CLT installed.
-        execFile('python3', ['--version'], (probeError) => {
-            if (probeError) {
-                res.status(500).send(renderForm(
-                    values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                    undefined, 'python3 introuvable sur cette machine - impossible d\'importer depuis le dépôt.',
-                ));
-                return;
-            }
+        if (!isPython3Available()) {
+            res.status(500).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, 'python3 introuvable sur cette machine - impossible d\'importer depuis le dépôt.',
+            ));
+            return;
+        }
 
-            const packUrl = `${config.repoUrl}/${packFilename}`;
-            const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
+        const packUrl = `${config.repoUrl}/${packFilename}`;
 
-            res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-            res.socket?.setNoDelay(true);
-            res.write(renderPageHead('mame'));
-            res.write(`<section class="card"><h2>Import depuis le dépôt en cours… (${
-                escapeHtml(packFilename)})</h2><ul class="progress-log">`);
+        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+        res.socket?.setNoDelay(true);
+        res.write(renderPageHead('mame'));
 
-            // spawn(), not the execFile already used for the preflight above: execFile's
-            // callback form still buffers internally up to maxBuffer (1 Mio default) even with
-            // listeners attached to its streams, which a verbose multi-hundred-game import could
-            // exceed. spawn() never buffers internally. Credentials go through env, never argv,
-            // so they don't leak via `ps`/`/proc/<pid>/cmdline` (they already sit in Config's
-            // plaintext JSON file at the same trust level as ssDevPassword).
-            const child = spawn('python3', [scriptPath, '--url', packUrl, '-y'], {
-                env: {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
-            });
+        // Credentials go through env, never argv, so they don't leak via `ps`/
+        // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
+        // trust level as ssDevPassword).
+        const started = await runImportScript(
+            res, `Import depuis le dépôt en cours… (${escapeHtml(packFilename)})`, ['--url', packUrl, '-y'],
+            {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+        );
+        if (!started) {
+            return;
+        }
 
-            const writeLine = (line: string): void => {
-                if (line.trim()) {
-                    res.write(`<li>${escapeHtml(line)}</li>`);
-                }
-            };
-            // child.stdout/stderr 'data' chunks don't align to line boundaries - buffer each
-            // stream separately and only flush complete lines, same as tailing a log file.
-            const makeLineSplitter = (onLine: (line: string) => void) => {
-                let buffer = '';
-                return {
-                    push: (chunk: Buffer) => {
-                        buffer += chunk.toString('utf8');
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop() ?? '';
-                        lines.forEach(onLine);
-                    },
-                    flush: () => {
-                        if (buffer.trim()) {
-                            onLine(buffer);
-                        }
-                    },
-                };
-            };
-            const stdoutSplitter = makeLineSplitter(writeLine);
-            const stderrSplitter = makeLineSplitter(writeLine);
-            child.stdout.on('data', stdoutSplitter.push);
-            child.stderr.on('data', stderrSplitter.push);
-
-            child.on('error', (error) => {
-                res.write(`</ul><p class="error">${escapeHtml(`Échec du lancement : ${error.message}`)}</p>`);
-                res.write(renderPageTail());
-                res.end();
-            });
-
-            child.on('close', () => {
-                stdoutSplitter.flush();
-                stderrSplitter.flush();
-                res.write('</ul></section>');
-
-                const refreshedMameInfo = getMameInfo(config);
-                res.write(renderConfigCard(values));
-                res.write(renderMameInfoCard(refreshedMameInfo));
-                if (!refreshedMameInfo.error) {
-                    res.write(renderImportCard());
-                    res.write(renderRepoImportCard(config));
-                }
-                res.write(renderPageTail());
-                res.end();
-            });
-        });
+        const refreshedMameInfo = getMameInfo(config);
+        res.write(renderConfigCard(values));
+        res.write(renderMameInfoCard(refreshedMameInfo));
+        if (!refreshedMameInfo.error) {
+            res.write(renderPythonWarning());
+            res.write(renderImportCard());
+            res.write(renderRepoImportCard(config));
+        }
+        res.write(renderPageTail());
+        res.end();
     });
 
     app.get('/maui', (req, res) => {
