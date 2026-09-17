@@ -1,0 +1,67 @@
+name: Build
+
+# Matrix currently covers linux-x64 only. linux-arm64 (Raspberry Pi) and
+# macos-arm64 are planned next — add matrix.include entries for them once
+# the arm64 sqlite3 native build is verified (see docs/RASPBERRY-PI-LAG.md
+# and CLAUDE.md's "Linux dev gotchas" section).
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-latest
+            build_args: --linux --x64
+            artifact_glob: dist_electron/*.AppImage
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Resolve Python interpreter for native module build
+        run: |
+          source scripts/resolve-python.sh
+          echo "PYTHON=$PYTHON" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run electron:build -- ${{ matrix.build_args }} --publish never
+
+      - name: Upload build artifact (develop validation)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.artifact_glob }}
+          retention-days: 7
+
+      - name: Attach to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.event.release.tag_name }}" ${{ matrix.artifact_glob }} --clobber
