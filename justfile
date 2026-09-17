@@ -57,6 +57,12 @@ serve: install _check-sandbox
 
 # Build production Electron app
 build: install
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # electron-builder.yml's artifactName expands env.ARTIFACT_SUFFIX unconditionally - CI sets it
+    # ('-dev'/''), but a plain local build has nothing to expand and errors out. Default it here
+    # so `just build` works standalone; CI's own exported value still wins.
+    export ARTIFACT_SUFFIX="${ARTIFACT_SUFFIX:--local}"
     npm run electron:build
 
 # Lint and auto-fix files
