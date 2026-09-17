@@ -73,8 +73,12 @@ production :
   `active` et suivi normalement par systemd. À garder en tête pour un futur
   renouvellement de certificat sur cet hôte (le renouvellement automatique
   pourrait reproduire le même symptôme).
-- Vérifié en HTTPS : 401 sans identifiants, 404 sur les chemins hors
-  `.zip`/`.json`, redirection 301 HTTP→HTTPS.
+- Vérifié en HTTPS : 401 sans identifiants (y compris sur le listing de
+  dossier `/`), 404 avec identifiants sur les chemins hors `.zip`/`.json`,
+  redirection 301 HTTP→HTTPS.
+- `location /` passée en `autoindex on` (au lieu de `return 404;`) pour
+  permettre à l'admin de parcourir les packs au navigateur avant que
+  `index.json` (étape 3) existe — voir la note dans l'étape 2 ci-dessous.
 - Pack de base `mame-starting-pack-20260911.zip` uploadé dans
   `/data/production/repo-maui/zip/` (depuis `~/Downloads`, via
   `scp`/`sudo install`, pas via le module rsync — voir note ci-dessous) et
@@ -290,17 +294,22 @@ server {
     auth_basic_user_file /etc/nginx/htpasswd/repo-maui;
 
     root /data/production/repo-maui/zip;
-    autoindex off;
 
     # Seuls les .zip et les .json compagnons (manifests + index.json, voir
-    # scripts/generate-repo-manifests.py) sont censés être récupérés ici.
+    # scripts/generate-repo-manifests.py) sont censés être téléchargés ici.
     location ~ \.(zip|json)$ {
         try_files $uri =404;
         add_header Cache-Control "public, max-age=3600";
     }
 
+    # Listing de dossier pour l'admin qui choisit un pack à la main. Sans
+    # risque puisque tout ce server block est déjà derrière auth_basic
+    # ci-dessus et que ce dossier ne contient jamais que des
+    # .zip/.manifest.json/index.json.
     location / {
-        return 404;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
     }
 
     add_header X-Frame-Options        "SAMEORIGIN" always;
@@ -320,16 +329,24 @@ sudo ufw status verbose | grep -E '80|443'       # vérifier que le 443 est auto
 
 Vérifié avec `curl`, sans le BO — résultats réels obtenus :
 ```bash
+curl -I https://repo.maui.afronob.com/                               # 401 ✅ (listing lui-même protégé)
+curl -u admin:<mdp> https://repo.maui.afronob.com/                    # 200, liste les .zip présents ✅
 curl -I https://repo.maui.afronob.com/index.json                     # 401 ✅
 curl -u admin:<mdp> https://repo.maui.afronob.com/index.json          # 404 tant que l'étape 3 n'a pas tourné (pas de 401) ✅
-curl -u admin:<mdp> https://repo.maui.afronob.com/does-not-exist.py   # 404 ✅ (même sans identifiants — voir note ci-dessous)
+curl -I https://repo.maui.afronob.com/does-not-exist.py               # 401 ✅
+curl -u admin:<mdp> https://repo.maui.afronob.com/does-not-exist.py   # 404 ✅
 ```
-Note : `location / { return 404; }` s'exécute pendant la phase *rewrite*
-de nginx, avant la phase *access* qui vérifie `auth_basic` — un chemin en
-dehors de `.zip`/`.json` renvoie donc 404 **même sans authentification**,
-sans jamais exposer d'information (toujours le même 404 générique, aucune
-donnée servie). C'est le comportement voulu, pas une faille : seule la
-zone `.zip`/`.json` a besoin d'être protégée par mot de passe.
+Décision prise le 2026-09-17 : `location /` a été passée en `autoindex on`
+(plutôt que `return 404;`) pour permettre à un admin de parcourir les
+packs disponibles au navigateur avant que `index.json` (étape 3) existe —
+sans risque supplémentaire puisque l'ensemble du server block reste
+derrière `auth_basic`. Effet de bord positif : avec `return 404;`, ce
+chemin s'exécutait pendant la phase *rewrite* de nginx, **avant** la phase
+*access* qui vérifie `auth_basic`, donc un chemin hors `.zip`/`.json`
+répondait 404 même sans identifiants (sans faille, juste incohérent). Avec
+`autoindex`, tout passe par le flux normal de service de fichiers
+statiques, donc l'authentification est désormais exigée uniformément
+partout sur le vhost, y compris pour un 404.
 
 ### 3. `scripts/generate-repo-manifests.py` (nouveau, versionné ici, déployé sur miyamoto)
 
