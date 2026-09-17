@@ -46,7 +46,12 @@ function getCategoryClasses(index: number) {
         next2,
     };
     if (index > 0) {
-        const classLogo = props.categories[index - 1].name.replace(/([\s\W]+)/, '_').toLowerCase();
+        // Strip mame's "TTL * " prefix (discrete-logic games, e.g. "TTL * Shooter") first - same
+        // icon as the non-TTL category since it's the same kind of game. The replace() needs /g:
+        // without it, only the first run of separators became '_' and any later one (e.g. the
+        // second space in "Musical Instrument Accessory") stayed literal, breaking the class name.
+        const name = props.categories[index - 1].name.replace(/^TTL \* /, '');
+        const classLogo = name.replace(/[\s\W]+/g, '_').toLowerCase();
         classes[classLogo] = true;
     }
     return classes;
