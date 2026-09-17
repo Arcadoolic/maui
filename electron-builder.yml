@@ -10,7 +10,7 @@ files:
 extraResources:
   - from: public/
     to: public/
-artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+artifactName: '${productName}-${version}${env.ARTIFACT_SUFFIX}-${os}-${arch}.${ext}'
 linux:
   target: AppImage
   category: Game

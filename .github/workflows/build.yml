@@ -6,10 +6,8 @@ name: Build
 # see its comment on why that can't be a separate `release: published`
 # triggered workflow.
 #
-# Matrix currently covers linux-x64 only. linux-arm64 (Raspberry Pi) and
-# macos-arm64 are planned next — add matrix.include entries for them once
-# the arm64 sqlite3 native build is verified (see docs/RASPBERRY-PI-LAG.md
-# and CLAUDE.md's "Linux dev gotchas" section).
+# Matrix covers linux-x64 and linux-arm64 (Raspberry Pi). macos-arm64 is
+# planned next.
 
 on:
   push:
@@ -29,6 +27,10 @@ jobs:
           - name: linux-x64
             runner: ubuntu-latest
             build_args: --linux --x64
+            artifact_glob: dist_electron/*.AppImage
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            build_args: --linux --arm64
             artifact_glob: dist_electron/*.AppImage
 
     runs-on: ${{ matrix.runner }}
@@ -58,6 +60,10 @@ jobs:
       - name: Build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Suffixes develop-validation artifact filenames so they never
+          # collide with a same-version release build (electron-builder
+          # throws if this is unset - see electron-builder.yml's artifactName).
+          ARTIFACT_SUFFIX: -dev
         run: npm run electron:build -- ${{ matrix.build_args }} --publish never
 
       - name: Upload build artifact

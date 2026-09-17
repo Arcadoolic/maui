@@ -67,9 +67,12 @@ jobs:
             runner: ubuntu-latest
             build_args: --linux --x64
             artifact_glob: dist_electron/*.AppImage
-      # linux-arm64 (Raspberry Pi, ubuntu-24.04-arm) and macos-arm64
-      # (macos-14) are next - add matrix.include entries once the sqlite3
-      # native build is verified on those runners.
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            build_args: --linux --arm64
+            artifact_glob: dist_electron/*.AppImage
+      # macos-arm64 (macos-14) is next - add its matrix.include entry once
+      # the sqlite3 native build is verified there.
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -93,6 +96,11 @@ jobs:
       - name: Build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Must stay defined (even empty) - electron-builder throws if an
+          # artifactName ${env.X} macro is unset. Empty here means release
+          # artifacts keep the plain name; build.yml's develop validation
+          # sets this to "-dev" instead, so filenames never collide.
+          ARTIFACT_SUFFIX: ''
         run: npm run electron:build -- ${{ matrix.build_args }} --publish never
 
       - name: Attach to GitHub release
