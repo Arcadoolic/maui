@@ -14,3 +14,6 @@ artifactName: '${productName}-${version}${env.ARTIFACT_SUFFIX}-${os}-${arch}.${e
 linux:
   target: AppImage
   category: Game
+mac:
+  target: zip
+  category: public.app-category.games
