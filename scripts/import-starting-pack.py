@@ -21,9 +21,14 @@ deployment story (see docs/RASPBERRY-PI-DEPLOY.md).
 Usage (on the machine hosting the MAME home, e.g. the Pi, after scp'ing the pack over):
     python3 import-starting-pack.py /home/puckman/mega-starting-pack-20260916.zip
     python3 import-starting-pack.py --yes /home/puckman/mega-starting-pack-20260916.zip
+
+Or straight from repo.maui.afronob.com (see docs/STARTER-PACK-REPO.md), no local file needed:
+    MAUI_REPO_USER=admin MAUI_REPO_PASSWORD=... \\
+        python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip -y
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -31,6 +36,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 import zipfile
 from datetime import datetime, timezone
 
@@ -530,6 +538,42 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
 
 
 # ---------------------------------------------------------------------------
+# --url : download the pack from repo.maui.afronob.com before importing it, so this script can
+# run unattended on a cabinet's BO instead of requiring an scp'd file already on disk.
+# ---------------------------------------------------------------------------
+
+def download_to_tempfile(url, user, password):
+    """Downloads `url` into a temp .zip file and returns its path. zipfile.ZipFile needs a
+    seekable file (it reads the central directory from the end), so true streaming extraction
+    straight from an HTTP response isn't possible with the stdlib - download-to-temp-then-open is
+    required. Preflights free disk space against Content-Length when the server reports one
+    (same 5%-margin convention as check_disk_space()); otherwise lets copyfileobj surface ENOSPC
+    cleanly instead of guessing."""
+    request = urllib.request.Request(url)
+    if user or password:
+        credentials = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
+        request.add_header('Authorization', f'Basic {credentials}')
+
+    fd, temp_path = tempfile.mkstemp(suffix='.zip')
+    try:
+        with os.fdopen(fd, 'wb') as dst, urllib.request.urlopen(request) as response:
+            content_length = response.headers.get('Content-Length')
+            if content_length:
+                needed = int(content_length) * 1.05
+                free = shutil.disk_usage(os.path.dirname(temp_path)).free
+                if needed > free:
+                    raise RuntimeError(
+                        f'besoin d\'environ {human_size(int(content_length))} pour le téléchargement, '
+                        f'{human_size(free)} disponible(s).',
+                    )
+            shutil.copyfileobj(response, dst)
+    except BaseException:
+        os.unlink(temp_path)
+        raise
+    return temp_path
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -587,14 +631,45 @@ def main():
                     "le formulaire du BO (limite Multer 500 Mio + double-buffering RAM complet - "
                     "invivable pour un gros pack sur Raspberry Pi).",
     )
-    parser.add_argument('pack', help='Chemin du fichier ZIP du starting pack')
+    parser.add_argument('pack', nargs='?', help='Chemin du fichier ZIP du starting pack (local)')
+    parser.add_argument('--url', help='URL HTTP(S) du pack à télécharger avant import (repo.maui.afronob.com)')
+    parser.add_argument(
+        '--user', help='Identifiant basic-auth pour --url - test manuel uniquement, visible dans '
+                        '`ps`/l\'historique du shell ; préférer la variable MAUI_REPO_USER',
+    )
+    parser.add_argument(
+        '--password', help='Mot de passe basic-auth pour --url - test manuel uniquement, visible '
+                            'dans `ps`/l\'historique du shell ; préférer la variable MAUI_REPO_PASSWORD',
+    )
     parser.add_argument('-y', '--yes', action='store_true', help='Ne pas demander de confirmation avant import')
     args = parser.parse_args()
 
-    if not os.path.isfile(args.pack):
-        fail(f'Fichier introuvable : "{args.pack}".')
+    if bool(args.pack) == bool(args.url):
+        fail('Fournir soit un chemin de pack local, soit --url - jamais les deux, ni aucun des deux.')
 
-    print(f'[import-starting-pack] Pack : {args.pack} ({human_size(os.path.getsize(args.pack))})')
+    temp_path = None
+    if args.url:
+        user = args.user or os.environ.get('MAUI_REPO_USER', '')
+        password = args.password or os.environ.get('MAUI_REPO_PASSWORD', '')
+        print(f'[import-starting-pack] Téléchargement : {args.url}')
+        try:
+            temp_path = download_to_tempfile(args.url, user, password)
+        except (urllib.error.URLError, OSError, RuntimeError) as error:
+            fail(f'Téléchargement impossible : {error}')
+    pack_path = temp_path if args.url else args.pack
+
+    try:
+        _run_import(pack_path, args.yes)
+    finally:
+        if temp_path is not None:
+            os.unlink(temp_path)
+
+
+def _run_import(pack_path, skip_confirmation):
+    if not os.path.isfile(pack_path):
+        fail(f'Fichier introuvable : "{pack_path}".')
+
+    print(f'[import-starting-pack] Pack : {pack_path} ({human_size(os.path.getsize(pack_path))})')
 
     config = load_config()
     mame_path, mame_binary_name = config.get('mamePath'), config.get('mameBinaryName')
@@ -602,7 +677,7 @@ def main():
     ini_path = mame_home_path()
 
     try:
-        zf = zipfile.ZipFile(args.pack)
+        zf = zipfile.ZipFile(pack_path)
     except zipfile.BadZipFile as error:
         fail(f'ZIP invalide : {error}')
         return  # unreachable, keeps type-checkers happy
@@ -658,7 +733,7 @@ def main():
             print(f"[import-starting-pack] Dossier(s) mame détecté(s) dans le ZIP : "
                   f"{', '.join(directory_targets.keys())}.")
 
-        if not args.yes:
+        if not skip_confirmation:
             answer = input(
                 '[import-starting-pack] Ceci écrase les roms/favoris/médias déjà présents pour les '
                 'jeux du pack. Continuer ? [o/N] ',
