@@ -132,8 +132,13 @@ function onGameChange(previous: boolean) {
 
 function onCategoryChange(previous: boolean) {
     const showGameFn = async () => {
+        // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
+        // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
+        // within its category no longer matched where it sits in the full list (e.g. "005" first
+        // alphabetically, but wherever insertion order placed it inside its category).
         games.value = (!selectedCategoryIndex.value) ? await gameService.loadGames() :
-            await categories.value[selectedCategoryIndex.value - 1].$get('games') as Game[] || [];
+            await categories.value[selectedCategoryIndex.value - 1]
+                .$get('games', {order: ['romName']}) as Game[] || [];
 
         selectedGameIndex.value = 0;
         flyer.value = generateFlyerPath();
