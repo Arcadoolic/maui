@@ -9,6 +9,7 @@ import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
+import BoUser from '@/model/BoUser.model';
 import Umzug from 'umzug';
 import * as Log from 'electron-log';
 
@@ -28,7 +29,7 @@ export default class Database {
         this._sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: this.databasePath,
-            models: [Category, Game, User, Hiscore],
+            models: [Category, Game, User, Hiscore, BoUser],
             logging: false,
         });
     }
