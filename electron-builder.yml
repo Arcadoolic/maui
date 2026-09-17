@@ -6,10 +6,11 @@ directories:
 files:
   - out/**/*
   - package.json
+  - migrations/**/*
 extraResources:
-  - from: migrations/
-    to: migrations/
   - from: public/
     to: public/
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 linux:
+  target: AppImage
   category: Game

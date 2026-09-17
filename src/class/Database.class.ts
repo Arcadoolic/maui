@@ -9,6 +9,7 @@ import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
+import BoUser from '@/model/BoUser.model';
 import Umzug from 'umzug';
 import * as Log from 'electron-log';
 
@@ -28,7 +29,7 @@ export default class Database {
         this._sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: this.databasePath,
-            models: [Category, Game, User, Hiscore],
+            models: [Category, Game, User, Hiscore, BoUser],
             logging: false,
         });
     }
@@ -82,7 +83,12 @@ export default class Database {
                             throw new Error('Migration tried to use old style "done" callback.');
                         },
                     ],
-                    path: process.env.NODE_ENV === 'development' ? './migrations' : join(process.resourcesPath!, 'migrations'),
+                    // In production, migrations ship inside app.asar (electron-builder's fixed
+                    // archive name), not as an extraResources copy: they need to sit alongside
+                    // node_modules so a migration's own `require('bcryptjs')` (etc.) resolves -
+                    // Node walks up from the migration file's own directory to find node_modules,
+                    // and a plain extraResources copy outside the asar has no such ancestor.
+                    path: process.env.NODE_ENV === 'development' ? './migrations' : join(process.resourcesPath!, 'app.asar', 'migrations'),
                     pattern: /\.js$/,
                     customResolver(path: string): { up: () => PromiseLike<any>; down?: () => PromiseLike<any> } {
                         return require(path);
