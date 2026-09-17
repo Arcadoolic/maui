@@ -14,6 +14,9 @@ jobs:
   release:
     if: "!contains(github.event.head_commit.message, 'chore(release):')"
     runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.release_check.outputs.published }}
+      tag: ${{ steps.release_check.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -33,3 +36,66 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
+
+      - name: Detect published release
+        # @semantic-release/github creates the GitHub Release using this
+        # job's own GITHUB_TOKEN, and GitHub never triggers a *separate*
+        # workflow run from an event authored by the default GITHUB_TOKEN
+        # (anti-recursion protection) - so a second workflow reacting to
+        # `release: published` never fires. The build+attach job below runs
+        # in this same workflow run instead, gated on whether HEAD is now
+        # tagged (i.e. semantic-release actually published a release).
+        id: release_check
+        run: |
+          if tag=$(git describe --exact-match --tags HEAD 2>/dev/null); then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-latest
+            build_args: --linux --x64
+            artifact_glob: dist_electron/*.AppImage
+      # linux-arm64 (Raspberry Pi, ubuntu-24.04-arm) and macos-arm64
+      # (macos-14) are next - add matrix.include entries once the sqlite3
+      # native build is verified on those runners.
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Resolve Python interpreter for native module build
+        run: |
+          source scripts/resolve-python.sh
+          echo "PYTHON=$PYTHON" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run electron:build -- ${{ matrix.build_args }} --publish never
+
+      - name: Attach to GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release.outputs.tag }}" ${{ matrix.artifact_glob }} --clobber
