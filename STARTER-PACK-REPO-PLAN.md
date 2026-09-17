@@ -46,6 +46,104 @@ Confirmé via reconnaissance sur le serveur (SSH via le jump host
   localement par borne dans Electron ; le script Python est invoqué comme
   processus enfant local, jamais via HTTP).
 
+## État d'avancement (2026-09-17)
+
+L'étape 2 (« miyamoto : vhost nginx, basic auth, TLS ») a été exécutée en
+production :
+- `/data/production/repo-maui` et `/data/production/repo-maui/zip`
+  appartiennent désormais à `www-data:www-data` (mode `2775`), `afronob` a
+  été ajouté au groupe `www-data`.
+- Fichier `htpasswd` créé (`/etc/nginx/htpasswd/repo-maui`, utilisateur
+  `admin`, mot de passe généré aléatoirement côté serveur — jamais transité
+  en clair par ce chat — et déposé temporairement dans
+  `/root/repo-maui-admin-password.txt` en attendant d'être rangé dans un
+  gestionnaire de mots de passe puis supprimé du serveur).
+- Vhost `repo-maui-production.conf` déployé et activé, certificat TLS
+  obtenu via `sudo certbot certonly --nginx -d repo.maui.afronob.com`
+  (**pas** `certbot --nginx` sans `certonly` : ce dernier réécrit le vhost
+  lui-même, alors qu'ici le vhost est volontairement écrit à la main —
+  section mise à jour dans le plan ci-dessous en conséquence).
+- **Incident mineur rencontré et corrigé** : un hook global pre/post de
+  certbot sur cet hôte arrête/relance nginx autour de l'émission du
+  certificat ; le redémarrage a échoué (« Address already in use ») car
+  l'ancien process maître n'avait pas relâché les ports à temps. Le site
+  restait servi entre-temps (pas de coupure), mais systemd marquait le
+  service `failed`. Corrigé par un arrêt propre (`kill -QUIT`) de l'ancien
+  process puis un `systemctl start nginx` classique — nginx est de nouveau
+  `active` et suivi normalement par systemd. À garder en tête pour un futur
+  renouvellement de certificat sur cet hôte (le renouvellement automatique
+  pourrait reproduire le même symptôme).
+- Vérifié en HTTPS : 401 sans identifiants, 404 sur les chemins hors
+  `.zip`/`.json`, redirection 301 HTTP→HTTPS.
+- Pack de base `mame-starting-pack-20260911.zip` uploadé dans
+  `/data/production/repo-maui/zip/` (depuis `~/Downloads`, via
+  `scp`/`sudo install`, pas via le module rsync — voir note ci-dessous) et
+  téléchargement vérifié en HTTPS avec authentification.
+- **Découverte** : un module rsync `[repo-maui]` existe déjà dans
+  `/etc/rsyncd.conf` sur miyamoto, pointant vers
+  `/data/production/repo-maui` (uid/gid `www-data`), restreint à
+  `127.0.0.1` et deux IPs (`51.15.182.108`, `82.65.178.12`) — probablement
+  des runners CI, à l'image des modules équivalents pour les autres apps
+  hébergées ici (`sc-fonts-tools`, `poke-app-*`, etc.). Publier un pack
+  depuis un poste de dev classique ne passe donc pas par ce module (IP non
+  whitelistée) ; ça reste du `scp`/`ssh` + `sudo install` en usage manuel.
+  Si un pipeline CI publie un jour des packs ou des releases MAUI
+  automatiquement, ce module rsync est le point d'entrée naturel à
+  réutiliser plutôt qu'en créer un nouveau.
+- Restent à faire : générer `scripts/generate-repo-manifests.py` (§3, pas
+  encore écrit — volontairement non improvisé sur le serveur, voir la
+  contrainte déjà notée plus bas) et l'exécuter pour produire le
+  `<pack>.manifest.json`/`index.json` du pack déjà uploadé ; puis les
+  étapes 1 et 4 à 6 (script Python `--url`, `Config.class.ts`, `boServer.ts`,
+  `electron-builder.yml`).
+
+## Extension future : hébergement des mises à jour MAUI
+
+Le dépôt `repo.maui.afronob.com` a vocation, à terme, à héberger aussi les
+artefacts de mise à jour de l'application MAUI elle-même (auto-update
+Electron), en plus des starting packs. À anticiper dès maintenant dans
+l'organisation du dépôt pour éviter une réorganisation plus tard :
+
+- **Arborescence retenue** : un dossier `zip/` (existant, déjà en
+  production, inchangé — starting packs + manifests compagnons +
+  `index.json`) à côté d'un futur dossier `releases/` (mises à jour MAUI),
+  plutôt que de renommer `zip/` maintenant. Renommer casserait la config
+  nginx et le pack déjà publiés pour un gain surtout cosmétique ; `zip/`
+  reste un nom exact pour ce qu'il contient.
+  ```
+  /data/production/repo-maui/
+  ├── zip/                    # starting packs (existant)
+  │   ├── <pack>.zip
+  │   ├── <pack>.manifest.json
+  │   └── index.json
+  └── releases/               # futur : artefacts d'auto-update MAUI
+      ├── latest.yml          # + latest-mac.yml / latest-linux.yml
+      ├── *.dmg / *.AppImage / *.deb / *.zip
+      └── *.blockmap
+  ```
+- **Format imposé par l'outillage** : `electron-builder`, avec un provider
+  de publication `generic` (le plus simple à héberger soi-même, pas besoin
+  de credentials cloud), dépose tout à plat dans un seul dossier par canal
+  de version : `latest.yml`/`latest-mac.yml`/`latest-linux.yml` (lus par
+  `electron-updater` au runtime) plus les installeurs et leurs
+  `.blockmap`. C'est cette convention qui dicte la structure `releases/`
+  ci-dessus — ne pas la sous-typer par OS, `electron-updater` s'appuie sur
+  les noms de fichiers, pas sur des sous-dossiers.
+- **Nginx** : quand cette fonctionnalité sera implémentée, le bloc
+  `location ~ \.(zip|json)$` actuel (basé sur l'extension, pas sur le
+  chemin) devra être remplacé par des blocs `location /zip/ { ... }` et
+  `location /releases/ { ... }` séparés, chacun avec sa propre liste
+  blanche d'extensions (`releases/` doit accepter `.yml`, `.blockmap`,
+  `.dmg`, `.AppImage`, `.deb`, `.zip`, `.exe` en plus de `.json`). Le
+  contrôle d'accès (`auth_basic`) devra probablement rester actif sur
+  `zip/` mais être reconsidéré pour `releases/` — un cabinet en usine doit
+  pouvoir vérifier les mises à jour même sans configuration BO préalable
+  (l'auto-update tourne typiquement avant tout accès à un écran de config).
+- Hors périmètre de ce plan : la génération des artefacts `releases/`
+  elle-même (config `publish` d'`electron-builder`, déclenchement CI sur
+  tag/release GitHub) n'est pas traitée ici et mériterait son propre plan
+  une fois ce dépôt de starting packs stabilisé.
+
 ## Fichiers critiques
 
 - `src/boServer.ts` — application Express du BO. Motifs à réutiliser :
@@ -107,10 +205,36 @@ Confirmé via reconnaissance sur le serveur (SSH via le jump host
   `python3 -m http.server 8080` en local, puis
   `python3 scripts/import-starting-pack.py --url http://localhost:8080/test.zip -y`.
 
-### 2. miyamoto : vhost nginx, basic auth, TLS (écrit à la main via SSH)
+### 2. miyamoto : vhost nginx, basic auth, TLS (écrit à la main via SSH) — ✅ fait le 2026-09-17
 
 Accessible via `ssh -J mccoy.info.local afronob@miyamoto.afronob.com`
 (le SSH direct depuis ce réseau échoue — toujours passer par le jump host).
+
+**Écart avec la séquence initialement prévue ci-dessous** : `sudo certbot
+--nginx -d ...` (sans `certonly`) réécrit lui-même le vhost pour y insérer
+ses propres directives SSL — incompatible avec un vhost volontairement
+écrit à la main. Utiliser `sudo certbot certonly --nginx -d ...` à la
+place (obtient le certificat via le challenge HTTP-01 sans toucher au
+fichier de conf), en 3 temps :
+1. Déployer d'abord une version du vhost qui ne contient que le bloc
+   `listen 80` (le bloc 443 référencerait un certificat qui n'existe pas
+   encore → `nginx -t` échouerait), l'activer, `nginx -t`, reload.
+2. `sudo certbot certonly --nginx -d repo.maui.afronob.com --non-interactive
+   --agree-tos` (réutilise le compte Let's Encrypt déjà enregistré sur cet
+   hôte pour les domaines voisins, pas besoin de `--email`).
+3. Déployer le vhost complet (les deux blocs, comme ci-dessous), `nginx -t`,
+   reload.
+
+**Incident rencontré à l'étape 2** : cet hôte a un hook global pre/post
+certbot qui arrête/relance nginx autour de l'émission du certificat. Le
+redémarrage a échoué (`bind() ... Address already in use`) car l'ancien
+process maître n'avait pas relâché les ports à temps — nginx continuait à
+servir le trafic entre-temps (pas de coupure), mais systemd marquait le
+service `failed`, ce qui aurait cassé un futur `systemctl reload`. Corrigé
+par `sudo kill -QUIT <pid de l'ancien master>` (arrêt propre) puis
+`sudo systemctl start nginx`. À vérifier après chaque renouvellement de
+certificat sur cet hôte (`sudo systemctl is-active nginx` doit rester
+`active`, pas seulement « le site répond »).
 
 ```bash
 # Propriété : repo-maui est root:root, chaque dossier voisin est www-data:www-data.
@@ -137,7 +261,7 @@ commandes exactes de mise en place) et le motif `alias` statique de
 #
 # Prérequis :
 #   fichier htpasswd : sudo htpasswd -c /etc/nginx/htpasswd/repo-maui <utilisateur>
-#   certificat SSL   : sudo certbot --nginx -d repo.maui.afronob.com
+#   certificat SSL   : sudo certbot certonly --nginx -d repo.maui.afronob.com
 #
 # Lien symbolique pour activer :
 #   sudo ln -s /etc/nginx/sites-available/repo-maui-production.conf \
@@ -186,20 +310,26 @@ server {
 ```
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/repo-maui-production.conf \
-           /etc/nginx/sites-enabled/repo-maui-production.conf
+sudo ln -sf /etc/nginx/sites-available/repo-maui-production.conf \
+            /etc/nginx/sites-enabled/repo-maui-production.conf
 sudo nginx -t
-sudo certbot --nginx -d repo.maui.afronob.com   # réécrit les chemins de certificat du bloc 443 sur place
 sudo systemctl reload nginx
+sudo systemctl is-active nginx                   # confirme que systemd suit bien un process actif, pas juste "le site répond"
 sudo ufw status verbose | grep -E '80|443'       # vérifier que le 443 est autorisé (le 80 l'est déjà)
 ```
 
-Vérifier avec `curl`, sans le BO pour l'instant :
+Vérifié avec `curl`, sans le BO — résultats réels obtenus :
 ```bash
-curl -I https://repo.maui.afronob.com/index.json                     # attendu : 401
-curl -u admin:<mdp> https://repo.maui.afronob.com/index.json          # 404 tant que l'étape 3 n'a pas tourné, mais pas de 401
-curl -u admin:<mdp> https://repo.maui.afronob.com/does-not-exist.py   # attendu : 404 (bloqué par la liste blanche d'extensions)
+curl -I https://repo.maui.afronob.com/index.json                     # 401 ✅
+curl -u admin:<mdp> https://repo.maui.afronob.com/index.json          # 404 tant que l'étape 3 n'a pas tourné (pas de 401) ✅
+curl -u admin:<mdp> https://repo.maui.afronob.com/does-not-exist.py   # 404 ✅ (même sans identifiants — voir note ci-dessous)
 ```
+Note : `location / { return 404; }` s'exécute pendant la phase *rewrite*
+de nginx, avant la phase *access* qui vérifie `auth_basic` — un chemin en
+dehors de `.zip`/`.json` renvoie donc 404 **même sans authentification**,
+sans jamais exposer d'information (toujours le même 404 générique, aucune
+donnée servie). C'est le comportement voulu, pas une faille : seule la
+zone `.zip`/`.json` a besoin d'être protégée par mot de passe.
 
 ### 3. `scripts/generate-repo-manifests.py` (nouveau, versionné ici, déployé sur miyamoto)
 
