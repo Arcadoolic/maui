@@ -11,5 +11,7 @@ extraResources:
     to: migrations/
   - from: public/
     to: public/
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 linux:
+  target: AppImage
   category: Game
