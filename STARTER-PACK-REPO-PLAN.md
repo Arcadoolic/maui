@@ -94,12 +94,18 @@ production :
   Si un pipeline CI publie un jour des packs ou des releases MAUI
   automatiquement, ce module rsync est le point d'entrée naturel à
   réutiliser plutôt qu'en créer un nouveau.
-- Restent à faire : générer `scripts/generate-repo-manifests.py` (§3, pas
-  encore écrit — volontairement non improvisé sur le serveur, voir la
-  contrainte déjà notée plus bas) et l'exécuter pour produire le
-  `<pack>.manifest.json`/`index.json` du pack déjà uploadé ; puis les
-  étapes 1 et 4 à 6 (script Python `--url`, `Config.class.ts`, `boServer.ts`,
-  `electron-builder.yml`).
+- **Étape 3 faite le 2026-09-17** : `scripts/generate-repo-manifests.py`
+  écrit (voir §3, inchangé par rapport au design décrit), déployé sur
+  miyamoto (`sudo install -o afronob -g afronob -m 755 ... /data/production/repo-maui/generate-repo-manifests.py`,
+  hors de `zip/`, non servi par nginx), exécuté sur le pack déjà uploadé.
+  Testé en local au préalable contre un vrai pack, un zip sans manifest
+  interne et un zip corrompu (les trois cas produisent le fallback attendu
+  ou le manifest verbatim, et une seconde exécution skip tout — voir §3
+  pour le détail). `index.json` et
+  `mame-starting-pack-20260911.manifest.json` vérifiés en HTTPS avec
+  authentification.
+- Restent à faire : étapes 1 et 4 à 6 (script Python `--url`,
+  `Config.class.ts`, `boServer.ts`, `electron-builder.yml`).
 
 ## Extension future : hébergement des mises à jour MAUI
 
@@ -348,7 +354,7 @@ répondait 404 même sans identifiants (sans faille, juste incohérent). Avec
 statiques, donc l'authentification est désormais exigée uniformément
 partout sur le vhost, y compris pour un 404.
 
-### 3. `scripts/generate-repo-manifests.py` (nouveau, versionné ici, déployé sur miyamoto)
+### 3. `scripts/generate-repo-manifests.py` (nouveau, versionné ici, déployé sur miyamoto) — ✅ fait le 2026-09-17
 
 Stdlib uniquement (`zipfile`, `json`, `pathlib`, `argparse`), `--zip-dir`
 optionnel (défaut `/data/production/repo-maui/zip`) pour rester testable en
