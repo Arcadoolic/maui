@@ -1,5 +1,11 @@
 name: Build
 
+# Validation-only: builds the packaged app on develop pushes/PRs so a build
+# regression is caught before it reaches main. The release build (which
+# attaches the AppImage to a GitHub Release) lives in release.yml instead -
+# see its comment on why that can't be a separate `release: published`
+# triggered workflow.
+#
 # Matrix currently covers linux-x64 only. linux-arm64 (Raspberry Pi) and
 # macos-arm64 are planned next — add matrix.include entries for them once
 # the arm64 sqlite3 native build is verified (see docs/RASPBERRY-PI-LAG.md
@@ -10,11 +16,9 @@ on:
     branches: [develop]
   pull_request:
     branches: [develop]
-  release:
-    types: [published]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -32,11 +36,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          # release: the published tag. pull_request: the PR branch's own commit, not GitHub's
-          # ephemeral refs/pull/N/merge (default for this event) - that ref gets GC'd if the PR is
-          # merged/closed before the runner fetches it, failing the checkout outright. push: the
-          # branch ref as normal.
-          ref: ${{ github.event.release.tag_name || github.event.pull_request.head.sha || github.ref }}
+          # pull_request: the PR branch's own commit, not GitHub's ephemeral
+          # refs/pull/N/merge (default for this event) - that ref gets GC'd
+          # if the PR is merged/closed before the runner fetches it, failing
+          # the checkout outright. push: the branch ref as normal.
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -56,16 +60,9 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npm run electron:build -- ${{ matrix.build_args }} --publish never
 
-      - name: Upload build artifact (develop validation)
-        if: github.event_name != 'release'
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.artifact_glob }}
           retention-days: 7
-
-      - name: Attach to GitHub release
-        if: github.event_name == 'release'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" ${{ matrix.artifact_glob }} --clobber
