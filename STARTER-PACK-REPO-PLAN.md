@@ -104,8 +104,21 @@ production :
   pour le détail). `index.json` et
   `mame-starting-pack-20260911.manifest.json` vérifiés en HTTPS avec
   authentification.
-- Restent à faire : étapes 1 et 4 à 6 (script Python `--url`,
-  `Config.class.ts`, `boServer.ts`, `electron-builder.yml`).
+- **Étapes 1, 4, 5, 6 faites le 2026-09-17** : `scripts/import-starting-pack.py`
+  ressuscité depuis `afronob/mame-awesome-ui@feat/starting-pack-import-script`
+  (commit `c88dcd1`, cherry-pické tel quel) + mode `--url` ajouté (voir §1) ;
+  `Config.class.ts` a ses trois champs `repoUrl`/`repoUser`/`repoPassword`
+  (voir §4) ; `boServer.ts` a la carte « Dépôt de starting packs » et ses
+  trois routes (voir §5) ; `electron-builder.yml` embarque le script (voir
+  §6). Testé bout en bout : `tsc --noEmit` (aucune régression, mêmes 16
+  erreurs préexistantes sans rapport), `eslint`, `npm test` (54 tests) tous
+  verts, puis un vrai round-trip BO (login admin réel → `/repo/save` avec
+  les identifiants réels de miyamoto → `/import/from-url/packs` liste le
+  pack réel avec ses métadonnées → `/import/from-url` télécharge et importe
+  22 jeux avec succès) et la vérification que la carte/les routes sont bien
+  absentes/403 pour une session non-admin.
+- Rien d'autre n'est en attente sur ce plan, à part les points listés dans
+  « Points ouverts à reconfirmer » ci-dessous.
 
 ## Extension future : hébergement des mises à jour MAUI
 
@@ -185,7 +198,7 @@ l'organisation du dépôt pour éviter une réorganisation plus tard :
 
 ## Plan
 
-### 1. `scripts/import-starting-pack.py` : remise en état + `--url` (à faire en premier, testable seul)
+### 1. `scripts/import-starting-pack.py` : remise en état + `--url` — ✅ fait le 2026-09-17
 
 - `git fetch origin && git checkout -b feat/starting-pack-repo-import develop
   && git cherry-pick c88dcd1` (propre, 1 commit, sans conflit d'après la
@@ -388,13 +401,13 @@ uniquement sur cette protection. Documenter cette séquence de publication
 (upload du zip → exécution du script) dans un nouveau
 `docs/STARTER-PACK-REPO.md`.
 
-### 4. `src/class/Config.class.ts` : paramètres du dépôt
+### 4. `src/class/Config.class.ts` : paramètres du dépôt — ✅ fait le 2026-09-17
 
 Ajouter `repoUrl`, `repoUser`, `repoPassword` (tous `string`, défaut `''`),
 en suivant exactement le motif déjà utilisé pour `ssDevId` dans
 `load()`/`save()`.
 
-### 5. `src/boServer.ts` : UI et routes du BO
+### 5. `src/boServer.ts` : UI et routes du BO — ✅ fait le 2026-09-17
 
 - Nouvelle carte `renderRepoImportCard(config, packs?, error?, info?)`,
   calquée sur `renderScreenScraperCard()` (formulaire d'identifiants) — un
@@ -453,7 +466,7 @@ en suivant exactement le motif déjà utilisé pour `ssDevId` dans
   `execFile('python3', ['--version'], cb)` avec un message d'erreur clair
   affiché dans le BO plutôt que de laisser remonter un `ENOENT` brut.
 
-### 6. `electron-builder.yml`
+### 6. `electron-builder.yml` — ✅ fait le 2026-09-17
 
 ```yaml
 extraResources:
@@ -500,19 +513,22 @@ besoin d'entrée pour lui.)
    `Config.class.test.ts` avec les trois nouveaux champs, puisque ce fichier
    teste déjà exactement cela.
 
-## Points ouverts à reconfirmer avant l'implémentation
+## Points ouverts (résolus le 2026-09-17, sauf le dernier)
 
-- **Emplacement dans l'UI** : onglet mame (regroupé avec l'UI d'import
-  existante, la section admin y existe déjà via la danger zone) vs. onglet
-  maui (déjà entièrement protégé pour les admins) — le plan ci-dessus
-  recommande l'onglet mame mais cela n'a pas été explicitement tranché avec
-  l'utilisateur.
-- **Mot de passe basic-auth** : à générer et stocker dans un gestionnaire de
-  mots de passe, puis à saisir une fois par formulaire de paramètres BO de
-  chaque borne.
-- **Repli sur l'appartenance de groupe** : `usermod -aG www-data afronob`
-  nécessite une reconnexion pour prendre effet — si c'est gênant en pleine
-  session, publier un pack pourrait plutôt passer par
-  `sudo install -o www-data -g www-data -m 664 <src>
-  /data/production/repo-maui/zip/`, sans changer l'appartenance de groupe du
-  tout.
+- ~~**Emplacement dans l'UI**~~ : tranché, onglet mame (carte « Dépôt de
+  starting packs », voir §5) - regroupé avec l'UI d'import existante et la
+  danger zone, tous les trois admin-only.
+- ~~**Mot de passe basic-auth**~~ : généré côté serveur au provisioning,
+  jamais transité en clair par ce chat. À vérifier qu'il est bien rangé dans
+  le gestionnaire de mots de passe de l'équipe et que
+  `/root/repo-maui-admin-password.txt` a été supprimé du serveur.
+- ~~**Repli sur l'appartenance de groupe**~~ : `usermod -aG www-data afronob`
+  appliqué ; en pratique chaque publication de pack faite depuis ce poste
+  est passée par `sudo install -o www-data -g www-data -m 664` sans jamais
+  dépendre de cette appartenance de groupe (voir `docs/STARTER-PACK-REPO.md`
+  §3.1) - le `usermod` reste en place mais n'est donc pas strictement
+  nécessaire au workflow actuel.
+- **Toujours ouvert** : le module rsync `[repo-maui]` découvert sur miyamoto
+  (voir « État d'avancement » ci-dessus) n'est branché à rien - à
+  reconsidérer si un pipeline CI publie un jour des packs ou des releases
+  MAUI automatiquement.
