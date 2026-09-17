@@ -53,7 +53,7 @@ import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import Category from '@/model/Category.model';
 import {join} from 'path';
-import {format} from 'url';
+import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService} from '@/services';
 import * as Log from 'electron-log';
@@ -109,7 +109,10 @@ function generateFlyerPath(): string {
         if (!path) {
             return '';
         }
-        return format({pathname: path, protocol: 'file', slashes: true});
+        // pathToFileURL(), not format({pathname, protocol: 'file', ...}): format() leaves Windows
+        // backslashes as-is instead of converting them to the forward slashes a file: URL needs,
+        // which broke image loading on Windows (the flyer never displayed).
+        return pathToFileURL(path).href;
     }
     return '';
 }
