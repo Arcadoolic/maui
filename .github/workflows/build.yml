@@ -60,6 +60,10 @@ jobs:
       - name: Build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Suffixes develop-validation artifact filenames so they never
+          # collide with a same-version release build (electron-builder
+          # throws if this is unset - see electron-builder.yml's artifactName).
+          ARTIFACT_SUFFIX: -dev
         run: npm run electron:build -- ${{ matrix.build_args }} --publish never
 
       - name: Upload build artifact

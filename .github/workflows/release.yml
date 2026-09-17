@@ -96,6 +96,11 @@ jobs:
       - name: Build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Must stay defined (even empty) - electron-builder throws if an
+          # artifactName ${env.X} macro is unset. Empty here means release
+          # artifacts keep the plain name; build.yml's develop validation
+          # sets this to "-dev" instead, so filenames never collide.
+          ARTIFACT_SUFFIX: ''
         run: npm run electron:build -- ${{ matrix.build_args }} --publish never
 
       - name: Attach to GitHub release
