@@ -10,6 +10,8 @@ files:
 extraResources:
   - from: public/
     to: public/
+  - from: scripts/import-starting-pack.py
+    to: scripts/import-starting-pack.py
 artifactName: '${productName}-${version}${env.ARTIFACT_SUFFIX}-${os}-${arch}.${ext}'
 linux:
   target: AppImage

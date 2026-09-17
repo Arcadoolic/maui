@@ -169,8 +169,8 @@ function getMameLocationsReadOnly(iniPath: string): MameLocations {
     const favoritesPath = uiIni.ui_path
         ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
     // ui.ini's categorypath points at the "folders" directory holding genre.ini/Multiplayer.ini
-    // - the real, per-mame-version categorization/player-count datasets (see
-    // importStartingPack()'s own comment for why these - not the app's old bundled
+    // - the real, per-mame-version categorization/player-count datasets (see boServer.ts's
+    // getMameLocations() comment for why these - not the app's old bundled
     // public/data/genre_206.ini/nplayers_206.ini - are now the source of truth).
     const genreIniPath = uiIni.categorypath
         ? getFirstExistingDirectory(uiIni.categorypath, iniPath, 'genre.ini') : null;
@@ -278,8 +278,8 @@ function main() {
             + 'avant de générer un starting pack.');
     }
     // Both optional: absent (no "folders" pack installed on this MAME version) simply means the
-    // pack ships without categories/player counts - importStartingPack() in boServer.ts already
-    // tolerates missing genre.ini/Multiplayer.ini entries in the zip.
+    // pack ships without categories/player counts - import-starting-pack.py already tolerates
+    // missing genre.ini/Multiplayer.ini entries in the zip.
     if (!genreIniPath) {
         console.warn('[build-starting-pack] genre.ini introuvable (categorypath dans ui.ini) - '
             + 'le pack sera généré sans catégories.');
@@ -397,9 +397,9 @@ function main() {
     };
     zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
     zip.addFile('favorites.ini', readFileSync(favoritesPath));
-    // Bundled when available so an import can install them too (see importStartingPack() in
-    // boServer.ts) - omitted entirely when absent on this source MAME install, which
-    // importStartingPack() already tolerates (warns, doesn't fail the import).
+    // Bundled when available so an import can install them too (see
+    // scripts/import-starting-pack.py) - omitted entirely when absent on this source MAME
+    // install, which that script already tolerates (warns, doesn't fail the import).
     if (genreIniPath) {
         zip.addFile('genre.ini', readFileSync(genreIniPath));
     }
