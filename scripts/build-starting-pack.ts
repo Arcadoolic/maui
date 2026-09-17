@@ -396,15 +396,19 @@ function main() {
         biosRoms: [...biosRomPaths.keys()],
     };
     zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
-    zip.addFile('favorites.ini', readFileSync(favoritesPath));
-    // Bundled when available so an import can install them too (see
-    // scripts/import-starting-pack.py) - omitted entirely when absent on this source MAME
-    // install, which that script already tolerates (warns, doesn't fail the import).
+    // ui/ and folders/ mirror mame's own ui_path/categorypath directory names (see
+    // getMameLocations() in boServer.ts) - same one-subfolder-per-artifact-kind convention as
+    // roms/marquees/flyers/logos above, instead of dumping these at the zip root.
+    zip.addFile('ui/favorites.ini', readFileSync(favoritesPath));
+    // Bundled when available so an import can install them too - omitted entirely when absent on
+    // this source MAME install, which import-starting-pack.py already tolerates. folders/ is the
+    // same zip folder IMPORTABLE_MAME_DIRECTORIES already uses for a raw categorypath backup, so
+    // import-starting-pack.py picks these up via that generic mechanism, not a dedicated one.
     if (genreIniPath) {
-        zip.addFile('genre.ini', readFileSync(genreIniPath));
+        zip.addFile('folders/genre.ini', readFileSync(genreIniPath));
     }
     if (nplayersIniPath) {
-        zip.addFile('Multiplayer.ini', readFileSync(nplayersIniPath));
+        zip.addFile('folders/Multiplayer.ini', readFileSync(nplayersIniPath));
     }
 
     zip.writeZip(args.output);

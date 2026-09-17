@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""Import a MAUI starting pack ZIP (built by scripts/build-starting-pack.ts) directly on disk,
-bypassing the BO's HTTP upload entirely.
+"""Import a MAUI starting pack ZIP (built by scripts/build-starting-pack.ts).
 
-Why this exists: src/boServer.ts's `/import` route uses `multer({storage: memoryStorage(),
-limits: {fileSize: 500 * 1024 * 1024}})` - it buffers the *whole* upload in RAM before handing
-it to AdmZip (which itself indexes the whole buffer again), and rejects anything over 500 MiB
-outright. A multi-hundred-MB (or larger) starting pack can't go through that path at all, and
-even a pack just under the cap would double-buffer its full size in memory on a Raspberry Pi
-that's also running the Electron kiosk app. This script mirrors boServer.ts's
-importStartingPack()/importMameDirectories() but reads the ZIP as a stream: `zipfile` only
-loads the central directory (a few KB) into memory, and every rom/marquee/flyer/logo/config
-file is copied one entry at a time via shutil.copyfileobj - memory use stays flat regardless of
-the pack's total size. `zipfile` also handles ZIP64 archives (>4 GiB / >65535 entries) natively,
-unlike the pinned 0.5.x AdmZip release boServer.ts is stuck on for an unrelated webpack-parsing
-reason (see its import comment).
+The single implementation for starting-pack import: both of src/boServer.ts's BO routes
+(`/import`, a manual upload, and `/import/from-url`, browsing repo.maui.afronob.com) spawn this
+script rather than importing in-process, and it can also be run standalone (e.g. over SSH,
+directly on the machine hosting the MAME home) with no BO involved at all. Reads the ZIP as a
+stream: `zipfile` only loads the central directory (a few KB) into memory, and every
+rom/marquee/flyer/logo/config file is copied one entry at a time via shutil.copyfileobj - memory
+use stays flat regardless of the pack's total size, and `zipfile` handles ZIP64 archives (>4 GiB
+/ >65535 entries) natively, unlike the pinned 0.5.x AdmZip release boServer.ts is stuck on for an
+unrelated webpack-parsing reason (see its import comment) and still uses for its own unrelated
+MAUI config/database export feature.
 
 Stdlib only, no `pip install` needed - deliberately, to match this repo's Debian Lite-friendly
 deployment story (see docs/RASPBERRY-PI-DEPLOY.md).
@@ -153,8 +150,10 @@ def get_mame_locations(ini_path):
 
 
 def ensure_favorites_path(ini_path):
-    """Same as boServer.ts's ensureFavoritesPath(): resolves (creating if needed) where
-    favorites.ini should be written, even on a brand new install with none yet."""
+    """Unlike get_mame_locations()'s own favorites_path, which stays None on purpose when
+    favorites.ini doesn't exist yet (mame itself is meant to be the only writer), this resolves
+    (creating the target ui_path directory if needed) where favorites.ini should be written - for
+    importing a starting pack onto a brand new install that has no favorites.ini at all yet."""
     ui_ini_path = os.path.join(ini_path, 'ui.ini')
     ui_ini = parse_mame_ini_file(read_text(ui_ini_path)) if os.path.exists(ui_ini_path) else {}
     ui_path = ui_ini.get('ui_path')
@@ -245,9 +244,9 @@ def extract_entry_to(zf, entry_name, dest_dir):
 
 def extract_zip_folder(zf, folder, target_dir):
     """Copies every file entry under `{folder}/` into target_dir, preserving whatever
-    subdirectories sit under it (e.g. snapshot_directory's per-game subfolders) - same as
-    boServer.ts's extractZipFolder(), including its zip-slip guard: an entry whose relative path
-    would resolve outside target_dir (via a `../` segment) is skipped rather than written."""
+    subdirectories sit under it (e.g. snapshot_directory's per-game subfolders). Guards against
+    zip-slip: an entry whose relative path would resolve outside target_dir (via a `../` segment)
+    is skipped rather than written."""
     prefix = folder + '/'
     resolved_target = os.path.realpath(target_dir)
     files_written = 0
@@ -269,9 +268,8 @@ def extract_zip_folder(zf, folder, target_dir):
 def resolve_directory_targets(zf, resolved_ini, ini_path, summary):
     """Resolves (and creates, via ensure_first_directory) the real destination for every
     IMPORTABLE_MAME_DIRECTORIES folder actually present in the ZIP - done once, up front, so
-    both the disk-space preflight check and the later extraction pass share the same
-    resolution/warnings instead of duplicating boServer.ts's importMameDirectories() logic
-    twice."""
+    both the disk-space preflight check and the later extraction pass (import_mame_directories())
+    share the same resolution/warnings instead of duplicating it twice."""
     targets = {}
     for zip_folder, ini_key in IMPORTABLE_MAME_DIRECTORIES:
         if not zip_has_folder(zf, zip_folder):
@@ -338,8 +336,8 @@ def check_disk_space(zf, targets):
 # so it writes to the exact same table schema Sequelize creates (verified against a live
 # ~/.mame-awesome-ui/mame-awesome-ui.sqlite: `sqlite3 <db> ".schema game" ".schema category"`).
 # CREATE TABLE IF NOT EXISTS mirrors Sequelize's sync() - never touches existing tables, only
-# creates them on a genuinely fresh install (see importStartingPack()'s own comment in
-# boServer.ts for why that matters: a starting pack can be the very first thing imported).
+# creates them on a genuinely fresh install: a starting pack is meant to be importable as the
+# very first thing on a machine that's never launched the Electron app (no sqlite file yet).
 # ---------------------------------------------------------------------------
 
 CATEGORY_TABLE_SQL = """
@@ -380,9 +378,9 @@ def now_timestamp():
 
 
 def find_or_create_category(conn, name, now):
-    """Same lookup as boServer.ts's Category.findOrCreate({where: {name}}): only matches a
-    non-soft-deleted row: a name that was previously soft-deleted gets a fresh row rather than
-    being restored, matching Sequelize's paranoid default scope on findOrCreate."""
+    """Only matches a non-soft-deleted row: a name that was previously soft-deleted gets a fresh
+    row rather than being restored, matching Category.model.ts's paranoid default scope on
+    Sequelize's own findOrCreate()."""
     row = conn.execute(
         'SELECT id_category FROM category WHERE name = ? AND deletionDate IS NULL LIMIT 1', (name,),
     ).fetchone()
@@ -396,10 +394,9 @@ def find_or_create_category(conn, name, now):
 
 
 def upsert_game(conn, rom_name, fields, now):
-    """Same as boServer.ts's Game.findOne({paranoid: false}) + restore()/update(), or create():
-    looks up by romName *including* soft-deleted rows (paranoid: false) since the unique
-    constraint still occupies that romName, restores it (clears deletedAt) if found instead of
-    colliding on create()."""
+    """Looks up by romName *including* soft-deleted rows (Game.model.ts's paranoid:true means a
+    plain lookup hides them) since the unique constraint still occupies that romName, restores it
+    (clears deletedAt) if found instead of colliding on a plain insert."""
     row = conn.execute('SELECT id_game FROM game WHERE romName = ? LIMIT 1', (rom_name,)).fetchone()
     if row:
         conn.execute(
@@ -438,34 +435,14 @@ def js_like_parse_int(value):
 def default_summary():
     return {
         'gamesUpserted': 0, 'romFilesWritten': 0, 'biosFilesWritten': 0, 'marqueesWritten': 0,
-        'flyersWritten': 0, 'logosWritten': 0, 'favoritesReplaced': False, 'genreIniReplaced': False,
-        'nplayersIniReplaced': False, 'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
+        'flyersWritten': 0, 'logosWritten': 0, 'favoritesReplaced': False,
+        'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
         'errors': [],
     }
 
 
-def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_path, category_dir,
+def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_path,
                           ini_path, db_path, summary, log):
-    # genre.ini/Multiplayer.ini first, before touching the database at all - same order as
-    # boServer.ts's importStartingPack(): on a genuinely fresh install, the CREATE TABLE below is
-    # what creates category/game in the first place, and a starting pack is meant to be
-    # importable as the very first thing on such an install.
-    genre_text = read_zip_text(zf, 'genre.ini')
-    if genre_text is not None:
-        write_text(os.path.join(category_dir, 'genre.ini'), genre_text)
-        summary['genreIniReplaced'] = True
-    else:
-        summary['warnings'].append('genre.ini absent du ZIP (pack invalide ou obsolète) - catégories inchangées.')
-
-    nplayers_text = read_zip_text(zf, 'Multiplayer.ini')
-    if nplayers_text is not None:
-        write_text(os.path.join(category_dir, 'Multiplayer.ini'), nplayers_text)
-        summary['nplayersIniReplaced'] = True
-    else:
-        summary['warnings'].append(
-            'Multiplayer.ini absent du ZIP (pack invalide ou obsolète) - nombre de joueurs inchangé.',
-        )
-
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(CATEGORY_TABLE_SQL)
@@ -520,7 +497,7 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
                 upsert_game(conn, rom_name, fields, now_timestamp())
                 summary['gamesUpserted'] += 1
                 log(f"{rom_name} : {game.get('fullname')} importé.")
-            except Exception as error:  # noqa: BLE001 - warn-and-continue, same policy as boServer.ts
+            except Exception as error:  # noqa: BLE001 - one rom failing shouldn't abort the whole import
                 message = str(error) or 'erreur inattendue'
                 summary['errors'].append(f'{rom_name} : {message}')
                 log(f'{rom_name} : erreur ({message}).')
@@ -529,7 +506,7 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
     finally:
         conn.close()
 
-    favorites_text = read_zip_text(zf, 'favorites.ini')
+    favorites_text = read_zip_text(zf, 'ui/favorites.ini')
     if favorites_text is not None:
         write_text(ensure_favorites_path(ini_path), favorites_text)
         summary['favoritesReplaced'] = True
@@ -600,8 +577,6 @@ def print_summary(summary):
         f"{summary['flyersWritten']} flyer(s)",
         f"{summary['logosWritten']} logo(s)",
         'favoris remplacés' if summary['favoritesReplaced'] else 'favoris inchangés',
-        'genre.ini remplacé' if summary['genreIniReplaced'] else 'genre.ini inchangé',
-        'Multiplayer.ini remplacé' if summary['nplayersIniReplaced'] else 'Multiplayer.ini inchangé',
         f"{len(summary['errors'])} erreur(s)",
     ]
     print()
@@ -745,12 +720,17 @@ def _run_import(pack_path, skip_confirmation):
         def log(line):
             print(f'  {line}', flush=True)
 
+        # Before import_starting_pack(): a manifest-driven pack's genre.ini/Multiplayer.ini now
+        # live under folders/ (same zip folder IMPORTABLE_MAME_DIRECTORIES already uses for a raw
+        # categorypath backup - no need for a second, dedicated read of them here), and writing
+        # them early, before import_starting_pack()'s own game-upsert loop, means they've already
+        # made it to disk even if that loop fails partway through.
+        import_mame_directories(zf, directory_targets, summary, log)
         if manifest is not None:
             import_starting_pack(
                 zf, manifest, rom_path, locations['marquee_path'], locations['flyer_path'],
-                locations['logo_path'], locations['category_dir'], ini_path, database_path(), summary, log,
+                locations['logo_path'], ini_path, database_path(), summary, log,
             )
-        import_mame_directories(zf, directory_targets, summary, log)
 
     print_summary(summary)
     sys.exit(1 if summary['errors'] else 0)
