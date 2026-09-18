@@ -1152,13 +1152,27 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .checkbox-row {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 8px;
             margin-top: 16px;
         }
         .checkbox-row input {
             width: auto;
-            margin-top: 0;
+            margin-top: 3px;
+        }
+        /* Wraps everything after the checkbox in one flex item (an element like <code> inside
+           otherwise-bare text would each become their own anonymous flex item, and the first
+           text run wraps within its own narrowed box instead of flowing as one paragraph across
+           the row - see the "Supprimer tout le repertoire" row this was written for). */
+        .checkbox-row > span {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        .checkbox-row-detail {
+            display: block;
+            margin-top: 2px;
+            color: #aaaaaa;
+            font-size: 0.9em;
         }
         .current-path {
             font-family: monospace;
@@ -1690,17 +1704,17 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                 <input type="hidden" name="zone" value="mame">
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteHiscores">
-                    Supprimer les hiscores (<code>${escapeHtml(getHiscorePath(mameInfo.iniPath))}</code>)
+                    <span>Supprimer les hiscores (<code>${escapeHtml(getHiscorePath(mameInfo.iniPath))}</code>)</span>
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteGamesMedia">
-                    Supprimer les roms et médias des jeux (roms, marquees, flyers, logos)
+                    <span>Supprimer les roms et médias des jeux (roms, marquees, flyers, logos)</span>
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteFavorites"${mameInfo.favoritesPath ? '' : ' disabled'}>
-                    Supprimer le fichier des favoris${mameInfo.favoritesPath
+                    <span>Supprimer le fichier des favoris${mameInfo.favoritesPath
                         ? ` (<code>${escapeHtml(mameInfo.favoritesPath)}</code>)`
-                        : ' (aucun favorites.ini pour l\'instant)'}
+                        : ' (aucun favorites.ini pour l\'instant)'}</span>
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteMameHome" onchange="
@@ -1711,9 +1725,12 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                         this.form.deleteFavorites.checked = this.checked || this.form.deleteFavorites.checked;
                         this.form.deleteFavorites.disabled = this.checked || ${mameInfo.favoritesPath ? 'false' : 'true'};
                     ">
-                    Supprimer tout le répertoire <code>${escapeHtml(mameInfo.iniPath)}</code> et son
-                    contenu (englobe les options ci-dessus, plus la configuration mame.ini/ui.ini
-                    elle-même, cfg, nvram, snapshots...) - MAME la recréera au prochain lancement
+                        <span>
+                            Supprimer tout le répertoire <code>${escapeHtml(mameInfo.iniPath)}</code>
+                            <span class="checkbox-row-detail">Englobe les options ci-dessus, plus la
+                            configuration mame.ini/ui.ini elle-même, cfg, nvram, snapshots... - MAME
+                            la recréera au prochain lancement.</span>
+                        </span>
                 </label>
                 <button type="submit">Supprimer la sélection</button>
             </form>
