@@ -6,6 +6,18 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    ignore:
+      # Major bumps of these two shipped in 2.2.0 and broke the front at startup: the renderer
+      # bundle threw "Uncaught TypeError: Cannot redefine property: prototype" at load (the BO,
+      # in the main process, kept working, which made it look fine). The cause is
+      # vite-plugin-electron-renderer 1.0.0, whose Node-builtin shims get wrapped by Rollup's
+      # getAugmentedNamespace(); electron-log 5 also needs main-process initialization
+      # (log.initialize()) and moves its log file, so both need a real migration and a check that
+      # the app actually starts - a green CI build doesn't prove that. Minor/patch bumps still flow.
+      - dependency-name: "vite-plugin-electron-renderer"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "electron-log"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
