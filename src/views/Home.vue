@@ -55,6 +55,7 @@ import Category from '@/model/Category.model';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
+import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService} from '@/services';
 import * as Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
@@ -181,13 +182,13 @@ function startGame() {
 }
 
 function addPlayer() {
-    loaderDuration.value = 2;
+    loaderDuration.value = LONG_PRESS_MS.newPlayer / 1000;
     showLoader.value = true;
     loaderTitle.value = 'Add new player ?';
     timeouts.addPlayer = window.setTimeout(() => {
         showLoader.value = false;
         showAddUser.value = true;
-    }, 2000);
+    }, LONG_PRESS_MS.newPlayer);
 }
 
 const {onKeydown, onKeyup} = useControllable();
@@ -199,30 +200,30 @@ function registerKeyMapping() {
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
         switch (key) {
-        case 'ArrowUp':
+        case MAUI_KEYS.up:
             onGameChange(true);
             break;
-        case 'ArrowDown':
+        case MAUI_KEYS.down:
             onGameChange(false);
             break;
-        case 'ArrowLeft':
+        case MAUI_KEYS.left:
             if (hasCategories.value) {
                 onCategoryChange(true);
             }
             break;
-        case 'ArrowRight':
+        case MAUI_KEYS.right:
             if (hasCategories.value) {
                 onCategoryChange(false);
             }
             break;
-        case 'Space':
+        case MAUI_KEYS.space:
             showHiscores.value = !showHiscores.value;
-            timeouts.quit = window.setTimeout(() => remote.app.quit(), 3000);
+            timeouts.quit = window.setTimeout(() => remote.app.quit(), LONG_PRESS_MS.quit);
             break;
-        case 'Enter':
+        case MAUI_KEYS.enter:
             startGame();
             break;
-        case 'KeyP':
+        case MAUI_KEYS.p:
             addPlayer();
             break;
         }
@@ -234,10 +235,10 @@ function registerKeyMapping() {
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
         switch (key) {
-        case 'Space':
+        case MAUI_KEYS.space:
             clearTimeout(timeouts.quit);
             break;
-        case 'KeyP':
+        case MAUI_KEYS.p:
             showLoader.value = false;
             clearTimeout(timeouts.addPlayer);
             break;

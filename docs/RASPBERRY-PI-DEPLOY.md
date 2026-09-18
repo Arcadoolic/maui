@@ -334,9 +334,8 @@ SDL_AUDIO_DRIVER=alsa timeout -s KILL 25 $MAME dkong -video none -skip_gameinfo 
 **Contournement** : `export SDL_AUDIO_DRIVER=alsa` dans `~/.xinitrc` (§5.3).
 Avec ALSA, MAME ouvre bien la carte `vc4hdmi0` (visible dans
 `/proc/asound/card1/pcm0p/sub0/status`, état `RUNNING`), celle que le
-`/etc/asound.conf` du §6.2 déclare par défaut. Non testé à l'oreille au
-moment de l'écriture de cette section : à vérifier après le premier
-déploiement.
+`/etc/asound.conf` du §6.2 déclare par défaut. Vérifié sur le cabinet : le
+son du jeu sort bien sur l'écran HDMI, et quitter une partie ne fige plus MAME.
 
 Ce réglage n'a pas sa place dans le code de l'app : il est propre à cette
 installation (PulseAudio de Homebrew) et casserait le son sur macOS et
