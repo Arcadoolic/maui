@@ -2620,7 +2620,11 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
         res.write(`<li>${escapeHtml(line)}</li>`);
     };
 
-    const workDir = mkdtempSync(join(os.tmpdir(), 'mame-awesome-ui-update-'));
+    const squashfsRoot = getSquashfsRootPath();
+    // Next to ~/squashfs-root, not in os.tmpdir(): /tmp is a separate tmpfs on Debian/Raspberry Pi
+    // OS, and renameSync() across devices fails with EXDEV - which used to happen *after* the
+    // current install had already been moved to .old, leaving no ~/squashfs-root at all.
+    const workDir = mkdtempSync(join(dirname(squashfsRoot), '.mame-awesome-ui-update-'));
     try {
         writeLine('Téléchargement en cours…');
         const response = await fetch(downloadUrl);
@@ -2660,14 +2664,32 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
             throw new Error('Extraction terminée mais squashfs-root introuvable dans l\'AppImage.');
         }
 
-        const squashfsRoot = getSquashfsRootPath();
         const oldSquashfsRoot = `${squashfsRoot}.old`;
+        // The previous .old is parked in workDir (deleted with it in finally) rather than removed
+        // up front, so it can be put back if the swap fails.
+        const parkedOldSquashfsRoot = join(workDir, 'previous.old');
         writeLine('Bascule vers la nouvelle version…');
-        if (existsSync(oldSquashfsRoot)) {
-            rmSync(oldSquashfsRoot, {recursive: true, force: true});
+        const hadOld = existsSync(oldSquashfsRoot);
+        if (hadOld) {
+            renameSync(oldSquashfsRoot, parkedOldSquashfsRoot);
         }
-        renameSync(squashfsRoot, oldSquashfsRoot);
-        renameSync(newSquashfsRoot, squashfsRoot);
+        const hadCurrent = existsSync(squashfsRoot);
+        try {
+            if (hadCurrent) {
+                renameSync(squashfsRoot, oldSquashfsRoot);
+            }
+            renameSync(newSquashfsRoot, squashfsRoot);
+        } catch (error) {
+            // Undo, so a failed swap never leaves the machine without ~/squashfs-root (which
+            // ~/.xinitrc launches on boot).
+            if (!existsSync(squashfsRoot) && hadCurrent && existsSync(oldSquashfsRoot)) {
+                renameSync(oldSquashfsRoot, squashfsRoot);
+            }
+            if (hadOld && !existsSync(oldSquashfsRoot)) {
+                renameSync(parkedOldSquashfsRoot, oldSquashfsRoot);
+            }
+            throw error;
+        }
 
         writeLine(
             'Mise à jour installée. Redémarrez le Pi (ou "sudo systemctl restart getty@tty1") '
