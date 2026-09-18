@@ -34,6 +34,7 @@
 <script setup lang="ts">
 import {ref, computed} from 'vue';
 import {useControllable} from '@/composables/useControllable';
+import {MAUI_KEYS} from '@/class/MauiControls';
 import {getUserService} from '@/services';
 import Modal from '@/components/Modal.vue';
 
@@ -96,22 +97,22 @@ const {onKeydown, onKeyup} = useControllable();
 onKeydown((e, isGamepad) => {
     const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
     switch (key) {
-    case 'ArrowUp':
+    case MAUI_KEYS.up:
         previousLetter();
         break;
-    case 'ArrowDown':
+    case MAUI_KEYS.down:
         nextLetter();
         break;
-    case 'ArrowLeft':
+    case MAUI_KEYS.left:
         previousSelectedLetter();
         break;
-    case 'ArrowRight':
+    case MAUI_KEYS.right:
         nextSelectedLetter();
         break;
-    case 'KeyP':
+    case MAUI_KEYS.p:
         addUser();
         break;
-    case 'Space':
+    case MAUI_KEYS.space:
         emit('quit');
         break;
     }

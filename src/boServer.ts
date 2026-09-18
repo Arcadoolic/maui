@@ -22,6 +22,10 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
+import {
+    MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
+} from '@/class/MauiControls';
+import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
@@ -2862,12 +2866,81 @@ interface MauiPageMessages {
     updateInfoError?: string;
 }
 
+/**
+ * Read-only list of the controls MAUI itself understands (see MauiControls.ts, which the screens
+ * switch on too), per screen, with what each does. The controller column follows the "standard"
+ * layout of controllers.json - what Gamepads.class.ts falls back to for any pad it has no entry
+ * for - and any pad with an entry of its own is listed under it.
+ */
+function renderMauiControlsCard(): string {
+    const mappings = ControllerMappings as unknown as Record<string, ControllerMapping>;
+    const standard = mappings.standard;
+    const renderInputs = (inputs: string[]): string => inputs.length
+        ? inputs.map(input => `<code>${escapeHtml(input)}</code>`).join(' ')
+        : '<em>aucune entrée</em>';
+
+    const renderLongPress = (ms?: number): string => ms === undefined ? '' : ` <em>appui long (${ms / 1000} s)</em>`;
+
+    const contextTables = MAUI_CONTROL_CONTEXTS.map(context => `
+        <h3>${escapeHtml(context.title)}</h3>
+        <div class="table-wrap">
+            <table class="favorites-table">
+                <thead>
+                    <tr><th>Touche</th><th>Rôle</th><th>Manette (disposition standard)</th></tr>
+                </thead>
+                <tbody>${context.controls.map(control => `
+                    <tr>
+                        <td><code>${escapeHtml(keyLabel(control.key))}</code>${renderLongPress(control.longPressMs)}</td>
+                        <td>${escapeHtml(control.role)}</td>
+                        <td>${renderInputs(describeGamepadInputs(standard, control.key, STANDARD_BUTTON_NAMES))}</td>
+                    </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+    `).join('');
+
+    const specificPads = Object.entries(mappings).filter(([name]) => name !== 'standard');
+    const specificPadsHtml = specificPads.length ? `
+        <details>
+            <summary>Manettes avec une disposition propre (${specificPads.length})</summary>
+            ${specificPads.map(([name, mapping]) => `
+                <h3>${escapeHtml(name)}</h3>
+                <div class="table-wrap">
+                    <table class="favorites-table">
+                        <thead><tr><th>Touche</th><th>Entrées de la manette</th></tr></thead>
+                        <tbody>${Object.values(MAUI_KEYS).map(key => `
+                            <tr>
+                                <td><code>${escapeHtml(keyLabel(key))}</code></td>
+                                <td>${renderInputs(describeGamepadInputs(mapping, key))}</td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `).join('')}
+        </details>
+    ` : '';
+
+    return `
+        <section class="card">
+            <h2>Contrôles de MAUI</h2>
+            <p class="info">Les touches que l'interface de la borne comprend, avec leur rôle. Les
+            mêmes touches n'ont pas le même rôle selon l'écran. Une manette produit ces touches via
+            <code>controllers.json</code> : une entrée <em>aucune entrée</em> veut dire que la
+            commande n'est accessible qu'au clavier avec cette disposition. Distinct de l'onglet MAME
+            &gt; Manettes, qui règle les entrées de MAME (dans les jeux) et non celles de MAUI.</p>
+            ${contextTables}
+            ${specificPadsHtml}
+        </section>
+    `;
+}
+
 function renderMauiPage(
     config: Config, messages: MauiPageMessages = {}, isAdmin: boolean = false,
     updateInfo?: UpdateInfo,
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'Général', html: renderMauiCard(config, messages.mauiInfo)},
+        {id: 'controles', label: 'Contrôles', html: renderMauiControlsCard()},
     ];
     if (updateInfo) {
         sections.push({
