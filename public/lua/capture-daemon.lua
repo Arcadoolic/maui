@@ -69,6 +69,35 @@ local function write_file(path, content)
     end
 end
 
+-- Dumps MAME's effective sequence for every UI_* port (its own defaults plus whatever default.cfg
+-- already overrides) once at startup, one "<PORT_TYPE>|<sequence>" line each. Node reads it to find
+-- default bindings a newly captured button would collide with - e.g. UI_MENU (the in-game config
+-- menu) is bound to JOYCODE_1_BUTTON9 out of the box, so a cabinet button remapped to quit MAME
+-- would open that menu at the same time. Never guessed from a hardcoded table: defaults differ
+-- between MAME versions.
+local UI_SEQS_PATH = CAPTURE_DIR .. '/ui-seqs.txt'
+
+local function dump_ui_seqs()
+    local lines = {}
+    for _, port_type in pairs(manager.machine.ioport.types) do
+        local token = tostring(port_type.token or port_type.type)
+        if token:find('^UI_') then
+            local ok, seq = pcall(function()
+                return input:seq_to_tokens(manager.machine.ioport:type_seq(port_type.type, port_type.player or 0, 'standard'))
+            end)
+            if ok and seq then
+                table.insert(lines, token .. '|' .. seq)
+            end
+        end
+    end
+    write_file(UI_SEQS_PATH, table.concat(lines, '\n') .. '\n')
+end
+
+local dump_ok, dump_err = pcall(dump_ui_seqs)
+if not dump_ok then
+    io.stderr:write('[capture-daemon] ui-seqs dump error: ' .. tostring(dump_err) .. '\n')
+end
+
 local last_seen_request = nil
 local armed_nonce = nil
 

@@ -21,6 +21,7 @@ import bcrypt from 'bcryptjs';
 import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
+import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
@@ -1943,6 +1944,9 @@ interface RemapState {
     portType: string;
     error?: string;
     capturedToken?: string;
+    // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
+    // binds it to them by default - shown so the admin knows why e.g. the menu key changed.
+    releasedFrom?: string[];
 }
 
 interface MameConfigSession {
@@ -2051,6 +2055,51 @@ function captureOnePress(): string | null {
     return null;
 }
 
+/**
+ * UI ports that fire *during* a game (not just inside a MAME menu) and ship with a joystick
+ * button in their defaults - so a button remapped for anything else would trigger them as well.
+ * Menu navigation ports (UI_SELECT, UI_UP, ...) also default to joystick buttons but are only
+ * live while a menu is open, and stripping those would cripple the pad inside MAME's own menus.
+ */
+const IN_GAME_UI_PORTS = ['UI_MENU'];
+
+const UI_PORT_LABELS: Record<string, string> = {
+    UI_MENU: 'le menu de configuration de MAME (touche Tab)',
+};
+
+/**
+ * MAME doesn't take a button away from another port when default.cfg gives it to a new one: the
+ * press then feeds both. (Observed on 0.289: UI_CANCEL on JOYCODE_1_BUTTON9 also opened UI_MENU's
+ * config menu, its default binding.) So for every IN_GAME_UI_PORTS entry other than `portType`
+ * whose effective sequence holds `token` - default.cfg's override if any, else what MAME reported
+ * at session start (capture-daemon.lua's ui-seqs.txt) - writes that sequence back without it.
+ * Returns the ports it changed.
+ */
+function releaseTokenFromInGameUiPorts(cfgPath: string, portType: string, token: string): string[] {
+    if (!mameConfigSession) {
+        return [];
+    }
+    const seqsPath = join(mameConfigSession.dir, 'ui-seqs.txt');
+    const sessionSeqs = existsSync(seqsPath) ? parseUiSeqs(readFileSync(seqsPath, 'utf8')) : new Map<string, string>();
+    const overrides = readDefaultCfgUiInputs(cfgPath);
+
+    const released: string[] = [];
+    for (const otherPort of IN_GAME_UI_PORTS) {
+        const effective = overrides.get(otherPort) ?? sessionSeqs.get(otherPort);
+        if (otherPort === portType || !effective) {
+            continue;
+        }
+        const stripped = removeTokenFromSeq(effective, token);
+        // null: the token was the port's only binding - leave it rather than hand-write an empty
+        // sequence (see setDefaultCfgUiInput()'s note on hand-written <newseq> values).
+        if (stripped && stripped !== effective) {
+            setDefaultCfgUiInput(cfgPath, otherPort, stripped);
+            released.push(otherPort);
+        }
+    }
+    return released;
+}
+
 function getDefaultCfgPath(iniPath: string): string {
     return join(iniPath, 'cfg', 'default.cfg');
 }
@@ -2145,6 +2194,11 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             </tr>
             ${actionState?.error ? `
                 <tr><td colspan="3"><p class="error flash">${escapeHtml(actionState.error)}</p></td></tr>
+            ` : ''}
+            ${actionState?.releasedFrom?.length ? `
+                <tr><td colspan="3"><p class="info flash">Ce bouton était aussi lié par défaut à
+                ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} dans
+                MAME - il en a été retiré pour éviter un double déclenchement.</p></td></tr>
             ` : ''}
         `;
     }).join('');
@@ -4485,7 +4539,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 : {portType, error: 'Aucun appui détecté dans le délai imparti (30s) - réessaie ' +
                     '(la fenêtre MAME doit avoir le focus).'};
             if (token) {
-                setDefaultCfgUiInput(getDefaultCfgPath(mameInfo.iniPath), portType, token);
+                const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+                setDefaultCfgUiInput(cfgPath, portType, token);
+                const released = releaseTokenFromInGameUiPorts(cfgPath, portType, token);
+                if (released.length) {
+                    remapState.releasedFrom = released;
+                }
             }
             res.send(renderForm(
                 {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
