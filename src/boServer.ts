@@ -1902,6 +1902,18 @@ const REMAP_GROUPS: { title: string; actions: RemapAction[] }[] = [
     {title: 'Joueur 1', actions: [
         {portType: 'COIN1', label: 'Insérer une pièce'},
         {portType: 'START1', label: 'Start'},
+        {portType: 'P1_JOYSTICK_UP', label: 'Haut'},
+        {portType: 'P1_JOYSTICK_RIGHT', label: 'Droite'},
+        {portType: 'P1_JOYSTICK_DOWN', label: 'Bas'},
+        {portType: 'P1_JOYSTICK_LEFT', label: 'Gauche'},
+        {portType: 'P1_BUTTON1', label: 'Bouton 1'},
+        {portType: 'P1_BUTTON2', label: 'Bouton 2'},
+        {portType: 'P1_BUTTON3', label: 'Bouton 3'},
+        {portType: 'P1_BUTTON4', label: 'Bouton 4'},
+        {portType: 'P1_BUTTON5', label: 'Bouton 5'},
+        {portType: 'P1_BUTTON6', label: 'Bouton 6'},
+        {portType: 'P1_BUTTON7', label: 'Bouton 7'},
+        {portType: 'P1_BUTTON8', label: 'Bouton 8'},
     ]},
 ];
 
@@ -2027,21 +2039,25 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
     if (!romNames.length) {
         return '';
     }
-    const renderAction = (action: RemapAction): string => {
+    const renderActionRows = (actions: RemapAction[]): string => actions.map(action => {
         const actionState = state?.portType === action.portType ? state : undefined;
         const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
         return `
-            <div class="remap-action">
-                <span>${escapeHtml(action.label)}</span>
-                ${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>non assigné</em>'}
-                <form method="post" action="/input-probe/remap">
-                    <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                    <button type="submit">Capturer un appui</button>
-                </form>
-                ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
-            </div>
+            <tr>
+                <td>${escapeHtml(action.label)}</td>
+                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>non assigné</em>'}</td>
+                <td class="center">
+                    <form method="post" action="/input-probe/remap">
+                        <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
+                        <button type="submit">Capturer un appui</button>
+                    </form>
+                </td>
+            </tr>
+            ${actionState?.error ? `
+                <tr><td colspan="3"><p class="error flash">${escapeHtml(actionState.error)}</p></td></tr>
+            ` : ''}
         `;
-    };
+    }).join('');
 
     return `
         <section class="card">
@@ -2049,10 +2065,18 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             <p class="info">Associe un bouton de la manette à une commande : lance une rom en
             arrière-plan (sans vidéo ni son), appuie sur le bouton voulu dans les 30 secondes qui
             suivent, il est écrit directement dans <code>default.cfg</code> (valable pour tous les
-            jeux, sauf override propre à un jeu précis).</p>
+            jeux, sauf override propre à un jeu précis). <strong>Actuellement</strong> reflète ce
+            qui est vraiment enregistré dans le fichier, pas seulement la dernière capture.</p>
             ${REMAP_GROUPS.map(group => `
                 <h3>${escapeHtml(group.title)}</h3>
-                ${group.actions.map(renderAction).join('')}
+                <div class="table-wrap">
+                    <table class="favorites-table">
+                        <thead>
+                            <tr><th>Commande</th><th>Actuellement</th><th class="center"></th></tr>
+                        </thead>
+                        <tbody>${renderActionRows(group.actions)}</tbody>
+                    </table>
+                </div>
             `).join('')}
         </section>
     `;
