@@ -57,6 +57,17 @@ jobs:
         with:
           node-version: 24
 
+      - name: Setup Python (Windows)
+        # windows-latest's default `python` on PATH is 3.12+ with no
+        # distutils/setuptools available, so resolve-python.sh below finds
+        # nothing usable there - unlike the Linux/macOS runners, which
+        # already have a distutils-capable interpreter on PATH. Installing
+        # 3.11 here puts a working `python` first on PATH for this job only.
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Resolve Python interpreter for native module build
         # windows-latest's default shell is pwsh, which doesn't support
         # `source` - force bash (Git Bash, present on all GitHub-hosted
