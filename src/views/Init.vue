@@ -30,9 +30,27 @@ onMounted(async () => {
     const config = getConfiguration();
     const database = getDatabase();
 
+    try {
+        if (!database.exist()) {
+            // Create database file if not existing
+            await database.install();
+        } else {
+            await database.update();
+        }
+    } catch (e) {
+        // e.g. Database.install() refusing to run because genre.ini hasn't been installed yet by
+        // a starting pack import - stay on this screen with the message instead of silently
+        // hanging on a blank splash.
+        error.value = e instanceof Error ? e.message : 'Erreur inattendue au démarrage.';
+        return;
+    }
+
     config.load();
     if (!config.loaded()) {
-        // If no config or not valid, redirect to config page
+        // If no config or not valid, redirect to config page. Run above the database bootstrap:
+        // Config.vue sends the user to the BO to set the MAME path, and the BO's login needs the
+        // bo_user table (created and seeded by that bootstrap) to work even before MAME is
+        // configured.
         router.push({name: 'config'});
         return;
     }
@@ -43,13 +61,6 @@ onMounted(async () => {
     const hiService = getHiscoreService();
 
     try {
-        if (!database.exist()) {
-            // Create database file if not existing
-            await database.install();
-        } else {
-            await database.update();
-        }
-
         // (Re)seed categories from genre.ini before syncing games below: it may have been added
         // (or replaced) after the database already existed, and games are synced with an
         // id_category that must already exist in this table (see Database.syncCategories()'s own
@@ -67,9 +78,6 @@ onMounted(async () => {
 
         router.push({name: 'home'});
     } catch (e) {
-        // e.g. Database.install() refusing to run because genre.ini hasn't been installed yet by
-        // a starting pack import - stay on this screen with the message instead of silently
-        // hanging on a blank splash.
         error.value = e instanceof Error ? e.message : 'Erreur inattendue au démarrage.';
     }
 });

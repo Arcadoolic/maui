@@ -9,7 +9,6 @@ import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
-import BoUser from '@/model/BoUser.model';
 import Umzug from 'umzug';
 import * as Log from 'electron-log';
 
@@ -29,7 +28,12 @@ export default class Database {
         this._sequelize = new Sequelize({
             dialect: 'sqlite',
             storage: this.databasePath,
-            models: [Category, Game, User, Hiscore, BoUser],
+            // BoUser is deliberately excluded here: it's created (and seeded) exclusively by the
+            // create-bo-user migration below, not by sync(). sync() creates tables straight from
+            // the current model definitions with no seed data, so if it also created bo_user,
+            // the login accounts would never exist and the next update() run would fail with
+            // "table bo_user already exists" when the migration tries to create it itself.
+            models: [Category, Game, User, Hiscore],
             logging: false,
         });
     }
@@ -40,6 +44,9 @@ export default class Database {
 
     public async install() {
         await this.sequelize.sync();
+        // Runs the migrations (including the bo_user creation/seed) right away instead of
+        // waiting for a second launch's update() call - see this constructor's models comment.
+        await this.update();
     }
 
     /**

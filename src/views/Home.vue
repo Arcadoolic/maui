@@ -53,7 +53,7 @@ import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import Category from '@/model/Category.model';
 import {join} from 'path';
-import {format} from 'url';
+import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService} from '@/services';
 import * as Log from 'electron-log';
@@ -109,7 +109,10 @@ function generateFlyerPath(): string {
         if (!path) {
             return '';
         }
-        return format({pathname: path, protocol: 'file', slashes: true});
+        // pathToFileURL(), not format({pathname, protocol: 'file', ...}): format() leaves Windows
+        // backslashes as-is instead of converting them to the forward slashes a file: URL needs,
+        // which broke image loading on Windows (the flyer never displayed).
+        return pathToFileURL(path).href;
     }
     return '';
 }
@@ -129,8 +132,13 @@ function onGameChange(previous: boolean) {
 
 function onCategoryChange(previous: boolean) {
     const showGameFn = async () => {
+        // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
+        // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
+        // within its category no longer matched where it sits in the full list (e.g. "005" first
+        // alphabetically, but wherever insertion order placed it inside its category).
         games.value = (!selectedCategoryIndex.value) ? await gameService.loadGames() :
-            await categories.value[selectedCategoryIndex.value - 1].$get('games') as Game[] || [];
+            await categories.value[selectedCategoryIndex.value - 1]
+                .$get('games', {order: ['romName']}) as Game[] || [];
 
         selectedGameIndex.value = 0;
         flyer.value = generateFlyerPath();
@@ -242,7 +250,9 @@ if (!getIsInit()) {
 } else {
     if (getConfiguration().fullscreen) {
         remote.getCurrentWindow().setFullScreen(true);
-    } else if (process.env.NODE_ENV === 'development') {
+    } else {
+        // Not dev-only: without this, a packaged build left in windowed mode keeps whatever size
+        // Init.vue's splash screen set (346x354) instead of a usable default.
         remote.getCurrentWindow().setSize(1280, 720);
         remote.getCurrentWindow().center();
     }

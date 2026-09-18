@@ -100,7 +100,11 @@ def resolve_directory_path(path, parent_path):
     (path only), then joins onto parent_path when not absolute, dropping a duplicated leading
     segment when parent_path's own last segment already names it."""
     home = os.path.expanduser('~')
-    path = re.sub(r'\$HOME|~', home, path, count=1)
+    # repl as a function, not a string: re.sub interprets backslashes in a string replacement
+    # (\1, \g<...>, \a, \U, ...), and a Windows home path like C:\Users\... contains \U, which
+    # isn't a valid escape and raises "bad escape \U". A function's return value is inserted
+    # literally, sidestepping that.
+    path = re.sub(r'\$HOME|~', lambda _match: home, path, count=1)
     if path.startswith('/'):
         return path
     parent_path = parent_path.replace('$HOME', home)
