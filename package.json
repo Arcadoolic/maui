@@ -63,7 +63,7 @@
         "@vitejs/plugin-vue": "^6.0.9",
         "autoprefixer": "^10.6.0",
         "conventional-changelog-conventionalcommits": "^9.3.1",
-        "electron": "^44.3.0",
+        "electron": "^44.4.0",
         "electron-builder": "^26.15.3",
         "electron-log": "^3.0.6",
         "electron-vite": "5.0.0",
