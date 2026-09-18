@@ -1881,6 +1881,121 @@ function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): st
     `;
 }
 
+interface RemapState {
+    error?: string;
+    capturedToken?: string;
+}
+
+/**
+ * Boots `romName` headlessly with capture-input.lua and blocks (execFileSync) until the player
+ * presses something or that script's own CAPTURE_TIMEOUT_FRAMES elapses - returns the exact token
+ * MAME itself resolved the press to (e.g. "JOYCODE_1_BUTTON5"), or null on timeout/no press.
+ * timeout here is capture-input.lua's own ~30s window plus a margin, not a separate limit.
+ */
+function runCaptureInput(mameBinary: string, iniPath: string, romName: string): string | null {
+    const stdout = execFileSync(
+        mameBinary,
+        [
+            romName,
+            '-video', 'none',
+            '-sound', 'none',
+            '-skip_gameinfo',
+            '-autoboot_delay', '0',
+            '-autoboot_script', join(getStaticPath(), 'lua', 'capture-input.lua'),
+            '-inipath', iniPath,
+            '-homepath', iniPath,
+        ],
+        {
+            cwd: iniPath,
+            encoding: 'utf8',
+            timeout: 35000,
+            killSignal: 'SIGKILL',
+            maxBuffer: 4 * 1024 * 1024,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        },
+    );
+    const match = /MAUI_CAPTURED\|(\S+)/.exec(stdout);
+    return match ? match[1] : null;
+}
+
+function getDefaultCfgPath(iniPath: string): string {
+    return join(iniPath, 'cfg', 'default.cfg');
+}
+
+/**
+ * Small hand-rolled edit of default.cfg's <input> block - not a general XML parser, and
+ * deliberately not: MAME rewrites this file in its own canonical form on its next normal exit
+ * regardless of the exact whitespace/attribute order used here. Only ever touches
+ * <port type="..."><newseq type="standard">TOKEN</newseq></port> entries directly under
+ * <system name="default"><input>, and only with `token` sourced from MAME's own
+ * input:code_to_token() (see capture-input.lua) - never hand-guessed. That matters: MAME's cfg
+ * loader was empirically observed to drop its *entire* <input> block (including an otherwise-valid
+ * sibling entry) on the next boot after a single bad <newseq> token was written by hand.
+ */
+function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string): void {
+    const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : `<?xml version="1.0"?>
+<mameconfig version="10">
+    <system name="default">
+    </system>
+</mameconfig>
+`;
+
+    const inputBlockMatch = /<input>[\s\S]*?<\/input>\s*/.exec(existing);
+    const ports = new Map<string, string>();
+    if (inputBlockMatch) {
+        const portRegex = /<port type="([^"]+)">\s*<newseq type="standard">([\s\S]*?)<\/newseq>\s*<\/port>/g;
+        let match: RegExpExecArray | null;
+        while ((match = portRegex.exec(inputBlockMatch[0])) !== null) {
+            ports.set(match[1], match[2].trim());
+        }
+    }
+    ports.set(portType, token);
+
+    const newInputBlock = '        <input>\n'
+        + Array.from(ports.entries()).map(([type, seq]) => ''
+            + `            <port type="${type}">\n`
+            + '                <newseq type="standard">\n'
+            + `                    ${seq}\n`
+            + '                </newseq>\n'
+            + '            </port>\n').join('')
+        + '        </input>\n';
+
+    const updated = inputBlockMatch
+        ? existing.slice(0, inputBlockMatch.index) + newInputBlock + existing.slice(inputBlockMatch.index + inputBlockMatch[0].length)
+        : existing.replace(/(<system name="default">\s*\n)/, `$1${newInputBlock}`);
+
+    mkdirSync(dirname(cfgPath), {recursive: true});
+    writeFileSync(cfgPath, updated, 'utf8');
+}
+
+/**
+ * First (and so far only) remap action: associate a joystick input with UI_CANCEL, MAME's own
+ * "quit the running game" binding (pressed outside any menu, it's what raises the exit
+ * confirmation) - see runCaptureInput()/setDefaultCfgUiInput() above.
+ */
+function renderQuitRemapCard(romNames: string[], state?: RemapState): string {
+    if (!romNames.length) {
+        return '';
+    }
+    return `
+        <section class="card">
+            <h2>Quitter MAME depuis la manette</h2>
+            <p class="info">Associe un bouton de la manette à la sortie de MAME
+            (<code>UI_CANCEL</code>) : lance une rom en arrière-plan (sans vidéo ni son), appuie sur
+            le bouton voulu dans les 30 secondes qui suivent, il est écrit directement dans
+            <code>default.cfg</code>.</p>
+            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.capturedToken ? `
+                <p class="info flash">Bouton associé à Quitter MAME :
+                <code>${escapeHtml(state.capturedToken)}</code></p>
+            ` : ''}
+            <form method="post" action="/input-probe/remap-quit">
+                <button type="submit">Capturer un appui</button>
+            </form>
+        </section>
+    `;
+}
+
 interface InputProbeState {
     selectedRom?: string;
     result?: InputProbeRow[];
@@ -2118,6 +2233,7 @@ function renderForm(
     repoError?: string,
     repoInfo?: string,
     deviceProbeState?: DeviceProbeState,
+    quitRemapState?: RemapState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
     // see /save, /launch, /mame-options/save, /reset, etc.) purely for the repo card's
@@ -2142,6 +2258,7 @@ function renderForm(
             id: 'manettes',
             label: 'Manettes',
             html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
+                + renderQuitRemapCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], quitRemapState)
                 + renderDeviceProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], deviceProbeState),
         });
         sections.push({
@@ -2173,7 +2290,7 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'depot'
             : importError !== undefined ? 'import'
-                : (inputProbeState !== undefined || deviceProbeState !== undefined) ? 'manettes'
+                : (inputProbeState !== undefined || deviceProbeState !== undefined || quitRemapState !== undefined) ? 'manettes'
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
@@ -4109,6 +4226,66 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 {error: `Échec du sondage des périphériques : ${message} (timeout, code de sortie non nul, ou binaire introuvable).`},
+            ));
+        }
+    });
+
+    app.post('/input-probe/remap-quit', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdmin = req.session.boRole === 'admin';
+
+        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+        const romName = romNames[0];
+
+        if (mameInfo.error || !romName) {
+            // Same "shouldn't normally be reachable" caveat as /input-probe above - the form only
+            // renders once mameInfo.error is unset and at least one rom exists.
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
+            ));
+            return;
+        }
+
+        try {
+            const token = runCaptureInput(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+            const quitRemapState: RemapState = token
+                ? {capturedToken: token}
+                : {error: 'Aucun appui détecté dans le délai imparti (30s) - réessaie.'};
+            if (token) {
+                setDefaultCfgUiInput(getDefaultCfgPath(mameInfo.iniPath), 'UI_CANCEL', token);
+            }
+            res.send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
+                undefined, // error
+                undefined, // info
+                undefined, // mameInfoMessage
+                undefined, // importError
+                undefined, // dangerZoneInfo
+                undefined, // inputProbeState
+                undefined, // repoPacks
+                undefined, // repoError
+                undefined, // repoInfo
+                undefined, // deviceProbeState
+                quitRemapState,
+            ));
+        } catch (error) {
+            console.error('[boServer] Quit remap capture failed:', error);
+            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            res.status(500).send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
+                undefined, // error
+                undefined, // info
+                undefined, // mameInfoMessage
+                undefined, // importError
+                undefined, // dangerZoneInfo
+                undefined, // inputProbeState
+                undefined, // repoPacks
+                undefined, // repoError
+                undefined, // repoInfo
+                undefined, // deviceProbeState
+                {error: `Échec de la capture : ${message}`},
             ));
         }
     });
