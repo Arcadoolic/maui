@@ -957,8 +957,50 @@ function runImportScript(
     });
 }
 
-function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true): string {
-    return renderPageHead(active, authenticated) + body + renderPageTail();
+function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
+    return renderPageHead(active, authenticated, hasSubtabs) + body + renderPageTail();
+}
+
+interface Subsection {
+    // Short slug, also used as the URL hash so a subtab is directly linkable/bookmarkable and
+    // survives a page reload (e.g. after a form POST re-renders the same tab).
+    id: string;
+    // Kept short - shown as the subtab's own label. The section's existing <h2> (inside html)
+    // stays as the longer, fully descriptive heading; nothing about it changes.
+    label: string;
+    // Complete `<section class="card">...</section>` markup, exactly as a bare renderXCard()
+    // call already produces - this just groups and gates visibility of what was previously
+    // concatenated straight into the page body.
+    html: string;
+}
+
+/**
+ * Wraps 2+ cards for one primary tab behind a secondary "subtabs" row instead of one long
+ * vertically-stacked page - one card's <h2> per subtab, but reachable through a short label
+ * instead of scrolling. Client-side only (renderPageTail()'s script shows/hides
+ * .subtab-panel elements; every panel is still fully rendered server-side, nothing is fetched
+ * on demand) - a full page reload (e.g. after a form POST) still works exactly as before, it
+ * just needs the right panel picked back out on load (see that script: URL hash first, then
+ * whichever panel actually has a message to show).
+ * A single section is rendered bare, with no subtabs nav at all - nothing to switch between.
+ */
+function renderSubtabbedPage(active: Tab, sections: Subsection[], authenticated: boolean = true): string {
+    if (sections.length <= 1) {
+        return renderPage(sections.map(section => section.html).join(''), active, authenticated);
+    }
+    const nav = `
+        <nav class="subtabs">
+            ${sections.map(section => `
+                <a href="#${escapeHtml(section.id)}" class="subtab-link" data-subtab="${escapeHtml(section.id)}">
+                    ${escapeHtml(section.label)}
+                </a>
+            `).join('')}
+        </nav>
+    `;
+    const panels = sections.map(section => `
+        <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}">${section.html}</div>
+    `).join('');
+    return renderPage(nav + panels, active, authenticated, true);
 }
 
 /**
@@ -966,7 +1008,7 @@ function renderPage(body: string, active: Tab = 'mame', authenticated: boolean =
  * chunks with res.write() (progress feedback for a long-running action) instead of building
  * the whole HTML string before sending anything.
  */
-function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): string {
+function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
     return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1013,6 +1055,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): st
             color: #aaaaaa;
             text-decoration: none;
             border-bottom: 2px solid transparent;
+            transition: color 0.15s ease, border-color 0.15s ease;
+        }
+        .tabs a:hover {
+            color: #ffffff;
         }
         .tabs a.active {
             color: #ffffff;
@@ -1042,19 +1088,44 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): st
             box-sizing: border-box;
             padding: 8px;
             margin-top: 4px;
+            transition: outline-color 0.15s ease;
+        }
+        input:focus, select:focus {
+            outline: 2px solid #8ab4f8;
+            outline-offset: -1px;
         }
         button {
             padding: 8px 16px;
             color: #000000;
+            background-color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, opacity 0.15s ease;
+        }
+        button:hover:not(:disabled) {
+            background-color: #dddddd;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         form > button[type="submit"]:last-child {
             margin-top: 24px;
         }
+        .error, .info {
+            padding: 10px 14px;
+            margin: 12px 0 0;
+            border-radius: 6px;
+            border-left: 3px solid currentColor;
+        }
         .error {
             color: #ff6b6b;
+            background-color: rgba(255, 107, 107, 0.12);
         }
         .info {
             color: #8ab4f8;
+            background-color: rgba(138, 180, 248, 0.12);
         }
         .path-row {
             display: flex;
@@ -1074,10 +1145,6 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): st
             display: inline-flex;
             align-items: center;
             gap: 8px;
-        }
-        .launch-button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
         .launch-logo {
             height: 20px;
@@ -1124,6 +1191,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): st
             color: #000000;
             text-decoration: none;
             border-radius: 4px;
+            transition: background-color 0.15s ease;
+        }
+        .button-link:hover {
+            background-color: #dddddd;
         }
         .browse-list {
             list-style: none;
@@ -1218,12 +1289,57 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): st
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
         }
+        /* Present once a page has subtabs (see renderSubtabbedPage()) - the primary nav steps
+           back (smaller, dimmed except the active tab) so the subtabs row below reads as the
+           primary navigation for the page actually being looked at, without hiding the way
+           back to the other top-level tabs. */
+        .tabs.compact a {
+            padding: 6px 12px;
+            font-size: 0.85em;
+            opacity: 0.55;
+        }
+        .tabs.compact a.active {
+            opacity: 1;
+        }
+        .subtabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 4px 0 20px;
+            border-bottom: 1px solid #333333;
+            animation: subtabs-slide-in 0.2s ease-out;
+        }
+        @keyframes subtabs-slide-in {
+            from { opacity: 0; transform: translateX(-16px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .subtabs a {
+            display: inline-block;
+            padding: 8px 16px;
+            color: #aaaaaa;
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s ease, border-color 0.15s ease;
+        }
+        .subtabs a:hover {
+            color: #ffffff;
+        }
+        .subtabs a.active {
+            color: #8ab4f8;
+            border-bottom-color: #8ab4f8;
+        }
+        .subtab-panel {
+            display: none;
+        }
+        .subtab-panel.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
     <header>
         <h1>mame-awesome-ui</h1>
-        ${authenticated ? `<nav class="tabs">
+        ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}">
             <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
             <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Players</a>
@@ -1237,6 +1353,67 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true): st
 
 function renderPageTail(): string {
     return `
+    <script>
+        // Every action here is a plain form POST/GET (full page navigation, no AJAX) - the only
+        // feedback the browser gives on its own during that navigation is the tab's spinner,
+        // easy to miss. Disable + relabel whichever button actually triggered the submission
+        // (event.submitter, not just "the first submit button in the form" - several forms have
+        // more than one, e.g. formaction-overriding browse buttons) so a click always visibly
+        // registers, even before the new page has finished loading. No need to re-enable it: the
+        // navigation this triggers replaces the whole DOM (or, for a confirm() dialog the user
+        // cancels, defaultPrevented is set below and this is skipped entirely).
+        document.addEventListener('submit', function (event) {
+            if (event.defaultPrevented) {
+                return;
+            }
+            var button = event.submitter;
+            if (button && button.tagName === 'BUTTON' && !button.disabled) {
+                button.textContent = button.textContent + '…';
+                button.disabled = true;
+            }
+        });
+
+        // Subtabs (see renderSubtabbedPage()): every panel is already in the DOM, server-
+        // rendered - this only shows/hides which one is visible, no fetch involved. Picks, in
+        // order: the URL hash (so a subtab is linkable and survives a reload), else whichever
+        // panel has a .flash message (a real result/status, e.g. a form POST response or a
+        // "plugin.ini incomplete" warning - deliberately not every .info/.error, most of those
+        // are permanent help text present on every load), else the first panel.
+        (function () {
+            var panels = document.querySelectorAll('.subtab-panel');
+            if (!panels.length) {
+                return;
+            }
+            var links = document.querySelectorAll('.subtabs a');
+            function activate(id) {
+                panels.forEach(function (panel) {
+                    panel.classList.toggle('active', panel.dataset.subtabPanel === id);
+                });
+                links.forEach(function (link) {
+                    link.classList.toggle('active', link.dataset.subtab === id);
+                });
+            }
+            links.forEach(function (link) {
+                link.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    activate(link.dataset.subtab);
+                    history.replaceState(null, '', '#' + link.dataset.subtab);
+                });
+            });
+            var hashId = location.hash.replace('#', '');
+            var initial = hashId && document.querySelector(
+                '.subtab-panel[data-subtab-panel="' + hashId.replace(/"/g, '') + '"]',
+            ) ? hashId : null;
+            if (!initial) {
+                panels.forEach(function (panel) {
+                    if (!initial && panel.querySelector('.flash')) {
+                        initial = panel.dataset.subtabPanel;
+                    }
+                });
+            }
+            activate(initial || panels[0].dataset.subtabPanel);
+        })();
+    </script>
 </body>
 </html>`;
 }
@@ -1245,7 +1422,7 @@ function renderLoginPage(error?: string): string {
     return renderPage(`
         <section class="card">
             <h2>Connexion</h2>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/login">
                 <label for="username">Identifiant</label>
                 <input type="text" id="username" name="username" required autofocus>
@@ -1262,8 +1439,8 @@ function renderAccountPage(username: string, role: string, error?: string, info?
         <section class="card">
             <h2>Mon compte</h2>
             <p>Connecté en tant que <strong>${escapeHtml(username)}</strong> (${escapeHtml(role)}).</p>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/account/password">
                 <label for="currentPassword">Mot de passe actuel</label>
                 <input type="password" id="currentPassword" name="currentPassword" required>
@@ -1297,8 +1474,8 @@ function renderConfigCard(values: ConfigFormValues, error?: string, info?: strin
     return `
         <section class="card">
             <h2>Configuration</h2>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/save" novalidate>
                 <label for="mamePath">Dossier contenant le binaire mame</label>
                 <div class="path-row">
@@ -1333,14 +1510,14 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
         return `
             <section class="card">
                 <h2>Informations MAME</h2>
-                <p class="error">${escapeHtml(mameInfo.error)}</p>
+                <p class="error flash">${escapeHtml(mameInfo.error)}</p>
             </section>
         `;
     }
     return `
         <section class="card">
             <h2>Informations MAME</h2>
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <dl>
                 <div class="info-field">
                     <dt>Dossier home mame (ini, cfg, nvram, snapshots...)</dt>
@@ -1405,7 +1582,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
             </form>
             ${mameInfo.missingPlugins.length ? `
                 <form method="post" action="/mame-options/repair-plugins">
-                    <p class="error">plugin.ini est incomplet : ${mameInfo.missingPlugins.length} plugin(s)
+                    <p class="error flash">plugin.ini est incomplet : ${mameInfo.missingPlugins.length} plugin(s)
                     détecté(s) dans le dossier des plugins mais absent(s) de plugin.ini
                     (${escapeHtml(mameInfo.missingPlugins.join(', '))}).</p>
                     <button type="submit">Réparer plugin.ini (ajouter les plugins manquants)</button>
@@ -1442,7 +1619,7 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
             MAME lui-même. Chaque case agit indépendamment des autres - cochez ce que vous voulez
             supprimer puis validez. La suppression des roms/médias supprime aussi les roms
             elles-mêmes, pas seulement les visuels.</p>
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
                 if (this.deleteMameHome.checked) {
@@ -1597,7 +1774,7 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
         return `
             <section class="card">
                 <h2>Touches et manettes (sondage MAME)</h2>
-                <p class="info">Aucune rom trouvée dans le dossier des roms - importez un starting
+                <p class="info flash">Aucune rom trouvée dans le dossier des roms - importez un starting
                 pack ou déposez au moins un fichier .zip dans ce dossier pour pouvoir sonder une
                 configuration d'entrées.</p>
             </section>
@@ -1659,7 +1836,7 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
                         <tbody>${rows}</tbody>
                     </table>
                 </div>
-            ` : '<p class="info">Aucune association trouvée pour ce joueur.</p>'}
+            ` : '<p class="info flash">Aucune association trouvée pour ce joueur.</p>'}
         `;
     };
 
@@ -1673,7 +1850,7 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
             propres à ce jeu appliqués (en <strong>gras</strong> quand elle diffère du défaut).
             <code>KEYCODE_*</code> = touche clavier, <code>JOYCODE_&lt;n&gt;_*</code> = manette
             n° n ; plusieurs associations peuvent être combinées avec OR/AND/NOT.</p>
-            ${state?.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
             <form method="post" action="/input-probe">
                 <label for="probeRomName">Rom</label>
                 <select id="probeRomName" name="romName">${options}</select>
@@ -1698,7 +1875,7 @@ function renderMauiDangerZoneCard(info?: string): string {
             supprimer puis validez. Supprimer la configuration ou la base de données ferme
             l'application ensuite ; il faudra la relancer manuellement (<code>just serve</code>
             en développement) pour terminer l'opération.</p>
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
                 if (this.deleteConfig.checked) items.push('la configuration de mame-awesome-ui');
@@ -1742,33 +1919,52 @@ function renderForm(
     const config = new Config();
     config.load();
 
+    const sections: Subsection[] = [
+        {id: 'config', label: 'Config', html: renderConfigCard(values, error, info)},
+        {id: 'infos', label: 'Infos', html: renderMameInfoCard(mameInfo, mameInfoMessage)},
+    ];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
-    // configured and validated (mameInfo.error unset), those paths don't exist, so neither
-    // section has anything meaningful to show or act on.
-    return renderPage(
-        renderConfigCard(values, error, info)
-        + renderMameInfoCard(mameInfo, mameInfoMessage)
-        + (mameInfo.error ? '' : (
-            // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
-            // counts, all resolved from this same MAME install) - kept on this tab instead of
-            // its own, next to the MAME info it depends on and updates.
-            renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
-            + renderPythonWarning()
-            + renderImportCard(importError)
-            // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
-            + (isAdmin ? renderRepoImportCard(config, repoPacks, repoError, repoInfo) : '')
-            + (isAdmin ? renderMameDangerZoneCard(mameInfo, dangerZoneInfo) : '')
-        )),
-        'mame',
-    );
+    // configured and validated (mameInfo.error unset), those paths don't exist, so none of these
+    // sections have anything meaningful to show or act on.
+    if (!mameInfo.error) {
+        // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
+        // counts, all resolved from this same MAME install) - kept on this tab instead of
+        // its own, next to the MAME info it depends on and updates.
+        sections.push({
+            id: 'manettes',
+            label: 'Manettes',
+            html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState),
+        });
+        sections.push({
+            id: 'import',
+            label: 'Import',
+            // renderPythonWarning() is meant to sit right above renderImportCard() (see its own
+            // comment) - not a section of its own.
+            html: renderPythonWarning() + renderImportCard(importError),
+        });
+        // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
+        if (isAdmin) {
+            sections.push({
+                id: 'depot',
+                label: 'Dépôt',
+                html: renderRepoImportCard(config, repoPacks, repoError, repoInfo),
+            });
+            sections.push({
+                id: 'danger',
+                label: 'Danger',
+                html: renderMameDangerZoneCard(mameInfo, dangerZoneInfo),
+            });
+        }
+    }
+    return renderSubtabbedPage('mame', sections);
 }
 
 function renderMauiCard(config: Config, info?: string): string {
     return `
         <section class="card">
             <h2>mame-awesome-ui</h2>
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/maui/save">
                 <label class="checkbox-row">
                     <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
@@ -1791,8 +1987,8 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
             <p class="info">Sauvegarde ou restaure la configuration
             (mame-awesome-ui-config.json) et/ou la base de données (jeux, joueurs, scores)
             de mame-awesome-ui - pas les roms ni les données de mame lui-même.</p>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="get" action="/maui/export">
                 <label class="checkbox-row">
                     <input type="checkbox" name="json" checked>
@@ -1822,14 +2018,20 @@ interface MauiPageMessages {
 }
 
 function renderMauiPage(config: Config, messages: MauiPageMessages = {}, isAdmin: boolean = false): string {
-    return renderPage(
-        renderMauiCard(config, messages.mauiInfo)
-        // Import/export and the danger zone both act on the app's own config/database - only
-        // shown (and only actionable, see /maui/export, /maui/import and /reset) for admins.
-        + (isAdmin ? renderMauiImportExportCard(messages.importExportError, messages.importExportInfo) : '')
-        + (isAdmin ? renderMauiDangerZoneCard(messages.dangerZoneInfo) : ''),
-        'maui',
-    );
+    const sections: Subsection[] = [
+        {id: 'general', label: 'Général', html: renderMauiCard(config, messages.mauiInfo)},
+    ];
+    // Import/export and the danger zone both act on the app's own config/database - only
+    // shown (and only actionable, see /maui/export, /maui/import and /reset) for admins.
+    if (isAdmin) {
+        sections.push({
+            id: 'import-export',
+            label: 'Import/Export',
+            html: renderMauiImportExportCard(messages.importExportError, messages.importExportInfo),
+        });
+        sections.push({id: 'danger', label: 'Danger', html: renderMauiDangerZoneCard(messages.dangerZoneInfo)});
+    }
+    return renderSubtabbedPage('maui', sections);
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -1838,8 +2040,8 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
             <h2>ScreenScraper</h2>
             <p>Identifiants utilisés pour récupérer marquees, flyers et autres visuels depuis
             <a href="https://www.screenscraper.fr" target="_blank" rel="noopener">screenscraper.fr</a>.</p>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/screenscraper/save" novalidate>
                 <label for="ssUserId">Identifiant utilisateur (ssid)</label>
                 <input type="text" id="ssUserId" name="ssUserId" value="${escapeHtml(values.ssUserId)}" autocomplete="off">
@@ -1874,7 +2076,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
         return `
             <section class="card">
                 <h2>Récupération des médias</h2>
-                <p class="error">Identifiants ScreenScraper manquants : renseignez-les ci-dessus avant de
+                <p class="error flash">Identifiants ScreenScraper manquants : renseignez-les ci-dessus avant de
                 lancer un téléchargement.</p>
             </section>
         `;
@@ -1882,7 +2084,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
     return `
         <section class="card">
             <h2>Récupération des médias</h2>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${summary ? renderDownloadSummary(summary) : ''}
             <form method="post" action="/favorites/download-media">
                 <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour tous
@@ -1902,11 +2104,14 @@ function renderScreenScraperPage(
     downloadError?: string,
     summary?: DownloadSummary,
 ): string {
-    return renderPage(
-        renderScreenScraperCard(values, error, info)
-        + renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
-        'screenscraper',
-    );
+    return renderSubtabbedPage('screenscraper', [
+        {id: 'identifiants', label: 'Identifiants', html: renderScreenScraperCard(values, error, info)},
+        {
+            id: 'telechargement',
+            label: 'Téléchargement',
+            html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
+        },
+    ]);
 }
 
 function renderFavoriteBadge(found: boolean): string {
@@ -1955,7 +2160,7 @@ function renderDownloadSummary(summary: DownloadSummary): string {
         ? `<ul>${summary.errors.map(error => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`
         : '';
     return `
-        <p class="info">${escapeHtml(parts.join(' — '))}${summary.stoppedForQuota
+        <p class="info flash">${escapeHtml(parts.join(' — '))}${summary.stoppedForQuota
             ? ' — arrêté : quota ScreenScraper dépassé, réessayez plus tard.'
             : ''}</p>
         ${errorsHtml}
@@ -2061,7 +2266,7 @@ function renderPythonWarning(): string {
     if (isPython3Available()) {
         return '';
     }
-    return '<p class="error">python3 introuvable sur cette machine - l\'import de starting pack '
+    return '<p class="error flash">python3 introuvable sur cette machine - l\'import de starting pack '
         + 'est indisponible.</p>';
 }
 
@@ -2074,7 +2279,7 @@ function renderImportCard(error?: string): string {
             <p class="info">Un ZIP peut aussi ne contenir que des dossiers ${IMPORTABLE_MAME_DIRECTORIES
                 .map(d => escapeHtml(d.zipFolder)).join(', ')} (copiés tels quels dans la
             configuration mame courante) - dans ce cas, pas besoin de manifest.json.</p>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/import" enctype="multipart/form-data">
                 <label for="pack">Fichier ZIP</label>
                 <input type="file" id="pack" name="pack" accept=".zip" required>
@@ -2097,7 +2302,7 @@ function humanFileSize(bytes: number): string {
 
 function renderRepoPackPicker(packs: RepoPack[]): string {
     if (!packs.length) {
-        return '<p class="info">Aucun pack disponible sur ce dépôt.</p>';
+        return '<p class="info flash">Aucun pack disponible sur ce dépôt.</p>';
     }
     const options = packs.map(pack => {
         const details = [
@@ -2131,8 +2336,8 @@ function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string
             <p class="info">Parcourt et importe un starting pack directement depuis un dépôt HTTP
             protégé par mot de passe (voir docs/STARTER-PACK-REPO.md), sans passer par l'upload
             ci-dessus - utile pour un pack trop volumineux pour un formulaire navigateur.</p>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/repo/save" novalidate>
                 <label for="repoUrl">URL du dépôt</label>
                 <input type="text" id="repoUrl" name="repoUrl" value="${escapeHtml(config.repoUrl)}"
@@ -2215,8 +2420,8 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
     return `
         <section class="card">
             <h2>Joueurs (${users.length})</h2>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info">${escapeHtml(info)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <div class="table-wrap">
                 <table class="favorites-table">
                     <thead>
@@ -2237,7 +2442,10 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
 }
 
 function renderUsersPage(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
-    return renderPage(renderCreateUserCard() + renderUsersListCard(users, avatarFilenames, error, info), 'users');
+    return renderSubtabbedPage('users', [
+        {id: 'ajouter', label: 'Ajouter', html: renderCreateUserCard()},
+        {id: 'joueurs', label: 'Joueurs', html: renderUsersListCard(users, avatarFilenames, error, info)},
+    ]);
 }
 
 /**
@@ -2285,7 +2493,7 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
         <section class="card">
             <h2>Choisir un dossier</h2>
             <p class="current-path">${escapeHtml(currentDir)}</p>
-            ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <p>
                 <a class="button-link" href="${selectLink(currentDir)}">Choisir ce dossier</a>
                 ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Dossier parent</a>` : ''}
@@ -3406,49 +3614,62 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // once, at app startup - a restart is what makes it re-bootstrap them from scratch.
         const needsRestart = deleteConfig || deleteDatabase || deleteMameHome;
         const backHref = zone === 'mame' ? '/' : '/maui';
+        const deletedInfo = `Supprimé : ${deleted.join(', ')}.`;
+
+        // No restart needed (hiscores/games media/favorites) - land back on the zone's own page
+        // with an inline message, same as every other action in the BO (renderForm/
+        // renderMauiPage's own info params), instead of a dead-end page whose only affordance is
+        // a "Retour" link. The dead-end + auto-reconnect page below is reserved for the case
+        // where the process is actually about to exit and there's nothing else to show yet.
+        if (!needsRestart) {
+            if (zone === 'mame') {
+                res.send(renderForm(
+                    {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo, true,
+                    undefined, undefined, undefined, undefined, deletedInfo,
+                ));
+            } else {
+                res.send(renderMauiPage(config, {dangerZoneInfo: deletedInfo}, true));
+            }
+            return;
+        }
 
         res.send(renderPage(
             '<section class="card"><h2>Suppression effectuée</h2>'
-            + `<p class="error">Supprimé : ${deleted.join(', ')}.</p>`
-            + (needsRestart
-                ? '<p>L\'application va se fermer dans un instant. '
-                    + '<strong>Relancez-la manuellement</strong> pour terminer l\'opération '
-                    + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
-                    + 'production) - recharger cette page ou l\'application ne suffit pas : le '
-                    + 'renderer garde en mémoire les services construits sur l\'ancienne '
-                    + 'configuration tant que le process n\'a pas complètement redémarré.</p>'
-                    + '<p id="restart-wait-message" class="info">En attente du redémarrage… '
-                    + 'cette page vous ramènera automatiquement à l\'accueil dès que le serveur '
-                    + 'sera de nouveau disponible.</p>'
-                    + `<script>${
-                        // Polls the BO server itself (the same process this reset just told to
-                        // exit - see onReset below) until it answers again, then redirects -
-                        // rather than relying on the user to remember to come back once they've
-                        // relaunched it manually. Only trusts a successful response *after* one
-                        // has already failed: right after this page loads the old process may
-                        // still be up for a moment (see the 300ms exit delay below), and an
-                        // immediate success there would just bounce straight back with nothing
-                        // actually restarted yet.
-                        'var backHref = ' + JSON.stringify(backHref) + ';'
-                        + 'var sawDown = false;'
-                        + 'var poll = function () {'
-                        + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
-                        + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
-                        + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
-                        + '};'
-                        + 'setTimeout(poll, 1000);'
-                    }</script>`
-                : `<p><a href="${backHref}">Retour</a></p>`)
+            + `<p class="error">${deletedInfo}</p>`
+            + '<p>L\'application va se fermer dans un instant. '
+                + '<strong>Relancez-la manuellement</strong> pour terminer l\'opération '
+                + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
+                + 'production) - recharger cette page ou l\'application ne suffit pas : le '
+                + 'renderer garde en mémoire les services construits sur l\'ancienne '
+                + 'configuration tant que le process n\'a pas complètement redémarré.</p>'
+                + '<p id="restart-wait-message" class="info">En attente du redémarrage… '
+                + 'cette page vous ramènera automatiquement à l\'accueil dès que le serveur '
+                + 'sera de nouveau disponible.</p>'
+                + `<script>${
+                    // Polls the BO server itself (the same process this reset just told to
+                    // exit - see onReset below) until it answers again, then redirects -
+                    // rather than relying on the user to remember to come back once they've
+                    // relaunched it manually. Only trusts a successful response *after* one
+                    // has already failed: right after this page loads the old process may
+                    // still be up for a moment (see the 300ms exit delay below), and an
+                    // immediate success there would just bounce straight back with nothing
+                    // actually restarted yet.
+                    'var backHref = ' + JSON.stringify(backHref) + ';'
+                    + 'var sawDown = false;'
+                    + 'var poll = function () {'
+                    + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
+                    + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
+                    + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
+                    + '};'
+                    + 'setTimeout(poll, 1000);'
+                }</script>`
             + '</section>',
             zone,
         ));
 
-        if (needsRestart) {
-            // Only closes the app (see onReset in background.ts) - it does NOT relaunch it.
-            // Delayed slightly so this response finishes flushing to the browser before the
-            // process exits.
-            setTimeout(onReset, 300);
-        }
+        // Only closes the app (see onReset in background.ts) - it does NOT relaunch it. Delayed
+        // slightly so this response finishes flushing to the browser before the process exits.
+        setTimeout(onReset, 300);
     });
 
     return app.listen(port, () => {
