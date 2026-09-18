@@ -6,7 +6,8 @@ name: Build
 # see its comment on why that can't be a separate `release: published`
 # triggered workflow.
 #
-# Matrix covers linux-x64, linux-arm64 (Raspberry Pi), and macos-arm64.
+# Matrix covers linux-x64, linux-arm64 (Raspberry Pi), macos-arm64, and
+# windows-x64.
 
 on:
   push:
@@ -35,6 +36,10 @@ jobs:
             runner: macos-14
             build_args: --mac --arm64
             artifact_glob: dist_electron/*.zip
+          - name: windows-x64
+            runner: windows-latest
+            build_args: --win --x64
+            artifact_glob: dist_electron/*.exe
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -53,6 +58,10 @@ jobs:
           node-version: 24
 
       - name: Resolve Python interpreter for native module build
+        # windows-latest's default shell is pwsh, which doesn't support
+        # `source` - force bash (Git Bash, present on all GitHub-hosted
+        # runners including Windows) so this step works across the matrix.
+        shell: bash
         run: |
           source scripts/resolve-python.sh
           echo "PYTHON=$PYTHON" >> "$GITHUB_ENV"
