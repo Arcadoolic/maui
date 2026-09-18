@@ -1881,7 +1881,38 @@ function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): st
     `;
 }
 
+interface RemapAction {
+    // MAME's own <port type="..."> value - see setDefaultCfgUiInput(). Also doubles as this
+    // action's form/state identifier (see the "portType" hidden field and REMAP_ACTIONS_BY_TYPE
+    // below), since it's already unique by construction (one cfg port per action).
+    portType: string;
+    label: string;
+}
+
+/**
+ * Global (default.cfg, not per-game) remap actions offered on the Manettes tab, grouped for
+ * display. Grows over time (see renderRemapCard()'s own comment) - starts with just enough to
+ * make the cabinet joystick-only usable: quitting a game, and P1's coin/start (the two inputs
+ * every driver needs before its own P1 directions/buttons even come into play).
+ */
+const REMAP_GROUPS: { title: string; actions: RemapAction[] }[] = [
+    {title: 'Système', actions: [
+        {portType: 'UI_CANCEL', label: 'Quitter MAME'},
+    ]},
+    {title: 'Joueur 1', actions: [
+        {portType: 'COIN1', label: 'Insérer une pièce'},
+        {portType: 'START1', label: 'Start'},
+    ]},
+];
+
+const REMAP_ACTIONS_BY_TYPE = new Map<string, RemapAction>(
+    REMAP_GROUPS.flatMap(group => group.actions).map(action => [action.portType, action]),
+);
+
 interface RemapState {
+    // Which action this state is about - renderRemapCard() only shows a flash message on the one
+    // form just submitted, not every action's form at once.
+    portType: string;
     error?: string;
     capturedToken?: string;
 }
@@ -1932,6 +1963,29 @@ function getDefaultCfgPath(iniPath: string): string {
  * loader was empirically observed to drop its *entire* <input> block (including an otherwise-valid
  * sibling entry) on the next boot after a single bad <newseq> token was written by hand.
  */
+/**
+ * Reads the <port type="..."><newseq type="standard">TOKEN</newseq></port> entries directly under
+ * <system name="default"><input> - the same regex setDefaultCfgUiInput() below uses to avoid
+ * clobbering them, exposed separately so renderRemapCard() can show what's actually persisted for
+ * every action, not just whichever one a request just captured.
+ */
+function readDefaultCfgUiInputs(cfgPath: string): Map<string, string> {
+    const ports = new Map<string, string>();
+    if (!existsSync(cfgPath)) {
+        return ports;
+    }
+    const inputBlockMatch = /<input>[\s\S]*?<\/input>/.exec(readFileSync(cfgPath, 'utf8'));
+    if (!inputBlockMatch) {
+        return ports;
+    }
+    const portRegex = /<port type="([^"]+)">\s*<newseq type="standard">([\s\S]*?)<\/newseq>\s*<\/port>/g;
+    let match: RegExpExecArray | null;
+    while ((match = portRegex.exec(inputBlockMatch[0])) !== null) {
+        ports.set(match[1], match[2].trim());
+    }
+    return ports;
+}
+
 function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string): void {
     const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : `<?xml version="1.0"?>
 <mameconfig version="10">
@@ -1941,14 +1995,7 @@ function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string):
 `;
 
     const inputBlockMatch = /<input>[\s\S]*?<\/input>\s*/.exec(existing);
-    const ports = new Map<string, string>();
-    if (inputBlockMatch) {
-        const portRegex = /<port type="([^"]+)">\s*<newseq type="standard">([\s\S]*?)<\/newseq>\s*<\/port>/g;
-        let match: RegExpExecArray | null;
-        while ((match = portRegex.exec(inputBlockMatch[0])) !== null) {
-            ports.set(match[1], match[2].trim());
-        }
-    }
+    const ports = readDefaultCfgUiInputs(cfgPath);
     ports.set(portType, token);
 
     const newInputBlock = '        <input>\n'
@@ -1969,29 +2016,44 @@ function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string):
 }
 
 /**
- * First (and so far only) remap action: associate a joystick input with UI_CANCEL, MAME's own
- * "quit the running game" binding (pressed outside any menu, it's what raises the exit
- * confirmation) - see runCaptureInput()/setDefaultCfgUiInput() above.
+ * Global input remap: one "Capturer un appui" form per REMAP_GROUPS action, each posting to
+ * /input-probe/remap with its own portType - lance une rom en arrière-plan (sans vidéo ni son),
+ * capture-input.lua waits up to ~30s for a press, and the resulting token is written straight into
+ * default.cfg's matching <port> entry (see runCaptureInput()/setDefaultCfgUiInput() above).
+ * Player 1's directions/buttons and a Player 2 group are meant to join REMAP_GROUPS later - this
+ * only renders whatever's in it, no other change needed to add more.
  */
-function renderQuitRemapCard(romNames: string[], state?: RemapState): string {
+function renderRemapCard(romNames: string[], persisted: Map<string, string>, state?: RemapState): string {
     if (!romNames.length) {
         return '';
     }
+    const renderAction = (action: RemapAction): string => {
+        const actionState = state?.portType === action.portType ? state : undefined;
+        const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
+        return `
+            <div class="remap-action">
+                <span>${escapeHtml(action.label)}</span>
+                ${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>non assigné</em>'}
+                <form method="post" action="/input-probe/remap">
+                    <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
+                    <button type="submit">Capturer un appui</button>
+                </form>
+                ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
+            </div>
+        `;
+    };
+
     return `
         <section class="card">
-            <h2>Quitter MAME depuis la manette</h2>
-            <p class="info">Associe un bouton de la manette à la sortie de MAME
-            (<code>UI_CANCEL</code>) : lance une rom en arrière-plan (sans vidéo ni son), appuie sur
-            le bouton voulu dans les 30 secondes qui suivent, il est écrit directement dans
-            <code>default.cfg</code>.</p>
-            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
-            ${state?.capturedToken ? `
-                <p class="info flash">Bouton associé à Quitter MAME :
-                <code>${escapeHtml(state.capturedToken)}</code></p>
-            ` : ''}
-            <form method="post" action="/input-probe/remap-quit">
-                <button type="submit">Capturer un appui</button>
-            </form>
+            <h2>Configuration globale des entrées</h2>
+            <p class="info">Associe un bouton de la manette à une commande : lance une rom en
+            arrière-plan (sans vidéo ni son), appuie sur le bouton voulu dans les 30 secondes qui
+            suivent, il est écrit directement dans <code>default.cfg</code> (valable pour tous les
+            jeux, sauf override propre à un jeu précis).</p>
+            ${REMAP_GROUPS.map(group => `
+                <h3>${escapeHtml(group.title)}</h3>
+                ${group.actions.map(renderAction).join('')}
+            `).join('')}
         </section>
     `;
 }
@@ -2233,7 +2295,7 @@ function renderForm(
     repoError?: string,
     repoInfo?: string,
     deviceProbeState?: DeviceProbeState,
-    quitRemapState?: RemapState,
+    remapState?: RemapState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
     // see /save, /launch, /mame-options/save, /reset, etc.) purely for the repo card's
@@ -2258,7 +2320,11 @@ function renderForm(
             id: 'manettes',
             label: 'Manettes',
             html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
-                + renderQuitRemapCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], quitRemapState)
+                + renderRemapCard(
+                    mameInfo.romPath ? listRomNames(mameInfo.romPath) : [],
+                    readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
+                    remapState,
+                )
                 + renderDeviceProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], deviceProbeState),
         });
         sections.push({
@@ -2290,7 +2356,7 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'depot'
             : importError !== undefined ? 'import'
-                : (inputProbeState !== undefined || deviceProbeState !== undefined || quitRemapState !== undefined) ? 'manettes'
+                : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined) ? 'manettes'
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
@@ -4230,18 +4296,23 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
     });
 
-    app.post('/input-probe/remap-quit', (req, res) => {
+    app.post('/input-probe/remap', (req, res) => {
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
         const isAdmin = req.session.boRole === 'admin';
 
+        const portType: string = (req.body.portType || '').trim();
+        const action = REMAP_ACTIONS_BY_TYPE.get(portType);
+
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         const romName = romNames[0];
 
-        if (mameInfo.error || !romName) {
-            // Same "shouldn't normally be reachable" caveat as /input-probe above - the form only
-            // renders once mameInfo.error is unset and at least one rom exists.
+        if (mameInfo.error || !romName || !action) {
+            // mameInfo.error/no rom: same "shouldn't normally be reachable" caveat as /input-probe
+            // above - the form only renders once mameInfo.error is unset and at least one rom
+            // exists. !action: portType isn't in REMAP_ACTIONS_BY_TYPE - only reachable by posting
+            // outside the rendered form, since every form's hidden portType field is one of ours.
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
             ));
@@ -4250,11 +4321,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         try {
             const token = runCaptureInput(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
-            const quitRemapState: RemapState = token
-                ? {capturedToken: token}
-                : {error: 'Aucun appui détecté dans le délai imparti (30s) - réessaie.'};
+            const remapState: RemapState = token
+                ? {portType, capturedToken: token}
+                : {portType, error: 'Aucun appui détecté dans le délai imparti (30s) - réessaie.'};
             if (token) {
-                setDefaultCfgUiInput(getDefaultCfgPath(mameInfo.iniPath), 'UI_CANCEL', token);
+                setDefaultCfgUiInput(getDefaultCfgPath(mameInfo.iniPath), portType, token);
             }
             res.send(renderForm(
                 {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
@@ -4268,10 +4339,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 undefined, // repoError
                 undefined, // repoInfo
                 undefined, // deviceProbeState
-                quitRemapState,
+                remapState,
             ));
         } catch (error) {
-            console.error('[boServer] Quit remap capture failed:', error);
+            console.error(`[boServer] Remap capture failed for "${portType}":`, error);
             const message = error instanceof Error ? error.message : 'erreur inattendue';
             res.status(500).send(renderForm(
                 {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
@@ -4285,7 +4356,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 undefined, // repoError
                 undefined, // repoInfo
                 undefined, // deviceProbeState
-                {error: `Échec de la capture : ${message}`},
+                {portType, error: `Échec de la capture : ${message}`},
             ));
         }
     });
