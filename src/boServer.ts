@@ -981,15 +981,24 @@ interface Subsection {
  * .subtab-panel elements; every panel is still fully rendered server-side, nothing is fetched
  * on demand) - a full page reload (e.g. after a form POST) still works exactly as before, it
  * just needs the right panel picked back out on load (see that script: URL hash first, then
- * whichever panel actually has a message to show).
+ * this call's own defaultSectionId, then whichever panel has a message to show).
  * A single section is rendered bare, with no subtabs nav at all - nothing to switch between.
+ *
+ * defaultSectionId: which section a response is "about", set by the caller from whichever of
+ * its own message params is actually filled in (see renderForm()'s own defaultSubtab logic for
+ * the reasoning) - not inferred client-side from scanning for .flash content. A section with a
+ * standing warning unrelated to what was just submitted (missing plugins, no python3...) can
+ * carry a .flash of its own at the same time; without this, whichever of those happens to come
+ * first in `sections` always wins over the section the just-submitted form actually belongs to.
  */
-function renderSubtabbedPage(active: Tab, sections: Subsection[], authenticated: boolean = true): string {
+function renderSubtabbedPage(
+    active: Tab, sections: Subsection[], authenticated: boolean = true, defaultSectionId?: string,
+): string {
     if (sections.length <= 1) {
         return renderPage(sections.map(section => section.html).join(''), active, authenticated);
     }
     const nav = `
-        <nav class="subtabs">
+        <nav class="subtabs" data-default-subtab="${escapeHtml(defaultSectionId || '')}">
             ${sections.map(section => `
                 <a href="#${escapeHtml(section.id)}" class="subtab-link" data-subtab="${escapeHtml(section.id)}">
                     ${escapeHtml(section.label)}
@@ -1413,10 +1422,14 @@ function renderPageTail(): string {
 
         // Subtabs (see renderSubtabbedPage()): every panel is already in the DOM, server-
         // rendered - this only shows/hides which one is visible, no fetch involved. Picks, in
-        // order: the URL hash (so a subtab is linkable and survives a reload), else whichever
-        // panel has a .flash message (a real result/status, e.g. a form POST response or a
-        // "plugin.ini incomplete" warning - deliberately not every .info/.error, most of those
-        // are permanent help text present on every load), else the first panel.
+        // order: the URL hash (so a subtab is linkable and survives a reload), else the section
+        // the server says this response is about (data-default-subtab, set from whichever of
+        // renderForm()'s own message params is actually filled in for this request - not every
+        // section with a .flash: a standing warning elsewhere, e.g. "plugin.ini incomplete" or
+        // "python3 introuvable", also carries one and would otherwise wrongly outrank the
+        // section a just-submitted form actually belongs to, since it's earlier in the list),
+        // else whichever panel has a .flash message anyway (only reached when the server didn't
+        // say - e.g. an unrelated standing warning on first load), else the first panel.
         (function () {
             var panels = document.querySelectorAll('.subtab-panel');
             if (!panels.length) {
@@ -1442,6 +1455,11 @@ function renderPageTail(): string {
             var initial = hashId && document.querySelector(
                 '.subtab-panel[data-subtab-panel="' + hashId.replace(/"/g, '') + '"]',
             ) ? hashId : null;
+            var nav = document.querySelector('.subtabs');
+            var defaultSubtab = nav ? nav.dataset.defaultSubtab : '';
+            if (!initial && defaultSubtab) {
+                initial = defaultSubtab;
+            }
             if (!initial) {
                 panels.forEach(function (panel) {
                     if (!initial && panel.querySelector('.flash')) {
@@ -2029,7 +2047,19 @@ function renderForm(
             });
         }
     }
-    return renderSubtabbedPage('mame', sections);
+    // Which of the params above is actually filled in tells us which section this specific
+    // response is about - e.g. a POST to /repo/save only ever sets repoInfo/repoError, nothing
+    // else, regardless of what other sections might separately have a standing .flash warning
+    // of their own (missing plugins, no python3...) that would otherwise wrongly win just for
+    // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
+    const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
+        : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'depot'
+            : importError !== undefined ? 'import'
+                : inputProbeState !== undefined ? 'manettes'
+                    : mameInfoMessage !== undefined ? 'infos'
+                        : (error !== undefined || info !== undefined) ? 'config'
+                            : undefined;
+    return renderSubtabbedPage('mame', sections, true, defaultSubtab);
 }
 
 function renderMauiCard(config: Config, info?: string): string {
@@ -2103,7 +2133,13 @@ function renderMauiPage(config: Config, messages: MauiPageMessages = {}, isAdmin
         });
         sections.push({id: 'danger', label: 'Danger', html: renderMauiDangerZoneCard(messages.dangerZoneInfo)});
     }
-    return renderSubtabbedPage('maui', sections);
+    // See renderForm()'s own defaultSubtab for why this is computed from which message was
+    // actually passed for this response, not inferred client-side from scanning for .flash.
+    const defaultSubtab = messages.dangerZoneInfo !== undefined ? 'danger'
+        : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
+            : messages.mauiInfo !== undefined ? 'general'
+                : undefined;
+    return renderSubtabbedPage('maui', sections, true, defaultSubtab);
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -2176,6 +2212,11 @@ function renderScreenScraperPage(
     downloadError?: string,
     summary?: DownloadSummary,
 ): string {
+    // See renderForm()'s own defaultSubtab for why this is computed from which message was
+    // actually passed for this response, not inferred client-side from scanning for .flash.
+    const defaultSubtab = (downloadError !== undefined || summary !== undefined) ? 'telechargement'
+        : (error !== undefined || info !== undefined) ? 'identifiants'
+            : undefined;
     return renderSubtabbedPage('screenscraper', [
         {id: 'identifiants', label: 'Identifiants', html: renderScreenScraperCard(values, error, info)},
         {
@@ -2183,7 +2224,7 @@ function renderScreenScraperPage(
             label: 'Téléchargement',
             html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
         },
-    ]);
+    ], true, defaultSubtab);
 }
 
 function renderFavoriteBadge(found: boolean): string {
@@ -2434,10 +2475,11 @@ function renderUserStatusBadge(active: boolean): string {
     return active ? '<span class="badge-yes">✓ actif</span>' : '<span class="badge-no">✗ inactif</span>';
 }
 
-function renderCreateUserCard(): string {
+function renderCreateUserCard(error?: string): string {
     return `
         <section class="card">
             <h2>Ajouter un joueur</h2>
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/users/create">
                 <label for="pseudo_3">Pseudo 3 lettres (requis, unique)</label>
                 <input type="text" id="pseudo_3" name="pseudo_3" maxlength="3" required>
@@ -2513,11 +2555,21 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
     `;
 }
 
-function renderUsersPage(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+function renderUsersPage(
+    users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
+): string {
+    // See renderForm()'s own defaultSubtab for why this is computed from which message was
+    // actually passed for this response, not inferred client-side from scanning for .flash.
+    // createError is kept separate from error/info (both list-card messages, e.g. from
+    // toggle-active/delete/avatar upload) so a duplicate-pseudo error from /users/create lands
+    // back on "Ajouter", next to the form that produced it, instead of "Joueurs".
+    const defaultSubtab = createError !== undefined ? 'ajouter'
+        : (error !== undefined || info !== undefined) ? 'joueurs'
+            : undefined;
     return renderSubtabbedPage('users', [
-        {id: 'ajouter', label: 'Ajouter', html: renderCreateUserCard()},
+        {id: 'ajouter', label: 'Ajouter', html: renderCreateUserCard(createError)},
         {id: 'joueurs', label: 'Joueurs', html: renderUsersListCard(users, avatarFilenames, error, info)},
-    ]);
+    ], true, defaultSubtab);
 }
 
 /**
@@ -2812,7 +2864,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             res.send(renderUsersPage(users, avatarFilenames, undefined, `Joueur "${pseudo3}" créé.`));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
-            res.status(422).send(renderUsersPage(users, avatarFilenames, describeUserError(error)));
+            res.status(422).send(renderUsersPage(
+                users, avatarFilenames, undefined, undefined, describeUserError(error),
+            ));
         }
     });
 
