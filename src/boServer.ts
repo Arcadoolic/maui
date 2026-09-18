@@ -2085,6 +2085,7 @@ interface GithubRelease {
     name: string | null;
     body: string | null;
     published_at: string;
+    prerelease: boolean;
     assets: GithubReleaseAsset[];
 }
 
@@ -2094,23 +2095,15 @@ interface UpdateReleaseEntry {
     publishedAt: string;
     assetUrl: string | null;
     isCurrent: boolean;
-}
-
-interface UpdatePrBuildEntry {
-    prNumber: number;
-    prTitle: string;
-    branch: string;
-    runUpdatedAt: string;
-    artifactUrl: string;
+    isPrerelease: boolean;
 }
 
 interface UpdateInfo {
     capable: boolean;
     currentVersion: string;
     releases: UpdateReleaseEntry[];
+    devBuilds: UpdateReleaseEntry[];
     releasesError?: string;
-    prBuilds?: UpdatePrBuildEntry[];
-    prBuildsError?: string;
 }
 
 // x64/arm64 are the only archs mame-awesome-ui packages for Linux (electron-builder.yml has no
@@ -2138,7 +2131,10 @@ const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000;
 
 // Public GitHub Releases - no auth needed (repo is public), so this is safe to call for every
 // BO role, not just admins. Cached briefly so repeatedly loading the MAUI tab doesn't burn
-// through the anonymous API's 60 req/h/IP rate limit.
+// through the anonymous API's 60 req/h/IP rate limit. Includes both real releases (tagged on
+// main by semantic-release) and dev prereleases (tagged on every push to develop by build.yml,
+// see its "Publish develop prerelease" job) - GitHub's /releases endpoint returns both, told
+// apart by the `prerelease` flag.
 async function fetchGithubReleases(): Promise<GithubRelease[]> {
     if (releasesCache && Date.now() - releasesCache.fetchedAt < GITHUB_CACHE_TTL_MS) {
         return releasesCache.releases;
@@ -2154,92 +2150,24 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
     return releases;
 }
 
-let prBuildsCache: {fetchedAt: number; token: string; builds: UpdatePrBuildEntry[]} | null = null;
-
-// PR-validation builds are only ever GitHub Actions workflow artifacts from build.yml (this repo
-// has no separate "PR pre-release" mechanism) - listing/downloading those requires auth even on
-// a public repo, unlike /releases above, which is why this is admin-only and needs config.githubToken.
-async function fetchPrBuilds(token: string): Promise<UpdatePrBuildEntry[]> {
-    if (prBuildsCache && prBuildsCache.token === token && Date.now() - prBuildsCache.fetchedAt < GITHUB_CACHE_TTL_MS) {
-        return prBuildsCache.builds;
-    }
-    const arch = currentLinuxArch();
-    const headers = {Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json'};
-
-    const pullsResponse = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/pulls`
-            + '?state=open&base=develop&sort=updated&direction=desc&per_page=10',
-        {headers},
-    );
-    if (!pullsResponse.ok) {
-        throw new Error(`HTTP ${pullsResponse.status} (pulls)`);
-    }
-    const pulls = await pullsResponse.json() as {
-        number: number; title: string; head: {sha: string; ref: string};
-    }[];
-
-    // Sequential on purpose: at most 10 PRs (per_page above), each up to 2 extra requests - not
-    // worth the complexity of parallelizing for an admin-only, infrequently-loaded section.
-    const builds: UpdatePrBuildEntry[] = [];
-    for (const pull of pulls) {
-        if (!arch) {
-            break;
-        }
-        const runsResponse = await fetch(
-            `https://api.github.com/repos/${GITHUB_REPO}/actions/runs`
-                + `?head_sha=${pull.head.sha}&status=success&per_page=5`,
-            {headers},
-        );
-        if (!runsResponse.ok) {
-            continue;
-        }
-        const runsData = await runsResponse.json() as {workflow_runs: {id: number; name: string; updated_at: string}[]};
-        const buildRun = runsData.workflow_runs.find(run => run.name === 'Build');
-        if (!buildRun) {
-            continue;
-        }
-        const artifactsResponse = await fetch(
-            `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${buildRun.id}/artifacts`,
-            {headers},
-        );
-        if (!artifactsResponse.ok) {
-            continue;
-        }
-        const artifactsData = await artifactsResponse.json() as {artifacts: {id: number; name: string}[]};
-        const artifact = artifactsData.artifacts.find(a => a.name === `linux-${arch}`);
-        if (!artifact) {
-            continue;
-        }
-        builds.push({
-            prNumber: pull.number,
-            prTitle: pull.title,
-            branch: pull.head.ref,
-            runUpdatedAt: buildRun.updated_at,
-            artifactUrl: `https://api.github.com/repos/${GITHUB_REPO}/actions/artifacts/${artifact.id}/zip`,
-        });
-    }
-
-    prBuildsCache = {fetchedAt: Date.now(), token, builds};
-    return builds;
-}
-
 /**
- * Computes everything the "Mise à jour" subtab needs to render - always includes the public
- * releases list (any BO role can see/install those), and additionally the PR-builds list when
- * isAdmin and a GitHub token is configured. Called by every route that (re-)renders the MAUI
- * page, same as getMameInfo() is recomputed fresh by every route touching the MAME tab.
+ * Computes everything the "Mise à jour" subtab needs to render: the public releases list (any
+ * BO role can see/install those), split into real releases and develop prereleases (the latter
+ * only rendered for admins, see renderUpdateCard()). Called by every route that (re-)renders
+ * the MAUI page, same as getMameInfo() is recomputed fresh by every route touching the MAME tab.
  */
-async function getUpdateInfo(config: Config, isAdmin: boolean): Promise<UpdateInfo> {
+async function getUpdateInfo(): Promise<UpdateInfo> {
     const info: UpdateInfo = {
         capable: isSelfUpdateCapable(),
         currentVersion: electronApp.getVersion(),
         releases: [],
+        devBuilds: [],
     };
 
     try {
         const releases = await fetchGithubReleases();
         const arch = currentLinuxArch();
-        info.releases = releases.map(release => {
+        const entries = releases.map((release): UpdateReleaseEntry => {
             const asset = arch
                 ? release.assets.find(a => new RegExp(`-linux-${arch}\\.AppImage$`).test(a.name))
                 : undefined;
@@ -2249,36 +2177,28 @@ async function getUpdateInfo(config: Config, isAdmin: boolean): Promise<UpdateIn
                 publishedAt: release.published_at,
                 assetUrl: asset ? asset.browser_download_url : null,
                 isCurrent: release.tag_name === info.currentVersion,
+                isPrerelease: release.prerelease,
             };
         });
+        info.releases = entries.filter(entry => !entry.isPrerelease);
+        info.devBuilds = entries.filter(entry => entry.isPrerelease);
     } catch (error) {
         info.releasesError = error instanceof Error ? error.message : 'erreur inattendue';
-    }
-
-    if (isAdmin && config.githubToken) {
-        try {
-            info.prBuilds = await fetchPrBuilds(config.githubToken);
-        } catch (error) {
-            info.prBuildsError = error instanceof Error ? error.message : 'erreur inattendue';
-        }
     }
 
     return info;
 }
 
 /**
- * Downloads `downloadUrl` (a raw release asset when isZippedArtifact is false, or a GitHub
- * Actions artifact zip when true - artifacts are always zip-wrapped by the API, release assets
- * never are), extracts the AppImage inside if needed, and swaps it into ~/squashfs-root (see
+ * Downloads `downloadUrl` (a raw release asset - real releases and develop-prerelease builds
+ * are published the same way, see getUpdateInfo()) and swaps it into ~/squashfs-root (see
  * getSquashfsRootPath()) - same end state as docs/RASPBERRY-PI-DEPLOY.md §7's manual `rm -rf` +
  * re-extract, but via an atomic rename into a fresh temp dir first, so ~/squashfs-root.old stays
  * available as a manual rollback if the new version turns out broken, and the currently-running
  * process's own files are never touched mid-extraction. Streams progress the same way as
  * runImportScript() above - res must already have its page head written.
  */
-async function runUpdateInstall(
-    res: Response, title: string, downloadUrl: string, headers: Record<string, string>, isZippedArtifact: boolean,
-): Promise<void> {
+async function runUpdateInstall(res: Response, title: string, downloadUrl: string): Promise<void> {
     res.write(`<section class="card"><h2>${escapeHtml(title)}</h2><ul class="progress-log">`);
     const writeLine = (line: string): void => {
         res.write(`<li>${escapeHtml(line)}</li>`);
@@ -2287,12 +2207,12 @@ async function runUpdateInstall(
     const workDir = mkdtempSync(join(os.tmpdir(), 'mame-awesome-ui-update-'));
     try {
         writeLine('Téléchargement en cours…');
-        const response = await fetch(downloadUrl, {headers});
+        const response = await fetch(downloadUrl);
         if (!response.ok || !response.body) {
             throw new Error(`Téléchargement échoué (HTTP ${response.status}).`);
         }
         const totalBytes = Number(response.headers.get('content-length')) || 0;
-        const downloadedPath = join(workDir, 'download.bin');
+        const appImagePath = join(workDir, 'download.AppImage');
         let downloadedBytes = 0;
         let lastLoggedMb = 0;
         await pipeline(
@@ -2311,20 +2231,8 @@ async function runUpdateInstall(
                     callback(null, chunk);
                 },
             }),
-            createWriteStream(downloadedPath),
+            createWriteStream(appImagePath),
         );
-
-        let appImagePath = downloadedPath;
-        if (isZippedArtifact) {
-            writeLine('Extraction de l\'archive…');
-            const zip = new AdmZip(downloadedPath);
-            const entry = zip.getEntries().find(zipEntry => zipEntry.entryName.endsWith('.AppImage'));
-            if (!entry) {
-                throw new Error('Archive reçue sans fichier .AppImage.');
-            }
-            appImagePath = join(workDir, 'app.AppImage');
-            writeFileSync(appImagePath, entry.getData());
-        }
 
         chmodSync(appImagePath, 0o755);
 
@@ -2360,42 +2268,38 @@ async function runUpdateInstall(
     res.write('</ul></section>');
 }
 
-function renderUpdateCard(
-    config: Config, updateInfo: UpdateInfo, isAdmin: boolean,
-    installMessage?: string, installError?: string, tokenMessage?: string,
-): string {
-    const releaseRows = updateInfo.releases.map(release => `
+function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, confirmLabel: string): string {
+    return `
         <tr>
             <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">version actuelle</span>' : ''}</td>
             <td>${escapeHtml(new Date(release.publishedAt).toLocaleDateString('fr-FR'))}</td>
             <td class="center">
                 ${release.assetUrl && !release.isCurrent ? `
                     <form method="post" action="/maui/update/install"
-                        onsubmit="return confirm('Installer la version ${escapeHtml(release.tagName)} ? Le Pi devra ensuite etre redemarre.')">
+                        onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
                         <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
                         <input type="hidden" name="assetUrl" value="${escapeHtml(release.assetUrl)}">
-                        <button type="submit" ${updateInfo.capable ? '' : 'disabled'}>Installer</button>
+                        <button type="submit" ${capable ? '' : 'disabled'}>Installer</button>
                     </form>
                 ` : release.isCurrent ? '' : '<em>Aucun artefact pour cette plateforme</em>'}
             </td>
         </tr>
-    `).join('');
+    `;
+}
 
-    const prBuildRows = (updateInfo.prBuilds || []).map(build => `
-        <tr>
-            <td>#${build.prNumber} - ${escapeHtml(build.prTitle)}</td>
-            <td>${escapeHtml(build.branch)}</td>
-            <td>${escapeHtml(new Date(build.runUpdatedAt).toLocaleDateString('fr-FR'))}</td>
-            <td class="center">
-                <form method="post" action="/maui/update/pr-build/install"
-                    onsubmit="return confirm('Installer le build de la PR #${build.prNumber} (non revu, non merge) ?')">
-                    <input type="hidden" name="prNumber" value="${build.prNumber}">
-                    <input type="hidden" name="artifactUrl" value="${escapeHtml(build.artifactUrl)}">
-                    <button type="submit" ${updateInfo.capable ? '' : 'disabled'}>Installer</button>
-                </form>
-            </td>
-        </tr>
-    `).join('');
+function renderUpdateCard(
+    updateInfo: UpdateInfo, isAdmin: boolean, installMessage?: string, installError?: string,
+): string {
+    const confirmRelease = 'Installer la version {tag} ? Le Pi devra ensuite etre redemarre.';
+    const releaseRows = updateInfo.releases
+        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmRelease))
+        .join('');
+
+    const confirmDevBuild = 'Installer le build de developpement {tag} (non promu vers main) ? '
+        + 'Le Pi devra ensuite etre redemarre.';
+    const devBuildRows = updateInfo.devBuilds
+        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmDevBuild))
+        .join('');
 
     return `
         <section class="card">
@@ -2417,24 +2321,15 @@ function renderUpdateCard(
         </section>
         ${isAdmin ? `
             <section class="card">
-                <h2>Builds de PR (non publiés)</h2>
-                <p class="error">Builds de validation CI (workflow "Build" sur une PR ouverte vers
-                develop) - pas encore revus ni mergés, à réserver aux tests.</p>
-                ${tokenMessage ? `<p class="info flash">${escapeHtml(tokenMessage)}</p>` : ''}
-                <form method="post" action="/maui/update/github-token/save" novalidate>
-                    <label for="githubToken">Token GitHub (lecture des artefacts CI)</label>
-                    <input type="password" id="githubToken" name="githubToken"
-                        value="${escapeHtml(config.githubToken)}" autocomplete="off">
-                    <button type="submit">Enregistrer</button>
-                </form>
-                ${!config.githubToken
-                    ? '<p class="info">Renseignez un token pour lister les builds de PR.</p>'
-                    : updateInfo.prBuildsError
-                        ? `<p class="error">Impossible de récupérer les builds de PR : ${escapeHtml(updateInfo.prBuildsError)}</p>`
-                        : `<table>
-                            <thead><tr><th>PR</th><th>Branche</th><th>Build du</th><th></th></tr></thead>
-                            <tbody>${prBuildRows || '<tr><td colspan="4"><em>Aucun build disponible.</em></td></tr>'}</tbody>
-                        </table>`}
+                <h2>Builds de développement (non publiés)</h2>
+                <p class="error">Prereleases GitHub générées automatiquement à chaque push sur
+                develop (workflow "Build") - pas encore promues vers main, à réserver aux tests.</p>
+                ${!updateInfo.releasesError
+                    ? `<table>
+                        <thead><tr><th>Version</th><th>Publiée le</th><th></th></tr></thead>
+                        <tbody>${devBuildRows || '<tr><td colspan="3"><em>Aucun build disponible.</em></td></tr>'}</tbody>
+                    </table>`
+                    : ''}
             </section>
         ` : ''}
     `;
@@ -2497,7 +2392,6 @@ interface MauiPageMessages {
     dangerZoneInfo?: string;
     updateInfoMessage?: string;
     updateInfoError?: string;
-    githubTokenMessage?: string;
 }
 
 function renderMauiPage(
@@ -2511,10 +2405,7 @@ function renderMauiPage(
         sections.push({
             id: 'update',
             label: 'Mise à jour',
-            html: renderUpdateCard(
-                config, updateInfo, isAdmin, messages.updateInfoMessage, messages.updateInfoError,
-                messages.githubTokenMessage,
-            ),
+            html: renderUpdateCard(updateInfo, isAdmin, messages.updateInfoMessage, messages.updateInfoError),
         });
     }
     // Import/export and the danger zone both act on the app's own config/database - only
@@ -2531,8 +2422,7 @@ function renderMauiPage(
     // actually passed for this response, not inferred client-side from scanning for .flash.
     const defaultSubtab = messages.dangerZoneInfo !== undefined ? 'danger'
         : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
-            : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined
-                || messages.githubTokenMessage !== undefined) ? 'update'
+            : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                 : messages.mauiInfo !== undefined ? 'general'
                     : undefined;
     return renderSubtabbedPage('maui', sections, true, defaultSubtab);
@@ -2547,7 +2437,7 @@ async function sendMauiPage(
     req: express.Request, res: Response, config: Config, messages: MauiPageMessages = {},
 ): Promise<void> {
     const isAdmin = req.session.boRole === 'admin';
-    const updateInfo = await getUpdateInfo(config, isAdmin);
+    const updateInfo = await getUpdateInfo();
     res.send(renderMauiPage(config, messages, isAdmin, updateInfo));
 }
 
@@ -3770,80 +3660,43 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         setTimeout(onReset, 300);
     });
 
-    app.post('/maui/update/github-token/save', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
-            return;
-        }
-        const config = new Config();
-        config.load();
-        config.githubToken = (req.body.githubToken || '').trim();
-        config.save();
-        // Invalidate: a request already in flight with the old (or no) token shouldn't overwrite
-        // this on completion, and the next MAUI page load should reflect the new token right away.
-        prBuildsCache = null;
-        await sendMauiPage(req, res, config, {githubTokenMessage: 'Token enregistré.'});
-    });
-
-    // Not role-gated beyond being logged in - installing a publicly published release onto the
-    // device the BO itself runs on is exactly what a "user"-role account (e.g. puckman) is meant
-    // to be able to do, same trust level as everything else on the "Général" MAUI subtab.
+    // Not role-gated beyond being logged in for a real release - installing one of those onto
+    // the device the BO itself runs on is exactly what a "user"-role account (e.g. puckman) is
+    // meant to be able to do, same trust level as everything else on the "Général" MAUI subtab.
+    // A dev build (GitHub prerelease published from develop, see getUpdateInfo()) stays
+    // admin-only even though the asset itself needs no auth to download - checked server-side
+    // below, not just by hiding the row in renderUpdateCard(), since the tagName/assetUrl pair
+    // is posted back by the client and could otherwise be forged by a "user"-role account.
     app.post('/maui/update/install', async (req, res) => {
         const config = new Config();
         config.load();
         const tagName = typeof req.body.tagName === 'string' ? req.body.tagName : '';
         const assetUrl = typeof req.body.assetUrl === 'string' ? req.body.assetUrl : '';
+        const isAdmin = req.session.boRole === 'admin';
 
         if (!isSelfUpdateCapable() || !assetUrl) {
             await sendMauiPage(req, res, config, {updateInfoError: 'Installation indisponible sur cette machine.'});
             return;
         }
 
+        const preUpdateInfo = await getUpdateInfo();
+        if (!isAdmin && preUpdateInfo.devBuilds.some(build => build.tagName === tagName)) {
+            res.status(403).send('Action réservée aux administrateurs.');
+            return;
+        }
+
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('maui'));
-        await runUpdateInstall(res, `Installation de la version ${tagName}…`, assetUrl, {}, false);
+        await runUpdateInstall(res, `Installation de la version ${tagName}…`, assetUrl);
 
-        const isAdmin = req.session.boRole === 'admin';
-        const updateInfo = await getUpdateInfo(config, isAdmin);
+        const updateInfo = await getUpdateInfo();
         res.write(renderMauiCard(config));
-        res.write(renderUpdateCard(config, updateInfo, isAdmin));
+        res.write(renderUpdateCard(updateInfo, isAdmin));
         if (isAdmin) {
             res.write(renderMauiImportExportCard());
             res.write(renderMauiDangerZoneCard());
         }
-        res.write(renderPageTail());
-        res.end();
-    });
-
-    app.post('/maui/update/pr-build/install', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
-            return;
-        }
-        const config = new Config();
-        config.load();
-        const prNumber = typeof req.body.prNumber === 'string' ? req.body.prNumber : '';
-        const artifactUrl = typeof req.body.artifactUrl === 'string' ? req.body.artifactUrl : '';
-
-        if (!isSelfUpdateCapable() || !artifactUrl || !config.githubToken) {
-            await sendMauiPage(req, res, config, {updateInfoError: 'Installation indisponible sur cette machine.'});
-            return;
-        }
-
-        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-        res.socket?.setNoDelay(true);
-        res.write(renderPageHead('maui'));
-        await runUpdateInstall(
-            res, `Installation du build de la PR #${prNumber}…`, artifactUrl,
-            {Authorization: `Bearer ${config.githubToken}`, Accept: 'application/vnd.github+json'}, true,
-        );
-
-        const updateInfo = await getUpdateInfo(config, true);
-        res.write(renderMauiCard(config));
-        res.write(renderUpdateCard(config, updateInfo, true));
-        res.write(renderMauiImportExportCard());
-        res.write(renderMauiDangerZoneCard());
         res.write(renderPageTail());
         res.end();
     });

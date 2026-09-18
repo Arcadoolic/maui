@@ -8,6 +8,13 @@ name: Build
 #
 # Matrix covers linux-x64, linux-arm64 (Raspberry Pi), macos-arm64, and
 # windows-x64.
+#
+# On a push (not a PR) to develop, the publish-develop-prerelease job below
+# additionally republishes the linux-x64/linux-arm64 AppImages as a GitHub
+# prerelease - this is what the BO's "Mise à jour" tab lists as develop
+# builds for admin accounts (src/boServer.ts's getUpdateInfo(), filtered on
+# the GitHub Release `prerelease` flag), replacing the old admin-only
+# "builds de PR" mechanism (PR CI artifacts, needed a GitHub token to list).
 
 on:
   push:
@@ -95,3 +102,55 @@ jobs:
           name: ${{ matrix.name }}
           path: ${{ matrix.artifact_glob }}
           retention-days: 7
+
+  # Only Linux gets a dev build: the BO's self-update ("Mise à jour" tab) only ever runs on
+  # the Linux cabinet/Pi (see isSelfUpdateCapable() in src/boServer.ts) - macOS/Windows
+  # artifacts stay workflow-artifact-only (7-day retention, above), not worth publishing.
+  publish-develop-prerelease:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          path: dist_electron
+          merge-multiple: true
+
+      - name: Compute prerelease tag
+        id: tag
+        run: |
+          version=$(node -p "require('./package.json').version")
+          short_sha=$(git rev-parse --short HEAD)
+          echo "tag=${version}-dev.${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" dist_electron/*.AppImage \
+            --repo "${{ github.repository }}" \
+            --title "Dev build ${{ steps.tag.outputs.tag }}" \
+            --notes "Automated build from develop@${{ github.sha }}. Not reviewed, not merged to main." \
+            --target develop \
+            --prerelease
+
+      - name: Prune old dev prereleases
+        # Keeps the BO's "Builds de développement" list short - same intent as the old PR-builds
+        # section capping itself at the 10 most recently updated open PRs.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --repo "${{ github.repository }}" --limit 200 \
+              --json tagName,isPrerelease,createdAt \
+              --jq '[.[] | select(.isPrerelease) | select(.tagName | test("-dev\\."))]
+                  | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' \
+            | while read -r old_tag; do
+              gh release delete "$old_tag" --repo "${{ github.repository }}" --yes --cleanup-tag
+            done

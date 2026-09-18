@@ -140,24 +140,6 @@ describe('Config.load', () => {
         expect(withoutRepo.repoPassword).toBe('');
     });
 
-    it('reads the GitHub token, defaulting to an empty string when absent', () => {
-        new Config();
-        writeFileSync(configPath, JSON.stringify({
-            mamePath: '/opt/mame',
-            mameBinaryName: 'mame',
-            githubToken: 'ghp_secret',
-        }));
-
-        const config = new Config();
-        config.load();
-        expect(config.githubToken).toBe('ghp_secret');
-
-        const withoutToken = new Config();
-        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
-        withoutToken.load();
-        expect(withoutToken.githubToken).toBe('');
-    });
-
     it('defaults bezelAspect to 16:9 unless the file says exactly 4:3', () => {
         // Implementation: `configFile.bezelAspect === '4:3' ? '4:3' : '16:9'`.
         const cases: Array<[unknown, '4:3' | '16:9']> = [
@@ -234,7 +216,6 @@ describe('Config.save', () => {
         written.repoUrl = 'https://repo.maui.afronob.com';
         written.repoUser = 'admin';
         written.repoPassword = 'secret';
-        written.githubToken = 'ghp_secret';
         written.bezelAspect = '4:3';
         written.openDevTools = true;
         written.fullscreen = false;
@@ -250,7 +231,6 @@ describe('Config.save', () => {
         expect(read.repoUrl).toBe('https://repo.maui.afronob.com');
         expect(read.repoUser).toBe('admin');
         expect(read.repoPassword).toBe('secret');
-        expect(read.githubToken).toBe('ghp_secret');
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(false);
@@ -265,7 +245,6 @@ describe('Config.save', () => {
         expect(Object.keys(raw).sort()).toEqual([
             'bezelAspect',
             'fullscreen',
-            'githubToken',
             'mameBinaryName',
             'mamePath',
             'openDevTools',

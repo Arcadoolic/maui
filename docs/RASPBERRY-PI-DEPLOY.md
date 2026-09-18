@@ -316,8 +316,9 @@ l'écrase de toute façon.
 
 Accessible à tout compte BO (rôle `user` compris, ex. `puckman`) pour les
 releases publiées ; les comptes `admin` ont en plus accès aux builds de
-validation par PR (non publiés, nécessite d'y renseigner un token GitHub).
-Comme la méthode manuelle ci-dessous, le BO ne redémarre pas lui-même la
+développement (prereleases GitHub publiées automatiquement à chaque push sur
+`develop` par le workflow `Build` - pas encore promus vers `main`, à réserver
+aux tests). Comme la méthode manuelle ci-dessous, le BO ne redémarre pas lui-même la
 session kiosk : une fois l'installation terminée, il faut relancer
 `sudo systemctl restart getty@tty1` (ou redémarrer le Pi) pour reprendre
 sur la nouvelle version.

@@ -47,11 +47,6 @@ export default class Config {
     public repoUser: string = '';
     public repoPassword: string = '';
 
-    // GitHub PAT used only by BO admins to list/download PR-validation build artifacts (see the
-    // "Mise à jour" tab's builds-de-PR section) - the public releases list needs no auth, but
-    // the GitHub Actions artifacts API requires one even on a public repo.
-    public githubToken: string = '';
-
     // Preferred bezel aspect ratio when fetching bezel artwork from ScreenScraper - 16:9 default
     // since new cabinet builds mostly use widescreen LCD monitors rather than 4:3 CRTs.
     public bezelAspect: '4:3' | '16:9' = '16:9';
@@ -93,8 +88,6 @@ export default class Config {
             this.repoUser = configFile.repoUser || '';
             this.repoPassword = configFile.repoPassword || '';
 
-            this.githubToken = configFile.githubToken || '';
-
             this.bezelAspect = configFile.bezelAspect === '4:3' ? '4:3' : '16:9';
 
             this.openDevTools = configFile.openDevTools === true;
@@ -120,7 +113,6 @@ export default class Config {
                 repoUrl: this.repoUrl,
                 repoUser: this.repoUser,
                 repoPassword: this.repoPassword,
-                githubToken: this.githubToken,
                 bezelAspect: this.bezelAspect,
                 openDevTools: this.openDevTools,
                 fullscreen: this.fullscreen,
