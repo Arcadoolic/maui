@@ -1776,6 +1776,111 @@ interface InputProbeRow {
     currentText: string;
 }
 
+interface DeviceProbeRow {
+    name: string;
+    id: string;
+    // "<item display name>=<MAME token>" pairs, e.g. "LB=BUTTON5" - kept as raw strings rather
+    // than split further, this is a basic detection test, not a mapping UI yet.
+    items: string[];
+}
+
+interface DeviceProbeState {
+    result?: DeviceProbeRow[];
+    error?: string;
+}
+
+/**
+ * Line-based parse of device-probe.lua's stdout, same MAUI_..._ROW| convention as
+ * parseInputProbeOutput() above - see that function's comment.
+ */
+function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
+    const rows: DeviceProbeRow[] = [];
+    for (const line of stdout.split('\n')) {
+        if (!line.startsWith('MAUI_DEVICE_ROW|')) {
+            continue;
+        }
+        const [, name, id, itemsRaw] = line.split('|');
+        rows.push({
+            name: name ?? '',
+            id: id ?? '',
+            items: itemsRaw ? itemsRaw.split(',').filter(Boolean) : [],
+        });
+    }
+    return rows;
+}
+
+/**
+ * Boots `romName` headlessly just long enough for device-probe.lua to dump every joystick/gamepad
+ * device MAME currently detects and exit the machine - same approach as runInputProbe() above,
+ * just a different Lua script and result shape. Which rom is booted doesn't matter (device
+ * detection isn't per-game), it's only needed because -autoboot_script requires a running machine.
+ */
+function runDeviceProbe(mameBinary: string, iniPath: string, romName: string): DeviceProbeRow[] {
+    const stdout = execFileSync(
+        mameBinary,
+        [
+            romName,
+            '-video', 'none',
+            '-sound', 'none',
+            '-skip_gameinfo',
+            '-autoboot_delay', '0',
+            '-autoboot_script', join(getStaticPath(), 'lua', 'device-probe.lua'),
+            '-inipath', iniPath,
+            '-homepath', iniPath,
+        ],
+        {
+            cwd: iniPath,
+            encoding: 'utf8',
+            timeout: 15000,
+            killSignal: 'SIGKILL',
+            maxBuffer: 4 * 1024 * 1024,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        },
+    );
+    return parseDeviceProbeOutput(stdout);
+}
+
+/**
+ * Basic detection test, not a mapping UI: lists whatever joystick/gamepad devices MAME itself
+ * currently sees, with the raw item name=token pairs (e.g. "LT=SLIDER1") it would accept in a
+ * default.cfg <newseq> - useful to check a device is recognized, and under what token, before
+ * hand-writing any cfg entry for it.
+ */
+function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): string {
+    if (!romNames.length) {
+        return '';
+    }
+    const rows = (state?.result ?? []).map(device => `
+        <tr>
+            <td>${escapeHtml(device.name)}</td>
+            <td><code>${escapeHtml(device.id)}</code></td>
+            <td>${device.items.map(item => `<code>${escapeHtml(item)}</code>`).join(' ')}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <section class="card">
+            <h2>Périphériques détectés (sondage MAME)</h2>
+            <p class="info">Lance une rom en arrière-plan (sans vidéo ni son) juste pour demander à
+            MAME quels joysticks/manettes il détecte actuellement, et sous quel nom/token
+            (<code>JOYCODE_&lt;n&gt;_&lt;token&gt;</code>) chacun de leurs boutons/axes est
+            reconnu.</p>
+            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            <form method="post" action="/input-probe/devices">
+                <button type="submit">Détecter les manettes</button>
+            </form>
+            ${state?.result ? (rows ? `
+                <div class="table-wrap">
+                    <table class="favorites-table">
+                        <thead><tr><th>Périphérique</th><th>ID</th><th>Boutons/axes</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            ` : '<p class="info flash">Aucun périphérique joystick détecté.</p>') : ''}
+        </section>
+    `;
+}
+
 interface InputProbeState {
     selectedRom?: string;
     result?: InputProbeRow[];
@@ -2012,6 +2117,7 @@ function renderForm(
     repoPacks?: RepoPack[],
     repoError?: string,
     repoInfo?: string,
+    deviceProbeState?: DeviceProbeState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
     // see /save, /launch, /mame-options/save, /reset, etc.) purely for the repo card's
@@ -2035,7 +2141,8 @@ function renderForm(
         sections.push({
             id: 'manettes',
             label: 'Manettes',
-            html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState),
+            html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
+                + renderDeviceProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], deviceProbeState),
         });
         sections.push({
             id: 'import',
@@ -2066,7 +2173,7 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'depot'
             : importError !== undefined ? 'import'
-                : inputProbeState !== undefined ? 'manettes'
+                : (inputProbeState !== undefined || deviceProbeState !== undefined) ? 'manettes'
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
@@ -3966,6 +4073,42 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                     error: `Échec du sondage de "${romName}" : ${message}`
                         + ' (timeout, code de sortie non nul, ou binaire introuvable).',
                 },
+            ));
+        }
+    });
+
+    app.post('/input-probe/devices', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdmin = req.session.boRole === 'admin';
+
+        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+        const romName = romNames[0];
+
+        if (mameInfo.error || !romName) {
+            // Same "shouldn't normally be reachable" caveat as /input-probe above - the form only
+            // renders once mameInfo.error is unset and at least one rom exists.
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || '', isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
+            ));
+            return;
+        }
+
+        try {
+            const result = runDeviceProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+            res.send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                {result},
+            ));
+        } catch (error) {
+            console.error('[boServer] Device probe failed:', error);
+            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            res.status(500).send(renderForm(
+                {mamePath: config.mamePath, isLocal: isLocalhostRequest(req)}, mameInfo, isAdmin,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                {error: `Échec du sondage des périphériques : ${message} (timeout, code de sortie non nul, ou binaire introuvable).`},
             ));
         }
     });
