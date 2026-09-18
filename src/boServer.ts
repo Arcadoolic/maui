@@ -1450,6 +1450,7 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                 } else {
                     if (this.deleteHiscores.checked) items.push('les hiscores');
                     if (this.deleteGamesMedia.checked) items.push('les roms et medias des jeux (roms, marquees, flyers, logos)');
+                    if (this.deleteFavorites.checked) items.push('le fichier des favoris (favorites.ini)');
                 }
                 if (!items.length) { return true; }
                 return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
@@ -1464,14 +1465,22 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                     Supprimer les roms et médias des jeux (roms, marquees, flyers, logos)
                 </label>
                 <label class="checkbox-row">
+                    <input type="checkbox" name="deleteFavorites"${mameInfo.favoritesPath ? '' : ' disabled'}>
+                    Supprimer le fichier des favoris${mameInfo.favoritesPath
+                        ? ` (<code>${escapeHtml(mameInfo.favoritesPath)}</code>)`
+                        : ' (aucun favorites.ini pour l\'instant)'}
+                </label>
+                <label class="checkbox-row">
                     <input type="checkbox" name="deleteMameHome" onchange="
                         this.form.deleteHiscores.checked = this.checked || this.form.deleteHiscores.checked;
                         this.form.deleteHiscores.disabled = this.checked;
                         this.form.deleteGamesMedia.checked = this.checked || this.form.deleteGamesMedia.checked;
                         this.form.deleteGamesMedia.disabled = this.checked;
+                        this.form.deleteFavorites.checked = this.checked || this.form.deleteFavorites.checked;
+                        this.form.deleteFavorites.disabled = this.checked || ${mameInfo.favoritesPath ? 'false' : 'true'};
                     ">
                     Supprimer tout le répertoire <code>${escapeHtml(mameInfo.iniPath)}</code> et son
-                    contenu (englobe les deux options ci-dessus, plus la configuration mame.ini/ui.ini
+                    contenu (englobe les options ci-dessus, plus la configuration mame.ini/ui.ini
                     elle-même, cfg, nvram, snapshots...) - MAME la recréera au prochain lancement
                 </label>
                 <button type="submit">Supprimer la sélection</button>
@@ -3302,13 +3311,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const zone = req.body.zone === 'maui' ? 'maui' : 'mame';
 
         // deleteMameHome wipes mameInfo.iniPath (~/.mame) wholesale, which already contains
-        // everything deleteHiscores/deleteGamesMedia would otherwise remove - so those two are
-        // skipped when it's checked, rather than redundantly rm'ing paths about to disappear
-        // anyway (the danger-zone card's onchange also ticks+disables both when this one is
-        // checked, purely to communicate that they're included).
+        // everything deleteHiscores/deleteGamesMedia/deleteFavorites would otherwise remove - so
+        // those are skipped when it's checked, rather than redundantly rm'ing paths about to
+        // disappear anyway (the danger-zone card's onchange also ticks+disables them when this
+        // one is checked, purely to communicate that they're included).
         const deleteMameHome = zone === 'mame' && req.body.deleteMameHome === 'on';
         const deleteHiscores = zone === 'mame' && !deleteMameHome && req.body.deleteHiscores === 'on';
         const deleteGamesMedia = zone === 'mame' && !deleteMameHome && req.body.deleteGamesMedia === 'on';
+        const deleteFavorites = zone === 'mame' && !deleteMameHome
+            && req.body.deleteFavorites === 'on' && !!mameInfo.favoritesPath;
         const deleteConfig = zone === 'maui' && req.body.deleteConfig === 'on';
         const deleteDatabase = zone === 'maui' && req.body.deleteDatabase === 'on';
 
@@ -3347,6 +3358,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 }
             });
             deleted.push('les roms et médias des jeux (roms, marquees, flyers, logos)');
+        }
+
+        if (deleteFavorites) {
+            try {
+                // Cast: gated above on !!mameInfo.favoritesPath.
+                rmSync(mameInfo.favoritesPath as string, {force: true});
+                deleted.push('le fichier des favoris (favorites.ini)');
+            } catch (error) {
+                console.error('[boServer] Failed to remove favorites.ini:', error);
+            }
         }
 
         if (deleteConfig) {
