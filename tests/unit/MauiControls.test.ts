@@ -30,6 +30,17 @@ describe('describeGamepadInputs', () => {
         expect(describeGamepadInputs(standard, MAUI_KEYS.up, STANDARD_BUTTON_NAMES))
             .toEqual(['Bouton 12 (croix haut)', 'Axe 1 −']);
     });
+
+    it('gives every MAUI key at least one input on the "standard" layout', () => {
+        // Any pad without an entry of its own falls back to it (see Gamepads.class.ts): a key
+        // with no input there is unreachable from that pad.
+        const standard = (controllers as {standard: ControllerMapping}).standard;
+        for (const key of Object.values(MAUI_KEYS)) {
+            expect(describeGamepadInputs(standard, key), key).not.toEqual([]);
+        }
+        expect(describeGamepadInputs(standard, MAUI_KEYS.space, STANDARD_BUTTON_NAMES)).toEqual(['Bouton 1 (B)']);
+        expect(describeGamepadInputs(standard, MAUI_KEYS.p, STANDARD_BUTTON_NAMES)).toEqual(['Bouton 2 (X)']);
+    });
 });
 
 describe('MAUI_CONTROL_CONTEXTS', () => {
