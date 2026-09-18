@@ -1,26 +1,24 @@
 name: Build
 
-# Validation-only: builds the packaged app on develop pushes/PRs so a build
-# regression is caught before it reaches main. The release build (which
-# attaches the AppImage to a GitHub Release) lives in release.yml instead -
-# see its comment on why that can't be a separate `release: published`
-# triggered workflow.
+# Manual-only: builds the packaged app on demand (workflow_dispatch, pick the
+# ref/branch to build from in the run UI) instead of on every develop
+# push/PR - a full 4-platform matrix build for every feat/fix commit was
+# wasteful. The release build (which attaches the AppImage to a GitHub
+# Release) lives in release.yml instead - see its comment on why that can't
+# be a separate `release: published` triggered workflow.
 #
 # Matrix covers linux-x64, linux-arm64 (Raspberry Pi), macos-arm64, and
 # windows-x64.
 #
-# On a push (not a PR) to develop, the publish-develop-prerelease job below
-# additionally republishes the linux-x64/linux-arm64 AppImages as a GitHub
-# prerelease - this is what the BO's "Mise à jour" tab lists as develop
-# builds for admin accounts (src/boServer.ts's getUpdateInfo(), filtered on
-# the GitHub Release `prerelease` flag), replacing the old admin-only
-# "builds de PR" mechanism (PR CI artifacts, needed a GitHub token to list).
+# The publish-develop-prerelease job below additionally republishes the
+# linux-x64/linux-arm64 AppImages as a GitHub prerelease - this is what the
+# BO's "Mise à jour" tab lists as develop builds for admin accounts
+# (src/boServer.ts's getUpdateInfo(), filtered on the GitHub Release
+# `prerelease` flag), replacing the old admin-only "builds de PR" mechanism
+# (PR CI artifacts, needed a GitHub token to list).
 
 on:
-  push:
-    branches: [develop]
-  pull_request:
-    branches: [develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -108,7 +106,7 @@ jobs:
   # artifacts stay workflow-artifact-only (7-day retention, above), not worth publishing.
   publish-develop-prerelease:
     needs: build
-    if: github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,7 +126,7 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           short_sha=$(git rev-parse --short HEAD)
-          echo "tag=${version}-dev.${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=${version}+dev.${short_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Publish prerelease
         env:
@@ -149,7 +147,7 @@ jobs:
         run: |
           gh release list --repo "${{ github.repository }}" --limit 200 \
               --json tagName,isPrerelease,createdAt \
-              --jq '[.[] | select(.isPrerelease) | select(.tagName | test("-dev\\."))]
+              --jq '[.[] | select(.isPrerelease) | select(.tagName | test("\\+dev\\."))]
                   | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' \
             | while read -r old_tag; do
               gh release delete "$old_tag" --repo "${{ github.repository }}" --yes --cleanup-tag
