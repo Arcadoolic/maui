@@ -477,6 +477,7 @@ interface MameInfo {
     iniPath: string;
     mameIniPath: string;
     uiIniPath: string;
+    pluginIniPath: string;
     romPath: string | null;
     marqueePath: string | null;
     flyerPath: string | null;
@@ -508,17 +509,17 @@ function getMameInfo(config: Config): MameInfo {
 
     if (!config.mamePath || !config.mameBinaryName) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
-            error: 'Configurez le binaire mame ci-dessus pour voir le chemin des roms.',
+            iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
+            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
+            error: 'Configurez le binaire mame (onglet Config) pour voir le chemin des roms.',
         };
     }
 
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
+            iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
+            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: `Le binaire "${mameBinary}" est introuvable.`,
         };
     }
@@ -532,13 +533,13 @@ function getMameInfo(config: Config): MameInfo {
         const parsed = parseMameIniFile(output.toString());
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
         return {
-            iniPath, mameIniPath, uiIniPath, romPath, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: parsed,
+            iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath, marqueePath, flyerPath, logoPath,
+            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: parsed,
         };
     } catch {
         return {
-            iniPath, mameIniPath, uiIniPath, romPath: null, marqueePath, flyerPath, logoPath, favoritesPath,
-            genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
+            iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
+            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
         };
     }
@@ -1615,6 +1616,10 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dd>${renderFoundIcon(existsSync(mameInfo.uiIniPath))}${escapeHtml(mameInfo.uiIniPath)}</dd>
                 </div>
                 <div class="info-field">
+                    <dt>Fichier plugin.ini</dt>
+                    <dd>${renderFoundIcon(existsSync(mameInfo.pluginIniPath))}${escapeHtml(mameInfo.pluginIniPath)}</dd>
+                </div>
+                <div class="info-field">
                     <dt>Dossier des roms (rompath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.romPath)}${mameInfo.romPath
                         ? escapeHtml(mameInfo.romPath) : '<em>Non disponible</em>'}</dd>
@@ -1644,14 +1649,14 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Fichier des genres (genre.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.genreIniPath)}${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
-                        : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
+                        : '<em>Introuvable — importez un starting pack (onglet Import) pour '
                             + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier du nombre de joueurs (Multiplayer.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
-                        : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
+                        : '<em>Introuvable — importez un starting pack (onglet Import) pour '
                             + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
                 </div>
             </dl>
@@ -2184,8 +2189,8 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
         return `
             <section class="card">
                 <h2>Récupération des médias</h2>
-                <p class="error flash">Identifiants ScreenScraper manquants : renseignez-les ci-dessus avant de
-                lancer un téléchargement.</p>
+                <p class="error flash">Identifiants ScreenScraper manquants : renseignez-les (onglet
+                Identifiants) avant de lancer un téléchargement.</p>
             </section>
         `;
     }
@@ -2448,7 +2453,7 @@ function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string
             <h2>Dépôt de starting packs</h2>
             <p class="info">Parcourt et importe un starting pack directement depuis un dépôt HTTP
             protégé par mot de passe (voir docs/STARTER-PACK-REPO.md), sans passer par l'upload
-            ci-dessus - utile pour un pack trop volumineux pour un formulaire navigateur.</p>
+            (onglet Import) - utile pour un pack trop volumineux pour un formulaire navigateur.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/repo/save" novalidate>
@@ -2968,7 +2973,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!marqueePath || !flyerPath || !logoPath) {
             res.send(renderScreenScraperPage(
                 ssValues, hasCreds, undefined, undefined,
-                'Dossiers marquees/flyers/logos introuvables - configurez et validez le binaire mame ci-dessus.',
+                'Dossiers marquees/flyers/logos introuvables - configurez et validez le binaire mame '
+                    + '(onglet MAME > Config).',
             ));
             return;
         }
@@ -3575,7 +3581,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             undefined,
             added
                 ? `${added} plugin(s) ajouté(s) à plugin.ini (valeurs par défaut de mame).`
-                : 'Rien à réparer : plugin.ini contient déjà tous les plugins détectés (ou aucun plugin trouvé - vérifiez le dossier des plugins ci-dessus).',
+                : 'Rien à réparer : plugin.ini contient déjà tous les plugins détectés (ou aucun plugin trouvé - vérifiez le dossier des plugins ci-dessous).',
         ));
     });
 
