@@ -22,6 +22,7 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
+import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
@@ -907,7 +908,7 @@ function runImportScript(
     res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
 ): Promise<boolean> {
     const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
-    res.write(`<section class="card"><h2>${title}</h2><ul class="progress-log">`);
+    res.write(`<section class="card"><h2>${title}</h2>${PROGRESS_LOG_OPEN}`);
 
     return new Promise(resolve => {
         const child = spawn('python3', [scriptPath, ...scriptArgs], {env});
@@ -1016,6 +1017,20 @@ function renderSubtabbedPage(
  * chunks with res.write() (progress feedback for a long-running action) instead of building
  * the whole HTML string before sending anything.
  */
+/**
+ * Opening tag of a streamed progress log (a `<ul class="progress-log">` that gets one `<li>` per
+ * line as the response is written - imports, favorites refresh, media download, self-update).
+ * The list is a fixed-height scrollable box (see .progress-log), and a browser never scrolls
+ * such a box by itself as content is appended: once the lines overflow it, the box just sat on
+ * its first lines while the newest ones - the actual progress, e.g. "Téléchargé : 84 Mo" -
+ * piled up out of sight below, so the log seemed frozen. The inline script keeps it pinned to the
+ * bottom as lines arrive; a <script> is valid directly inside a <ul>.
+ */
+const PROGRESS_LOG_OPEN = '<ul class="progress-log"><script>(function () {'
+    + 'var log = document.currentScript.parentNode;'
+    + 'new MutationObserver(function () { log.scrollTop = log.scrollHeight; }).observe(log, {childList: true});'
+    + '})();</script>';
+
 function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
     return `<!DOCTYPE html>
 <html lang="fr">
@@ -1049,6 +1064,15 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         header h1 {
             margin: 0;
             font-size: 1.4em;
+        }
+        .app-version {
+            position: fixed;
+            top: 8px;
+            right: 12px;
+            z-index: 10;
+            color: #ff4d4d;
+            font-size: 0.8em;
+            font-weight: bold;
         }
         .tabs {
             display: flex;
@@ -1371,6 +1395,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     </style>
 </head>
 <body>
+    <div class="app-version" title="Version en cours d'exécution">v${escapeHtml(getRunningVersion())}</div>
     <header>
         <h1>mame-awesome-ui</h1>
         ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}">
@@ -2563,6 +2588,16 @@ function currentLinuxArch(): 'x64' | 'arm64' | null {
     return process.arch === 'x64' || process.arch === 'arm64' ? process.arch : null;
 }
 
+/**
+ * package.json's version plus, for develop builds, "-dev.<short sha>" (see
+ * electron.vite.config.ts) - the same string as that build's GitHub prerelease tag, so it is both
+ * what the BO header shows and what the releases list matches "version actuelle" against.
+ */
+function getRunningVersion(): string {
+    const suffix = typeof MAUI_BUILD_VERSION_SUFFIX === 'string' ? MAUI_BUILD_VERSION_SUFFIX : '';
+    return electronApp.getVersion() + suffix;
+}
+
 function getSquashfsRootPath(): string {
     return join(os.homedir(), 'squashfs-root');
 }
@@ -2609,7 +2644,7 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
 async function getUpdateInfo(): Promise<UpdateInfo> {
     const info: UpdateInfo = {
         capable: isSelfUpdateCapable(),
-        currentVersion: electronApp.getVersion(),
+        currentVersion: getRunningVersion(),
         releases: [],
         devBuilds: [],
     };
@@ -2630,8 +2665,9 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
                 isPrerelease: release.prerelease,
             };
         });
-        info.releases = entries.filter(entry => !entry.isPrerelease);
-        info.devBuilds = entries.filter(entry => entry.isPrerelease);
+        // Sorted here, not left in the API's order - see sortByPublishedDesc().
+        info.releases = sortByPublishedDesc(entries.filter(entry => !entry.isPrerelease));
+        info.devBuilds = sortByPublishedDesc(entries.filter(entry => entry.isPrerelease));
     } catch (error) {
         info.releasesError = error instanceof Error ? error.message : 'erreur inattendue';
     }
@@ -2649,7 +2685,7 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
  * runImportScript() above - res must already have its page head written.
  */
 async function runUpdateInstall(res: Response, title: string, downloadUrl: string): Promise<void> {
-    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2><ul class="progress-log">`);
+    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
     const writeLine = (line: string): void => {
         res.write(`<li>${escapeHtml(line)}</li>`);
     };
@@ -2744,7 +2780,7 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
     return `
         <tr>
             <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">version actuelle</span>' : ''}</td>
-            <td>${escapeHtml(new Date(release.publishedAt).toLocaleDateString('fr-FR'))}</td>
+            <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
             <td class="center">
                 ${release.assetUrl && !release.isCurrent ? `
                     <form method="post" action="/maui/update/install"
@@ -3657,7 +3693,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write(`
             <section class="card">
                 <h2>Mise à jour des favoris (${context.romNames.length})…</h2>
-                <ul class="progress-log">
+                ${PROGRESS_LOG_OPEN}
         `);
 
         const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
@@ -3825,7 +3861,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write(`
             <section class="card">
                 <h2>Téléchargement en cours…</h2>
-                <ul class="progress-log">
+                ${PROGRESS_LOG_OPEN}
         `);
 
         try {
