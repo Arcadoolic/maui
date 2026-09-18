@@ -10,7 +10,14 @@ files:
 extraResources:
   - from: public/
     to: public/
-artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+  - from: scripts/import-starting-pack.py
+    to: scripts/import-starting-pack.py
+artifactName: '${productName}-${version}${env.ARTIFACT_SUFFIX}-${os}-${arch}.${ext}'
 linux:
   target: AppImage
   category: Game
+mac:
+  target: zip
+  category: public.app-category.games
+win:
+  target: portable

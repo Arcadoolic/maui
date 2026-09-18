@@ -8,15 +8,24 @@ An Electron + Vue 3 (TypeScript) frontend ("arcade cabinet" front-end) for the M
 
 ## Platform support
 
-The project must run on both:
+The project must run on:
 - **macOS** 15.1 and later
 - **Linux**: Ubuntu 24.04 and later, Debian 13 and later (Debian 13 "Trixie"
   arm64 is the current target for Raspberry Pi 4 Model B support, tracked on
   `perf/raspberry-pi-lag` — see `docs/RASPBERRY-PI-LAG.md`).
   `electron-builder.yml` has no arm64 Linux target declared yet, and
   `npm run rebuild` (sqlite3 native rebuild) is unverified on ARM toolchains.
+- **Windows** 10 and later (x64). CI packages a portable `.exe` via a
+  `windows-latest` job in `.github/workflows/build.yml`; beyond that job
+  passing, this platform is unverified by a real Windows dev environment —
+  no one has run `just serve`/`just build` there. The sqlite3 native
+  rebuild needs the Visual Studio Build Tools (or the deprecated
+  `windows-build-tools` npm package — see `docs/COMPILATION.md`); `just
+  install`'s Python auto-resolution (`scripts/resolve-python.sh`) also
+  applies here, but only `python`/`py`-launcher naming has been considered,
+  not exercised.
 
-Keep path handling, shell/process invocation, and packaging (Electron build targets, native module rebuilds) working on both platforms. When changing anything platform-sensitive (paths, `execFile`/shell calls, `mame -showconfig`/`ui.ini` parsing, `justfile` recipes, native module builds), verify it holds on both macOS and Linux — don't assume macOS-only behavior.
+Keep path handling, shell/process invocation, and packaging (Electron build targets, native module rebuilds) working on all three. When changing anything platform-sensitive (paths, `execFile`/shell calls, `mame -showconfig`/`ui.ini` parsing, `justfile` recipes, native module builds), verify it holds on macOS, Linux, and Windows — don't assume macOS-only behavior.
 
 Requires **Node 24 LTS** or later (pinned via `engines.node` in `package.json` and `.nvmrc`) — `npm install` warns on older runtimes.
 

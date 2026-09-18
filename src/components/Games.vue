@@ -30,7 +30,7 @@ import {ref, computed, watch, useTemplateRef} from 'vue';
 import Champions from '@/components/Champions.vue';
 import Game from '@/model/Game.model';
 import {join} from 'path';
-import {format} from 'url';
+import {pathToFileURL} from 'url';
 import {getMameService, getGameService} from '@/services';
 import defaultMarqueeUrl from '@/assets/default_marquee.jpg';
 
@@ -75,7 +75,10 @@ function findMediaPath(dirPath: string, filenames: string[], romName: string): s
 }
 
 function toFileUrl(path: string): string {
-    return format({pathname: path, protocol: 'file', slashes: true});
+    // pathToFileURL(), not format({pathname, protocol: 'file', ...}): format() leaves Windows
+    // backslashes as-is instead of converting them to the forward slashes a file: URL needs,
+    // which broke image loading on Windows (flyers/marquees/logos never displayed).
+    return pathToFileURL(path).href;
 }
 
 function getMarquee(romName: string) {

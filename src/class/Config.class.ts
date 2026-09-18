@@ -40,6 +40,13 @@ export default class Config {
     public ssUserId: string = '';
     public ssUserPassword: string = '';
 
+    // Starting-pack repository (repo.maui.afronob.com or equivalent) - basic-auth credentials
+    // used both to browse its index.json from the BO and to download a pack via
+    // scripts/import-starting-pack.py --url.
+    public repoUrl: string = '';
+    public repoUser: string = '';
+    public repoPassword: string = '';
+
     // Preferred bezel aspect ratio when fetching bezel artwork from ScreenScraper - 16:9 default
     // since new cabinet builds mostly use widescreen LCD monitors rather than 4:3 CRTs.
     public bezelAspect: '4:3' | '16:9' = '16:9';
@@ -77,6 +84,10 @@ export default class Config {
             this.ssUserId = configFile.ssUserId || '';
             this.ssUserPassword = configFile.ssUserPassword || '';
 
+            this.repoUrl = configFile.repoUrl || '';
+            this.repoUser = configFile.repoUser || '';
+            this.repoPassword = configFile.repoPassword || '';
+
             this.bezelAspect = configFile.bezelAspect === '4:3' ? '4:3' : '16:9';
 
             this.openDevTools = configFile.openDevTools === true;
@@ -99,6 +110,9 @@ export default class Config {
                 ssSoftName: this.ssSoftName,
                 ssUserId: this.ssUserId,
                 ssUserPassword: this.ssUserPassword,
+                repoUrl: this.repoUrl,
+                repoUser: this.repoUser,
+                repoPassword: this.repoPassword,
                 bezelAspect: this.bezelAspect,
                 openDevTools: this.openDevTools,
                 fullscreen: this.fullscreen,

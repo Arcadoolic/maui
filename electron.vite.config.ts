@@ -1,4 +1,5 @@
 import {resolve} from 'path';
+import {execSync} from 'child_process';
 import {defineConfig, swcPlugin} from 'electron-vite';
 import vue from '@vitejs/plugin-vue';
 import renderer from 'vite-plugin-electron-renderer';
@@ -109,9 +110,31 @@ const rendererAlias = {
     '@': alias['@'],
 };
 
+// Build identity for develop builds.
+//
+// package.json's version is the same for every build cut from develop (only semantic-release, on
+// main, ever bumps it), so on its own it can't tell two develop prereleases apart. build.yml names
+// them `<version>-dev.<short sha>` (see its "Compute prerelease tag" step) and sets
+// ARTIFACT_SUFFIX=-dev for those builds only: bake the same `-dev.<short sha>` into the main
+// process, so the BO shows (and matches against the releases list) exactly that tag. Empty for
+// release builds, for `electron-vite dev`, and when git isn't available - the plain package.json
+// version is then all there is.
+const buildVersionSuffix = (() => {
+    if (process.env.ARTIFACT_SUFFIX !== '-dev') {
+        return '';
+    }
+    try {
+        const sha = execSync('git rev-parse --short HEAD', {stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
+        return sha ? `-dev.${sha}` : '';
+    } catch {
+        return '';
+    }
+})();
+
 export default defineConfig({
     main: {
         plugins: [swcPlugin(swcOptions)],
+        define: {MAUI_BUILD_VERSION_SUFFIX: JSON.stringify(buildVersionSuffix)},
         resolve: {alias},
         build: {
             rollupOptions: {

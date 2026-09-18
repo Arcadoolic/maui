@@ -19,13 +19,13 @@ jobs:
       tag: ${{ steps.release_check.outputs.tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -54,6 +54,27 @@ jobs:
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
+  sync-develop:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v7
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Merge main into develop
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-ff -m "chore: sync develop with main after release ${{ needs.release.outputs.tag }}"
+          git push origin develop
+
   build:
     needs: release
     if: needs.release.outputs.published == 'true'
@@ -67,18 +88,23 @@ jobs:
             runner: ubuntu-latest
             build_args: --linux --x64
             artifact_glob: dist_electron/*.AppImage
-      # linux-arm64 (Raspberry Pi, ubuntu-24.04-arm) and macos-arm64
-      # (macos-14) are next - add matrix.include entries once the sqlite3
-      # native build is verified on those runners.
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            build_args: --linux --arm64
+            artifact_glob: dist_electron/*.AppImage
+          - name: macos-arm64
+            runner: macos-14
+            build_args: --mac --arm64
+            artifact_glob: dist_electron/*.zip
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.release.outputs.tag }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -93,6 +119,11 @@ jobs:
       - name: Build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Must stay defined (even empty) - electron-builder throws if an
+          # artifactName ${env.X} macro is unset. Empty here means release
+          # artifacts keep the plain name; build.yml's develop validation
+          # sets this to "-dev" instead, so filenames never collide.
+          ARTIFACT_SUFFIX: ''
         run: npm run electron:build -- ${{ matrix.build_args }} --publish never
 
       - name: Attach to GitHub release
