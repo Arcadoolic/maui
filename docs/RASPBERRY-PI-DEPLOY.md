@@ -301,6 +301,29 @@ Pi (vérifié).
 extraction figée de l'AppImage — une nouvelle version ne remplace rien
 automatiquement, il faut ré-extraire par-dessus.
 
+### 7.1 Depuis le BO (méthode principale)
+
+Le BO (`http://<ip-du-pi>:3131`, voir §3) tourne sur ce même Pi et a donc
+un accès direct au système de fichiers local — inutile de passer par `scp` :
+l'onglet **MAUI → Mise à jour** télécharge côté serveur la release choisie
+sur [github.com/Arcadoolic/maui/releases](https://github.com/Arcadoolic/maui/releases),
+l'extrait dans un dossier temporaire puis bascule
+`~/squashfs-root` dessus par renommage atomique (au lieu du `rm -rf` +
+ré-extraction manuel ci-dessous). L'ancienne version reste disponible dans
+`~/squashfs-root.old` le temps de valider la nouvelle - à supprimer une
+fois satisfait (`rm -rf ~/squashfs-root.old`), une mise à jour suivante
+l'écrase de toute façon.
+
+Accessible à tout compte BO (rôle `user` compris, ex. `puckman`) pour les
+releases publiées ; les comptes `admin` ont en plus accès aux builds de
+validation par PR (non publiés, nécessite d'y renseigner un token GitHub).
+Comme la méthode manuelle ci-dessous, le BO ne redémarre pas lui-même la
+session kiosk : une fois l'installation terminée, il faut relancer
+`sudo systemctl restart getty@tty1` (ou redémarrer le Pi) pour reprendre
+sur la nouvelle version.
+
+### 7.2 En repli, en SSH direct (BO inaccessible, pas de réseau)
+
 ```bash
 # Depuis le poste de build, copier le nouvel AppImage sur le Pi
 scp mame-awesome-ui-X.Y.Z-arm64.AppImage puckman@<ip-du-pi>:~/
@@ -321,7 +344,8 @@ reste le même. L'ancien `.AppImage` peut être supprimé une fois la nouvelle
 version validée (`rm ~/mame-awesome-ui-<ancienne-version>-arm64.AppImage`).
 
 **Ce qu'une mise à jour ne touche pas** (tout vit en dehors de
-`squashfs-root`, donc survit au `rm -rf` ci-dessus) :
+`squashfs-root`, donc survit à son remplacement, que ce soit via le BO ou
+le `rm -rf` manuel ci-dessus) :
 - Config MAUI : `~/.mame-awesome-ui/` (§3)
 - Home MAME (roms, favoris, cfg, nvram) : `~/.mame/`
 - Profil Electron (cache, localStorage, etc.) : `~/.config/mame-awesome-ui/`
