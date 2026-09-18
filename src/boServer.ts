@@ -1269,6 +1269,18 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             color: #8ab4f8;
             cursor: help;
         }
+        .found-icon {
+            display: inline-flex;
+            vertical-align: middle;
+            flex-shrink: 0;
+            margin-right: 6px;
+        }
+        .found-yes {
+            color: #6bff8a;
+        }
+        .found-no {
+            color: #ff6b6b;
+        }
         .progress-log {
             list-style: none;
             padding: 0;
@@ -1362,14 +1374,26 @@ function renderPageTail(): string {
         // registers, even before the new page has finished loading. No need to re-enable it: the
         // navigation this triggers replaces the whole DOM (or, for a confirm() dialog the user
         // cancels, defaultPrevented is set below and this is skipped entirely).
+        //
+        // The mutation itself is deferred one tick (setTimeout(fn, 0)) instead of applied
+        // synchronously in this handler: Chrome submits a form on Enter by internally
+        // simulating a click on its default button, and disabling that same button
+        // synchronously from within the 'submit' event it's still in the middle of dispatching
+        // aborts that in-flight click - the submission silently never happens. A real pointer
+        // click isn't affected (its own default action already committed before 'submit'
+        // fires), so this broke keyboard-only ("press Enter") submission specifically, while
+        // clicking the button kept working - reported against exactly this symptom on the
+        // login page. Deferring lets the browser finish submitting first either way.
         document.addEventListener('submit', function (event) {
             if (event.defaultPrevented) {
                 return;
             }
             var button = event.submitter;
             if (button && button.tagName === 'BUTTON' && !button.disabled) {
-                button.textContent = button.textContent + '…';
-                button.disabled = true;
+                setTimeout(function () {
+                    button.textContent = button.textContent + '…';
+                    button.disabled = true;
+                }, 0);
             }
         });
 
@@ -1423,11 +1447,18 @@ function renderLoginPage(error?: string): string {
         <section class="card">
             <h2>Connexion</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            <!-- Deliberately no "required" here: with two fields, pressing Enter in one while
+                 the other is still empty triggers the browser's native validation instead of
+                 submitting - easy to miss (the message lands on the other, unfocused field),
+                 and looks like "Enter does nothing". /login already handles a blank/wrong
+                 username or password gracefully (401 + "Identifiant ou mot de passe
+                 incorrect."), so letting the browser send an incomplete submission and having
+                 the server reject it is simpler than fighting native validation here. -->
             <form method="post" action="/login">
                 <label for="username">Identifiant</label>
-                <input type="text" id="username" name="username" required autofocus>
+                <input type="text" id="username" name="username" autofocus>
                 <label for="password">Mot de passe</label>
-                <input type="password" id="password" name="password" required>
+                <input type="password" id="password" name="password">
                 <button type="submit">Se connecter</button>
             </form>
         </section>
@@ -1502,6 +1533,26 @@ function renderConfigCard(values: ConfigFormValues, error?: string, info?: strin
     `;
 }
 
+/**
+ * Green check / red cross next to each Informations MAME field below, so a missing path/file
+ * is visible at a glance instead of only readable from the "Non disponible"/"Introuvable" text
+ * next to it (kept as well, for screen readers and anyone not distinguishing the colors).
+ */
+function renderFoundIcon(found: boolean): string {
+    return found
+        ? `<span class="found-icon found-yes" title="Trouvé" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 16 16">
+                <path d="M3 8.5 L6.5 12 L13 4" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </span>`
+        : `<span class="found-icon found-no" title="Introuvable" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 16 16">
+                <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+        </span>`;
+}
+
 function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
     // mameInfo.error means the binary isn't configured yet, or -showconfig failed against it -
     // every field/form below is resolved from that same -showconfig/ui.ini read, so none of it
@@ -1521,48 +1572,52 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
             <dl>
                 <div class="info-field">
                     <dt>Dossier home mame (ini, cfg, nvram, snapshots...)</dt>
-                    <dd>${escapeHtml(mameInfo.iniPath)}</dd>
+                    <dd>${renderFoundIcon(existsSync(mameInfo.iniPath))}${escapeHtml(mameInfo.iniPath)}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier mame.ini</dt>
-                    <dd>${escapeHtml(mameInfo.mameIniPath)}</dd>
+                    <dd>${renderFoundIcon(existsSync(mameInfo.mameIniPath))}${escapeHtml(mameInfo.mameIniPath)}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier ui.ini</dt>
-                    <dd>${escapeHtml(mameInfo.uiIniPath)}</dd>
+                    <dd>${renderFoundIcon(existsSync(mameInfo.uiIniPath))}${escapeHtml(mameInfo.uiIniPath)}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Dossier des roms (rompath)</dt>
-                    <dd>${mameInfo.romPath ? escapeHtml(mameInfo.romPath) : '<em>Non disponible</em>'}</dd>
+                    <dd>${renderFoundIcon(!!mameInfo.romPath)}${mameInfo.romPath
+                        ? escapeHtml(mameInfo.romPath) : '<em>Non disponible</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Dossier des marquees (marquees_directory)</dt>
-                    <dd>${mameInfo.marqueePath ? escapeHtml(mameInfo.marqueePath) : '<em>Non disponible</em>'}</dd>
+                    <dd>${renderFoundIcon(!!mameInfo.marqueePath)}${mameInfo.marqueePath
+                        ? escapeHtml(mameInfo.marqueePath) : '<em>Non disponible</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Dossier des flyers (flyers_directory)</dt>
-                    <dd>${mameInfo.flyerPath ? escapeHtml(mameInfo.flyerPath) : '<em>Non disponible</em>'}</dd>
+                    <dd>${renderFoundIcon(!!mameInfo.flyerPath)}${mameInfo.flyerPath
+                        ? escapeHtml(mameInfo.flyerPath) : '<em>Non disponible</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Dossier des logos (logos_directory)</dt>
-                    <dd>${mameInfo.logoPath ? escapeHtml(mameInfo.logoPath) : '<em>Non disponible</em>'}</dd>
+                    <dd>${renderFoundIcon(!!mameInfo.logoPath)}${mameInfo.logoPath
+                        ? escapeHtml(mameInfo.logoPath) : '<em>Non disponible</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier des favoris (favorites.ini)</dt>
-                    <dd>${mameInfo.favoritesPath
+                    <dd>${renderFoundIcon(!!mameInfo.favoritesPath)}${mameInfo.favoritesPath
                         ? escapeHtml(mameInfo.favoritesPath)
                         : '<em>Aucun favori pour l\'instant — ajoutez-en depuis le menu de MAME (Tab en jeu).</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier des genres (genre.ini, categorypath)</dt>
-                    <dd>${mameInfo.genreIniPath
+                    <dd>${renderFoundIcon(!!mameInfo.genreIniPath)}${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
                         : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
                             + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
                     <dt>Fichier du nombre de joueurs (Multiplayer.ini, categorypath)</dt>
-                    <dd>${mameInfo.nplayersIniPath
+                    <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
                         : '<em>Introuvable — importez un starting pack (ci-dessous) pour '
                             + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
