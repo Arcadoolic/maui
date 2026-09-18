@@ -19,3 +19,5 @@ linux:
 mac:
   target: zip
   category: public.app-category.games
+win:
+  target: portable
