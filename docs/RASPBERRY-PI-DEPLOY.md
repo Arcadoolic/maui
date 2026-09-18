@@ -140,6 +140,7 @@ xset -dpms
 xset s off
 xset s noblank
 matchbox-window-manager -use_titlebar no &
+export SDL_AUDIO_DRIVER=alsa
 exec /home/puckman/squashfs-root/AppRun
 EOF
 
@@ -151,6 +152,10 @@ chmod +x ~/.xinitrc
 - `matchbox-window-manager` est lancé **en arrière-plan avant** l'app, pour
   qu'il soit prêt à honorer la demande de plein écran dès que la fenêtre
   Electron apparaît.
+- `export SDL_AUDIO_DRIVER=alsa` force MAME (donc SDL3) à sortir le son par
+  ALSA au lieu de PulseAudio : voir §6.4 — sans elle, quitter une partie peut
+  figer MAME. Placée avant `exec` pour être héritée par l'app puis par chaque
+  `mame` qu'elle lance.
 - `exec` remplace le shell par `AppRun` : quand l'app se ferme, la session X
   se termine proprement avec elle (pas de shell zombie qui traîne).
 
@@ -265,8 +270,13 @@ le device par défaut) doit être audible sur l'écran.
 
 ### 6.3 Sink par défaut PulseAudio (MAME lui-même)
 
-Le `mame` compilé par Homebrew utilise PulseAudio (pas ALSA en direct) via
-son propre `pulseaudio` embarqué — confirmé par `mame -verbose` :
+> ⚠️ Depuis le §6.4, MAME est forcé sur ALSA (`SDL_AUDIO_DRIVER=alsa` dans
+> `~/.xinitrc`) : ce paragraphe ne s'applique plus qu'en revenant à
+> PulseAudio, et c'est alors le `/etc/asound.conf` du §6.2 qui décide de la
+> sortie.
+
+Par défaut le `mame` compilé par Homebrew utilise PulseAudio (pas ALSA en
+direct) via son propre `pulseaudio` embarqué — confirmé par `mame -verbose` :
 ```
 SDL Audio: Driver is pulseaudio
 SDL Audio: Sink device 2: device 'vc4-hdmi-0 Stereo'
@@ -295,6 +305,47 @@ Pi (vérifié).
 > `/home/linuxbrew/.linuxbrew/bin/pactl` (installé comme dépendance du
 > `mame` Homebrew, pas via `apt`).
 
+### 6.4 MAME se fige à la fermeture d'une partie (SDL3 + PulseAudio)
+
+**Symptôme** : on quitte une partie (par exemple avec le bouton assigné à
+« Quitter MAME » dans l'onglet Manettes du BO), le jeu s'arrête mais la
+fenêtre MAME reste figée et le processus `mame` ne se termine jamais — il
+faut le tuer (`kill -9`, un `SIGTERM` est ignoré).
+
+**Cause** (trace `gdb -p <pid>` sur le processus figé) : deadlock dans
+l'arrêt du son de SDL3. Le thread principal est dans
+`osd_exit → SDL_QuitAudio → ClosePhysicalAudioDevice → SDL_WaitThread`, et
+attend le thread de lecture audio, lui-même bloqué dans
+`PULSEAUDIO_WaitDevice → pa_threaded_mainloop_wait` (PulseAudio 17 de
+Homebrew). Reproductible sans écran, 2 fois sur 2 :
+
+```bash
+export DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/$(id -u)
+cd ~/.mame
+MAME=/home/linuxbrew/.linuxbrew/Cellar/mame/0.289/bin/mame
+# PulseAudio (défaut) : ne se termine pas, tué par le timeout (code 137)
+timeout -s KILL 25 $MAME dkong -video none -skip_gameinfo -seconds_to_run 3 \
+  -inipath ~/.mame -homepath ~/.mame
+# ALSA : se termine normalement (code 0)
+SDL_AUDIO_DRIVER=alsa timeout -s KILL 25 $MAME dkong -video none -skip_gameinfo \
+  -seconds_to_run 3 -inipath ~/.mame -homepath ~/.mame
+```
+
+**Contournement** : `export SDL_AUDIO_DRIVER=alsa` dans `~/.xinitrc` (§5.3).
+Avec ALSA, MAME ouvre bien la carte `vc4hdmi0` (visible dans
+`/proc/asound/card1/pcm0p/sub0/status`, état `RUNNING`), celle que le
+`/etc/asound.conf` du §6.2 déclare par défaut. Non testé à l'oreille au
+moment de l'écriture de cette section : à vérifier après le premier
+déploiement.
+
+Ce réglage n'a pas sa place dans le code de l'app : il est propre à cette
+installation (PulseAudio de Homebrew) et casserait le son sur macOS et
+Windows.
+
+> `/proc/<pid>/environ` est inutilisable pour vérifier la variable sur les
+> processus Electron (la zone est réécrite par Chromium) : le test réel est
+> de quitter une partie et de voir MAME se fermer.
+
 ## 7. Mise à jour de l'application (nouvel AppImage)
 
 `~/squashfs-root` (référencé en dur par `~/.xinitrc`, §5.3) est une
@@ -309,7 +360,15 @@ l'onglet **MAUI → Mise à jour** télécharge côté serveur la release choisi
 sur [github.com/Arcadoolic/maui/releases](https://github.com/Arcadoolic/maui/releases),
 l'extrait dans un dossier temporaire puis bascule
 `~/squashfs-root` dessus par renommage atomique (au lieu du `rm -rf` +
-ré-extraction manuel ci-dessous). L'ancienne version reste disponible dans
+ré-extraction manuel ci-dessous). Le dossier temporaire est créé **à côté de
+`~/squashfs-root`** (`~/.mame-awesome-ui-update-XXXX`), pas dans `/tmp`, qui est
+un autre système de fichiers sur le Pi : un `rename` entre les deux échoue
+avec `EXDEV`. Les versions antérieures à ce correctif faisaient précisément
+cela et laissaient le Pi **sans `~/squashfs-root`** (l'ancien déplacé en
+`.old`, le nouveau jamais mis en place) : si c'est arrivé,
+`mv ~/squashfs-root.old ~/squashfs-root` remet l'ancienne version en place.
+Si la bascule échoue désormais, elle est annulée et l'ancienne version est
+remise en place automatiquement. L'ancienne version reste disponible dans
 `~/squashfs-root.old` le temps de valider la nouvelle - à supprimer une
 fois satisfait (`rm -rf ~/squashfs-root.old`), une mise à jour suivante
 l'écrase de toute façon.
