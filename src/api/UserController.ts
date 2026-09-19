@@ -19,7 +19,7 @@ export default class UserController extends Controller {
     }
 
     public getUserById(request: Request, response: Response) {
-        User.findByPk(request.params.id_user).then((user: User|null) => {
+        User.findByPk(String(request.params.id_user)).then((user: User|null) => {
             if (user) {
                 return response.json(user);
             }

@@ -17,7 +17,7 @@ export default class GameController extends Controller {
     }
 
     public getGameById(request: Request, response: Response) {
-        Game.findByPk(request.params.id).then((game: Game|null) => {
+        Game.findByPk(String(request.params.id)).then((game: Game|null) => {
             if (game) {
                 return response.json(game);
             }
