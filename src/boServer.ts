@@ -3304,7 +3304,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
     }).join('');
     return `
         <form method="post" action="/import/from-url"
-            onsubmit="return confirm('Ceci écrase les roms/médias déjà présents pour les jeux du pack. Continuer ?')">
+            onsubmit="return confirm('Ceci écrase les roms et médias des jeux du pack (et les fichiers de catégories, le cas échéant), puis ajoute ces jeux à vos favoris MAME sans toucher aux vôtres. Continuer ?')">
             <label for="packFilename">Pack à importer</label>
             <select id="packFilename" name="packFilename" required>${options}</select>
             <button type="submit">Télécharger et importer</button>

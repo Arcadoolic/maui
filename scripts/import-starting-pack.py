@@ -753,8 +753,9 @@ def _run_import(pack_path, skip_confirmation):
 
         if not skip_confirmation:
             answer = input(
-                '[import-starting-pack] Ceci écrase les roms/médias déjà présents pour les '
-                'jeux du pack. Continuer ? [o/N] ',
+                '[import-starting-pack] Ceci écrase les roms et médias des jeux du pack (et les '
+                'fichiers de catégories, le cas échéant), puis ajoute ces jeux à vos favoris MAME '
+                'sans toucher aux vôtres. Continuer ? [o/N] ',
             )
             if answer.strip().lower() not in ('o', 'oui', 'y', 'yes'):
                 print('[import-starting-pack] Annulé.')
