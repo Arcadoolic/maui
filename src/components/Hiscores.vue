@@ -1,6 +1,7 @@
 <template>
     <div class="hiscores">
         <p v-if="loading">Loading hiscores...</p>
+        <p v-else-if="!scores.length" class="no-hiscores">No Hiscores Yet !</p>
         <template v-else>
             <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores" :key="score.id_hiscore">
                 <div class="icon">
@@ -31,6 +32,10 @@ import {getConfiguration, getUserService} from '@/services';
 
 const props = defineProps<{game: Game}>();
 
+// How many scores the table shows: the best one is drawn on its own above the box (.first), the
+// rest fill the 3-column grid below it.
+const MAX_HISCORES_DISPLAYED = 9;
+
 const scores = ref<Hiscore[]>([]);
 const loading = ref(true);
 const avatars = ref<string[]>([]);
@@ -39,7 +44,7 @@ async function onGameChange() {
     loading.value = true;
     scores.value = await props.game.$get(
         'hiscores',
-        {include: [{model: User}], limit: 10, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
+        {include: [{model: User}], limit: MAX_HISCORES_DISPLAYED, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
     ) as Hiscore[] || [];
     loading.value = false;
 }
@@ -88,6 +93,23 @@ onUnmounted(() => {
         0 6px 5px rgba(242, 0, 10, 0.7),
         0 8px 5px rgba(0, 0, 0, 1);
         padding-top: 8vh;
+    }
+
+    /* Nobody has a score on this game yet: one message in the middle of the box (absolute, so the
+       8vh top padding kept for the first place doesn't push it off-center). */
+    .no-hiscores {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        /* The arcade font is wide: at 2.5vw the text took 92% of the box's width, 2.2vw leaves ~10% each side. */
+        font-size: 2.2vw;
     }
 
     .hiscore {
