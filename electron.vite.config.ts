@@ -123,18 +123,20 @@ const rendererAlias = {
 //
 // package.json's version is the same for every build cut from develop (only semantic-release, on
 // main, ever bumps it), so on its own it can't tell two develop prereleases apart. build.yml names
-// them `<version>-dev.<short sha>` (see its "Compute prerelease tag" step) and sets
-// ARTIFACT_SUFFIX=-dev for those builds only: bake the same `-dev.<short sha>` into the main
-// process, so the BO shows (and matches against the releases list) exactly that tag. Empty for
-// release builds, for `electron-vite dev`, and when git isn't available - the plain package.json
-// version is then all there is.
+// them `<version>+dev.<short sha>` (see its "Compute prerelease tag" step: a semver build-metadata
+// suffix, so a prerelease still sorts as its version and not before it) and sets
+// ARTIFACT_SUFFIX=-dev for those builds only - that one is the AppImage file name's suffix and is
+// unrelated to the tag's separator. Bake the same `+dev.<short sha>` into the main process, so the
+// BO shows (and matches against the releases list) exactly that tag. Empty for release builds, for
+// `electron-vite dev`, and when git isn't available - the plain package.json version is then all
+// there is.
 const buildVersionSuffix = (() => {
     if (process.env.ARTIFACT_SUFFIX !== '-dev') {
         return '';
     }
     try {
         const sha = execSync('git rev-parse --short HEAD', {stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
-        return sha ? `-dev.${sha}` : '';
+        return sha ? `+dev.${sha}` : '';
     } catch {
         return '';
     }

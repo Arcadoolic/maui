@@ -2589,7 +2589,7 @@ function currentLinuxArch(): 'x64' | 'arm64' | null {
 }
 
 /**
- * package.json's version plus, for develop builds, "-dev.<short sha>" (see
+ * package.json's version plus, for develop builds, "+dev.<short sha>" (see
  * electron.vite.config.ts) - the same string as that build's GitHub prerelease tag, so it is both
  * what the BO header shows and what the releases list matches "version actuelle" against.
  */
