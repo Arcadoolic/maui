@@ -119,7 +119,7 @@ jobs:
         # already have a distutils-capable interpreter on PATH. Installing
         # 3.11 here puts a working `python` first on PATH for this job only.
         if: runner.os == 'Windows'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 

@@ -18,6 +18,12 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "electron-log"
         update-types: ["version-update:semver-major"]
+      # 10.x needs conventional-changelog-writer 9+, but @semantic-release/release-notes-generator
+      # still loads an older writer: generating the release notes then throws "requires
+      # conventional-changelog-writer@9 or newer", which would fail the release on main.
+      # Revisit once semantic-release's plugins move to writer 9.
+      - dependency-name: "conventional-changelog-conventionalcommits"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
