@@ -11,6 +11,7 @@ import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
 import {Umzug, SequelizeStorage} from 'umzug';
 import * as Log from 'electron-log';
+import {isPackaged} from '@/isPackaged';
 
 export default class Database {
     protected databasePath!: string;
@@ -81,9 +82,9 @@ export default class Database {
         // own `require('bcryptjs')` (etc.) resolves - Node walks up from the migration file's own
         // directory to find node_modules, and a plain extraResources copy outside the asar has no
         // such ancestor.
-        const migrationsPath = process.env.NODE_ENV === 'development'
-            ? resolvePath('./migrations')
-            : join(process.resourcesPath!, 'app.asar', 'migrations');
+        const migrationsPath = isPackaged()
+            ? join(process.resourcesPath!, 'app.asar', 'migrations')
+            : resolvePath('./migrations');
         const queryInterface = this.sequelize.getQueryInterface();
 
         const umzug = new Umzug({

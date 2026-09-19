@@ -2604,10 +2604,10 @@ function getSquashfsRootPath(): string {
 
 // Mirrors the dedicated-system layout documented in docs/RASPBERRY-PI-DEPLOY.md §5.3/§7: the
 // AppImage extracted once into a fixed ~/squashfs-root, referenced by path from ~/.xinitrc. Ruled
-// out in development (NODE_ENV) so this never fires from a repo checkout that happens to also
+// out in development (app.isPackaged) so this never fires from a repo checkout that happens to also
 // have a stray ~/squashfs-root from a real install on the same machine.
 function isSelfUpdateCapable(): boolean {
-    return process.platform === 'linux' && process.env.NODE_ENV !== 'development'
+    return process.platform === 'linux' && electronApp.isPackaged
         && existsSync(join(getSquashfsRootPath(), 'AppRun'));
 }
 
