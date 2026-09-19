@@ -43,6 +43,11 @@ export default class GameService {
      * @param romNames
      */
     public async saveGamesFromRomNames(romNames: string[]) {
+        // Game is paranoid: a game dropped from favorites.ini below is only soft-deleted, its row
+        // stays (romName is unique). Restore the ones back in favorites first - otherwise
+        // findAll() below can't see them, they take the "new game" path, and bulkCreate's
+        // updateOnDuplicate refreshes their columns but leaves deletedAt set, so they stay hidden.
+        await Game.restore({where: {romName: romNames}});
         const existingGames = (await Game.findAll()).map((game) => {
             return game.romName;
         });
