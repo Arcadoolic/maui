@@ -1,3 +1,15 @@
+## [2.3.0](https://github.com/Arcadoolic/maui/compare/2.2.0...2.3.0) (2026-09-19)
+
+### Features
+
+* **maui:** polish the hiscores table (top 9, category label behind it, empty message) ([e70a737](https://github.com/Arcadoolic/maui/commit/e70a7373b4ea651cbed397d650f722726b2f1932))
+
+### Bug Fixes
+
+* **bo:** match the CI prerelease tag in the running version ([392439a](https://github.com/Arcadoolic/maui/commit/392439a82c1efa69a9709ce98a5dc4935362e28c)), closes [#33](https://github.com/Arcadoolic/maui/issues/33)
+* **deps:** keep umzug on runtime require() in the renderer and ship it as a dependency ([92c41ab](https://github.com/Arcadoolic/maui/commit/92c41abb5aeba26d4d138340f439d454fa1fa6dd)), closes [#48](https://github.com/Arcadoolic/maui/issues/48)
+* **deps:** revert vite-plugin-electron-renderer and electron-log majors that broke the front ([3b5e75b](https://github.com/Arcadoolic/maui/commit/3b5e75b569289a4b668fb9e132ffc1370ccf5abb))
+
 ## [2.2.0](https://github.com/Arcadoolic/maui/compare/2.1.1...2.2.0) (2026-09-18)
 
 ### Features
