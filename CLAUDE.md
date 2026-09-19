@@ -16,8 +16,10 @@ The project must run on:
   `electron-builder.yml` has no arm64 Linux target declared yet, and
   `npm run rebuild` (sqlite3 native rebuild) is unverified on ARM toolchains.
 - **Windows** 10 and later (x64). CI packages a portable `.exe` via a
-  `windows-latest` job in `.github/workflows/build.yml`; beyond that job
-  passing, this platform is unverified by a real Windows dev environment —
+  `windows-latest` job in both `.github/workflows/build.yml` (manual,
+  `workflow_dispatch`) and `.github/workflows/release.yml` (attached to
+  every GitHub Release alongside the Linux/macOS artifacts); beyond those
+  jobs passing, this platform is unverified by a real Windows dev environment —
   no one has run `just serve`/`just build` there. The sqlite3 native
   rebuild needs the Visual Studio Build Tools (or the deprecated
   `windows-build-tools` npm package — see `docs/COMPILATION.md`); `just

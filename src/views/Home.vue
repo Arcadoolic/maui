@@ -16,7 +16,7 @@
         </transition>
 
         <transition name="category">
-            <div class="categoryTitle" v-if="hasCategories" v-show="showTitle">
+            <div class="categoryTitle" :class="{'behind-hiscores': hiscoresVisible}" v-if="hasCategories" v-show="showTitle">
                 <h1>{{category.name}}</h1>
             </div>
         </transition>
@@ -34,7 +34,7 @@
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
 
         <transition name="slide">
-            <Hiscores :game="selectedGame" v-if="selectedGame && selectedGame.hi && showHiscores"></Hiscores>
+            <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
         </transition>
     </div>
 
@@ -102,6 +102,9 @@ const category = computed(() => {
 });
 
 const hasCategories = computed(() => categories.value.length > 0);
+
+// The scores table only exists for a game that has a .hi file, and only while the player asked for it.
+const hiscoresVisible = computed(() => !!(selectedGame.value && selectedGame.value.hi && showHiscores.value));
 
 function generateFlyerPath(): string {
     if (selectedGame.value) {
@@ -317,6 +320,15 @@ onMounted(() => {
     .categoryTitle {
         bottom: 10px;
         background: none;
+        transition: opacity .3s ease;
+    }
+    /* While the scores table is up, the category label at the bottom would be drawn over its last
+       row (it sits above it, z-index 2): put it behind the table (z-index 0, and the table comes
+       later in the DOM) and fade it out until it is barely visible. Back to normal when the table
+       is hidden again. */
+    .categoryTitle.behind-hiscores {
+        z-index: 0;
+        opacity: 0.15;
     }
 
     .gameTitle > * {

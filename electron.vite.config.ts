@@ -86,10 +86,19 @@ const swcOptions = {
 //     against an undefined binding and threw "URL is not a constructor" before Vue ever mounted.
 //     Keeping the package external keeps its scope out of the renderer chunk entirely.
 //   - `sequelize-typescript` goes with them as the package that pulls both in.
+//   - `umzug` (3.x, run by Database.update() in the renderer): under `electron-vite dev` Vite
+//     pre-bundles it for the browser, and one of its dependencies (a graceful-fs style patch)
+//     assigns `fs.close = ...` on the generated `fs` module, which is read-only: the renderer
+//     throws "Cannot set property close of #<Object> which has only a getter" while loading
+//     and the window stays black. A production build didn't show it, which is how it slipped
+//     through. Kept on runtime `require()`, it loads with Node's own module system - which is
+//     why umzug is a production `dependency`, not a devDependency: once it is no longer bundled
+//     into the renderer, the packaged app must ship it (like the three above).
 const rendererCjsModules = {
     sqlite3: {type: 'cjs' as const},
     sequelize: {type: 'cjs' as const},
     'sequelize-typescript': {type: 'cjs' as const},
+    umzug: {type: 'cjs' as const},
 };
 
 const alias = {
@@ -114,18 +123,20 @@ const rendererAlias = {
 //
 // package.json's version is the same for every build cut from develop (only semantic-release, on
 // main, ever bumps it), so on its own it can't tell two develop prereleases apart. build.yml names
-// them `<version>-dev.<short sha>` (see its "Compute prerelease tag" step) and sets
-// ARTIFACT_SUFFIX=-dev for those builds only: bake the same `-dev.<short sha>` into the main
-// process, so the BO shows (and matches against the releases list) exactly that tag. Empty for
-// release builds, for `electron-vite dev`, and when git isn't available - the plain package.json
-// version is then all there is.
+// them `<version>+dev.<short sha>` (see its "Compute prerelease tag" step: a semver build-metadata
+// suffix, so a prerelease still sorts as its version and not before it) and sets
+// ARTIFACT_SUFFIX=-dev for those builds only - that one is the AppImage file name's suffix and is
+// unrelated to the tag's separator. Bake the same `+dev.<short sha>` into the main process, so the
+// BO shows (and matches against the releases list) exactly that tag. Empty for release builds, for
+// `electron-vite dev`, and when git isn't available - the plain package.json version is then all
+// there is.
 const buildVersionSuffix = (() => {
     if (process.env.ARTIFACT_SUFFIX !== '-dev') {
         return '';
     }
     try {
         const sha = execSync('git rev-parse --short HEAD', {stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
-        return sha ? `-dev.${sha}` : '';
+        return sha ? `+dev.${sha}` : '';
     } catch {
         return '';
     }

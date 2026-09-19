@@ -2589,7 +2589,7 @@ function currentLinuxArch(): 'x64' | 'arm64' | null {
 }
 
 /**
- * package.json's version plus, for develop builds, "-dev.<short sha>" (see
+ * package.json's version plus, for develop builds, "+dev.<short sha>" (see
  * electron.vite.config.ts) - the same string as that build's GitHub prerelease tag, so it is both
  * what the BO header shows and what the releases list matches "version actuelle" against.
  */
@@ -3772,7 +3772,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.post('/users/:id/avatar', avatarUpload.single('avatar'), async (req, res) => {
-        const user = await User.findByPk(req.params.id);
+        // String(): with a middleware ahead of the handler @types/express 5 no longer infers the
+        // route's params from the path, and req.params.id falls back to string | string[].
+        const user = await User.findByPk(String(req.params.id));
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
         const config = new Config();
 

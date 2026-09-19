@@ -96,6 +96,10 @@ jobs:
             runner: macos-14
             build_args: --mac --arm64
             artifact_glob: dist_electron/*.zip
+          - name: windows-x64
+            runner: windows-latest
+            build_args: --win --x64
+            artifact_glob: dist_electron/*.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -108,7 +112,22 @@ jobs:
         with:
           node-version: 24
 
+      - name: Setup Python (Windows)
+        # windows-latest's default `python` on PATH is 3.12+ with no
+        # distutils/setuptools available, so resolve-python.sh below finds
+        # nothing usable there - unlike the Linux/macOS runners, which
+        # already have a distutils-capable interpreter on PATH. Installing
+        # 3.11 here puts a working `python` first on PATH for this job only.
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
       - name: Resolve Python interpreter for native module build
+        # windows-latest's default shell is pwsh, which doesn't support
+        # `source` - force bash (Git Bash, present on all GitHub-hosted
+        # runners including Windows) so this step works across the matrix.
+        shell: bash
         run: |
           source scripts/resolve-python.sh
           echo "PYTHON=$PYTHON" >> "$GITHUB_ENV"
