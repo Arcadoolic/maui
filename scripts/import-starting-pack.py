@@ -439,10 +439,54 @@ def js_like_parse_int(value):
 def default_summary():
     return {
         'gamesUpserted': 0, 'romFilesWritten': 0, 'biosFilesWritten': 0, 'marqueesWritten': 0,
-        'flyersWritten': 0, 'logosWritten': 0, 'favoritesReplaced': False,
+        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0,
         'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
         'errors': [],
     }
+
+
+FAVORITES_HEADER = '[ROOT_FOLDER]\n[Favorite]\n\n'
+FAVORITE_ROM_NAME_RE = re.compile(r'^(?![0-9]$)[a-z0-9]+$')
+
+
+def favorite_entry(rom_name, fullname):
+    """One machine entry in mame's favorites.ini layout: 16 lines, the rom name on lines 1 and 8,
+    its description on line 2, and fixed filler/flags around them (playtime 0, then two "1"s).
+    mame ships no command line option to add a favorite - the file is only ever written by its
+    own in-game menu - so the layout is reproduced here from what mame itself writes."""
+    return '\n'.join([
+        rom_name, fullname, '', '', '', '0', '', rom_name, '', '', '', '1', '', '', '', '1',
+    ]) + '\n'
+
+
+def add_games_to_favorites(favorites_path, games, summary):
+    """Appends every manifest game not already listed to mame's own favorites.ini, keeping
+    whatever is there (unlike the old behavior of replacing the whole file with the pack's copy).
+    Rom names are matched line by line, same rule as MameIniParser.parseFavorites(). MAUI then
+    picks the new favorites up from that file, so no separate DB write is needed for them here.
+    A mame instance still running rewrites favorites.ini from its own memory when it exits and
+    would drop these entries."""
+    if os.path.exists(favorites_path):
+        text = read_text(favorites_path)
+    else:
+        text = '\ufeff' + FAVORITES_HEADER
+    newline = '\r\n' if '\r\n' in text else '\n'
+    known = {line.strip() for line in text.splitlines() if FAVORITE_ROM_NAME_RE.match(line.strip())}
+
+    added = ''
+    for game in games:
+        rom_name = game['romName']
+        if rom_name in known:
+            continue
+        known.add(rom_name)
+        added += favorite_entry(rom_name, game.get('fullname') or rom_name)
+        summary['favoritesAdded'] += 1
+
+    if not added:
+        return
+    if not text.endswith('\n'):
+        text += newline
+    write_text(favorites_path, text + added.replace('\n', newline))
 
 
 def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_path,
@@ -510,12 +554,7 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
     finally:
         conn.close()
 
-    favorites_text = read_zip_text(zf, 'ui/favorites.ini')
-    if favorites_text is not None:
-        write_text(ensure_favorites_path(ini_path), favorites_text)
-        summary['favoritesReplaced'] = True
-    else:
-        summary['warnings'].append('favorites.ini absent du ZIP, favoris inchangés.')
+    add_games_to_favorites(ensure_favorites_path(ini_path), manifest.get('games', []), summary)
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +619,7 @@ def print_summary(summary):
         f"{summary['marqueesWritten']} marquee(s)",
         f"{summary['flyersWritten']} flyer(s)",
         f"{summary['logosWritten']} logo(s)",
-        'favoris remplacés' if summary['favoritesReplaced'] else 'favoris inchangés',
+        f"{summary['favoritesAdded']} favori(s) ajouté(s)",
         f"{len(summary['errors'])} erreur(s)",
     ]
     print()
@@ -714,8 +753,9 @@ def _run_import(pack_path, skip_confirmation):
 
         if not skip_confirmation:
             answer = input(
-                '[import-starting-pack] Ceci écrase les roms/favoris/médias déjà présents pour les '
-                'jeux du pack. Continuer ? [o/N] ',
+                '[import-starting-pack] Ceci écrase les roms et médias des jeux du pack (et les '
+                'fichiers de catégories, le cas échéant), puis ajoute ces jeux à vos favoris MAME '
+                'sans toucher aux vôtres. Continuer ? [o/N] ',
             )
             if answer.strip().lower() not in ('o', 'oui', 'y', 'yes'):
                 print('[import-starting-pack] Annulé.')

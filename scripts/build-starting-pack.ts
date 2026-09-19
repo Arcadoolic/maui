@@ -1,7 +1,8 @@
 // Standalone script (run via `just starting-pack`, see package.json's "starting-pack" script)
 // that packages the current MAME home's favorites - their metadata, rom files, marquees,
-// flyers and favorites.ini - into a single ZIP a fresh install's BO server can import back
-// (see the /import route in src/boServer.ts).
+// flyers and logos - into a single ZIP a fresh install's BO server can import back (see the
+// /import route in src/boServer.ts). favorites.ini itself is deliberately not bundled: the
+// import adds each manifest game to the target's own favorites.ini instead of replacing it.
 //
 // Never bundled by webpack and never runs inside Electron, so unlike src/boServer.ts it
 // *could* safely import MameService.class.ts/Helpers.class.ts. It deliberately doesn't: this
@@ -396,10 +397,9 @@ function main() {
         biosRoms: [...biosRomPaths.keys()],
     };
     zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
-    // ui/ and folders/ mirror mame's own ui_path/categorypath directory names (see
-    // getMameLocations() in boServer.ts) - same one-subfolder-per-artifact-kind convention as
-    // roms/marquees/flyers/logos above, instead of dumping these at the zip root.
-    zip.addFile('ui/favorites.ini', readFileSync(favoritesPath));
+    // folders/ mirrors mame's own categorypath directory name (see getMameLocations() in
+    // boServer.ts) - same one-subfolder-per-artifact-kind convention as roms/marquees/flyers/logos
+    // above, instead of dumping these at the zip root.
     // Bundled when available so an import can install them too - omitted entirely when absent on
     // this source MAME install, which import-starting-pack.py already tolerates. folders/ is the
     // same zip folder IMPORTABLE_MAME_DIRECTORIES already uses for a raw categorypath backup, so

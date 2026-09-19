@@ -3263,8 +3263,9 @@ function renderImportCard(error?: string): string {
     return `
         <section class="card">
             <h2>Importer un starting pack</h2>
-            <p class="info">Remplace intégralement les jeux/roms/artwork/favoris présents dans
-            le pack. Les autres jeux, joueurs et scores ne sont pas touchés.</p>
+            <p class="info">Remplace intégralement les jeux/roms/artwork présents dans
+            le pack et ajoute ses jeux aux favoris de MAME (favoris existants conservés). Les
+            autres jeux, joueurs et scores ne sont pas touchés.</p>
             <p class="info">Un ZIP peut aussi ne contenir que des dossiers ${IMPORTABLE_MAME_DIRECTORIES
                 .map(d => escapeHtml(d.zipFolder)).join(', ')} (copiés tels quels dans la
             configuration mame courante) - dans ce cas, pas besoin de manifest.json.</p>
@@ -3303,7 +3304,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
     }).join('');
     return `
         <form method="post" action="/import/from-url"
-            onsubmit="return confirm('Ceci écrase les roms/favoris/médias déjà présents pour les jeux du pack. Continuer ?')">
+            onsubmit="return confirm('Ceci écrase les roms et médias des jeux du pack (et les fichiers de catégories, le cas échéant), puis ajoute ces jeux à vos favoris MAME sans toucher aux vôtres. Continuer ?')">
             <label for="packFilename">Pack à importer</label>
             <select id="packFilename" name="packFilename" required>${options}</select>
             <button type="submit">Télécharger et importer</button>
