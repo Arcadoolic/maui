@@ -24,8 +24,10 @@ import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScrap
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
 import {removeFavorite, addFavorite} from '@/class/MameIniParser';
 import {
-    computePackOwnership, isPackFullyOwned, listPackGames, PackGameDetail, PackOwnership,
+    computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
+    PackOwnership,
 } from '@/class/PackOwnership';
+import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
 import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
@@ -89,6 +91,8 @@ interface RepoPack {
     ownership?: PackOwnership;
     // Its games, for the expandable list (same manifest, same comparison).
     games?: PackGameDetail[];
+    // Size of each BIOS/parent set the pack ships, by name (see computeBiosSizes()).
+    biosSizes?: Record<string, number>;
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -965,8 +969,9 @@ function runImportScript(
 ): Promise<boolean> {
     const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
     const barId = `import-progress-${++importProgressCounter}`;
-    // A downloaded pack (--url) spends its first half downloading; a local file has no such phase.
-    const hasDownload = scriptArgs.includes('--url');
+    // A pack downloaded whole (--url alone) spends its first half downloading; a local file, or a
+    // pack read partially (--url with --only), has no such phase.
+    const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
     res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
         + PROGRESS_LOG_OPEN);
 
@@ -1544,9 +1549,6 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             border-left: 1px solid #000000;
             transition: width 0.25s ease-out;
         }
-        .disk-bar-temp, .pack-swatch.disk-bar-temp {
-            background-image: repeating-linear-gradient(45deg, #777777 0 4px, #333333 4px 8px);
-        }
         .disk-zoomed .disk-bar-track > .disk-bar-used,
         .disk-zoomed .disk-bar-track > .disk-bar-roms,
         .disk-zoomed .disk-legend-static {
@@ -1590,6 +1592,19 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: flex;
             gap: 8px;
             padding: 2px 0;
+        }
+        /* Overrides the page-wide label/input styles (block, full width, top margin). */
+        .pack-game-label {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 0;
+            cursor: pointer;
+        }
+        .pack-game-label input {
+            flex: 0 0 auto;
+            width: auto;
+            margin: 3px 0 0;
         }
         .pack-game-mark {
             flex: 0 0 14px;
@@ -3892,14 +3907,12 @@ function packColor(index: number): string {
 
 /**
  * Free-space block for the repository card: one bar over the total size of the disk holding the
- * roms - already used space in grey, then (filled in by the script in renderRepoPackPicker() as
- * packs are ticked/unticked) one coloured segment per selected pack, with a legend. The estimate
- * mirrors what scripts/import-starting-pack.py needs: packs are mostly already-compressed ROM
- * zips, so extracted size ~= download size, +5% for filesystem block overhead (same margin as
- * its own preflight), and the download itself sits in the temp dir until its import finishes -
- * on the same filesystem as the roms it counts too (hatched segment), but only the largest one
- * at a time (packs are imported sequentially, each temp file removed afterwards). When the temp
- * dir is on another filesystem, its free space is only shown/checked as text: one bar, one disk.
+ * roms - space already used in grey, then (filled in by the script in renderRepoPackPicker() as
+ * games are ticked/unticked) one coloured segment per pack the selected games come from, with a
+ * legend. A pack's segment is the extracted size of its selected games (rom zip + artwork, plus
+ * each BIOS/parent set they need, once) +5% for filesystem block overhead, the same margin as the
+ * import script's own preflight. Nothing is downloaded to a temporary file any more (the script
+ * reads just what it needs from the pack with HTTP Range requests), so only this disk matters.
  */
 function renderDiskSpaceInfo(mameInfo: MameInfo): string {
     const romPath = mameInfo.romPath;
@@ -3907,8 +3920,6 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
     if (!roms) {
         return '';
     }
-    const temp = getDiskSpace(os.tmpdir());
-    const sameDisk = !temp || temp.deviceId === roms.deviceId;
     const usedBytes = Math.max(0, roms.totalBytes - roms.freeBytes);
     // Part of the used space that is pack content already installed (roms + marquees/flyers/
     // logos, what a pack carries - its ini files are negligible), before any pack is added; the
@@ -3922,8 +3933,7 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
         roms.totalBytes > 0 ? Math.min(100, bytes / roms.totalBytes * 100) : 0
     ).toFixed(2);
     return `
-        <div class="disk-space" data-total="${roms.totalBytes}" data-roms-free="${roms.freeBytes}"
-            data-temp-free="${temp ? temp.freeBytes : 0}" data-same-disk="${sameDisk ? '1' : '0'}">
+        <div class="disk-space" data-total="${roms.totalBytes}" data-roms-free="${roms.freeBytes}">
             <p class="info">Disk space for the roms
             (<span class="current-path">${escapeHtml(roms.path)}</span>):
             <strong>${escapeHtml(humanFileSize(roms.freeBytes))}</strong> free of
@@ -3941,9 +3951,6 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
                 <li class="disk-legend-static"><span class="pack-swatch disk-bar-roms"></span>Roms &amp; artwork already installed
                     (${escapeHtml(humanFileSize(romsBytes))})</li>
             </ul>
-            ${sameDisk ? '' : `<p class="info">Free disk space for downloads
-            (<span class="current-path">${escapeHtml(temp!.path)}</span>):
-            <strong>${escapeHtml(humanFileSize(temp!.freeBytes))}</strong></p>`}
             <p class="info disk-space-selection" hidden></p>
         </div>
     `;
@@ -3999,25 +4006,43 @@ const PACK_GAME_MARKS: {[status in PackGameDetail['status']]: {mark: string; tit
 };
 
 /**
- * Expandable list of a pack's games. Rendered next to the pack's <label>, never inside it: a
- * click on a <summary> inside a <label> would also tick the pack's checkbox. The "new" marks are
- * only highlighted when part of the pack is already installed (an update): for a pack never
- * imported, every game being "new" is not worth a colour.
+ * Expandable list of a pack's games. Each game that is not installed yet has its own checkbox
+ * (`game`, value "<pack>|<romName>"): the import then takes only the ticked ones from that pack.
+ * The same game listed by several packs is ticked everywhere at once (script in
+ * renderRepoPackPicker()) and fetched from the first of them only. Rendered next to the pack's
+ * <label>, never inside it: a click on a <summary> inside a <label> would also tick the pack's
+ * checkbox. The "new" marks are only highlighted when part of the pack is already installed (an
+ * update): for a pack never imported, every game being "new" is not worth a colour.
  */
-function renderPackGames(pack: RepoPack): string {
+function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
     if (!pack.games?.length) {
         return '';
     }
-    const isUpdate = !!pack.ownership && pack.ownership.owned > 0 && !isPackFullyOwned(pack.ownership);
+    const isUpdate = !!pack.ownership && pack.ownership.owned > 0 && !fullyOwned;
     const items = pack.games.map(game => {
         const {mark, title} = PACK_GAME_MARKS[game.status];
         const meta = [game.year, game.manufacturer && decodeXmlEntities(game.manufacturer), game.categoryName]
             .filter((part): part is string => !!part).map(escapeHtml).join(' · ');
+        const label = `${escapeHtml(decodeXmlEntities(game.fullname))}
+            ${meta ? `<span class="checkbox-row-detail">${meta}</span>` : ''}`;
+        const classes = `pack-game pack-game-${game.status}${game.status === 'new' && isUpdate ? ' pack-game-highlight' : ''}`;
+        if (game.status === 'installed' || fullyOwned) {
+            return `
+                <li class="${classes}">
+                    <span class="pack-game-mark" title="${title}">${mark}</span>
+                    <span>${label}</span>
+                </li>
+            `;
+        }
         return `
-            <li class="pack-game pack-game-${game.status}${game.status === 'new' && isUpdate ? ' pack-game-highlight' : ''}">
-                <span class="pack-game-mark" title="${title}">${mark}</span>
-                <span>${escapeHtml(decodeXmlEntities(game.fullname))}
-                    ${meta ? `<span class="checkbox-row-detail">${meta}</span>` : ''}</span>
+            <li class="${classes}">
+                <label class="pack-game-label">
+                    <input type="checkbox" class="game-checkbox" name="game"
+                        value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
+                        data-rom="${escapeHtml(game.romName)}" data-size="${game.size}"
+                        data-bios="${escapeHtml(game.biosName ?? '')}">
+                    <span>${label}</span>
+                </label>
             </li>
         `;
     }).join('');
@@ -4040,35 +4065,41 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             pack.generatedAt ? new Date(pack.generatedAt).toLocaleDateString('en-GB') : null,
         ].filter((part): part is string => part !== null).join(' — ');
         const color = packColor(index);
-        // Everything in the pack is already installed: nothing to download, so it cannot be ticked.
+        // Everything in the pack is already installed: nothing to fetch, so it cannot be ticked.
         const owned = isPackFullyOwned(pack.ownership);
+        // Without its manifest there is no list of games to pick from (the import needs the rom
+        // names), so such a pack cannot be selected either.
+        const unavailable = !pack.games?.length;
         return `
-            <div class="pack-row">
-            <label class="checkbox-row${owned ? ' pack-owned' : ''}">
-                <input type="checkbox" name="packFilename" value="${escapeHtml(pack.filename)}" class="pack-checkbox"
-                    data-size="${pack.size}" data-color="${color}"${owned ? ' disabled' : ''}>
+            <div class="pack-row" data-pack="${escapeHtml(pack.filename)}" data-color="${color}"
+                data-bios-sizes="${escapeHtml(JSON.stringify(pack.biosSizes ?? {}))}">
+            <label class="checkbox-row${owned || unavailable ? ' pack-owned' : ''}">
+                <input type="checkbox" class="pack-toggle"${owned || unavailable ? ' disabled' : ''}>
                 <span class="pack-swatch" style="background-color: ${color}"></span>
                 <span>${escapeHtml(pack.filename)}<span class="checkbox-row-detail">${escapeHtml(details)}</span>
-                    ${renderPackOwnership(pack.ownership)}</span>
+                    ${unavailable
+                        ? '<span class="pack-status">Manifest unavailable - its games cannot be listed</span>'
+                        : renderPackOwnership(pack.ownership)}</span>
             </label>
-            ${renderPackGames(pack)}
+            ${renderPackGames(pack, owned)}
             </div>
         `;
     }).join('');
-    // Submit stays disabled until at least one pack is ticked (server re-checks either way).
+    // Submit stays disabled until at least one game is ticked (server re-checks either way).
     return `
         <form method="post" action="/import/from-url"
-            onsubmit="return confirm('This overwrites the roms and media of the games in the selected packs (and the category files, if any), then adds these games to your MAME favorites without touching yours. Continue?')">
-            <p class="info">Pack(s) to import:</p>
+            onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
+            <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
+            A game listed by several packs is fetched once.</p>
             ${rows}
             <label class="checkbox-row">
                 <input type="checkbox" id="packSelectAll">
                 <span>Select all</span>
             </label>
-            <button type="submit" id="packSubmit" disabled>Download and import</button>
+            <button type="submit" id="packSubmit" disabled>Fetch and import</button>
         </form>
         <script>(function () {
-            var boxes = Array.prototype.slice.call(document.querySelectorAll('.pack-checkbox:not([disabled])'));
+            var rows = Array.prototype.slice.call(document.querySelectorAll('.pack-row'));
             var all = document.getElementById('packSelectAll');
             var submit = document.getElementById('packSubmit');
             var disk = document.querySelector('.disk-space');
@@ -4085,39 +4116,71 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
                 return bytes.toFixed(1) + ' ' + units[i];
             }
-            function name(box) { return box.value.replace(/[.]zip$/, ''); }
-            // Adds one segment to the bar and its entry to the legend. style is either a
-            // background colour or the hatched "temporary download" class.
-            function addPart(bytes, total, label, color, extraClass) {
+            function gameBoxes(row) {
+                return Array.prototype.slice.call(row.querySelectorAll('.game-checkbox:not([disabled])'));
+            }
+            var allBoxes = [].concat.apply([], rows.map(gameBoxes));
+            // Adds one segment to the bar and its entry to the legend.
+            function addPart(bytes, total, label, color) {
                 var seg = document.createElement('div');
-                seg.className = 'disk-bar-seg ' + (extraClass || '');
+                seg.className = 'disk-bar-seg';
                 seg.style.width = (bytes / total * 100).toFixed(2) + '%';
-                if (color) { seg.style.backgroundColor = color; }
+                seg.style.backgroundColor = color;
                 seg.title = label + ': ' + formatSize(bytes);
                 track.appendChild(seg);
                 var item = document.createElement('li');
                 item.className = 'disk-legend-part';
                 var swatch = document.createElement('span');
-                swatch.className = 'pack-swatch ' + (extraClass || '');
-                if (color) { swatch.style.backgroundColor = color; }
+                swatch.className = 'pack-swatch';
+                swatch.style.backgroundColor = color;
                 item.appendChild(swatch);
                 item.appendChild(document.createTextNode(label + ' (' + formatSize(bytes) + ')'));
                 legend.appendChild(item);
             }
+            // A game listed by several packs is only fetched from the first one (in page order)
+            // that has it ticked: the size and legend entry go to that pack alone.
+            function selection() {
+                var seen = {};
+                return rows.map(function (row) {
+                    var bios = {};
+                    var biosSizes = JSON.parse(row.dataset.biosSizes || '{}');
+                    var bytes = 0;
+                    var games = 0;
+                    gameBoxes(row).forEach(function (box) {
+                        if (!box.checked || seen[box.dataset.rom]) { return; }
+                        seen[box.dataset.rom] = true;
+                        games++;
+                        bytes += Number(box.dataset.size);
+                        var name = box.dataset.bios;
+                        if (name && !bios[name]) {
+                            bios[name] = true;
+                            bytes += Number(biosSizes[name] || 0);
+                        }
+                    });
+                    return {name: row.dataset.pack.replace(/[.]zip$/, ''), color: row.dataset.color, games: games, bytes: bytes};
+                });
+            }
             function refresh() {
-                var picked = boxes.filter(function (box) { return box.checked; });
-                submit.disabled = picked.length === 0;
-                all.checked = boxes.length > 0 && picked.length === boxes.length;
-                all.disabled = boxes.length === 0;
+                rows.forEach(function (row) {
+                    var boxes = gameBoxes(row);
+                    var ticked = boxes.filter(function (box) { return box.checked; }).length;
+                    var toggle = row.querySelector('.pack-toggle');
+                    toggle.checked = boxes.length > 0 && ticked === boxes.length;
+                    toggle.indeterminate = ticked > 0 && ticked < boxes.length;
+                });
+                var pickedBoxes = allBoxes.filter(function (box) { return box.checked; });
+                submit.disabled = pickedBoxes.length === 0;
+                all.checked = allBoxes.length > 0 && pickedBoxes.length === allBoxes.length;
+                all.disabled = allBoxes.length === 0;
                 if (!summary) { return; }
                 var total = Number(disk.dataset.total);
                 var free = Number(disk.dataset.romsFree);
-                var sameDisk = disk.dataset.sameDisk === '1';
-                var sizes = picked.map(function (box) { return Number(box.dataset.size); });
-                var downloads = sizes.reduce(function (sum, size) { return sum + size; }, 0);
-                var largest = Math.max.apply(null, sizes.concat([0]));
-                var needed = downloads * 1.05 + (sameDisk ? largest : 0);
-                var enough = needed <= free && (sameDisk || largest <= Number(disk.dataset.tempFree));
+                var parts = selection().filter(function (part) { return part.games > 0; });
+                var games = parts.reduce(function (sum, part) { return sum + part.games; }, 0);
+                var fetched = parts.reduce(function (sum, part) { return sum + part.bytes; }, 0);
+                // +5% for filesystem block overhead, like the import script's own preflight check.
+                var needed = fetched * 1.05;
+                var enough = needed <= free;
 
                 Array.prototype.slice.call(track.querySelectorAll('.disk-bar-seg')).forEach(function (el) { el.remove(); });
                 Array.prototype.slice.call(legend.querySelectorAll('.disk-legend-part')).forEach(function (el) { el.remove(); });
@@ -4131,28 +4194,39 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 zoomNote.textContent = 'Zoomed on the free space (' + formatSize(free)
                     + ') - the bar no longer shows the ' + formatSize(total) + ' disk as a whole.';
                 if (scale > 0) {
-                    picked.forEach(function (box) {
-                        addPart(Number(box.dataset.size) * 1.05, scale, name(box), box.dataset.color);
+                    parts.forEach(function (part) {
+                        addPart(part.bytes * 1.05, scale, part.name + ', ' + part.games + ' game(s)', part.color);
                     });
-                    if (sameDisk && largest > 0) {
-                        addPart(largest, scale, 'Temporary download (largest pack)', '', 'disk-bar-temp');
-                    }
                 }
                 track.classList.toggle('disk-bar-overflow', !enough);
 
-                summary.hidden = picked.length === 0;
+                summary.hidden = games === 0;
                 summary.className = 'disk-space-selection ' + (enough ? 'info' : 'error');
-                summary.textContent = picked.length + ' pack(s) selected: '
-                    + formatSize(downloads) + ' to download, about ' + formatSize(needed)
+                summary.textContent = games + ' game(s) from ' + parts.length + ' pack(s): '
+                    + formatSize(fetched) + ' to fetch, about ' + formatSize(needed)
                     + ' needed, ' + formatSize(Math.max(0, free - needed)) + ' left afterwards'
                     + (enough ? '.' : ' - not enough free disk space.');
             }
-            refresh();
+            // Ticking a game ticks the same game in every other pack that lists it.
+            function mirror(box) {
+                allBoxes.forEach(function (other) {
+                    if (other.dataset.rom === box.dataset.rom) { other.checked = box.checked; }
+                });
+            }
+            allBoxes.forEach(function (box) {
+                box.addEventListener('change', function () { mirror(box); refresh(); });
+            });
+            rows.forEach(function (row) {
+                row.querySelector('.pack-toggle').addEventListener('change', function (event) {
+                    gameBoxes(row).forEach(function (box) { box.checked = event.target.checked; mirror(box); });
+                    refresh();
+                });
+            });
             all.addEventListener('change', function () {
-                boxes.forEach(function (box) { box.checked = all.checked; });
+                allBoxes.forEach(function (box) { box.checked = all.checked; });
                 refresh();
             });
-            boxes.forEach(function (box) { box.addEventListener('change', refresh); });
+            refresh();
         })();</script>
     `;
 }
@@ -5164,9 +5238,17 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             const authorization = 'Basic '
                 + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64');
             await Promise.all(packs.map(async pack => {
-                const manifest = await fetchRepoManifest(config.repoUrl, pack.filename, authorization);
+                const [manifest, entrySizes] = await Promise.all([
+                    fetchRepoManifest(config.repoUrl, pack.filename, authorization),
+                    // Per-game sizes for the disk bar, from the ZIP's central directory alone
+                    // (two small range requests) - null if the server cannot do ranges.
+                    /^[\w.-]+\.zip$/.test(pack.filename)
+                        ? fetchRemoteZipEntrySizes(`${config.repoUrl}/${pack.filename}`, {Authorization: authorization})
+                        : Promise.resolve(null),
+                ]);
                 pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
-                pack.games = listPackGames(manifest, installedRoms);
+                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
+                pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             }));
             res.send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
@@ -5190,11 +5272,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         const mameInfo = getMameInfo(config);
-        // Flows into a URL and a child-process argv below - restricted to bare filenames (no
-        // path separators, no shell metacharacters) rather than trusting the checkbox values.
-        // urlencoded (extended: false) yields a string for one ticked box, an array for several.
-        const rawPackFilenames: unknown[] = [req.body.packFilename].flat();
-        const packFilenames = [...new Set(rawPackFilenames)];
+        // One "<pack>.zip|<romName>" per ticked game, grouped by pack (a game listed by several
+        // packs is kept for the first). urlencoded (extended: false) yields a string for one
+        // ticked box, an array for several; anything malformed is refused (see the function).
+        const selection = groupSelectedGames(req.body?.game);
 
         if (!config.repoUrl) {
             res.status(422).send(renderForm(
@@ -5203,17 +5284,17 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ));
             return;
         }
-        if (!packFilenames.length) {
+        if (selection && !selection.size) {
             res.status(422).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Tick at least one pack to import.',
+                undefined, 'Tick at least one game to import.',
             ));
             return;
         }
-        if (!packFilenames.every((name): name is string => typeof name === 'string' && /^[\w.-]+\.zip$/.test(name))) {
+        if (!selection) {
             res.status(422).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Invalid pack name.',
+                undefined, 'Invalid pack or game name.',
             ));
             return;
         }
@@ -5236,14 +5317,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Credentials go through env, never argv, so they don't leak via `ps`/
         // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
         // trust level as ssDevPassword).
-        for (const [index, packFilename] of packFilenames.entries()) {
-            const counter = packFilenames.length > 1 ? `[${index + 1}/${packFilenames.length}] ` : '';
+        for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
+            const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
+            // --only: just these games are read from the pack (HTTP Range requests, no full download).
             const started = await runImportScript(
                 res,
-                `${counter}Import from the repository in progress… (${escapeHtml(packFilename)})`,
-                ['--url', `${config.repoUrl}/${packFilename}`, '-y'],
+                `${counter}Import from the repository in progress… (${escapeHtml(packFilename)}, ${romNames.length} game(s))`,
+                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(','), '-y'],
                 {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
-                {index, total: packFilenames.length},
+                {index, total: selection.size},
             );
             // false = launch failure, runImportScript already closed the response.
             if (!started) {

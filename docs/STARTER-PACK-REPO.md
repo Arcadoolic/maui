@@ -44,6 +44,27 @@ curl -u admin:<mdp> https://repo.maui.afronob.com/index.json
 curl -u admin:<mdp> -O https://repo.maui.afronob.com/<pack>.zip
 ```
 
+### 2.1. Import partiel (jeux choisis) — prérequis : requêtes `Range`
+
+Depuis l'onglet MAME > Repository du BO, on peut ne récupérer que certains jeux d'un pack
+(cases à cocher par jeu). Le BO lance alors `import-starting-pack.py --url <pack>.zip --only
+<rom1>,<rom2>,…` : le script **ne télécharge pas le pack**, il lit son index (*central directory*)
+puis uniquement les entrées voulues (ROM, marquee/flyer/logo de chaque jeu, BIOS/parent requis)
+avec des requêtes HTTP `Range`. Le BO en fait autant pour connaître la taille de chaque jeu (barre
+d'espace disque) : deux petites requêtes `Range` par pack.
+
+- **Le serveur doit répondre `206 Partial Content`** (nginx le fait par défaut sur des fichiers
+  statiques, `Accept-Ranges: bytes`). Sans cela le script s'arrête avec « the repository does not
+  support HTTP Range requests » plutôt que de télécharger le pack entier, et le BO se rabat sur une
+  estimation de taille (taille du pack répartie sur ses jeux).
+- La liste des jeux d'un pack vient de son `<pack>.manifest.json` : un pack sans manifest lisible
+  (manifest de secours, voir 3.2) s'affiche mais ses jeux ne peuvent pas être choisis.
+- Un jeu présent dans plusieurs packs est coché partout à la fois mais récupéré une seule fois (dans
+  le premier pack de la liste).
+- `--only` se lance aussi à la main : `python3 scripts/import-starting-pack.py --url … --only
+  dkong,mario -y`. Sans `--only`, l'import reste celui du pack entier (téléchargé dans un fichier
+  temporaire).
+
 ## 3. Publier un nouveau pack
 
 Aucun pipeline CI ne fait ça aujourd'hui — c'est manuel, en 2 étapes

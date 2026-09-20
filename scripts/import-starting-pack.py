@@ -22,10 +22,18 @@ Usage (on the machine hosting the MAME home, e.g. the Pi, after scp'ing the pack
 Or straight from repo.maui.afronob.com (see docs/STARTER-PACK-REPO.md), no local file needed:
     MAUI_REPO_USER=admin MAUI_REPO_PASSWORD=... \\
         python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip -y
+
+With --only, just some games of a pack: only those games' roms/artwork (and the BIOS they need)
+are read, and only they are added to the database and favorites. Combined with --url the pack is
+never downloaded whole: its central directory and the needed entries are fetched with HTTP Range
+requests (the repository must support them - nginx does).
+        python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip \\
+            --only sf2,ffight -y
 """
 
 import argparse
 import base64
+import io
 import json
 import os
 import re
@@ -295,25 +303,73 @@ def import_mame_directories(zf, directory_targets, summary, log):
 
 
 # ---------------------------------------------------------------------------
+# --only : import just some games of a pack
+# ---------------------------------------------------------------------------
+
+# Zip folders holding one file per game: what --only narrows down.
+PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos')
+
+
+def select_games(manifest, only, summary):
+    """Copy of `manifest` restricted to the games named in `only` (romNames), keeping the pack's
+    order: the import below then needs no idea of --only at all - games, favorites and database
+    rows all come from this manifest. Only the BIOS/parent sets those games need (`biosName`)
+    stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
+    BO builds the list from the manifest, so it can only differ if the pack changed meanwhile."""
+    wanted = set(only)
+    games = [game for game in manifest.get('games', []) if game['romName'] in wanted]
+    for rom_name in sorted(wanted - {game['romName'] for game in games}):
+        summary['warnings'].append(f'{rom_name}: not in this pack, skipped.')
+    needed_bios = {game['biosName'] for game in games if game.get('biosName')}
+    return {
+        **manifest,
+        'games': games,
+        'biosRoms': [name for name in manifest.get('biosRoms', []) if name in needed_bios],
+    }
+
+
+def wanted_entries(manifest):
+    """Names of the per-game zip entries the (already restricted) manifest asks for."""
+    entries = set()
+    for game in manifest.get('games', []):
+        rom_name = game['romName']
+        if game.get('hasRomFile'):
+            entries.add(f'roms/{rom_name}.zip')
+        if game.get('hasMarquee'):
+            entries.add(f'marquees/{rom_name}.png')
+        if game.get('hasFlyer'):
+            entries.add(f'flyers/{rom_name}.png')
+        if game.get('hasLogo'):
+            entries.add(f'logos/{rom_name}.png')
+    entries.update(f'roms/{name}.zip' for name in manifest.get('biosRoms', []))
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # Disk-space preflight - a pack this size silently filling up a Pi's SD card halfway through
 # extraction (partially-imported roms, a truncated favorites.ini) is worse than refusing up
 # front, so total each destination's requirement before writing anything.
 # ---------------------------------------------------------------------------
 
-def compute_required_space(zf):
+def compute_required_space(zf, entry_filter=None):
+    """entry_filter: with --only, the set of per-game entries (roms/, marquees/, flyers/, logos/)
+    that will actually be extracted - the others are left out of the total. Any other folder
+    (folders/, mame config directories...) is always extracted whole and always counted."""
     totals = {}
     for info in zf.infolist():
         if info.filename.endswith('/'):
             continue
         prefix = info.filename.split('/', 1)[0]
+        if entry_filter is not None and prefix in PER_GAME_FOLDERS and info.filename not in entry_filter:
+            continue
         totals[prefix] = totals.get(prefix, 0) + info.file_size
     return totals
 
 
-def check_disk_space(zf, targets):
+def check_disk_space(zf, targets, entry_filter=None):
     """targets: {zip top-level prefix -> resolved destination directory}. Aborts with a clear
     error listing every undersized destination, before any file is written."""
-    required = compute_required_space(zf)
+    required = compute_required_space(zf, entry_filter)
     by_dir = {}
     for prefix, size in required.items():
         target_dir = targets.get(prefix)
@@ -566,6 +622,96 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
 # run unattended on a cabinet's BO instead of requiring an scp'd file already on disk.
 # ---------------------------------------------------------------------------
 
+class HttpRangeFile(io.RawIOBase):
+    """Read-only, seekable view of a remote file, backed by HTTP Range requests: what
+    zipfile.ZipFile needs to open a pack's central directory and pull individual entries out of
+    it without downloading the whole ZIP. One window is cached (WINDOW bytes, more for a bigger
+    read), so a sequential extraction costs one request per window and not one per 64 KiB copy
+    buffer; a failed request is retried a few times before giving up."""
+
+    WINDOW = 4 * 1024 * 1024
+    RETRIES = 3
+
+    def __init__(self, url, user='', password=''):
+        super().__init__()
+        self.url = url
+        self.headers = {}
+        if user or password:
+            credentials = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
+            self.headers['Authorization'] = f'Basic {credentials}'
+        self.position = 0
+        self.window_start = 0
+        self.window = b''
+        # A 1-byte range answers with the total size in Content-Range - and proves the server
+        # honours ranges at all, without which reading a ZIP this way would silently fetch it whole.
+        with self._request('bytes=0-0') as response:
+            content_range = response.headers.get('Content-Range', '')
+            if response.status != 206 or '/' not in content_range:
+                raise RuntimeError('the repository does not support HTTP Range requests.')
+            self.size = int(content_range.rsplit('/', 1)[1])
+
+    def _request(self, byte_range):
+        request = urllib.request.Request(self.url, headers={**self.headers, 'Range': byte_range})
+        last_error = None
+        for _ in range(self.RETRIES):
+            try:
+                return urllib.request.urlopen(request, timeout=60)
+            except urllib.error.HTTPError:
+                raise
+            except (urllib.error.URLError, OSError) as error:
+                last_error = error
+        raise last_error
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.position
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_SET:
+            self.position = offset
+        elif whence == io.SEEK_CUR:
+            self.position += offset
+        else:
+            self.position = self.size + offset
+        self.position = max(0, self.position)
+        return self.position
+
+    def _fill(self, wanted):
+        start = self.position
+        end = min(self.size, start + max(wanted, self.WINDOW)) - 1
+        with self._request(f'bytes={start}-{end}') as response:
+            self.window = response.read()
+        self.window_start = start
+
+    def read(self, size=-1):
+        if self.position >= self.size:
+            return b''
+        if size is None or size < 0:
+            size = self.size - self.position
+        size = min(size, self.size - self.position)
+        chunks = []
+        while size > 0:
+            offset = self.position - self.window_start
+            if not (0 <= offset < len(self.window)):
+                self._fill(size)
+                offset = 0
+            chunk = self.window[offset:offset + size]
+            chunks.append(chunk)
+            self.position += len(chunk)
+            size -= len(chunk)
+        return b''.join(chunks)
+
+    def readinto(self, buffer):
+        data = self.read(len(buffer))
+        buffer[:len(data)] = data
+        return len(data)
+
+
 def emit_progress(phase, done, total):
     """Machine-readable progress line, only when the BO asks for it (MAUI_PROGRESS=1): it parses
     these into a progress bar instead of listing them. Kept off by default so a terminal run
@@ -685,11 +831,42 @@ def main():
         '--password', help='Basic-auth password for --url - manual testing only, visible '
                             'in `ps`/the shell history; prefer the MAUI_REPO_PASSWORD variable',
     )
+    parser.add_argument(
+        '--only', help='Comma-separated romNames: import only these games of the pack (their roms, '
+                        'artwork and required BIOS). With --url the pack is then read with HTTP Range '
+                        'requests instead of being downloaded whole',
+    )
     parser.add_argument('-y', '--yes', action='store_true', help='Do not ask for confirmation before importing')
     args = parser.parse_args()
 
     if bool(args.pack) == bool(args.url):
         fail('Provide either a local pack path or --url - never both, and not neither.')
+
+    only = None
+    if args.only is not None:
+        only = [name.strip() for name in args.only.split(',') if name.strip()]
+        if not only:
+            fail('--only needs at least one romName.')
+        bad = [name for name in only if not re.fullmatch(r'[\w.-]+', name)]
+        if bad:
+            fail(f'--only: invalid romName(s): {", ".join(bad)}.')
+
+    if args.url and only:
+        # Never downloaded whole: zipfile reads the central directory and each wanted entry
+        # through HTTP Range requests (see HttpRangeFile).
+        user = args.user or os.environ.get('MAUI_REPO_USER', '')
+        password = args.password or os.environ.get('MAUI_REPO_PASSWORD', '')
+        print(f'[import-starting-pack] Reading: {args.url} ({len(only)} game(s) wanted)')
+        try:
+            remote = HttpRangeFile(args.url, user, password)
+        except (urllib.error.URLError, OSError, RuntimeError) as error:
+            fail(f'Cannot read the pack: {error}')
+            return
+        try:
+            _run_import(remote, args.yes, only, args.url)
+        finally:
+            remote.close()
+        return
 
     temp_path = None
     if args.url:
@@ -703,17 +880,21 @@ def main():
     pack_path = temp_path if args.url else args.pack
 
     try:
-        _run_import(pack_path, args.yes)
+        _run_import(pack_path, args.yes, only)
     finally:
         if temp_path is not None:
             os.unlink(temp_path)
 
 
-def _run_import(pack_path, skip_confirmation):
-    if not os.path.isfile(pack_path):
-        fail(f'File not found: "{pack_path}".')
-
-    print(f'[import-starting-pack] Pack: {pack_path} ({human_size(os.path.getsize(pack_path))})')
+def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
+    """pack_source: a path, or an already-open file-like object (HttpRangeFile) - zipfile takes
+    either. only: romNames to restrict the import to (see select_games())."""
+    if isinstance(pack_source, str):
+        if not os.path.isfile(pack_source):
+            fail(f'File not found: "{pack_source}".')
+        print(f'[import-starting-pack] Pack: {pack_source} ({human_size(os.path.getsize(pack_source))})')
+    else:
+        print(f'[import-starting-pack] Pack: {pack_label} ({human_size(pack_source.size)}, read partially)')
 
     config = load_config()
     mame_path, mame_binary_name = config.get('mamePath'), config.get('mameBinaryName')
@@ -721,7 +902,7 @@ def _run_import(pack_path, skip_confirmation):
     ini_path = mame_home_path()
 
     try:
-        zf = zipfile.ZipFile(pack_path)
+        zf = zipfile.ZipFile(pack_source)
     except zipfile.BadZipFile as error:
         fail(f'Invalid ZIP: {error}')
         return  # unreachable, keeps type-checkers happy
@@ -737,6 +918,8 @@ def _run_import(pack_path, skip_confirmation):
             if manifest.get('formatVersion') != 1:
                 fail(f"Invalid ZIP: unsupported pack version ({manifest.get('formatVersion')}).")
         else:
+            if only:
+                fail('--only needs a pack with a manifest.json.')
             folders = ', '.join(folder for folder, _ in IMPORTABLE_MAME_DIRECTORIES)
             if not any(zip_has_folder(zf, folder) for folder, _ in IMPORTABLE_MAME_DIRECTORIES):
                 fail(f'Invalid ZIP: manifest.json missing, and no recognized folder ({folders}) in the ZIP.')
@@ -760,6 +943,10 @@ def _run_import(pack_path, skip_confirmation):
                 fail('Incomplete MAME configuration, import impossible - missing: ' + ', '.join(missing))
 
         summary = default_summary()
+        entry_filter = None
+        if only:
+            manifest = select_games(manifest, only, summary)
+            entry_filter = wanted_entries(manifest)
         directory_targets = resolve_directory_targets(zf, resolved_ini, ini_path, summary)
 
         space_targets = dict(directory_targets)
@@ -768,10 +955,11 @@ def _run_import(pack_path, skip_confirmation):
                 'roms': rom_path, 'marquees': locations['marquee_path'],
                 'flyers': locations['flyer_path'], 'logos': locations['logo_path'],
             })
-        check_disk_space(zf, space_targets)
+        check_disk_space(zf, space_targets, entry_filter)
 
         if manifest is not None:
-            print(f"[import-starting-pack] {len(manifest.get('games', []))} game(s) in the manifest "
+            print(f"[import-starting-pack] {len(manifest.get('games', []))} game(s) "
+                  f"{'selected in' if only else 'in'} the manifest "
                   f"(generated on {manifest.get('generatedAt', '?')}), {len(manifest.get('biosRoms', []))} bios.")
         if directory_targets:
             print(f"[import-starting-pack] mame folder(s) detected in the ZIP: "
