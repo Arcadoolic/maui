@@ -1,5 +1,5 @@
 /**
- * Helpers for the BO's "Mise à jour" list of GitHub releases (see boServer.ts's getUpdateInfo()).
+ * Helpers for the BO's "Update" list of GitHub releases (see boServer.ts's getUpdateInfo()).
  */
 
 /**
@@ -23,7 +23,7 @@ export function sortByPublishedDesc<T extends {publishedAt: string}>(entries: T[
 
 /**
  * Publication date *and time* (down to the second) in the machine's local timezone, e.g.
- * "18/09/2026 20:24:16" - a date alone can't tell apart the several builds a busy day produces.
+ * "18/09/2026, 20:24:16" - a date alone can't tell apart the several builds a busy day produces.
  * Falls back to the raw string for an unparseable date rather than showing "Invalid Date".
  */
 export function formatPublishedAt(iso: string): string {
@@ -31,5 +31,5 @@ export function formatPublishedAt(iso: string): string {
     if (Number.isNaN(date.getTime())) {
         return iso;
     }
-    return date.toLocaleString('fr-FR', {dateStyle: 'short', timeStyle: 'medium'});
+    return date.toLocaleString('en-GB', {dateStyle: 'short', timeStyle: 'medium'});
 }
