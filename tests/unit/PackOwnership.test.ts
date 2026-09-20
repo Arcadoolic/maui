@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest';
 import type {StartingPackManifest, StartingPackGameEntry} from '@/types/StartingPackManifest';
-import {computePackOwnership, isPackFullyOwned, listPackGames} from '@/class/PackOwnership';
+import {computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames} from '@/class/PackOwnership';
 
 const game = (romName: string, fullname: string, hasRomFile = true) => ({
     romName, fullname, hasRomFile,
@@ -76,5 +76,72 @@ describe('listPackGames', () => {
     it('is empty for an unreadable manifest', () => {
         expect(listPackGames(null, [])).toEqual([]);
         expect(listPackGames({formatVersion: null, games: []} as never, [])).toEqual([]);
+    });
+});
+
+describe('pack sizes', () => {
+    const pack = {
+        ...manifest([
+            {...game('centiped', 'Centipede'), hasMarquee: true, hasFlyer: false, hasLogo: true, biosName: 'atarisy1'},
+            {...game('pong', 'Pong', false), hasMarquee: false, hasFlyer: false, hasLogo: false},
+        ]),
+        biosRoms: ['atarisy1'],
+    };
+    const sizes = new Map([
+        ['roms/centiped.zip', 1000], ['marquees/centiped.png', 50], ['logos/centiped.png', 5],
+        ['flyers/centiped.png', 9999], ['roms/atarisy1.zip', 400],
+    ]);
+
+    it('sizes a game from the entries it ships (rom, marquee, flyer, logo)', () => {
+        const result = listPackGames(pack, [], sizes);
+
+        expect(result.find(entry => entry.romName === 'centiped')).toMatchObject({size: 1055, biosName: 'atarisy1'});
+        expect(result.find(entry => entry.romName === 'pong')?.size).toBe(0);
+    });
+
+    it('spreads the pack size over its games when the entry sizes are unknown', () => {
+        expect(listPackGames(pack, [], null, 1000).map(entry => entry.size)).toEqual([500, 500]);
+    });
+
+    it('sizes the bios sets the pack ships', () => {
+        expect(computeBiosSizes(pack, sizes)).toEqual({atarisy1: 400});
+        expect(computeBiosSizes(pack, null)).toEqual({});
+    });
+});
+
+describe('groupSelectedGames', () => {
+    it('groups the ticked games by pack, in page order', () => {
+        const result = groupSelectedGames(['a-pack.zip|alpha', 'b-pack.zip|delta', 'a-pack.zip|beta']);
+
+        expect([...(result ?? [])]).toEqual([['a-pack.zip', ['alpha', 'beta']], ['b-pack.zip', ['delta']]]);
+    });
+
+    it('accepts the single string a lone ticked box gives', () => {
+        expect([...(groupSelectedGames('a-pack.zip|alpha') ?? [])]).toEqual([['a-pack.zip', ['alpha']]]);
+    });
+
+    it('keeps a game listed by two packs for the first one only', () => {
+        const result = groupSelectedGames(['a-pack.zip|dkong', 'b-pack.zip|dkong', 'b-pack.zip|mario']);
+
+        expect([...(result ?? [])]).toEqual([['a-pack.zip', ['dkong']], ['b-pack.zip', ['mario']]]);
+    });
+
+    it('is empty when nothing is ticked', () => {
+        expect(groupSelectedGames(undefined)?.size).toBe(0);
+    });
+
+    it.each([
+        ['a path in the pack name', '../x.zip|alpha'],
+        ['a pack that is not a zip', 'a-pack.tar|alpha'],
+        ['shell metacharacters in the rom name', 'a-pack.zip|alpha;rm -rf'],
+        ['a missing rom name', 'a-pack.zip|'],
+        ['a missing separator', 'a-pack.zip'],
+        ['an extra part', 'a-pack.zip|alpha|beta'],
+    ])('refuses %s', (_label, value) => {
+        expect(groupSelectedGames([value])).toBeNull();
+    });
+
+    it('refuses anything that is not a string', () => {
+        expect(groupSelectedGames([{pack: 'a-pack.zip'}])).toBeNull();
     });
 });
