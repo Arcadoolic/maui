@@ -23,6 +23,11 @@ import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
 import {removeFavorite, addFavorite} from '@/class/MameIniParser';
+import {
+    computePackOwnership, isPackFullyOwned, listPackGames, PackGameDetail, PackOwnership,
+} from '@/class/PackOwnership';
+import {decodeXmlEntities} from '@/class/XmlEntities';
+import type {StartingPackManifest} from '@/types/StartingPackManifest';
 import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
 import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
@@ -79,6 +84,11 @@ interface RepoPack {
     mtime: number;
     generatedAt?: string;
     gameCount?: number;
+    // Set by GET /import/from-url/packs: this pack's manifest compared with the roms already
+    // installed. Absent when the manifest could not be fetched or holds nothing to compare.
+    ownership?: PackOwnership;
+    // Its games, for the expandable list (same manifest, same comparison).
+    games?: PackGameDetail[];
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -1556,6 +1566,56 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             margin: 0 0 12px;
             font-size: 0.85em;
             color: #cccccc;
+        }
+        .pack-owned {
+            opacity: 0.55;
+        }
+        /* Aligned under the pack name: checkbox (13px + gap) + swatch (12px + margins). */
+        .pack-details {
+            margin: 4px 0 0 44px;
+            font-size: 0.9em;
+        }
+        .pack-details summary {
+            cursor: pointer;
+            color: #8ab4f8;
+        }
+        .pack-games {
+            list-style: none;
+            padding: 0;
+            margin: 6px 0 0;
+            max-height: 240px;
+            overflow-y: auto;
+        }
+        .pack-game {
+            display: flex;
+            gap: 8px;
+            padding: 2px 0;
+        }
+        .pack-game-mark {
+            flex: 0 0 14px;
+            text-align: center;
+            color: #aaaaaa;
+        }
+        .pack-game-installed .pack-game-mark {
+            color: #6bff8a;
+        }
+        .pack-game-highlight {
+            color: #f8eb48;
+        }
+        .pack-game-highlight .pack-game-mark {
+            color: #f8eb48;
+        }
+        .pack-status {
+            display: block;
+            margin-top: 2px;
+            font-size: 0.85em;
+            color: #aaaaaa;
+        }
+        .pack-status-owned {
+            color: #6bff8a;
+        }
+        .pack-status-update {
+            color: #f8eb48;
         }
         .pack-swatch {
             display: inline-block;
@@ -3889,6 +3949,86 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
     `;
 }
 
+/**
+ * `<pack>.manifest.json` next to a pack's zip on the repository (see docs/STARTER-PACK-REPO.md):
+ * the list of its games, which is all that is needed to tell what is already installed without
+ * downloading the pack. null on any failure (missing file, timeout, invalid JSON): the pack is
+ * then simply listed without that comparison instead of failing the whole browse.
+ */
+async function fetchRepoManifest(
+    repoUrl: string, packFilename: string, authorization: string,
+): Promise<StartingPackManifest | null> {
+    if (!/^[\w.-]+\.zip$/.test(packFilename)) {
+        return null;
+    }
+    try {
+        const response = await fetch(`${repoUrl}/${packFilename.replace(/\.zip$/, '')}.manifest.json`, {
+            headers: {Authorization: authorization},
+            signal: AbortSignal.timeout(10_000),
+        });
+        return response.ok ? await response.json() as StartingPackManifest : null;
+    } catch {
+        return null;
+    }
+}
+
+const MISSING_GAMES_SHOWN = 4;
+
+function renderPackOwnership(ownership: PackOwnership | undefined): string {
+    if (!ownership) {
+        return '';
+    }
+    if (isPackFullyOwned(ownership)) {
+        return `<span class="pack-status pack-status-owned">Already installed (${ownership.total}/${ownership.total} roms)</span>`;
+    }
+    if (ownership.owned === 0) {
+        return '<span class="pack-status">Not installed yet</span>';
+    }
+    // Some of it is installed, the rest is new to this machine: an updated pack, or a partial import.
+    const shown = ownership.missing.slice(0, MISSING_GAMES_SHOWN).map(escapeHtml).join(', ');
+    const more = ownership.missing.length > MISSING_GAMES_SHOWN
+        ? ` and ${ownership.missing.length - MISSING_GAMES_SHOWN} more` : '';
+    return `<span class="pack-status pack-status-update">Update available: ${ownership.missing.length} new game(s)
+        (${ownership.owned}/${ownership.total} roms installed) - ${shown}${more}</span>`;
+}
+
+const PACK_GAME_MARKS: {[status in PackGameDetail['status']]: {mark: string; title: string}} = {
+    installed: {mark: '✓', title: 'Already installed'},
+    new: {mark: '+', title: 'Not installed yet'},
+    'no-rom': {mark: '·', title: 'No rom file of its own'},
+};
+
+/**
+ * Expandable list of a pack's games. Rendered next to the pack's <label>, never inside it: a
+ * click on a <summary> inside a <label> would also tick the pack's checkbox. The "new" marks are
+ * only highlighted when part of the pack is already installed (an update): for a pack never
+ * imported, every game being "new" is not worth a colour.
+ */
+function renderPackGames(pack: RepoPack): string {
+    if (!pack.games?.length) {
+        return '';
+    }
+    const isUpdate = !!pack.ownership && pack.ownership.owned > 0 && !isPackFullyOwned(pack.ownership);
+    const items = pack.games.map(game => {
+        const {mark, title} = PACK_GAME_MARKS[game.status];
+        const meta = [game.year, game.manufacturer && decodeXmlEntities(game.manufacturer), game.categoryName]
+            .filter((part): part is string => !!part).map(escapeHtml).join(' · ');
+        return `
+            <li class="pack-game pack-game-${game.status}${game.status === 'new' && isUpdate ? ' pack-game-highlight' : ''}">
+                <span class="pack-game-mark" title="${title}">${mark}</span>
+                <span>${escapeHtml(decodeXmlEntities(game.fullname))}
+                    ${meta ? `<span class="checkbox-row-detail">${meta}</span>` : ''}</span>
+            </li>
+        `;
+    }).join('');
+    return `
+        <details class="pack-details">
+            <summary>Games in this pack (${pack.games.length})</summary>
+            <ul class="pack-games">${items}</ul>
+        </details>
+    `;
+}
+
 function renderRepoPackPicker(packs: RepoPack[]): string {
     if (!packs.length) {
         return '<p class="info flash">No pack available on this repository.</p>';
@@ -3900,13 +4040,19 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             pack.generatedAt ? new Date(pack.generatedAt).toLocaleDateString('en-GB') : null,
         ].filter((part): part is string => part !== null).join(' — ');
         const color = packColor(index);
+        // Everything in the pack is already installed: nothing to download, so it cannot be ticked.
+        const owned = isPackFullyOwned(pack.ownership);
         return `
-            <label class="checkbox-row">
+            <div class="pack-row">
+            <label class="checkbox-row${owned ? ' pack-owned' : ''}">
                 <input type="checkbox" name="packFilename" value="${escapeHtml(pack.filename)}" class="pack-checkbox"
-                    data-size="${pack.size}" data-color="${color}">
+                    data-size="${pack.size}" data-color="${color}"${owned ? ' disabled' : ''}>
                 <span class="pack-swatch" style="background-color: ${color}"></span>
-                <span>${escapeHtml(pack.filename)}<span class="checkbox-row-detail">${escapeHtml(details)}</span></span>
+                <span>${escapeHtml(pack.filename)}<span class="checkbox-row-detail">${escapeHtml(details)}</span>
+                    ${renderPackOwnership(pack.ownership)}</span>
             </label>
+            ${renderPackGames(pack)}
+            </div>
         `;
     }).join('');
     // Submit stays disabled until at least one pack is ticked (server re-checks either way).
@@ -3922,7 +4068,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             <button type="submit" id="packSubmit" disabled>Download and import</button>
         </form>
         <script>(function () {
-            var boxes = Array.prototype.slice.call(document.querySelectorAll('.pack-checkbox'));
+            var boxes = Array.prototype.slice.call(document.querySelectorAll('.pack-checkbox:not([disabled])'));
             var all = document.getElementById('packSelectAll');
             var submit = document.getElementById('packSubmit');
             var disk = document.querySelector('.disk-space');
@@ -3961,7 +4107,8 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             function refresh() {
                 var picked = boxes.filter(function (box) { return box.checked; });
                 submit.disabled = picked.length === 0;
-                all.checked = picked.length === boxes.length;
+                all.checked = boxes.length > 0 && picked.length === boxes.length;
+                all.disabled = boxes.length === 0;
                 if (!summary) { return; }
                 var total = Number(disk.dataset.total);
                 var free = Number(disk.dataset.romsFree);
@@ -5012,9 +5159,18 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 throw new Error(`HTTP ${response.status}`);
             }
             const data = await response.json() as {packs?: RepoPack[]};
+            const packs = data.packs ?? [];
+            const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+            const authorization = 'Basic '
+                + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64');
+            await Promise.all(packs.map(async pack => {
+                const manifest = await fetchRepoManifest(config.repoUrl, pack.filename, authorization);
+                pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
+                pack.games = listPackGames(manifest, installedRoms);
+            }));
             res.send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                data.packs ?? [],
+                packs,
             ));
         } catch (error) {
             const message = error instanceof Error ? error.message : 'unexpected error';
