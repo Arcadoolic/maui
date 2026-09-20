@@ -34,6 +34,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -503,7 +504,9 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
                 summary['warnings'].append(f'BIOS "{bios_name}": missing from the ZIP, skipped.')
 
         category_ids = {}
-        for game in manifest.get('games', []):
+        games = manifest.get('games', [])
+        emit_progress('import', 0, len(games))
+        for index, game in enumerate(games, start=1):
             rom_name = game['romName']
             try:
                 category_id = None
@@ -549,6 +552,7 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
                 message = str(error) or 'unexpected error'
                 summary['errors'].append(f'{rom_name}: {message}')
                 log(f'{rom_name}: error ({message}).')
+            emit_progress('import', index, len(games))
 
         conn.commit()
     finally:
@@ -561,6 +565,14 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
 # --url : download the pack from repo.maui.afronob.com before importing it, so this script can
 # run unattended on a cabinet's BO instead of requiring an scp'd file already on disk.
 # ---------------------------------------------------------------------------
+
+def emit_progress(phase, done, total):
+    """Machine-readable progress line, only when the BO asks for it (MAUI_PROGRESS=1): it parses
+    these into a progress bar instead of listing them. Kept off by default so a terminal run
+    stays readable. total 0 = unknown (indeterminate bar)."""
+    if os.environ.get('MAUI_PROGRESS') == '1':
+        print(f'@@PROGRESS {phase} {done} {total}', flush=True)
+
 
 def download_to_tempfile(url, user, password):
     """Downloads `url` into a temp .zip file and returns its path. zipfile.ZipFile needs a
@@ -586,7 +598,21 @@ def download_to_tempfile(url, user, password):
                         f'about {human_size(int(content_length))} needed for the download, '
                         f'{human_size(free)} available.',
                     )
-            shutil.copyfileobj(response, dst)
+            total = int(content_length) if content_length else 0
+            downloaded = 0
+            last_emit = 0.0
+            emit_progress('download', 0, total)
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                downloaded += len(chunk)
+                now = time.monotonic()
+                if now - last_emit >= 0.25:
+                    last_emit = now
+                    emit_progress('download', downloaded, total)
+            emit_progress('download', downloaded, downloaded)
     except BaseException:
         os.unlink(temp_path)
         raise
