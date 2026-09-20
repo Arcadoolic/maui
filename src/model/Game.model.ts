@@ -1,6 +1,7 @@
 import {BelongsTo, Column, DataType, ForeignKey, HasMany, HasOne, Model, Table} from 'sequelize-typescript';
 import Category from './Category.model';
 import Hiscore from '@/model/Hiscore.model';
+import {decodeXmlEntities} from '@/class/XmlEntities';
 
 @Table({
     timestamps: true,
@@ -73,6 +74,14 @@ export default class Game extends Model<Game> {
 
     @HasMany(() => Hiscore)
     public hiscores!: InstanceType<typeof Hiscore>[];
+
+    /**
+     * Studio/manufacturer as mame reports it ("Konami", "Capcom", "Atari Games"...), decoded for
+     * display; empty when mame gave none.
+     */
+    public get studio(): string {
+        return this.manufacturer ? decodeXmlEntities(this.manufacturer) : '';
+    }
 
     public get players() {
         let str: string|null = null;
