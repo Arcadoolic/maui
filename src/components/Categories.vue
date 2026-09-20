@@ -11,10 +11,10 @@
 </template>
 
 <script setup lang="ts">
-import Category from '@/model/Category.model';
+import type {CarouselCategory} from '@/types/CarouselCategory';
 
 const props = withDefaults(defineProps<{
-    categories: Category[];
+    categories: CarouselCategory[];
     selectedCategoryIndex?: number;
 }>(), {selectedCategoryIndex: 0});
 
@@ -120,6 +120,10 @@ function getCategoryClasses(index: number) {
 
     .categories .category.fighter {
         background-image: url(../assets/categories/fighter.svg);
+    }
+
+    .categories .category.hiscores_only {
+        background-image: url(../assets/categories/hiscores_only.svg);
     }
 
     .categories .category.maze {

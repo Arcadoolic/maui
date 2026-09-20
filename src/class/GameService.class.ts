@@ -187,6 +187,18 @@ export default class GameService {
     }
 
     /**
+     * Games whose high scores can be extracted (`hi`, the same flag that shows the champions on
+     * their marquee in the carousel) - the content of the dynamic "Hiscores Only" category.
+     * Queried on every call (never cached like loadGames()), so it always reflects the table.
+     */
+    public async loadHiscoreGames() {
+        return await Game.findAll({
+            where: {hi: true},
+            order: ['romName'],
+        });
+    }
+
+    /**
      * Load categories from database
      */
     public async loadCategories() {
