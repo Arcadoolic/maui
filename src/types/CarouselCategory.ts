@@ -11,7 +11,18 @@ export interface DynamicCategory {
     dynamic: 'hiscores';
 }
 
-export type CarouselCategory = Category | DynamicCategory;
+/**
+ * Several stored categories shown as one carousel entry, e.g. mame's "Ball & Paddle" and its
+ * "TTL * Ball & Paddle" (discrete-logic games of the same kind). See mergeTtlCategories().
+ */
+export interface MergedCategory {
+    // First of categoryIds: unique among carousel entries, used as the list key.
+    id_category: number;
+    name: string;
+    categoryIds: number[];
+}
+
+export type CarouselCategory = Category | DynamicCategory | MergedCategory;
 
 // Negative id: can never clash with an autoincrement `category` primary key.
 export const HISCORES_ONLY_CATEGORY: DynamicCategory = {
@@ -22,4 +33,8 @@ export const HISCORES_ONLY_CATEGORY: DynamicCategory = {
 
 export function isDynamicCategory(category: CarouselCategory): category is DynamicCategory {
     return 'dynamic' in category;
+}
+
+export function isMergedCategory(category: CarouselCategory): category is MergedCategory {
+    return 'categoryIds' in category;
 }

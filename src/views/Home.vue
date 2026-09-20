@@ -51,7 +51,10 @@ import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
-import {CarouselCategory, HISCORES_ONLY_CATEGORY, isDynamicCategory} from '@/types/CarouselCategory';
+import {
+    CarouselCategory, HISCORES_ONLY_CATEGORY, isDynamicCategory, isMergedCategory,
+} from '@/types/CarouselCategory';
+import {mergeTtlCategories} from '@/class/CarouselCategories';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
@@ -141,6 +144,9 @@ async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
     const selected = categories.value[categoryIndex - 1];
     if (isDynamicCategory(selected)) {
         return await gameService.loadHiscoreGames();
+    }
+    if (isMergedCategory(selected)) {
+        return await gameService.loadGamesByCategoryIds(selected.categoryIds);
     }
     return await selected.$get('games', {order: ['romName']}) as Game[] || [];
 }
@@ -274,7 +280,7 @@ if (!getIsInit()) {
     gameService = getGameService();
 
     onMounted(async () => {
-        const storedCategories = await gameService.loadCategories();
+        const storedCategories = mergeTtlCategories(await gameService.loadCategories());
         // Right after "All Games". Only offered once at least one game has extractable
         // hiscores: an empty category would be a dead end in the carousel.
         const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
