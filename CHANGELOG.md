@@ -1,3 +1,30 @@
+## [2.4.0](https://github.com/Arcadoolic/maui/compare/2.3.0...2.4.0) (2026-09-20)
+
+### Features
+
+* **bo:** Categories subtab in the Games tab ([f69ad92](https://github.com/Arcadoolic/maui/commit/f69ad927ffc2830c73adc3b96bac4a6c4960ae19))
+* **bo:** default avatars, reserved nicknames, restore and purge deleted players ([ee8fbcc](https://github.com/Arcadoolic/maui/commit/ee8fbcc6eec2995fb7dc43c0dfb17a2a34043d95))
+* **bo:** flag already-installed packs in the repository list, with expandable game lists ([63ad14f](https://github.com/Arcadoolic/maui/commit/63ad14f5f85cf8ee082c09fbd2271a1f0055b452))
+* **bo:** import only the ticked games of a starting pack, read with HTTP Range ([f297220](https://github.com/Arcadoolic/maui/commit/f2972209fc396950cc07c3eac422891e6d5e2af3))
+* **bo:** import several starting packs at once, with progress and disk-space bars ([6d29419](https://github.com/Arcadoolic/maui/commit/6d294197552c4a4a8833a2e905c8b0fe9819c5a0))
+* **bo:** remove and restore favorites from a new Games tab, BO in English ([18d65dd](https://github.com/Arcadoolic/maui/commit/18d65ddc8e2329819b5e0ba12749f99d9d1e4893))
+* **bo:** search the games of the repository packs before importing ([f3ead09](https://github.com/Arcadoolic/maui/commit/f3ead095229796567b7846e5f0b6049e9acfb795))
+* **carousel:** icons for the Arcade and MultiGame categories ([24d90c4](https://github.com/Arcadoolic/maui/commit/24d90c45d63514bf4af1c486bd73462b6f59e154))
+* **home:** dynamic "Hiscores Only" category in the carousel ([765663e](https://github.com/Arcadoolic/maui/commit/765663e2c8bec6ff8a8fd69f87e08c8eedb7c428))
+* **home:** merge mame's "TTL *" categories into their plain twin in the carousel ([1eb3802](https://github.com/Arcadoolic/maui/commit/1eb380225a78baf118ce1431a349cc73b617a627))
+* **home:** show the game's studio in its title ([24b1f58](https://github.com/Arcadoolic/maui/commit/24b1f588bfad043059739d7c4a812537828b1293))
+* **scripts:** add select-roms.py to copy a ROM selection from a full collection ([e7461bd](https://github.com/Arcadoolic/maui/commit/e7461bd6ce7988c99cb80bc0d6ee87b2446b72a9))
+* **starting-pack:** add pack games to MAME favorites instead of replacing them ([8e9817d](https://github.com/Arcadoolic/maui/commit/8e9817d7994ccab4a20fcd63d01ddf47ef2ed181))
+
+### Bug Fixes
+
+* detect packaged builds without relying on NODE_ENV ([7d74781](https://github.com/Arcadoolic/maui/commit/7d74781f0b1c8b90f461dcc9e5c3e8a7f5eb8fce))
+* **dev:** stop Electron when the dev server dies ([23e8c2e](https://github.com/Arcadoolic/maui/commit/23e8c2e84a8c10341fdfceb7a0e432558190e8e6))
+* **home:** flatten the license note of a studio shown in parentheses ([9a5c31f](https://github.com/Arcadoolic/maui/commit/9a5c31f5f1841951d40afdca7bf101103ff38ecc))
+* **home:** hide the category title before changing its name ([f606cc9](https://github.com/Arcadoolic/maui/commit/f606cc9f33e62557292b768519bc7a8ce9fafaec))
+* restore soft-deleted games when they return to favorites ([a14136c](https://github.com/Arcadoolic/maui/commit/a14136c3bae5228f62308147a705f011fea4169a))
+* **starting-pack:** reword the import confirmation ([cf5af3f](https://github.com/Arcadoolic/maui/commit/cf5af3fd9926f1fe3f44b0fc3b8053ac52b2c414))
+
 ## [2.3.0](https://github.com/Arcadoolic/maui/compare/2.2.0...2.3.0) (2026-09-19)
 
 ### Features
