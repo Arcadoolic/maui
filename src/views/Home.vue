@@ -51,7 +51,7 @@ import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
-import Category from '@/model/Category.model';
+import {CarouselCategory, HISCORES_ONLY_CATEGORY, isDynamicCategory} from '@/types/CarouselCategory';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
@@ -67,7 +67,7 @@ let gameService: GameService;
 const games = ref<Game[]>([]);
 const selectedGameIndex = ref(0);
 
-const categories = ref<Category[]>([]);
+const categories = ref<CarouselCategory[]>([]);
 const selectedCategoryIndex = ref(0);
 const hasPlayerInfo = ref(false);
 
@@ -134,15 +134,24 @@ function onGameChange(previous: boolean) {
         ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1);
 }
 
+async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
+    if (!categoryIndex) {
+        return await gameService.loadGames();
+    }
+    const selected = categories.value[categoryIndex - 1];
+    if (isDynamicCategory(selected)) {
+        return await gameService.loadHiscoreGames();
+    }
+    return await selected.$get('games', {order: ['romName']}) as Game[] || [];
+}
+
 function onCategoryChange(previous: boolean) {
     const showGameFn = async () => {
         // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
         // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
         // within its category no longer matched where it sits in the full list (e.g. "005" first
         // alphabetically, but wherever insertion order placed it inside its category).
-        games.value = (!selectedCategoryIndex.value) ? await gameService.loadGames() :
-            await categories.value[selectedCategoryIndex.value - 1]
-                .$get('games', {order: ['romName']}) as Game[] || [];
+        games.value = await loadCategoryGames(selectedCategoryIndex.value);
 
         selectedGameIndex.value = 0;
         flyer.value = generateFlyerPath();
@@ -265,7 +274,11 @@ if (!getIsInit()) {
     gameService = getGameService();
 
     onMounted(async () => {
-        categories.value = await gameService.loadCategories();
+        const storedCategories = await gameService.loadCategories();
+        // Right after "All Games". Only offered once at least one game has extractable
+        // hiscores: an empty category would be a dead end in the carousel.
+        const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
+        categories.value = hasHiscoreGames ? [HISCORES_ONLY_CATEGORY, ...storedCategories] : storedCategories;
         games.value = await gameService.loadGames();
         hasPlayerInfo.value = !!mameService.nplayersIniPath;
 
