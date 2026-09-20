@@ -1594,6 +1594,16 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             padding: 2px 0;
         }
         /* Overrides the page-wide label/input styles (block, full width, top margin). */
+        /* display: flex above would beat the UA rule for [hidden] (search filter). */
+        .pack-game[hidden], .pack-row[hidden] {
+            display: none;
+        }
+        .pack-search {
+            margin: 16px 0 0;
+        }
+        .pack-search-count {
+            margin: 8px 0 0;
+        }
         .pack-game-label {
             display: flex;
             align-items: flex-start;
@@ -4026,16 +4036,21 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
         const label = `${escapeHtml(decodeXmlEntities(game.fullname))}
             ${meta ? `<span class="checkbox-row-detail">${meta}</span>` : ''}`;
         const classes = `pack-game pack-game-${game.status}${game.status === 'new' && isUpdate ? ' pack-game-highlight' : ''}`;
+        // What the search box looks in (folded and matched in the page, see renderRepoPackPicker()).
+        const search = escapeHtml([
+            decodeXmlEntities(game.fullname), game.romName, game.manufacturer && decodeXmlEntities(game.manufacturer),
+            game.categoryName, game.year,
+        ].filter(Boolean).join(' '));
         if (game.status === 'installed' || fullyOwned) {
             return `
-                <li class="${classes}">
+                <li class="${classes}" data-search="${search}">
                     <span class="pack-game-mark" title="${title}">${mark}</span>
                     <span>${label}</span>
                 </li>
             `;
         }
         return `
-            <li class="${classes}">
+            <li class="${classes}" data-search="${search}">
                 <label class="pack-game-label">
                     <input type="checkbox" class="game-checkbox" name="game"
                         value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
@@ -4086,11 +4101,18 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
         `;
     }).join('');
     // Submit stays disabled until at least one game is ticked (server re-checks either way).
+    // The search box sits outside the form: Enter in it must not submit the import.
     return `
+        <div class="pack-search">
+            <input type="search" id="packSearch" placeholder="Search a game, studio or category…"
+                autocomplete="off" aria-label="Search the games of the packs">
+            <p class="info pack-search-count" id="packSearchCount" hidden></p>
+        </div>
         <form method="post" action="/import/from-url"
             onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
-            A game listed by several packs is fetched once.</p>
+            A game listed by several packs is fetched once. While a search is active, the pack boxes and
+            "Select all" only act on the games shown; ticked games stay ticked when they are hidden.</p>
             ${rows}
             <label class="checkbox-row">
                 <input type="checkbox" id="packSelectAll">
@@ -4107,6 +4129,8 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             var track = disk && disk.querySelector('.disk-bar-track');
             var legend = disk && disk.querySelector('.disk-legend');
             var zoomNote = disk && disk.querySelector('.disk-zoom-note');
+            var search = document.getElementById('packSearch');
+            var searchCount = document.getElementById('packSearchCount');
             // Below this share of the disk, the selection is a sliver of the full bar (700 MB on
             // a 1 TB disk): the bar then shows only the free space instead of the whole disk.
             var ZOOM_BELOW = 0.02;
@@ -4120,6 +4144,9 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 return Array.prototype.slice.call(row.querySelectorAll('.game-checkbox:not([disabled])'));
             }
             var allBoxes = [].concat.apply([], rows.map(gameBoxes));
+            // What a pack box / "Select all" acts on: the games a search leaves showing.
+            function isShown(box) { return !box.closest('li').hidden; }
+            function shownBoxes(row) { return gameBoxes(row).filter(isShown); }
             // Adds one segment to the bar and its entry to the legend.
             function addPart(bytes, total, label, color) {
                 var seg = document.createElement('div');
@@ -4162,16 +4189,18 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             }
             function refresh() {
                 rows.forEach(function (row) {
-                    var boxes = gameBoxes(row);
+                    var boxes = shownBoxes(row);
                     var ticked = boxes.filter(function (box) { return box.checked; }).length;
                     var toggle = row.querySelector('.pack-toggle');
                     toggle.checked = boxes.length > 0 && ticked === boxes.length;
                     toggle.indeterminate = ticked > 0 && ticked < boxes.length;
                 });
+                // The import takes every ticked game, shown or not.
                 var pickedBoxes = allBoxes.filter(function (box) { return box.checked; });
                 submit.disabled = pickedBoxes.length === 0;
-                all.checked = allBoxes.length > 0 && pickedBoxes.length === allBoxes.length;
-                all.disabled = allBoxes.length === 0;
+                var shownAll = allBoxes.filter(isShown);
+                all.checked = shownAll.length > 0 && shownAll.every(function (box) { return box.checked; });
+                all.disabled = shownAll.length === 0;
                 if (!summary) { return; }
                 var total = Number(disk.dataset.total);
                 var free = Number(disk.dataset.romsFree);
@@ -4218,13 +4247,60 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             });
             rows.forEach(function (row) {
                 row.querySelector('.pack-toggle').addEventListener('change', function (event) {
-                    gameBoxes(row).forEach(function (box) { box.checked = event.target.checked; mirror(box); });
+                    shownBoxes(row).forEach(function (box) { box.checked = event.target.checked; mirror(box); });
                     refresh();
                 });
             });
             all.addEventListener('change', function () {
-                allBoxes.forEach(function (box) { box.checked = all.checked; });
+                allBoxes.filter(isShown).forEach(function (box) { box.checked = all.checked; mirror(box); });
                 refresh();
+            });
+
+            // Search: every term must appear (accents and case ignored) in the game's name, rom
+            // name, studio, category or year, or in its pack's name. A pack with no match is hidden,
+            // one with matches opens on them; clearing the search puts the packs back as they were.
+            function fold(text) {
+                return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+            }
+            var openBeforeSearch = null;
+            function applySearch() {
+                var terms = fold(search.value).split(/\\s+/).filter(Boolean);
+                var searching = terms.length > 0;
+                if (searching && openBeforeSearch === null) {
+                    openBeforeSearch = rows.map(function (row) {
+                        var details = row.querySelector('.pack-details');
+                        return details ? details.open : false;
+                    });
+                }
+                var games = 0;
+                var packs = 0;
+                rows.forEach(function (row, index) {
+                    var packName = fold(row.dataset.pack);
+                    var shown = 0;
+                    Array.prototype.forEach.call(row.querySelectorAll('.pack-game'), function (item) {
+                        var haystack = packName + ' ' + fold(item.dataset.search || '');
+                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; });
+                        item.hidden = !match;
+                        if (match) { shown++; }
+                    });
+                    row.hidden = searching && shown === 0;
+                    var details = row.querySelector('.pack-details');
+                    if (details) {
+                        details.open = searching ? shown > 0 : (openBeforeSearch ? openBeforeSearch[index] : details.open);
+                    }
+                    games += shown;
+                    if (shown > 0) { packs++; }
+                });
+                if (!searching) { openBeforeSearch = null; }
+                searchCount.hidden = !searching;
+                searchCount.textContent = games
+                    ? games + ' game(s) found in ' + packs + ' pack(s).'
+                    : 'No game matches this search.';
+                refresh();
+            }
+            search.addEventListener('input', applySearch);
+            search.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') { event.preventDefault(); }
             });
             refresh();
         })();</script>
