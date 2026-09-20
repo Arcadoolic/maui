@@ -43,6 +43,11 @@ export default class GameService {
      * @param romNames
      */
     public async saveGamesFromRomNames(romNames: string[]) {
+        // Game is paranoid: a game dropped from favorites.ini below is only soft-deleted, its row
+        // stays (romName is unique). Restore the ones back in favorites first - otherwise
+        // findAll() below can't see them, they take the "new game" path, and bulkCreate's
+        // updateOnDuplicate refreshes their columns but leaves deletedAt set, so they stay hidden.
+        await Game.restore({where: {romName: romNames}});
         const existingGames = (await Game.findAll()).map((game) => {
             return game.romName;
         });
@@ -179,6 +184,29 @@ export default class GameService {
             });
         }
         return this.games;
+    }
+
+    /**
+     * Games whose high scores can be extracted (`hi`, the same flag that shows the champions on
+     * their marquee in the carousel) - the content of the dynamic "Hiscores Only" category.
+     * Queried on every call (never cached like loadGames()), so it always reflects the table.
+     */
+    public async loadHiscoreGames() {
+        return await Game.findAll({
+            where: {hi: true},
+            order: ['romName'],
+        });
+    }
+
+    /**
+     * Games of several stored categories at once (a merged carousel entry, see
+     * mergeTtlCategories()), in the same order as "All games".
+     */
+    public async loadGamesByCategoryIds(categoryIds: number[]) {
+        return await Game.findAll({
+            where: {id_category: categoryIds},
+            order: ['romName'],
+        });
     }
 
     /**

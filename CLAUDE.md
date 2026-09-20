@@ -54,7 +54,7 @@ just starting-pack  # build a starting pack ZIP (favorites + roms + artwork) fro
 
 Only ever run **one** `serve`/`build` at a time — both trigger `npm install`, and concurrent installs race on rebuilding the native `sqlite3` module (corrupts the `node-gyp`/`make` build directory).
 
-`just serve`/`just build` wrap `electron:serve`/`electron:build`, which run `electron-vite dev` and `electron-vite build && electron-builder` respectively (not `vue-cli-service`, removed during the Vue 3 migration).
+`just serve`/`just build` wrap `electron:serve`/`electron:build`, which run `electron-vite dev --watch` (main-process changes such as `boServer.ts` restart Electron automatically) and `electron-vite build && electron-builder` respectively (not `vue-cli-service`, removed during the Vue 3 migration).
 
 Other useful commands (no `just` recipe):
 ```bash

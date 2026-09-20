@@ -8,6 +8,7 @@ import {Server} from 'http';
 import {startBoServer} from '@/boServer';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import Config from '@/class/Config.class';
+import {exitWhenParentGone} from '@/devParentWatch';
 
 remoteMain.initialize();
 
@@ -106,6 +107,17 @@ if (isDevelopment) {
         process.on('SIGTERM', () => {
             app.quit();
         });
+        // Only under `electron-vite dev` (it sets ELECTRON_RENDERER_URL): this file also runs in the
+        // packaged app, where a changed parent is normal and must never stop the app.
+        if (process.env.ELECTRON_RENDERER_URL) {
+            // Ctrl+C in the terminal running `just serve` (SIGINT) and a closed terminal (SIGHUP)
+            // otherwise leave this process, and the BO with it, running.
+            process.on('SIGINT', () => app.quit());
+            process.on('SIGHUP', () => app.quit());
+            // Dev server killed without any signal reaching us (SIGKILL, or only its `just`/`npm`
+            // wrapper): see exitWhenParentGone(). exit(), not quit(): nothing left to wait for.
+            exitWhenParentGone(() => app.exit(0));
+        }
     }
 }
 

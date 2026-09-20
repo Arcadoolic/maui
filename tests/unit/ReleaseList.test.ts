@@ -42,7 +42,7 @@ describe('sortByPublishedDesc', () => {
 describe('formatPublishedAt', () => {
     it('shows the time as well as the date', () => {
         const formatted = formatPublishedAt('2026-09-18T20:24:16Z');
-        expect(formatted).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}$/);
+        expect(formatted).toMatch(/^\d{2}\/\d{2}\/\d{4},? \d{2}:\d{2}:\d{2}$/);
     });
 
     it('tells apart two builds published seconds apart', () => {

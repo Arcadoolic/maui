@@ -1,9 +1,9 @@
-import express, {Response} from 'express';
+import express, {Request, Response} from 'express';
 import session from 'express-session';
 import {Server} from 'http';
 import {
     existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
-    chmodSync, renameSync, createWriteStream,
+    chmodSync, renameSync, createWriteStream, statfsSync, statSync, lstatSync,
 } from 'fs';
 import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
@@ -22,6 +22,21 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
+import {removeFavorite, addFavorite} from '@/class/MameIniParser';
+import {
+    computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
+    PackOwnership,
+} from '@/class/PackOwnership';
+import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
+import {decodeXmlEntities} from '@/class/XmlEntities';
+import {getCategoryIconKey, mergeTtlCategories} from '@/class/CarouselCategories';
+import {HISCORES_ONLY_CATEGORY, isMergedCategory} from '@/types/CarouselCategory';
+import type {StartingPackManifest} from '@/types/StartingPackManifest';
+import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
+import {
+    findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
+} from '@/class/UserReservation';
+import {findAvatarFile} from '@/class/AvatarFiles';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
@@ -73,6 +88,13 @@ interface RepoPack {
     mtime: number;
     generatedAt?: string;
     gameCount?: number;
+    // Set by GET /import/from-url/packs: this pack's manifest compared with the roms already
+    // installed. Absent when the manifest could not be fetched or holds nothing to compare.
+    ownership?: PackOwnership;
+    // Its games, for the expandable list (same manifest, same comparison).
+    games?: PackGameDetail[];
+    // Size of each BIOS/parent set the pack ships, by name (see computeBiosSizes()).
+    biosSizes?: Record<string, number>;
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
@@ -131,7 +153,7 @@ function ensureMameConfigBootstrapped(mameBinary: string, iniPath: string): void
     // MameService.class.ts uses).
     execFileSync(mameBinary, ['-createconfig'], {cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe']});
     if (!existsSync(uiIniPath)) {
-        throw new Error(`"${uiIniPath}" introuvable après -createconfig.`);
+        throw new Error(`"${uiIniPath}" not found after -createconfig.`);
     }
     // Same forcing as MameService.class.ts's constructor (the Electron app's own bootstrap
     // path) - see its forceFullscreenDefault() comment for why this can't be left to
@@ -173,7 +195,7 @@ function getDatabasePath(): string {
  * Same fixed <home>/.mame-awesome-ui path as getDatabasePath(), for the favorites name/BIOS
  * cache (see FavoritesCache below) - resolving a favorite's fullname/BIOS is a blocking `mame
  * -lx` process spawn per rom (see getGameXmlInfo()), so the favorites tab reads this cache
- * instead of re-running it on every page load; only "Mettre à jour les favoris" re-resolves and
+ * instead of re-running it on every page load; only "Update favorites" re-resolves and
  * rewrites it.
  */
 function getFavoritesCachePath(): string {
@@ -212,6 +234,42 @@ function writeFavoritesCache(entries: { [romName: string]: FavoritesCacheEntry }
     const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
     writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
     return cache;
+}
+
+/**
+ * A favorite removed from the Games tab: the exact favorites.ini block mame had written for it
+ * (see removeFavorite()), plus its cached name/BIOS, so "Restore" can put both back as they were.
+ * Stored beside the favorites cache rather than in favorites.ini itself, which is mame's own file
+ * (it rewrites it from memory on exit and would drop anything foreign).
+ */
+interface RemovedFavorite {
+    romName: string;
+    fullname: string;
+    removedAt: string;
+    entry: string;
+    cache?: FavoritesCacheEntry;
+}
+
+function getRemovedFavoritesPath(): string {
+    return join(dirname(getFavoritesCachePath()), 'removed-favorites.json');
+}
+
+function readRemovedFavorites(): RemovedFavorite[] {
+    const path = getRemovedFavoritesPath();
+    if (!existsSync(path)) {
+        return [];
+    }
+    try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        // Corrupt/unreadable file - treat as empty rather than failing the whole tab.
+        return [];
+    }
+}
+
+function writeRemovedFavorites(removed: RemovedFavorite[]): void {
+    writeFileSync(getRemovedFavoritesPath(), JSON.stringify(removed));
 }
 
 /**
@@ -510,7 +568,7 @@ function getMameInfo(config: Config): MameInfo {
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
             favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
-            error: 'Configurez le binaire mame (onglet Config) pour voir le chemin des roms.',
+            error: 'Configure the mame binary (Config tab) to see the roms path.',
         };
     }
 
@@ -519,7 +577,7 @@ function getMameInfo(config: Config): MameInfo {
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
             favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
-            error: `Le binaire "${mameBinary}" est introuvable.`,
+            error: `The binary "${mameBinary}" was not found.`,
         };
     }
 
@@ -539,7 +597,7 @@ function getMameInfo(config: Config): MameInfo {
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
             favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
-            error: 'Impossible de lire la configuration mame ("-showconfig" a échoué).',
+            error: 'Unable to read the mame configuration ("-showconfig" failed).',
         };
     }
 }
@@ -663,8 +721,8 @@ interface FavoriteRow extends FavoriteMediaStatus {
     fullname: string;
     biosName: string | null;
     deviceRoms: string[];
-    // False when this rom has no entry in the favorites cache yet (added since the last "Mettre
-    // à jour les favoris") - fullname then just falls back to romName and biosName/deviceRoms to
+    // False when this rom has no entry in the favorites cache yet (added since the last "Update
+    // favorites") - fullname then just falls back to romName and biosName/deviceRoms to
     // empty, rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
     cached: boolean;
 }
@@ -676,6 +734,9 @@ interface FavoritesInfo {
     // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
     // always live, regardless of cache age - see getFavoriteMediaStatus().
     cacheUpdatedAt?: string | null;
+    // One-shot flash messages after a favorite was removed (POST /favorites/delete).
+    notice?: string;
+    warning?: string;
 }
 
 interface FavoritesContext {
@@ -697,20 +758,20 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
     const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
 
     if (!favoritesPath) {
-        return {error: 'Aucun favori pour l\'instant - ajoutez-en depuis le menu de MAME (Tab en jeu).'};
+        return {error: 'No favorites yet - add some from the MAME menu (Tab in game).'};
     }
 
     const romNames = getFavoriteRomNames(favoritesPath);
     if (!romNames.length) {
-        return {error: 'Le fichier favorites.ini ne contient aucun favori pour l\'instant.'};
+        return {error: 'The favorites.ini file contains no favorites yet.'};
     }
 
     if (!config.mamePath || !config.mameBinaryName) {
-        return {error: 'Configurez le binaire mame dans l\'onglet MAME pour afficher le nom des favoris.'};
+        return {error: 'Configure the mame binary in the MAME tab to display the favorites\' names.'};
     }
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
-        return {error: `Le binaire "${mameBinary}" est introuvable.`};
+        return {error: `The binary "${mameBinary}" was not found.`};
     }
 
     return {romNames, mameBinary, iniPath, marqueePath, flyerPath, logoPath};
@@ -733,8 +794,8 @@ function getFavoriteMediaStatus(context: FavoritesContext, romName: string): Fav
 /**
  * Resolves a single favorite's row - the slow part (a blocking `mame -lx` process spawn per
  * call, see getGameXmlInfo()) callers should interleave with res.write() progress so a long
- * favorites list streams in instead of blocking the whole response. Only used by "Mettre à jour
- * les favoris" (POST /favorites/refresh) now - the normal favorites tab reads the cache this
+ * favorites list streams in instead of blocking the whole response. Only used by "Update
+ * favorites" (POST /favorites/refresh) now - the normal favorites tab reads the cache this
  * populates instead (see favoriteRowFromCache()).
  */
 function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
@@ -802,7 +863,7 @@ async function downloadMissingFavoriteMedia(
     for (const row of rows) {
         if (row.hasMarquee && row.hasFlyer && row.hasLogo) {
             summary.alreadyComplete++;
-            onProgress(`${row.romName} : déjà complet, ignoré.`);
+            onProgress(`${row.romName}: already complete, skipped.`);
             continue;
         }
 
@@ -810,18 +871,18 @@ async function downloadMissingFavoriteMedia(
 
         if (result.status === 'quota-exceeded') {
             summary.stoppedForQuota = true;
-            summary.errors.push(`${row.romName}: quota ScreenScraper dépassé, arrêt du traitement.`);
-            onProgress(`${row.romName} : quota ScreenScraper dépassé, arrêt du traitement.`);
+            summary.errors.push(`${row.romName}: ScreenScraper quota exceeded, processing stopped.`);
+            onProgress(`${row.romName}: ScreenScraper quota exceeded, processing stopped.`);
             break;
         }
         if (result.status === 'not-found') {
             summary.notFound++;
-            onProgress(`${row.romName} : introuvable sur ScreenScraper.`);
+            onProgress(`${row.romName}: not found on ScreenScraper.`);
             continue;
         }
         if (result.status === 'error') {
             summary.errors.push(`${row.romName}: ${result.message}`);
-            onProgress(`${row.romName} : erreur (${result.message}).`);
+            onProgress(`${row.romName}: error (${result.message}).`);
             continue;
         }
 
@@ -868,16 +929,16 @@ async function downloadMissingFavoriteMedia(
             // Found on ScreenScraper, but no marquee/flyer/logo available for it (e.g. a
             // "notgame" driver entry like a BIOS/device, or media simply not uploaded yet).
             summary.noMedia++;
-            onProgress(`${row.romName} : trouvé, mais aucun visuel disponible.`);
+            onProgress(`${row.romName}: found, but no artwork available.`);
         } else {
             const parts: string[] = [];
             if (downloadedKinds.length) {
-                parts.push(`${downloadedKinds.join(' et ')} téléchargé(s)`);
+                parts.push(`${downloadedKinds.join(' and ')} downloaded`);
             }
             if (failedKinds.length) {
-                parts.push(`${failedKinds.join(' et ')} en erreur`);
+                parts.push(`${failedKinds.join(' and ')} failed`);
             }
-            onProgress(`${row.romName} : ${parts.join(', ')}.`);
+            onProgress(`${row.romName}: ${parts.join(', ')}.`);
         }
     }
 
@@ -906,15 +967,27 @@ function escapeHtml(value: string): string {
  */
 function runImportScript(
     res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
+    overall?: {index: number; total: number},
 ): Promise<boolean> {
     const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
-    res.write(`<section class="card"><h2>${title}</h2>${PROGRESS_LOG_OPEN}`);
+    const barId = `import-progress-${++importProgressCounter}`;
+    // A pack downloaded whole (--url alone) spends its first half downloading; a local file, or a
+    // pack read partially (--url with --only), has no such phase.
+    const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
+    res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
+        + PROGRESS_LOG_OPEN);
 
     return new Promise(resolve => {
-        const child = spawn('python3', [scriptPath, ...scriptArgs], {env});
+        const child = spawn('python3', [scriptPath, ...scriptArgs], {env: {...env, MAUI_PROGRESS: '1'}});
 
+        const updateBar = (call: string): void => {
+            res.write(`<script>mauiImportProgress.${call}</script>`);
+        };
         const writeLine = (line: string): void => {
-            if (line.trim()) {
+            const progress = /^@@PROGRESS (download|import) (\d+) (\d+)$/.exec(line.trim());
+            if (progress) {
+                updateBar(`update(${JSON.stringify(barId)},${JSON.stringify(progress[1])},${progress[2]},${progress[3]})`);
+            } else if (line.trim()) {
                 res.write(`<li>${escapeHtml(line)}</li>`);
             }
         };
@@ -942,19 +1015,93 @@ function runImportScript(
         child.stderr.on('data', stderrSplitter.push);
 
         child.on('error', (error) => {
-            res.write(`</ul><p class="error">${escapeHtml(`Échec du lancement : ${error.message}`)}</p></section>`);
+            res.write(`</ul><p class="error">${escapeHtml(`Launch failed: ${error.message}`)}</p></section>`);
             res.write(renderPageTail());
             res.end();
             resolve(false);
         });
 
-        child.on('close', () => {
+        child.on('close', (code) => {
             stdoutSplitter.flush();
             stderrSplitter.flush();
+            updateBar(`finish(${JSON.stringify(barId)},${code === 0})`);
             res.write('</ul></section>');
             resolve(true);
         });
     });
+}
+
+let importProgressCounter = 0;
+
+/**
+ * Progress bar(s) for one import run, driven by the `<script>mauiImportProgress.update(...)`
+ * lines runImportScript() streams as the script reports its `@@PROGRESS` lines. Bar 1 is the
+ * current pack (download, then games imported); a second, thinner one shows the whole batch when
+ * several packs are imported in a row. The helper is (re)defined with each run: it is
+ * idempotent, and a streamed page has no other single place to put it.
+ */
+function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {index: number; total: number}): string {
+    const overallBar = overall && overall.total > 1 ? `
+        <div class="progress-label"><span>Pack ${overall.index + 1} of ${overall.total}</span></div>
+        <div class="progress-track progress-track-thin"><div class="progress-fill" data-overall></div></div>
+    ` : '';
+    return `
+        <div class="import-progress" id="${id}" data-download="${hasDownload ? '1' : '0'}"
+            data-index="${overall ? overall.index : 0}" data-total="${overall ? overall.total : 1}">
+            <div class="progress-label"><span data-label>Starting…</span><span data-percent></span></div>
+            <div class="progress-track"><div class="progress-fill progress-indeterminate" data-fill></div></div>
+            ${overallBar}
+        </div>
+        <script>
+        window.mauiImportProgress = window.mauiImportProgress || (function () {
+            function size(bytes) {
+                var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+                var i = 0;
+                while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+                return bytes.toFixed(1) + ' ' + units[i];
+            }
+            function draw(root, label, fraction, overallFraction) {
+                var fill = root.querySelector('[data-fill]');
+                var known = fraction !== null;
+                fill.classList.toggle('progress-indeterminate', !known);
+                fill.style.width = known ? (fraction * 100).toFixed(1) + '%' : '';
+                root.querySelector('[data-label]').textContent = label;
+                root.querySelector('[data-percent]').textContent = known ? Math.round(fraction * 100) + '%' : '';
+                var overall = root.querySelector('[data-overall]');
+                if (overall && overallFraction !== null) { overall.style.width = (overallFraction * 100).toFixed(1) + '%'; }
+            }
+            return {
+                update: function (id, phase, done, total) {
+                    var root = document.getElementById(id);
+                    if (!root) { return; }
+                    var hasDownload = root.dataset.download === '1';
+                    var fraction = total > 0 ? Math.min(done / total, 1) : null;
+                    var label = phase === 'download'
+                        ? 'Downloading' + (total > 0 ? ' — ' + size(done) + ' / ' + size(total) : ' — ' + size(done))
+                        : 'Importing games — ' + done + ' / ' + total;
+                    // Download = first half of a pack's own progress, import = second half.
+                    var packFraction = fraction === null ? null
+                        : hasDownload ? (phase === 'download' ? fraction / 2 : 0.5 + fraction / 2) : fraction;
+                    var index = Number(root.dataset.index), count = Number(root.dataset.total);
+                    draw(root, label, fraction, packFraction === null ? null : (index + packFraction) / count);
+                },
+                finish: function (id, ok) {
+                    var root = document.getElementById(id);
+                    if (!root) { return; }
+                    var fill = root.querySelector('[data-fill]');
+                    fill.classList.remove('progress-indeterminate');
+                    fill.style.width = '100%';
+                    fill.classList.add(ok ? 'progress-done' : 'progress-failed');
+                    root.querySelector('[data-label]').textContent = ok ? 'Done' : 'Finished with errors — see the log below';
+                    root.querySelector('[data-percent]').textContent = '';
+                    var overall = root.querySelector('[data-overall]');
+                    var index = Number(root.dataset.index), count = Number(root.dataset.total);
+                    if (overall) { overall.style.width = ((index + 1) / count * 100).toFixed(1) + '%'; }
+                }
+            };
+        })();
+        </script>
+    `;
 }
 
 function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
@@ -1022,7 +1169,7 @@ function renderSubtabbedPage(
  * line as the response is written - imports, favorites refresh, media download, self-update).
  * The list is a fixed-height scrollable box (see .progress-log), and a browser never scrolls
  * such a box by itself as content is appended: once the lines overflow it, the box just sat on
- * its first lines while the newest ones - the actual progress, e.g. "Téléchargé : 84 Mo" -
+ * its first lines while the newest ones - the actual progress, e.g. "Downloaded: 84 MB" -
  * piled up out of sight below, so the log seemed frozen. The inline script keeps it pinned to the
  * bottom as lines arrive; a <script> is valid directly inside a <ul>.
  */
@@ -1033,7 +1180,7 @@ const PROGRESS_LOG_OPEN = '<ul class="progress-log"><script>(function () {'
 
 function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
     return `<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title>mame-awesome-ui - Configuration</title>
@@ -1159,6 +1306,21 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             color: #8ab4f8;
             background-color: rgba(138, 180, 248, 0.12);
         }
+        /* Info line with an action at its far end (favorites: cache date + "Update favorites").
+           The button selector out-ranks the generic "form > button:last-child" 24px top margin. */
+        .status-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px 16px;
+        }
+        .status-row form {
+            margin: 0;
+        }
+        .status-row form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
         .path-row {
             display: flex;
             gap: 8px;
@@ -1195,7 +1357,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         /* Wraps everything after the checkbox in one flex item (an element like <code> inside
            otherwise-bare text would each become their own anonymous flex item, and the first
            text run wraps within its own narrowed box instead of flowing as one paragraph across
-           the row - see the "Supprimer tout le repertoire" row this was written for). */
+           the row - see the "Delete the whole ... directory" row this was written for). */
         .checkbox-row > span {
             flex: 1 1 auto;
             min-width: 0;
@@ -1277,6 +1439,40 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .badge-no {
             color: #ff6b6b;
         }
+        .row-actions {
+            display: inline-flex;
+            gap: 8px;
+        }
+        .asset-icons {
+            display: inline-flex;
+            gap: 8px;
+            vertical-align: middle;
+        }
+        .asset-icon {
+            display: inline-flex;
+            cursor: help;
+        }
+        /* Icon-only submit button (favorites Remove/Restore): compact, outlined in its own color
+           instead of the plain white button. The extra selector parts beat the generic
+           "form > button[type=submit]:last-child" 24px top margin above, which would otherwise
+           push it out of its table row's alignment. */
+        form > button.icon-button[type="submit"]:last-child {
+            display: inline-flex;
+            padding: 5px;
+            margin-top: 0;
+            color: #ff6b6b;
+            background-color: transparent;
+            border: 1px solid currentColor;
+        }
+        form > button.icon-button.icon-button-ok[type="submit"]:last-child {
+            color: #6bff8a;
+        }
+        form > button.icon-button.icon-button-warn[type="submit"]:last-child {
+            color: #ffd166;
+        }
+        button.icon-button:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
         .avatar-thumb {
             display: block;
             width: 36px;
@@ -1327,6 +1523,191 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .found-no {
             color: #ff6b6b;
         }
+        .disk-bar-track {
+            display: flex;
+            height: 22px;
+            margin: 8px 0;
+            background-color: #111111;
+            border: 1px solid #333333;
+            border-radius: 11px;
+            overflow: hidden;
+        }
+        .disk-bar-track.disk-bar-overflow {
+            border-color: #ff6b6b;
+            box-shadow: 0 0 0 1px #ff6b6b;
+        }
+        .disk-bar-used {
+            background-color: #555555;
+        }
+        /* Roms already on disk: lighter neutral grey, so the coloured segments stay the "new" part. */
+        .disk-bar-roms {
+            background-color: #b5bcc4;
+        }
+        /* One coloured segment per ticked pack (background set inline); flex-shrink 0 so a
+           selection larger than the disk overflows (clipped, red outline) instead of squeezing. */
+        .disk-bar-seg {
+            flex-shrink: 0;
+            min-width: 3px;
+            border-left: 1px solid #000000;
+            transition: width 0.25s ease-out;
+        }
+        .disk-zoomed .disk-bar-track > .disk-bar-used,
+        .disk-zoomed .disk-bar-track > .disk-bar-roms,
+        .disk-zoomed .disk-legend-static {
+            display: none;
+        }
+        .disk-zoom-note {
+            margin: 0 0 4px;
+            font-size: 0.85em;
+            color: #8ab4f8;
+        }
+        .disk-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 16px;
+            list-style: none;
+            padding: 0;
+            margin: 0 0 12px;
+            font-size: 0.85em;
+            color: #cccccc;
+        }
+        .pack-owned {
+            opacity: 0.55;
+        }
+        /* Aligned under the pack name: checkbox (13px + gap) + swatch (12px + margins). */
+        .pack-details {
+            margin: 4px 0 0 44px;
+            font-size: 0.9em;
+        }
+        .pack-details summary {
+            cursor: pointer;
+            color: #8ab4f8;
+        }
+        .category-row {
+            border-top: 1px solid #333;
+        }
+        .category-row summary {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 0;
+            cursor: pointer;
+        }
+        .category-icon {
+            width: 40px;
+            height: 40px;
+            flex: none;
+        }
+        .category-name {
+            flex: 1;
+        }
+        .category-count {
+            color: #999;
+            font-size: 0.9em;
+        }
+        .category-games {
+            list-style: none;
+            margin: 0 0 8px 52px;
+            padding: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            font-size: 0.9em;
+        }
+        .category-games li {
+            padding: 2px 0;
+        }
+        /* Name, rom name and year · studio · players on one line (wrapping only when too long);
+           .checkbox-row-detail is display: block by default. */
+        .category-games .checkbox-row-detail {
+            display: inline;
+            margin: 0 0 0 8px;
+        }
+        .category-game-meta {
+            margin-left: 8px;
+            color: #999;
+            font-size: 0.9em;
+        }
+        .category-game-meta::before {
+            content: '— ';
+        }
+        .pack-games {
+            list-style: none;
+            padding: 0;
+            margin: 6px 0 0;
+            max-height: 240px;
+            overflow-y: auto;
+        }
+        .pack-game {
+            display: flex;
+            gap: 8px;
+            padding: 2px 0;
+        }
+        /* Overrides the page-wide label/input styles (block, full width, top margin). */
+        /* display: flex above would beat the UA rule for [hidden] (search filter). */
+        .pack-game[hidden], .pack-row[hidden] {
+            display: none;
+        }
+        .pack-search {
+            margin: 16px 0 0;
+        }
+        .pack-search-count {
+            margin: 8px 0 0;
+        }
+        .pack-game-label {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 0;
+            cursor: pointer;
+        }
+        .pack-game-label input {
+            flex: 0 0 auto;
+            width: auto;
+            margin: 3px 0 0;
+        }
+        .pack-game-mark {
+            flex: 0 0 14px;
+            text-align: center;
+            color: #aaaaaa;
+        }
+        .pack-game-installed .pack-game-mark {
+            color: #6bff8a;
+        }
+        .pack-game-highlight {
+            color: #f8eb48;
+        }
+        .pack-game-highlight .pack-game-mark {
+            color: #f8eb48;
+        }
+        .pack-status {
+            display: block;
+            margin-top: 2px;
+            font-size: 0.85em;
+            color: #aaaaaa;
+        }
+        .pack-status-owned {
+            color: #6bff8a;
+        }
+        .pack-status-update {
+            color: #f8eb48;
+        }
+        .pack-swatch {
+            display: inline-block;
+            flex: 0 0 auto;
+            width: 12px;
+            height: 12px;
+            margin: 3px 6px 0 0;
+            border-radius: 2px;
+            vertical-align: baseline;
+        }
+        /* Out-ranks ".checkbox-row > span" (flex: 1 1 auto), which would stretch the swatch. */
+        .checkbox-row > .pack-swatch {
+            flex: 0 0 12px;
+        }
+        .disk-legend .pack-swatch {
+            margin-top: 0;
+            vertical-align: -1px;
+        }
         .progress-log {
             list-style: none;
             padding: 0;
@@ -1335,6 +1716,53 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             overflow-y: auto;
             font-family: monospace;
             font-size: 0.9em;
+        }
+        .import-progress {
+            margin: 12px 0;
+        }
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 8px 0 4px;
+            font-size: 0.9em;
+            color: #cccccc;
+        }
+        .progress-track {
+            height: 18px;
+            background-color: #111111;
+            border: 1px solid #333333;
+            border-radius: 9px;
+            overflow: hidden;
+        }
+        .progress-track-thin {
+            height: 8px;
+            border-radius: 4px;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0;
+            background-color: #8ab4f8;
+            transition: width 0.25s ease-out;
+        }
+        .progress-fill.progress-done {
+            background-color: #6bff8a;
+        }
+        .progress-fill.progress-failed {
+            background-color: #ff6b6b;
+        }
+        /* Total unknown (server sent no Content-Length): a sliding stripe instead of a bar that
+           would sit at 0% and look frozen. */
+        .progress-fill.progress-indeterminate {
+            width: 100%;
+            background-image: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.35) 50%, transparent 100%);
+            background-size: 40% 100%;
+            background-repeat: no-repeat;
+            animation: progress-slide 1.2s linear infinite;
+        }
+        @keyframes progress-slide {
+            0% { background-position: -40% 0; }
+            100% { background-position: 140% 0; }
         }
         .progress-log li {
             padding: 4px 0;
@@ -1395,16 +1823,16 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     </style>
 </head>
 <body>
-    <div class="app-version" title="Version en cours d'exécution">v${escapeHtml(getRunningVersion())}</div>
+    <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
     <header>
         <h1>mame-awesome-ui</h1>
         ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}">
             <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
-            <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Favoris</a>
+            <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Games</a>
             <a href="/users" class="${active === 'users' ? 'active' : ''}">Players</a>
             <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
             <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
-            <a href="/account" class="${active === 'account' ? 'active' : ''}">Mon compte</a>
+            <a href="/account" class="${active === 'account' ? 'active' : ''}">My account</a>
         </nav>` : ''}
     </header>
     `;
@@ -1438,7 +1866,11 @@ function renderPageTail(): string {
             var button = event.submitter;
             if (button && button.tagName === 'BUTTON' && !button.disabled) {
                 setTimeout(function () {
-                    button.textContent = button.textContent + '…';
+                    // An icon-only button has no text to relabel (assigning textContent would
+                    // replace its <svg> with a bare "…") - just disabling it is feedback enough.
+                    if (!button.classList.contains('icon-button')) {
+                        button.textContent = button.textContent + '…';
+                    }
                     button.disabled = true;
                 }, 0);
             }
@@ -1450,7 +1882,7 @@ function renderPageTail(): string {
         // the server says this response is about (data-default-subtab, set from whichever of
         // renderForm()'s own message params is actually filled in for this request - not every
         // section with a .flash: a standing warning elsewhere, e.g. "plugin.ini incomplete" or
-        // "python3 introuvable", also carries one and would otherwise wrongly outrank the
+        // "python3 not found", also carries one and would otherwise wrongly outrank the
         // section a just-submitted form actually belongs to, since it's earlier in the list),
         // else whichever panel has a .flash message anyway (only reached when the server didn't
         // say - e.g. an unrelated standing warning on first load), else the first panel.
@@ -1501,21 +1933,21 @@ function renderPageTail(): string {
 function renderLoginPage(error?: string): string {
     return renderPage(`
         <section class="card">
-            <h2>Connexion</h2>
+            <h2>Sign in</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <!-- Deliberately no "required" here: with two fields, pressing Enter in one while
                  the other is still empty triggers the browser's native validation instead of
                  submitting - easy to miss (the message lands on the other, unfocused field),
                  and looks like "Enter does nothing". /login already handles a blank/wrong
-                 username or password gracefully (401 + "Identifiant ou mot de passe
+                 username or password gracefully (401 + "Incorrect username or password
                  incorrect."), so letting the browser send an incomplete submission and having
                  the server reject it is simpler than fighting native validation here. -->
             <form method="post" action="/login">
-                <label for="username">Identifiant</label>
+                <label for="username">Username</label>
                 <input type="text" id="username" name="username" autofocus>
-                <label for="password">Mot de passe</label>
+                <label for="password">Password</label>
                 <input type="password" id="password" name="password">
-                <button type="submit">Se connecter</button>
+                <button type="submit">Sign in</button>
             </form>
         </section>
     `, 'mame', false);
@@ -1524,23 +1956,23 @@ function renderLoginPage(error?: string): string {
 function renderAccountPage(username: string, role: string, error?: string, info?: string): string {
     return renderPage(`
         <section class="card">
-            <h2>Mon compte</h2>
-            <p>Connecté en tant que <strong>${escapeHtml(username)}</strong> (${escapeHtml(role)}).</p>
+            <h2>My account</h2>
+            <p>Signed in as <strong>${escapeHtml(username)}</strong> (${escapeHtml(role)}).</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/account/password">
-                <label for="currentPassword">Mot de passe actuel</label>
+                <label for="currentPassword">Current password</label>
                 <input type="password" id="currentPassword" name="currentPassword" required>
-                <label for="newPassword">Nouveau mot de passe</label>
+                <label for="newPassword">New password</label>
                 <input type="password" id="newPassword" name="newPassword" required minlength="4">
-                <label for="confirmPassword">Confirmer le nouveau mot de passe</label>
+                <label for="confirmPassword">Confirm the new password</label>
                 <input type="password" id="confirmPassword" name="confirmPassword" required minlength="4">
-                <button type="submit">Changer le mot de passe</button>
+                <button type="submit">Change password</button>
             </form>
         </section>
         <section class="card">
             <form method="post" action="/logout">
-                <button type="submit">Se déconnecter</button>
+                <button type="submit">Sign out</button>
             </form>
         </section>
     `, 'account');
@@ -1557,16 +1989,16 @@ function renderConfigCard(values: ConfigFormValues, isAdmin: boolean, error?: st
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/save" novalidate>
-                <label for="mamePath">Dossier contenant le binaire mame</label>
+                <label for="mamePath">Folder containing the mame binary</label>
                 <div class="path-row">
                     <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
-                    <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Parcourir</button>
+                    <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Browse</button>
                 </div>
                 <div class="button-row">
-                    <button type="submit">Enregistrer</button>
+                    <button type="submit">Save</button>
                     ${isAdmin ? `<button type="submit" formaction="/launch" formmethod="post" class="launch-button">
                         <img src="/mame-logo.svg" alt="" class="launch-logo">
-                        Lancer mame
+                        Launch mame
                     </button>` : ''}
                 </div>
             </form>
@@ -1575,19 +2007,19 @@ function renderConfigCard(values: ConfigFormValues, isAdmin: boolean, error?: st
 }
 
 /**
- * Green check / red cross next to each Informations MAME field below, so a missing path/file
- * is visible at a glance instead of only readable from the "Non disponible"/"Introuvable" text
+ * Green check / red cross next to each MAME information field below, so a missing path/file
+ * is visible at a glance instead of only readable from the "Not available"/"Not found" text
  * next to it (kept as well, for screen readers and anyone not distinguishing the colors).
  */
 function renderFoundIcon(found: boolean): string {
     return found
-        ? `<span class="found-icon found-yes" title="Trouvé" aria-hidden="true">
+        ? `<span class="found-icon found-yes" title="Found" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 16 16">
                 <path d="M3 8.5 L6.5 12 L13 4" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
         </span>`
-        : `<span class="found-icon found-no" title="Introuvable" aria-hidden="true">
+        : `<span class="found-icon found-no" title="Not found" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 16 16">
                 <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             </svg>
@@ -1601,91 +2033,91 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
     if (mameInfo.error) {
         return `
             <section class="card">
-                <h2>Informations MAME</h2>
+                <h2>MAME information</h2>
                 <p class="error flash">${escapeHtml(mameInfo.error)}</p>
             </section>
         `;
     }
     return `
         <section class="card">
-            <h2>Informations MAME</h2>
+            <h2>MAME information</h2>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <dl>
                 <div class="info-field">
-                    <dt>Dossier home mame (ini, cfg, nvram, snapshots...)</dt>
+                    <dt>MAME home folder (ini, cfg, nvram, snapshots...)</dt>
                     <dd>${renderFoundIcon(existsSync(mameInfo.iniPath))}${escapeHtml(mameInfo.iniPath)}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Fichier mame.ini</dt>
+                    <dt>mame.ini file</dt>
                     <dd>${renderFoundIcon(existsSync(mameInfo.mameIniPath))}${escapeHtml(mameInfo.mameIniPath)}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Fichier ui.ini</dt>
+                    <dt>ui.ini file</dt>
                     <dd>${renderFoundIcon(existsSync(mameInfo.uiIniPath))}${escapeHtml(mameInfo.uiIniPath)}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Fichier plugin.ini</dt>
+                    <dt>plugin.ini file</dt>
                     <dd>${renderFoundIcon(existsSync(mameInfo.pluginIniPath))}${escapeHtml(mameInfo.pluginIniPath)}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Dossier des roms (rompath)</dt>
+                    <dt>Roms folder (rompath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.romPath)}${mameInfo.romPath
-                        ? escapeHtml(mameInfo.romPath) : '<em>Non disponible</em>'}</dd>
+                        ? escapeHtml(mameInfo.romPath) : '<em>Not available</em>'}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Dossier des marquees (marquees_directory)</dt>
+                    <dt>Marquees folder (marquees_directory)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.marqueePath)}${mameInfo.marqueePath
-                        ? escapeHtml(mameInfo.marqueePath) : '<em>Non disponible</em>'}</dd>
+                        ? escapeHtml(mameInfo.marqueePath) : '<em>Not available</em>'}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Dossier des flyers (flyers_directory)</dt>
+                    <dt>Flyers folder (flyers_directory)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.flyerPath)}${mameInfo.flyerPath
-                        ? escapeHtml(mameInfo.flyerPath) : '<em>Non disponible</em>'}</dd>
+                        ? escapeHtml(mameInfo.flyerPath) : '<em>Not available</em>'}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Dossier des logos (logos_directory)</dt>
+                    <dt>Logos folder (logos_directory)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.logoPath)}${mameInfo.logoPath
-                        ? escapeHtml(mameInfo.logoPath) : '<em>Non disponible</em>'}</dd>
+                        ? escapeHtml(mameInfo.logoPath) : '<em>Not available</em>'}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Fichier des favoris (favorites.ini)</dt>
+                    <dt>Favorites file (favorites.ini)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.favoritesPath)}${mameInfo.favoritesPath
                         ? escapeHtml(mameInfo.favoritesPath)
-                        : '<em>Aucun favori pour l\'instant — ajoutez-en depuis le menu de MAME (Tab en jeu).</em>'}</dd>
+                        : '<em>No favorites yet — add some from the MAME menu (Tab in game).</em>'}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Fichier des genres (genre.ini, categorypath)</dt>
+                    <dt>Genres file (genre.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.genreIniPath)}${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
-                        : '<em>Introuvable — importez un starting pack (onglet Import) pour '
-                            + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
+                        : '<em>Not found — import a starting pack (Import tab) to '
+                            + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
-                    <dt>Fichier du nombre de joueurs (Multiplayer.ini, categorypath)</dt>
+                    <dt>Player count file (Multiplayer.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
-                        : '<em>Introuvable — importez un starting pack (onglet Import) pour '
-                            + 'l\'installer au chemin indiqué par categorypath dans ui.ini.</em>'}</dd>
+                        : '<em>Not found — import a starting pack (Import tab) to '
+                            + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
             </dl>
             <form method="post" action="/mame-options/save">
-                <label for="pluginsPath">Dossier des plugins MAME (pluginspath)</label>
+                <label for="pluginsPath">MAME plugins folder (pluginspath)</label>
                 <div class="path-row">
                     <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(mameInfo.pluginsPath || '')}">
-                    <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get">Parcourir</button>
+                    <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get">Browse</button>
                 </div>
                 <label class="checkbox-row">
                     <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
-                    Lancer MAME en mode fenêtré (au lieu du plein écran) - modifie mame.ini
+                    Launch MAME in windowed mode (instead of fullscreen) - edits mame.ini
                 </label>
-                <button type="submit">Enregistrer</button>
+                <button type="submit">Save</button>
             </form>
             ${mameInfo.missingPlugins.length ? `
                 <form method="post" action="/mame-options/repair-plugins">
-                    <p class="error flash">plugin.ini est incomplet : ${mameInfo.missingPlugins.length} plugin(s)
-                    détecté(s) dans le dossier des plugins mais absent(s) de plugin.ini
+                    <p class="error flash">plugin.ini is incomplete: ${mameInfo.missingPlugins.length} plugin(s)
+                    found in the plugins folder but missing from plugin.ini
                     (${escapeHtml(mameInfo.missingPlugins.join(', '))}).</p>
-                    <button type="submit">Réparer plugin.ini (ajouter les plugins manquants)</button>
+                    <button type="submit">Repair plugin.ini (add the missing plugins)</button>
                 </form>
             ` : ''}
         </section>
@@ -1714,38 +2146,37 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
     // strings inside an HTML attribute, so keeping them plain ASCII avoids any escaping headache.
     return `
         <section class="card">
-            <h2>Zone dangereuse</h2>
-            <p class="error">Suppressions ciblées et irréversibles, portant sur les données de
-            MAME lui-même. Chaque case agit indépendamment des autres - cochez ce que vous voulez
-            supprimer puis validez. La suppression des roms/médias supprime aussi les roms
-            elles-mêmes, pas seulement les visuels.</p>
+            <h2>Danger zone</h2>
+            <p class="error">Targeted, irreversible deletions of MAME's own data. Each checkbox
+            acts independently of the others - tick what you want to delete, then submit.
+            Deleting the roms/media also deletes the roms themselves, not just the artwork.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
                 if (this.deleteMameHome.checked) {
-                    items.push('tout le repertoire .mame et son contenu (configuration mame.ini/ui.ini, roms, medias, hiscores, cfg, nvram, snapshots...)');
+                    items.push('the whole .mame directory and its content (mame.ini/ui.ini configuration, roms, media, hiscores, cfg, nvram, snapshots...)');
                 } else {
-                    if (this.deleteHiscores.checked) items.push('les hiscores');
-                    if (this.deleteGamesMedia.checked) items.push('les roms et medias des jeux (roms, marquees, flyers, logos)');
-                    if (this.deleteFavorites.checked) items.push('le fichier des favoris (favorites.ini)');
+                    if (this.deleteHiscores.checked) items.push('the hiscores');
+                    if (this.deleteGamesMedia.checked) items.push('the games roms and media (roms, marquees, flyers, logos)');
+                    if (this.deleteFavorites.checked) items.push('the favorites file (favorites.ini)');
                 }
                 if (!items.length) { return true; }
-                return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
+                return confirm('Permanently delete ' + items.join(', ') + '? This cannot be undone.');
             ">
                 <input type="hidden" name="zone" value="mame">
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteHiscores">
-                    <span>Supprimer les hiscores (<code>${escapeHtml(getHiscorePath(mameInfo.iniPath))}</code>)</span>
+                    <span>Delete the hiscores (<code>${escapeHtml(getHiscorePath(mameInfo.iniPath))}</code>)</span>
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteGamesMedia">
-                    <span>Supprimer les roms et médias des jeux (roms, marquees, flyers, logos)</span>
+                    <span>Delete the games roms and media (roms, marquees, flyers, logos)</span>
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteFavorites"${mameInfo.favoritesPath ? '' : ' disabled'}>
-                    <span>Supprimer le fichier des favoris${mameInfo.favoritesPath
+                    <span>Delete the favorites file${mameInfo.favoritesPath
                         ? ` (<code>${escapeHtml(mameInfo.favoritesPath)}</code>)`
-                        : ' (aucun favorites.ini pour l\'instant)'}</span>
+                        : ' (no favorites.ini yet)'}</span>
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteMameHome" onchange="
@@ -1757,13 +2188,13 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                         this.form.deleteFavorites.disabled = this.checked || ${mameInfo.favoritesPath ? 'false' : 'true'};
                     ">
                         <span>
-                            Supprimer tout le répertoire <code>${escapeHtml(mameInfo.iniPath)}</code>
-                            <span class="checkbox-row-detail">Englobe les options ci-dessus, plus la
-                            configuration mame.ini/ui.ini elle-même, cfg, nvram, snapshots... - MAME
-                            la recréera au prochain lancement.</span>
+                            Delete the whole <code>${escapeHtml(mameInfo.iniPath)}</code> directory
+                            <span class="checkbox-row-detail">Includes the options above, plus the
+                            mame.ini/ui.ini configuration itself, cfg, nvram, snapshots... - MAME
+                            will recreate it on its next launch.</span>
                         </span>
                 </label>
-                <button type="submit">Supprimer la sélection</button>
+                <button type="submit">Delete the selection</button>
             </form>
         </section>
     `;
@@ -1862,23 +2293,23 @@ function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): st
 
     return `
         <section class="card">
-            <h2>Périphériques détectés (sondage MAME)</h2>
-            <p class="info">Lance une rom en arrière-plan (sans vidéo ni son) juste pour demander à
-            MAME quels joysticks/manettes il détecte actuellement, et sous quel nom/token
-            (<code>JOYCODE_&lt;n&gt;_&lt;token&gt;</code>) chacun de leurs boutons/axes est
-            reconnu.</p>
+            <h2>Detected devices (MAME probe)</h2>
+            <p class="info">Runs a rom in the background (no video or sound) just to ask MAME
+            which joysticks/gamepads it currently detects, and under which name/token
+            (<code>JOYCODE_&lt;n&gt;_&lt;token&gt;</code>) each of their buttons/axes is
+            recognized.</p>
             ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
             <form method="post" action="/input-probe/devices">
-                <button type="submit">Détecter les manettes</button>
+                <button type="submit">Detect gamepads</button>
             </form>
             ${state?.result ? (rows ? `
                 <div class="table-wrap">
                     <table class="favorites-table">
-                        <thead><tr><th>Périphérique</th><th>ID</th><th>Boutons/axes</th></tr></thead>
+                        <thead><tr><th>Device</th><th>ID</th><th>Buttons/axes</th></tr></thead>
                         <tbody>${rows}</tbody>
                     </table>
                 </div>
-            ` : '<p class="info flash">Aucun périphérique joystick détecté.</p>') : ''}
+            ` : '<p class="info flash">No joystick device detected.</p>') : ''}
         </section>
     `;
 }
@@ -1892,46 +2323,46 @@ interface RemapAction {
 }
 
 /**
- * Global (default.cfg, not per-game) remap actions offered on the Manettes tab, grouped for
+ * Global (default.cfg, not per-game) remap actions offered on the Gamepads tab, grouped for
  * display. Grows over time (see renderRemapCard()'s own comment) - starts with just enough to
  * make the cabinet joystick-only usable: quitting a game, and P1's coin/start (the two inputs
  * every driver needs before its own P1 directions/buttons even come into play).
  */
 const REMAP_GROUPS: { title: string; actions: RemapAction[] }[] = [
-    {title: 'Système', actions: [
-        {portType: 'UI_CANCEL', label: 'Quitter MAME'},
+    {title: 'System', actions: [
+        {portType: 'UI_CANCEL', label: 'Quit MAME'},
     ]},
-    {title: 'Joueur 1', actions: [
-        {portType: 'COIN1', label: 'Insérer une pièce'},
+    {title: 'Player 1', actions: [
+        {portType: 'COIN1', label: 'Insert coin'},
         {portType: 'START1', label: 'Start'},
-        {portType: 'P1_JOYSTICK_UP', label: 'Haut'},
-        {portType: 'P1_JOYSTICK_RIGHT', label: 'Droite'},
-        {portType: 'P1_JOYSTICK_DOWN', label: 'Bas'},
-        {portType: 'P1_JOYSTICK_LEFT', label: 'Gauche'},
-        {portType: 'P1_BUTTON1', label: 'Bouton 1'},
-        {portType: 'P1_BUTTON2', label: 'Bouton 2'},
-        {portType: 'P1_BUTTON3', label: 'Bouton 3'},
-        {portType: 'P1_BUTTON4', label: 'Bouton 4'},
-        {portType: 'P1_BUTTON5', label: 'Bouton 5'},
-        {portType: 'P1_BUTTON6', label: 'Bouton 6'},
-        {portType: 'P1_BUTTON7', label: 'Bouton 7'},
-        {portType: 'P1_BUTTON8', label: 'Bouton 8'},
+        {portType: 'P1_JOYSTICK_UP', label: 'Up'},
+        {portType: 'P1_JOYSTICK_RIGHT', label: 'Right'},
+        {portType: 'P1_JOYSTICK_DOWN', label: 'Down'},
+        {portType: 'P1_JOYSTICK_LEFT', label: 'Left'},
+        {portType: 'P1_BUTTON1', label: 'Button 1'},
+        {portType: 'P1_BUTTON2', label: 'Button 2'},
+        {portType: 'P1_BUTTON3', label: 'Button 3'},
+        {portType: 'P1_BUTTON4', label: 'Button 4'},
+        {portType: 'P1_BUTTON5', label: 'Button 5'},
+        {portType: 'P1_BUTTON6', label: 'Button 6'},
+        {portType: 'P1_BUTTON7', label: 'Button 7'},
+        {portType: 'P1_BUTTON8', label: 'Button 8'},
     ]},
-    {title: 'Joueur 2', actions: [
-        {portType: 'COIN2', label: 'Insérer une pièce'},
+    {title: 'Player 2', actions: [
+        {portType: 'COIN2', label: 'Insert coin'},
         {portType: 'START2', label: 'Start'},
-        {portType: 'P2_JOYSTICK_UP', label: 'Haut'},
-        {portType: 'P2_JOYSTICK_RIGHT', label: 'Droite'},
-        {portType: 'P2_JOYSTICK_DOWN', label: 'Bas'},
-        {portType: 'P2_JOYSTICK_LEFT', label: 'Gauche'},
-        {portType: 'P2_BUTTON1', label: 'Bouton 1'},
-        {portType: 'P2_BUTTON2', label: 'Bouton 2'},
-        {portType: 'P2_BUTTON3', label: 'Bouton 3'},
-        {portType: 'P2_BUTTON4', label: 'Bouton 4'},
-        {portType: 'P2_BUTTON5', label: 'Bouton 5'},
-        {portType: 'P2_BUTTON6', label: 'Bouton 6'},
-        {portType: 'P2_BUTTON7', label: 'Bouton 7'},
-        {portType: 'P2_BUTTON8', label: 'Bouton 8'},
+        {portType: 'P2_JOYSTICK_UP', label: 'Up'},
+        {portType: 'P2_JOYSTICK_RIGHT', label: 'Right'},
+        {portType: 'P2_JOYSTICK_DOWN', label: 'Down'},
+        {portType: 'P2_JOYSTICK_LEFT', label: 'Left'},
+        {portType: 'P2_BUTTON1', label: 'Button 1'},
+        {portType: 'P2_BUTTON2', label: 'Button 2'},
+        {portType: 'P2_BUTTON3', label: 'Button 3'},
+        {portType: 'P2_BUTTON4', label: 'Button 4'},
+        {portType: 'P2_BUTTON5', label: 'Button 5'},
+        {portType: 'P2_BUTTON6', label: 'Button 6'},
+        {portType: 'P2_BUTTON7', label: 'Button 7'},
+        {portType: 'P2_BUTTON8', label: 'Button 8'},
     ]},
 ];
 
@@ -1957,7 +2388,7 @@ interface MameConfigSession {
 }
 
 // Module-scope: at most one config session at a time, explicitly started/stopped by an admin from
-// the Manettes tab (see startMameConfigSession()/stopMameConfigSession()/captureOnePress() below) -
+// the Gamepads tab (see startMameConfigSession()/stopMameConfigSession()/captureOnePress() below) -
 // there's only ever one admin configuring one cabinet's inputs, no need for more than one.
 let mameConfigSession: MameConfigSession | undefined;
 
@@ -2065,7 +2496,7 @@ function captureOnePress(): string | null {
 const IN_GAME_UI_PORTS = ['UI_MENU'];
 
 const UI_PORT_LABELS: Record<string, string> = {
-    UI_MENU: 'le menu de configuration de MAME (touche Tab)',
+    UI_MENU: 'the MAME configuration menu (Tab key)',
 };
 
 /**
@@ -2185,11 +2616,11 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
         return `
             <tr>
                 <td>${escapeHtml(action.label)}</td>
-                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>non assigné</em>'}</td>
+                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>unassigned</em>'}</td>
                 <td class="center">
                     <form method="post" action="/input-probe/remap">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                        <button type="submit">Capturer un appui</button>
+                        <button type="submit">Capture a press</button>
                     </form>
                 </td>
             </tr>
@@ -2197,9 +2628,9 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
                 <tr><td colspan="3"><p class="error flash">${escapeHtml(actionState.error)}</p></td></tr>
             ` : ''}
             ${actionState?.releasedFrom?.length ? `
-                <tr><td colspan="3"><p class="info flash">Ce bouton était aussi lié par défaut à
-                ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} dans
-                MAME - il en a été retiré pour éviter un double déclenchement.</p></td></tr>
+                <tr><td colspan="3"><p class="info flash">This button was also bound by default to
+                ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                MAME - it was removed from there to avoid a double trigger.</p></td></tr>
             ` : ''}
         `;
     }).join('');
@@ -2208,28 +2639,28 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
 
     return `
         <section class="card">
-            <h2>Configuration globale des entrées</h2>
-            <p class="info">Associe un bouton de la manette à une commande. <strong>1.</strong>
-            Lance MAME ci-dessous (une vraie fenêtre, pas en arrière-plan) et laisse-le ouvert
-            pendant toute la configuration - toutes les captures partagent ainsi le même
-            démarrage, donc les mêmes index de manette du début à la fin.
-            <strong>2.</strong> Clique sur "Capturer un appui" pour la commande voulue, puis
-            <strong>donne le focus à la fenêtre MAME</strong> (clique dedans) et appuie sur le
-            bouton dans les 30 secondes - MAME ne reçoit les manettes que lorsqu'il est au premier
-            plan. <strong>3.</strong> Ferme MAME une fois terminé. Le résultat est écrit
-            directement dans <code>default.cfg</code> (valable pour tous les jeux, sauf override
-            propre à un jeu précis). <strong>Actuellement</strong> reflète ce qui est vraiment
-            enregistré dans le fichier, pas seulement la dernière capture.</p>
-            <p><strong>MAME :</strong> ${sessionRunning ? 'lancé' : 'fermé'}</p>
+            <h2>Global input configuration</h2>
+            <p class="info">Binds a gamepad button to a command. <strong>1.</strong>
+            Launch MAME below (a real window, not in the background) and leave it open
+            for the whole configuration - all captures then share the same startup, so the
+            same gamepad indexes from start to finish.
+            <strong>2.</strong> Click "Capture a press" for the wanted command, then
+            <strong>give the MAME window focus</strong> (click inside it) and press the
+            button within 30 seconds - MAME only receives gamepad input while it is in the
+            foreground. <strong>3.</strong> Close MAME when done. The result is written
+            directly to <code>default.cfg</code> (valid for all games, unless a specific game
+            has its own override). <strong>Currently</strong> reflects what is really saved
+            in the file, not just the last capture.</p>
+            <p><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
             <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}">
-                <button type="submit">${sessionRunning ? 'Fermer MAME' : 'Lancer MAME'}</button>
+                <button type="submit">${sessionRunning ? 'Close MAME' : 'Launch MAME'}</button>
             </form>
             ${REMAP_GROUPS.map(group => `
                 <h3>${escapeHtml(group.title)}</h3>
                 <div class="table-wrap">
                     <table class="favorites-table">
                         <thead>
-                            <tr><th>Commande</th><th>Actuellement</th><th class="center"></th></tr>
+                            <tr><th>Command</th><th>Currently</th><th class="center"></th></tr>
                         </thead>
                         <tbody>${renderActionRows(group.actions)}</tbody>
                     </table>
@@ -2252,12 +2683,12 @@ interface InputProbeState {
  */
 function labelForProbeFieldName(fieldName: string): string {
     const suffix = fieldName.replace(/^P[12] /, '');
-    const directions: { [key: string]: string } = {Up: 'Haut', Down: 'Bas', Left: 'Gauche', Right: 'Droite'};
+    const directions: { [key: string]: string } = {Up: 'Up', Down: 'Down', Left: 'Left', Right: 'Right'};
     if (directions[suffix]) {
         return directions[suffix];
     }
     const buttonMatch = /^Button (\d+)$/.exec(suffix);
-    return buttonMatch ? `Bouton ${buttonMatch[1]}` : suffix;
+    return buttonMatch ? `Button ${buttonMatch[1]}` : suffix;
 }
 
 /**
@@ -2337,10 +2768,10 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
     if (!romNames.length) {
         return `
             <section class="card">
-                <h2>Touches et manettes (sondage MAME)</h2>
-                <p class="info flash">Aucune rom trouvée dans le dossier des roms - importez un starting
-                pack ou déposez au moins un fichier .zip dans ce dossier pour pouvoir sonder une
-                configuration d'entrées.</p>
+                <h2>Keys and gamepads (MAME probe)</h2>
+                <p class="info flash">No rom found in the roms folder - import a starting
+                pack or drop at least one .zip file in that folder to be able to probe an
+                input configuration.</p>
             </section>
         `;
     }
@@ -2392,33 +2823,33 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
                 `;
             }).join('');
         return `
-            <h3>Joueur ${player}</h3>
+            <h3>Player ${player}</h3>
             ${rows ? `
                 <div class="table-wrap">
                     <table class="favorites-table">
-                        <thead><tr><th>Commande</th><th>Défaut</th><th>Actuel</th></tr></thead>
+                        <thead><tr><th>Command</th><th>Default</th><th>Current</th></tr></thead>
                         <tbody>${rows}</tbody>
                     </table>
                 </div>
-            ` : '<p class="info flash">Aucune association trouvée pour ce joueur.</p>'}
+            ` : '<p class="info flash">No binding found for this player.</p>'}
         `;
     };
 
     return `
         <section class="card">
-            <h2>Touches et manettes (sondage MAME)</h2>
-            <p class="info">Lance la rom sélectionnée en arrière-plan (sans vidéo ni son) pour
-            demander à MAME lui-même sa configuration d'entrées P1/P2 (stick directionnel,
-            boutons, start et coin) - <strong>Défaut</strong> est la valeur d'origine de MAME,
-            <strong>Actuel</strong> est la valeur effective une fois les réglages globaux et
-            propres à ce jeu appliqués (en <strong>gras</strong> quand elle diffère du défaut).
-            <code>KEYCODE_*</code> = touche clavier, <code>JOYCODE_&lt;n&gt;_*</code> = manette
-            n° n ; plusieurs associations peuvent être combinées avec OR/AND/NOT.</p>
+            <h2>Keys and gamepads (MAME probe)</h2>
+            <p class="info">Runs the selected rom in the background (no video or sound) to
+            ask MAME itself for its P1/P2 input configuration (joystick directions,
+            buttons, start and coin) - <strong>Default</strong> is MAME's original value,
+            <strong>Current</strong> is the effective value once the global and per-game
+            settings are applied (in <strong>bold</strong> when it differs from the default).
+            <code>KEYCODE_*</code> = keyboard key, <code>JOYCODE_&lt;n&gt;_*</code> = gamepad
+            no. n; several bindings can be combined with OR/AND/NOT.</p>
             ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
             <form method="post" action="/input-probe">
                 <label for="probeRomName">Rom</label>
                 <select id="probeRomName" name="romName">${options}</select>
-                <button type="submit">Sonder</button>
+                <button type="submit">Probe</button>
             </form>
             ${state?.result ? `${renderPlayerTable(1)}${renderPlayerTable(2)}` : ''}
         </section>
@@ -2433,30 +2864,30 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
 function renderMauiDangerZoneCard(info?: string): string {
     return `
         <section class="card">
-            <h2>Zone dangereuse</h2>
-            <p class="error">Suppressions ciblées et irréversibles, portant sur mame-awesome-ui
-            lui-même. Chaque case agit indépendamment des autres - cochez ce que vous voulez
-            supprimer puis validez. Supprimer la configuration ou la base de données ferme
-            l'application ensuite ; il faudra la relancer manuellement (<code>just serve</code>
-            en développement) pour terminer l'opération.</p>
+            <h2>Danger zone</h2>
+            <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data. Each
+            checkbox acts independently of the others - tick what you want to delete, then
+            submit. Deleting the configuration or the database then closes the application; it
+            has to be relaunched manually (<code>just serve</code> in development) to complete
+            the operation.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
-                if (this.deleteConfig.checked) items.push('la configuration de mame-awesome-ui');
-                if (this.deleteDatabase.checked) items.push('la base de donnees (jeux, joueurs, scores)');
+                if (this.deleteConfig.checked) items.push('the mame-awesome-ui configuration');
+                if (this.deleteDatabase.checked) items.push('the database (games, players, scores)');
                 if (!items.length) { return true; }
-                return confirm('Supprimer definitivement ' + items.join(', ') + ' ? Cette action est irreversible.');
+                return confirm('Permanently delete ' + items.join(', ') + '? This cannot be undone.');
             ">
                 <input type="hidden" name="zone" value="maui">
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteConfig">
-                    Supprimer la configuration de mame-awesome-ui (mame-awesome-ui-config.json)
+                    Delete the mame-awesome-ui configuration (mame-awesome-ui-config.json)
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteDatabase">
-                    Supprimer la base de données (jeux, joueurs, scores)
+                    Delete the database (games, players, scores)
                 </label>
-                <button type="submit">Supprimer la sélection</button>
+                <button type="submit">Delete the selection</button>
             </form>
         </section>
     `;
@@ -2501,8 +2932,8 @@ function renderForm(
         // remap card rewrites default.cfg) - their routes reject non-admins server-side too.
         if (isAdmin) {
             sections.push({
-                id: 'manettes',
-                label: 'Manettes',
+                id: 'gamepads',
+                label: 'Gamepads',
                 html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
                     + renderRemapCard(
                         mameInfo.romPath ? listRomNames(mameInfo.romPath) : [],
@@ -2522,9 +2953,9 @@ function renderForm(
         // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
         if (isAdmin) {
             sections.push({
-                id: 'depot',
-                label: 'Dépôt',
-                html: renderRepoImportCard(config, repoPacks, repoError, repoInfo),
+                id: 'repository',
+                label: 'Repository',
+                html: renderRepoImportCard(config, mameInfo, repoPacks, repoError, repoInfo),
             });
             sections.push({
                 id: 'danger',
@@ -2539,9 +2970,9 @@ function renderForm(
     // of their own (missing plugins, no python3...) that would otherwise wrongly win just for
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
-        : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'depot'
+        : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'repository'
             : importError !== undefined ? 'import'
-                : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined) ? 'manettes'
+                : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined) ? 'gamepads'
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
@@ -2604,10 +3035,10 @@ function getSquashfsRootPath(): string {
 
 // Mirrors the dedicated-system layout documented in docs/RASPBERRY-PI-DEPLOY.md §5.3/§7: the
 // AppImage extracted once into a fixed ~/squashfs-root, referenced by path from ~/.xinitrc. Ruled
-// out in development (NODE_ENV) so this never fires from a repo checkout that happens to also
+// out in development (app.isPackaged) so this never fires from a repo checkout that happens to also
 // have a stray ~/squashfs-root from a real install on the same machine.
 function isSelfUpdateCapable(): boolean {
-    return process.platform === 'linux' && process.env.NODE_ENV !== 'development'
+    return process.platform === 'linux' && electronApp.isPackaged
         && existsSync(join(getSquashfsRootPath(), 'AppRun'));
 }
 
@@ -2636,7 +3067,7 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
 }
 
 /**
- * Computes everything the "Mise à jour" subtab needs to render: the public releases list (any
+ * Computes everything the "Update" subtab needs to render: the public releases list (any
  * BO role can see/install those), split into real releases and develop prereleases (the latter
  * only rendered for admins, see renderUpdateCard()). Called by every route that (re-)renders
  * the MAUI page, same as getMameInfo() is recomputed fresh by every route touching the MAME tab.
@@ -2669,7 +3100,7 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
         info.releases = sortByPublishedDesc(entries.filter(entry => !entry.isPrerelease));
         info.devBuilds = sortByPublishedDesc(entries.filter(entry => entry.isPrerelease));
     } catch (error) {
-        info.releasesError = error instanceof Error ? error.message : 'erreur inattendue';
+        info.releasesError = error instanceof Error ? error.message : 'unexpected error';
     }
 
     return info;
@@ -2696,10 +3127,10 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
     // current install had already been moved to .old, leaving no ~/squashfs-root at all.
     const workDir = mkdtempSync(join(dirname(squashfsRoot), '.mame-awesome-ui-update-'));
     try {
-        writeLine('Téléchargement en cours…');
+        writeLine('Downloading…');
         const response = await fetch(downloadUrl);
         if (!response.ok || !response.body) {
-            throw new Error(`Téléchargement échoué (HTTP ${response.status}).`);
+            throw new Error(`Download failed (HTTP ${response.status}).`);
         }
         const totalBytes = Number(response.headers.get('content-length')) || 0;
         const appImagePath = join(workDir, 'download.AppImage');
@@ -2716,7 +3147,7 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
                     if (mb > lastLoggedMb) {
                         lastLoggedMb = mb;
                         const totalMb = totalBytes ? Math.round(totalBytes / (1024 * 1024)) : undefined;
-                        writeLine(totalMb ? `Téléchargé : ${mb} Mo / ${totalMb} Mo` : `Téléchargé : ${mb} Mo`);
+                        writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
                     }
                     callback(null, chunk);
                 },
@@ -2726,19 +3157,19 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
 
         chmodSync(appImagePath, 0o755);
 
-        writeLine('Extraction de l\'AppImage…');
+        writeLine('Extracting the AppImage…');
         execFileSync(appImagePath, ['--appimage-extract'], {cwd: workDir, stdio: ['ignore', 'pipe', 'pipe']});
 
         const newSquashfsRoot = join(workDir, 'squashfs-root');
         if (!existsSync(newSquashfsRoot)) {
-            throw new Error('Extraction terminée mais squashfs-root introuvable dans l\'AppImage.');
+            throw new Error('Extraction finished but squashfs-root was not found in the AppImage.');
         }
 
         const oldSquashfsRoot = `${squashfsRoot}.old`;
         // The previous .old is parked in workDir (deleted with it in finally) rather than removed
         // up front, so it can be put back if the swap fails.
         const parkedOldSquashfsRoot = join(workDir, 'previous.old');
-        writeLine('Bascule vers la nouvelle version…');
+        writeLine('Switching to the new version…');
         const hadOld = existsSync(oldSquashfsRoot);
         if (hadOld) {
             renameSync(oldSquashfsRoot, parkedOldSquashfsRoot);
@@ -2762,13 +3193,13 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
         }
 
         writeLine(
-            'Mise à jour installée. Redémarrez le Pi (ou "sudo systemctl restart getty@tty1") '
-            + 'pour appliquer la nouvelle version. L\'ancienne version reste disponible dans '
-            + '~/squashfs-root.old le temps de valider la nouvelle.',
+            'Update installed. Restart the Pi (or "sudo systemctl restart getty@tty1") '
+            + 'to apply the new version. The previous version stays available in '
+            + '~/squashfs-root.old while the new one is being validated.',
         );
     } catch (error) {
-        const message = error instanceof Error ? error.message : 'erreur inattendue';
-        writeLine(`Échec : ${message}`);
+        const message = error instanceof Error ? error.message : 'unexpected error';
+        writeLine(`Failed: ${message}`);
     } finally {
         rmSync(workDir, {recursive: true, force: true});
     }
@@ -2779,7 +3210,7 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
 function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, confirmLabel: string): string {
     return `
         <tr>
-            <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">version actuelle</span>' : ''}</td>
+            <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">current version</span>' : ''}</td>
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
             <td class="center">
                 ${release.assetUrl && !release.isCurrent ? `
@@ -2787,9 +3218,9 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
                         onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
                         <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
                         <input type="hidden" name="assetUrl" value="${escapeHtml(release.assetUrl)}">
-                        <button type="submit" ${capable ? '' : 'disabled'}>Installer</button>
+                        <button type="submit" ${capable ? '' : 'disabled'}>Install</button>
                     </form>
-                ` : release.isCurrent ? '' : '<em>Aucun artefact pour cette plateforme</em>'}
+                ` : release.isCurrent ? '' : '<em>No artifact for this platform</em>'}
             </td>
         </tr>
     `;
@@ -2798,44 +3229,44 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
 function renderUpdateCard(
     updateInfo: UpdateInfo, isAdmin: boolean, installMessage?: string, installError?: string,
 ): string {
-    const confirmRelease = 'Installer la version {tag} ? Le Pi devra ensuite etre redemarre.';
+    const confirmRelease = 'Install version {tag}? The Pi will then need to be restarted.';
     const releaseRows = updateInfo.releases
         .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmRelease))
         .join('');
 
-    const confirmDevBuild = 'Installer le build de developpement {tag} (non promu vers main) ? '
-        + 'Le Pi devra ensuite etre redemarre.';
+    const confirmDevBuild = 'Install the development build {tag} (not promoted to main)? '
+        + 'The Pi will then need to be restarted.';
     const devBuildRows = updateInfo.devBuilds
         .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmDevBuild))
         .join('');
 
     return `
         <section class="card">
-            <h2>Mise à jour</h2>
-            <p class="info">Version actuellement installée : <strong>${escapeHtml(updateInfo.currentVersion)}</strong></p>
+            <h2>Update</h2>
+            <p class="info">Currently installed version: <strong>${escapeHtml(updateInfo.currentVersion)}</strong></p>
             ${!updateInfo.capable ? `
-                <p class="error">Installation automatique indisponible sur cette machine (attendu :
-                Linux, hors développement, AppImage extraite dans ~/squashfs-root - voir
-                docs/RASPBERRY-PI-DEPLOY.md). Les releases restent consultables ci-dessous.</p>
+                <p class="error">Automatic installation is unavailable on this machine (expected:
+                Linux, not in development, AppImage extracted in ~/squashfs-root - see
+                docs/RASPBERRY-PI-DEPLOY.md). Releases can still be browsed below.</p>
             ` : ''}
             ${installError ? `<p class="error flash">${escapeHtml(installError)}</p>` : ''}
             ${installMessage ? `<p class="info flash">${escapeHtml(installMessage)}</p>` : ''}
             ${updateInfo.releasesError
-                ? `<p class="error">Impossible de récupérer les releases GitHub : ${escapeHtml(updateInfo.releasesError)}</p>`
+                ? `<p class="error">Unable to fetch the GitHub releases: ${escapeHtml(updateInfo.releasesError)}</p>`
                 : `<table>
-                    <thead><tr><th>Version</th><th>Publiée le</th><th></th></tr></thead>
-                    <tbody>${releaseRows || '<tr><td colspan="3"><em>Aucune release trouvée.</em></td></tr>'}</tbody>
+                    <thead><tr><th>Version</th><th>Published on</th><th></th></tr></thead>
+                    <tbody>${releaseRows || '<tr><td colspan="3"><em>No release found.</em></td></tr>'}</tbody>
                 </table>`}
         </section>
         ${isAdmin ? `
             <section class="card">
-                <h2>Builds de développement (non publiés)</h2>
-                <p class="error">Prereleases GitHub générées automatiquement à chaque push sur
-                develop (workflow "Build") - pas encore promues vers main, à réserver aux tests.</p>
+                <h2>Development builds (unpublished)</h2>
+                <p class="error">GitHub prereleases generated automatically on every push to
+                develop (workflow "Build") - not yet promoted to main, meant for testing only.</p>
                 ${!updateInfo.releasesError
                     ? `<table>
-                        <thead><tr><th>Version</th><th>Publiée le</th><th></th></tr></thead>
-                        <tbody>${devBuildRows || '<tr><td colspan="3"><em>Aucun build disponible.</em></td></tr>'}</tbody>
+                        <thead><tr><th>Version</th><th>Published on</th><th></th></tr></thead>
+                        <tbody>${devBuildRows || '<tr><td colspan="3"><em>No build available.</em></td></tr>'}</tbody>
                     </table>`
                     : ''}
             </section>
@@ -2851,13 +3282,13 @@ function renderMauiCard(config: Config, info?: string): string {
             <form method="post" action="/maui/save">
                 <label class="checkbox-row">
                     <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
-                    Afficher en plein écran (décoché = fenêtré)
+                    Show fullscreen (unchecked = windowed)
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
-                    Ouvrir les DevTools au démarrage (mode développement)
+                    Open DevTools on startup (development mode)
                 </label>
-                <button type="submit">Enregistrer</button>
+                <button type="submit">Save</button>
             </form>
         </section>
     `;
@@ -2866,10 +3297,10 @@ function renderMauiCard(config: Config, info?: string): string {
 function renderMauiImportExportCard(error?: string, info?: string): string {
     return `
         <section class="card">
-            <h2>Import / export mame-awesome-ui</h2>
-            <p class="info">Sauvegarde ou restaure la configuration
-            (mame-awesome-ui-config.json) et/ou la base de données (jeux, joueurs, scores)
-            de mame-awesome-ui - pas les roms ni les données de mame lui-même.</p>
+            <h2>mame-awesome-ui import / export</h2>
+            <p class="info">Backs up or restores the configuration
+            (mame-awesome-ui-config.json) and/or the database (games, players, scores)
+            of mame-awesome-ui - not the roms nor mame's own data.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="get" action="/maui/export">
@@ -2879,15 +3310,15 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="db">
-                    Base de données (DB)
+                    Database (DB)
                 </label>
-                <button type="submit">Exporter</button>
+                <button type="submit">Export</button>
             </form>
             <form method="post" action="/maui/import" enctype="multipart/form-data"
-                onsubmit="return confirm('Ecraser la configuration et/ou la base de donnees actuelle avec ce fichier ? Cette action est irreversible.')">
-                <label for="mauiImportFile">Fichier à importer (.json, .sqlite/.db, ou .zip contenant les deux)</label>
+                onsubmit="return confirm('Overwrite the current configuration and/or database with this file? This cannot be undone.')">
+                <label for="mauiImportFile">File to import (.json, .sqlite/.db, or a .zip containing both)</label>
                 <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
-                <button type="submit">Importer</button>
+                <button type="submit">Import</button>
             </form>
         </section>
     `;
@@ -2913,16 +3344,16 @@ function renderMauiControlsCard(): string {
     const standard = mappings.standard;
     const renderInputs = (inputs: string[]): string => inputs.length
         ? inputs.map(input => `<code>${escapeHtml(input)}</code>`).join(' ')
-        : '<em>aucune entrée</em>';
+        : '<em>no input</em>';
 
-    const renderLongPress = (ms?: number): string => ms === undefined ? '' : ` <em>appui long (${ms / 1000} s)</em>`;
+    const renderLongPress = (ms?: number): string => ms === undefined ? '' : ` <em>long press (${ms / 1000} s)</em>`;
 
     const contextTables = MAUI_CONTROL_CONTEXTS.map(context => `
         <h3>${escapeHtml(context.title)}</h3>
         <div class="table-wrap">
             <table class="favorites-table">
                 <thead>
-                    <tr><th>Touche</th><th>Rôle</th><th>Manette (disposition standard)</th></tr>
+                    <tr><th>Key</th><th>Role</th><th>Gamepad (standard layout)</th></tr>
                 </thead>
                 <tbody>${context.controls.map(control => `
                     <tr>
@@ -2938,12 +3369,12 @@ function renderMauiControlsCard(): string {
     const specificPads = Object.entries(mappings).filter(([name]) => name !== 'standard');
     const specificPadsHtml = specificPads.length ? `
         <details>
-            <summary>Manettes avec une disposition propre (${specificPads.length})</summary>
+            <summary>Gamepads with their own layout (${specificPads.length})</summary>
             ${specificPads.map(([name, mapping]) => `
                 <h3>${escapeHtml(name)}</h3>
                 <div class="table-wrap">
                     <table class="favorites-table">
-                        <thead><tr><th>Touche</th><th>Entrées de la manette</th></tr></thead>
+                        <thead><tr><th>Key</th><th>Gamepad inputs</th></tr></thead>
                         <tbody>${Object.values(MAUI_KEYS).map(key => `
                             <tr>
                                 <td><code>${escapeHtml(keyLabel(key))}</code></td>
@@ -2958,12 +3389,12 @@ function renderMauiControlsCard(): string {
 
     return `
         <section class="card">
-            <h2>Contrôles de MAUI</h2>
-            <p class="info">Les touches que l'interface de la borne comprend, avec leur rôle. Les
-            mêmes touches n'ont pas le même rôle selon l'écran. Une manette produit ces touches via
-            <code>controllers.json</code> : une entrée <em>aucune entrée</em> veut dire que la
-            commande n'est accessible qu'au clavier avec cette disposition. Distinct de l'onglet MAME
-            &gt; Manettes, qui règle les entrées de MAME (dans les jeux) et non celles de MAUI.</p>
+            <h2>MAUI controls</h2>
+            <p class="info">The keys the cabinet interface understands, with their role. The
+            same keys do not have the same role depending on the screen. A gamepad produces these keys via
+            <code>controllers.json</code>: an entry reading <em>no input</em> means the
+            command is only reachable from the keyboard with this layout. Not to be confused with the MAME
+            &gt; Gamepads tab, which sets MAME's inputs (in games) and not MAUI's.</p>
             ${contextTables}
             ${specificPadsHtml}
         </section>
@@ -2975,13 +3406,13 @@ function renderMauiPage(
     updateInfo?: UpdateInfo,
 ): string {
     const sections: Subsection[] = [
-        {id: 'general', label: 'Général', html: renderMauiCard(config, messages.mauiInfo)},
-        {id: 'controles', label: 'Contrôles', html: renderMauiControlsCard()},
+        {id: 'general', label: 'General', html: renderMauiCard(config, messages.mauiInfo)},
+        {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
     ];
     if (updateInfo) {
         sections.push({
             id: 'update',
-            label: 'Mise à jour',
+            label: 'Update',
             html: renderUpdateCard(updateInfo, isAdmin, messages.updateInfoMessage, messages.updateInfoError),
         });
     }
@@ -3022,29 +3453,29 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
     return `
         <section class="card">
             <h2>ScreenScraper</h2>
-            <p>Identifiants utilisés pour récupérer marquees, flyers et autres visuels depuis
+            <p>Credentials used to fetch marquees, flyers and other artwork from
             <a href="https://www.screenscraper.fr" target="_blank" rel="noopener">screenscraper.fr</a>.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/screenscraper/save" novalidate>
-                <label for="ssUserId">Identifiant utilisateur (ssid)</label>
+                <label for="ssUserId">User ID (ssid)</label>
                 <input type="text" id="ssUserId" name="ssUserId" value="${escapeHtml(values.ssUserId)}" autocomplete="off">
-                <label for="ssUserPassword">Mot de passe utilisateur (sspassword)</label>
+                <label for="ssUserPassword">User password (sspassword)</label>
                 <input type="password" id="ssUserPassword" name="ssUserPassword" value="${escapeHtml(values.ssUserPassword)}" autocomplete="off">
 
-                <label for="ssSoftName">Nom du logiciel (softname)</label>
+                <label for="ssSoftName">Software name (softname)</label>
                 <input type="text" id="ssSoftName" name="ssSoftName" value="${escapeHtml(values.ssSoftName)}" autocomplete="off">
-                <label for="ssDevId">Identifiant développeur (devid) — à créer sur screenscraper.fr, aucune valeur par défaut n'est fournie par l'application</label>
+                <label for="ssDevId">Developer ID (devid) — to be created on screenscraper.fr, the application provides no default value</label>
                 <input type="text" id="ssDevId" name="ssDevId" value="${escapeHtml(values.ssDevId)}" autocomplete="off">
-                <label for="ssDevPassword">Mot de passe développeur (devpassword)</label>
+                <label for="ssDevPassword">Developer password (devpassword)</label>
                 <input type="password" id="ssDevPassword" name="ssDevPassword" value="${escapeHtml(values.ssDevPassword)}" autocomplete="off">
 
-                <label for="bezelAspect">Format des bezels (aspect_ratio de l'écran cible)</label>
+                <label for="bezelAspect">Bezel format (aspect_ratio of the target screen)</label>
                 <select id="bezelAspect" name="bezelAspect">
-                    <option value="16:9" ${values.bezelAspect === '16:9' ? 'selected' : ''}>16:9 (écran large)</option>
-                    <option value="4:3" ${values.bezelAspect === '4:3' ? 'selected' : ''}>4:3 (écran classique)</option>
+                    <option value="16:9" ${values.bezelAspect === '16:9' ? 'selected' : ''}>16:9 (widescreen)</option>
+                    <option value="4:3" ${values.bezelAspect === '4:3' ? 'selected' : ''}>4:3 (standard screen)</option>
                 </select>
-                <button type="submit">Enregistrer</button>
+                <button type="submit">Save</button>
             </form>
         </section>
     `;
@@ -3059,22 +3490,22 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
     if (!hasCreds) {
         return `
             <section class="card">
-                <h2>Récupération des médias</h2>
-                <p class="error flash">Identifiants ScreenScraper manquants : renseignez-les (onglet
-                Identifiants) avant de lancer un téléchargement.</p>
+                <h2>Media download</h2>
+                <p class="error flash">ScreenScraper credentials missing: fill them in (Credentials
+                tab) before starting a download.</p>
             </section>
         `;
     }
     return `
         <section class="card">
-            <h2>Récupération des médias</h2>
+            <h2>Media download</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${summary ? renderDownloadSummary(summary) : ''}
             <form method="post" action="/favorites/download-media">
-                <p class="info">Télécharge les marquees/flyers/logos manquants depuis ScreenScraper pour tous
-                les favoris. Traitement synchrone, peut prendre plusieurs minutes selon le nombre de favoris
-                (délai imposé entre chaque appel) - ne fermez pas cette page pendant le téléchargement.</p>
-                <button type="submit">Télécharger les visuels manquants</button>
+                <p class="info">Downloads the missing marquees/flyers/logos from ScreenScraper for all
+                the favorites. Synchronous processing, may take several minutes depending on the number of favorites
+                (a delay is enforced between calls) - do not close this page during the download.</p>
+                <button type="submit">Download the missing artwork</button>
             </form>
         </section>
     `;
@@ -3090,22 +3521,61 @@ function renderScreenScraperPage(
 ): string {
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
-    const defaultSubtab = (downloadError !== undefined || summary !== undefined) ? 'telechargement'
-        : (error !== undefined || info !== undefined) ? 'identifiants'
+    const defaultSubtab = (downloadError !== undefined || summary !== undefined) ? 'download'
+        : (error !== undefined || info !== undefined) ? 'credentials'
             : undefined;
     return renderSubtabbedPage('screenscraper', [
-        {id: 'identifiants', label: 'Identifiants', html: renderScreenScraperCard(values, error, info)},
+        {id: 'credentials', label: 'Credentials', html: renderScreenScraperCard(values, error, info)},
         {
-            id: 'telechargement',
-            label: 'Téléchargement',
+            id: 'download',
+            label: 'Download',
             html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
         },
     ], true, defaultSubtab);
 }
 
-function renderFavoriteBadge(found: boolean): string {
-    return found ? '<span class="badge-yes">✓</span>' : '<span class="badge-no">✗</span>';
+// 16x16 stroke icons (drawn with currentColor, so the caller's color class tints them). Each
+// asset kind gets its own glyph: marquee = lit sign on a stand, flyer = folded sheet of paper,
+// logo = star.
+const ASSET_ICON_PATHS: { [kind: string]: string } = {
+    Marquee: '<rect x="1.5" y="3" width="13" height="6" rx="1"/><path d="M8 9v3.5M5 13h6"/>',
+    Flyer: '<path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 8.5h5M6 11h5"/>',
+    Logo: '<path d="M8 1.8l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.1l-3.7 2 .8-4.1L2 6.1l4.2-.5z"/>',
+};
+
+const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+    + 'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+
+/**
+ * One asset (marquee/flyer/logo) presence icon: green when the file exists, red when it doesn't.
+ * A missing one is also struck through, so the state doesn't rest on red vs. green alone.
+ */
+function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean): string {
+    const label = `${kind}: ${found ? 'present' : 'missing'}`;
+    return `<span class="asset-icon ${found ? 'badge-yes' : 'badge-no'}" title="${label}" role="img" aria-label="${label}">
+        <svg ${ICON_SVG_ATTRS}>${ASSET_ICON_PATHS[kind]}${found ? '' : '<path d="M2 14L14 2"/>'}</svg>
+    </span>`;
 }
+
+function renderAssetIcons(row: FavoriteMediaStatus): string {
+    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee)}${
+        renderAssetIcon('Flyer', row.hasFlyer)}${renderAssetIcon('Logo', row.hasLogo)}</span>`;
+}
+
+/** Icon-only submit button; `label` is its tooltip and accessible name. */
+function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' = 'danger'): string {
+    // danger (red) is the default: removing/deleting; ok (green): restoring/enabling; warn
+    // (amber): switching something off without losing it.
+    const toneClass = tone === 'danger' ? '' : ` icon-button-${tone}`;
+    return `<button type="submit" class="icon-button${toneClass}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+        <svg ${ICON_SVG_ATTRS}>${svgPaths}</svg>
+    </button>`;
+}
+
+const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
+const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
+const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
+const PAUSE_ICON_PATHS = '<path d="M5.5 3v10M10.5 3v10"/>';
 
 /**
  * Splits a MAME description ("Ghosts'n Goblins (World? set 1)", sometimes with several
@@ -3139,18 +3609,18 @@ function renderGameName(fullname: string): string {
 
 function renderDownloadSummary(summary: DownloadSummary): string {
     const parts = [
-        `${summary.alreadyComplete} déjà complet(s)`,
-        `${summary.downloaded} fichier(s) téléchargé(s)`,
-        `${summary.notFound} introuvable(s) sur ScreenScraper`,
-        `${summary.noMedia} sans visuel disponible`,
-        `${summary.errors.length} erreur(s)`,
+        `${summary.alreadyComplete} already complete`,
+        `${summary.downloaded} file(s) downloaded`,
+        `${summary.notFound} not found on ScreenScraper`,
+        `${summary.noMedia} without available artwork`,
+        `${summary.errors.length} error(s)`,
     ];
     const errorsHtml = summary.errors.length
         ? `<ul>${summary.errors.map(error => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`
         : '';
     return `
         <p class="info flash">${escapeHtml(parts.join(' — '))}${summary.stoppedForQuota
-            ? ' — arrêté : quota ScreenScraper dépassé, réessayez plus tard.'
+            ? ' — stopped: ScreenScraper quota exceeded, try again later.'
             : ''}</p>
         ${errorsHtml}
     `;
@@ -3170,10 +3640,16 @@ function renderBiosCell(row: FavoriteRow): string {
 }
 
 function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
+    const flash = `
+        ${favoritesInfo.notice ? `<p class="info flash">${escapeHtml(favoritesInfo.notice)}</p>` : ''}
+        ${favoritesInfo.warning ? `<p class="error flash">${escapeHtml(favoritesInfo.warning)}</p>` : ''}
+    `;
+
     if (favoritesInfo.error) {
         return `
             <section class="card">
-                <h2>Favoris</h2>
+                <h2>Favorites</h2>
+                ${flash}
                 <p class="info">${escapeHtml(favoritesInfo.error)}</p>
             </section>
         `;
@@ -3184,28 +3660,35 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             <td>${escapeHtml(row.romName)}</td>
             <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${renderBiosCell(row)}</td>
-            <td class="center">${renderFavoriteBadge(row.hasMarquee)}</td>
-            <td class="center">${renderFavoriteBadge(row.hasFlyer)}</td>
-            <td class="center">${renderFavoriteBadge(row.hasLogo)}</td>
+            <td class="center">${renderAssetIcons(row)}</td>
+            <td class="center">
+                <form method="post" action="/favorites/delete">
+                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
+                    ${renderIconButton('Remove from favorites', TRASH_ICON_PATHS)}
+                </form>
+            </td>
         </tr>
     `).join('');
 
     const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
     const cacheStatus = favoritesInfo.cacheUpdatedAt
-        ? `Noms à jour au ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('fr-FR', {
+        ? `Names up to date as of ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('en-GB', {
             dateStyle: 'short', timeStyle: 'short',
         }))}.`
-        : 'Noms jamais mis à jour.';
+        : 'Names never updated.';
 
     return `
         <section class="card">
-            <h2>Favoris (${favoritesInfo.rows.length})</h2>
-            <p class="info">${cacheStatus}${unresolvedCount
-                ? ` ${unresolvedCount} favori(s) ajouté(s) depuis - pas encore résolu(s).`
-                : ''}</p>
-            <form method="post" action="/favorites/refresh">
-                <button type="submit">Mettre à jour les favoris</button>
-            </form>
+            <h2>Favorites (${favoritesInfo.rows.length})</h2>
+            ${flash}
+            <div class="info status-row">
+                <span>${cacheStatus}${unresolvedCount
+                    ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
+                    : ''}</span>
+                <form method="post" action="/favorites/refresh">
+                    <button type="submit">Update favorites</button>
+                </form>
+            </div>
             <div class="table-wrap">
                 <table class="favorites-table">
                     <thead>
@@ -3213,22 +3696,228 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th>Shortname</th>
                             <th>Name</th>
                             <th>Bios / Devices</th>
-                            <th class="center">Marquee</th>
-                            <th class="center">Flyer</th>
-                            <th class="center">Logo</th>
+                            <th class="center" title="Marquee, flyer, logo">Assets</th>
+                            <th class="center"></th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
                 </table>
             </div>
-            <p class="info">Pour télécharger les visuels manquants (marquees, flyers, logos) depuis
-            ScreenScraper, utilisez le bouton de l'onglet <a href="/screenscraper">ScreenScraper</a>.</p>
+            <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
+            roms and artwork stay on disk). The change shows up on the cabinet the next time MAUI
+            starts. Do not do it while a MAME game is open: MAME rewrites this file when it
+            closes.</p>
+            <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
+            present, red (struck through) when it is missing. To download the missing artwork
+            from ScreenScraper, use the button in the
+            <a href="/screenscraper">ScreenScraper</a> tab.</p>
         </section>
     `;
 }
 
-function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
-    return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
+interface RemovedFavoritesFlash {
+    notice?: string;
+    warning?: string;
+}
+
+function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFavoritesFlash = {}): string {
+    const messages = `
+        ${flash.notice ? `<p class="info flash">${escapeHtml(flash.notice)}</p>` : ''}
+        ${flash.warning ? `<p class="error flash">${escapeHtml(flash.warning)}</p>` : ''}
+    `;
+    if (!removed.length) {
+        return `
+            <section class="card">
+                <h2>Removed favorites</h2>
+                ${messages}
+                <p class="info">No removed favorites yet.</p>
+            </section>
+        `;
+    }
+
+    const rows = removed.map(item => `
+        <tr>
+            <td>${escapeHtml(item.romName)}</td>
+            <td>${renderGameName(item.fullname)}</td>
+            <td>${escapeHtml(new Date(item.removedAt).toLocaleString('en-GB', {
+                dateStyle: 'short', timeStyle: 'short',
+            }))}</td>
+            <td class="center">
+                <form method="post" action="/favorites/restore">
+                    <input type="hidden" name="romName" value="${escapeHtml(item.romName)}">
+                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
+                </form>
+            </td>
+        </tr>
+    `).join('');
+
+    return `
+        <section class="card">
+            <h2>Removed favorites (${removed.length})</h2>
+            ${messages}
+            <p class="info">Favorites removed from the Games tab stay here: "Restore" puts them
+            back into <code>favorites.ini</code> in alphabetical order, exactly as MAME had written them.
+            Same precaution as for removal: not while a MAME game is open.</p>
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr>
+                            <th>Shortname</th>
+                            <th>Name</th>
+                            <th>Removed on</th>
+                            <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </section>
+    `;
+}
+
+// The Home carousel's category icons, embedded as text in this bundle (the BO has no access to
+// the renderer's hashed asset files, and src/ is not shipped): keyed by file name without
+// extension ("shooter", "_default"...), i.e. by getCategoryIconKey(), the same key the carousel
+// derives its CSS class from.
+const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
+    Object.entries(import.meta.glob('./assets/categories/*.svg', {query: '?raw', import: 'default', eager: true}))
+        .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
+);
+
+interface BoCategoryGame {
+    romName: string;
+    fullname: string;
+    year: number | null;
+    studio: string;
+    // Game.players: from Multiplayer.ini (via player_alt/player_sim), "1 player" when it says nothing.
+    players: string;
+}
+
+interface BoCategory {
+    name: string;
+    iconKey: string;
+    games: BoCategoryGame[];
+}
+
+/**
+ * The categories the Home carousel shows (TTL twins merged, same as mergeTtlCategories(); the
+ * dynamic "Hiscores Only" first when some game supports hiscores, like Home.vue), each with its
+ * games, plus a last "No category" entry for the games genre.ini doesn't know. Read from the
+ * database like the carousel does, so it is what the cabinet displays, not what genre.ini says.
+ */
+async function loadBoCategories(): Promise<BoCategory[]> {
+    const categories = await Category.findAll({order: ['name'], include: [{model: Game, required: true}]});
+    const toGame = (game: Game): BoCategoryGame => ({
+        romName: game.romName,
+        fullname: game.fullname || game.romName,
+        year: game.year || null,
+        studio: game.studio,
+        players: game.players,
+    });
+    const byName = (a: {fullname: string}, b: {fullname: string}) => a.fullname.localeCompare(b.fullname);
+
+    const result: BoCategory[] = mergeTtlCategories(categories).map(entry => {
+        const ids = isMergedCategory(entry) ? entry.categoryIds : [entry.id_category];
+        const games = categories.filter(category => ids.includes(category.id_category))
+            .flatMap(category => category.games.map(toGame)).sort(byName);
+        return {name: entry.name, iconKey: getCategoryIconKey(entry.name), games};
+    });
+
+    const hiscoreGames = await Game.findAll({where: {hi: true}});
+    if (hiscoreGames.length) {
+        result.unshift({
+            name: HISCORES_ONLY_CATEGORY.name,
+            iconKey: getCategoryIconKey(HISCORES_ONLY_CATEGORY.name),
+            games: hiscoreGames.map(toGame).sort(byName),
+        });
+    }
+
+    const uncategorized = (await Game.findAll()).filter(game => game.id_category == null);
+    if (uncategorized.length) {
+        result.push({name: 'No category', iconKey: '_default', games: uncategorized.map(toGame).sort(byName)});
+    }
+    return result;
+}
+
+/**
+ * "Categories" subtab of the Games tab: one row per carousel category with its icon and game
+ * count, unfolding into the list of its games. '' when the database can't be read (not migrated
+ * yet - same race as /login), which hides the subtab rather than breaking the whole Games tab.
+ */
+async function renderCategoriesCard(): Promise<string> {
+    let categories: BoCategory[];
+    try {
+        categories = await loadBoCategories();
+    } catch {
+        return '';
+    }
+    if (!categories.length) {
+        return `
+            <section class="card">
+                <h2>Categories</h2>
+                <p class="info">No game in the database yet.</p>
+            </section>
+        `;
+    }
+    const rows = categories.map(category => {
+        const iconKey = category.iconKey in CATEGORY_ICONS ? category.iconKey : '_default';
+        const games = category.games.map(game => {
+            const meta = [game.year, game.studio, game.players].filter(Boolean).map(part => escapeHtml(String(part)));
+            return `
+            <li>${escapeHtml(decodeXmlEntities(game.fullname))}
+                <span class="checkbox-row-detail">${escapeHtml(game.romName)}</span>
+                <span class="category-game-meta">${meta.join(' · ')}</span></li>
+        `;
+        }).join('');
+        return `
+            <details class="category-row">
+                <summary>
+                    <img class="category-icon" src="/category-icons/${escapeHtml(iconKey)}.svg" alt="">
+                    <span class="category-name">${escapeHtml(category.name)}</span>
+                    <span class="category-count">${category.games.length} game${category.games.length === 1 ? '' : 's'}</span>
+                </summary>
+                <ul class="category-games">${games}</ul>
+            </details>
+        `;
+    }).join('');
+    return `
+        <section class="card">
+            <h2>Categories (${categories.length})</h2>
+            <p class="info">Grouped like the cabinet's carousel: mame's "TTL *" twins are merged into
+            their plain category, and "Hiscores Only" lists the games whose scores can be extracted
+            (they also belong to their own category). Each game shows its year, studio and player
+            count (from Multiplayer.ini).</p>
+            ${rows}
+        </section>
+    `;
+}
+
+/**
+ * Games tab: current favorites, and the ones removed from it (restorable). Both are always
+ * present so a removed favorite stays reachable even when favorites.ini ends up empty (in which
+ * case the first card is just the "no favorites" message).
+ *
+ * removedFlash/defaultSection: which of the two a response is "about" (see renderSubtabbedPage()).
+ * A flash on favoritesInfo belongs to the first one, removedFlash to the second. categoriesHtml
+ * (see renderCategoriesCard()) is the "Categories" subtab, absent when empty.
+ */
+function renderFavoritesPage(
+    favoritesInfo: FavoritesInfo, removedFlash?: RemovedFavoritesFlash,
+    defaultSection: 'list' | 'removed' = 'list', categoriesHtml = '',
+): string {
+    // A rom put back by another route (or by mame's own menu) since it was removed isn't
+    // "removed" anymore - don't offer to restore what's already there.
+    const {favoritesPath} = getMameLocations(getMameHomePath());
+    const current = favoritesPath ? getFavoriteRomNames(favoritesPath) : [];
+    const removed = readRemovedFavorites()
+        .filter(item => !current.includes(item.romName))
+        .sort((a, b) => b.removedAt.localeCompare(a.removedAt));
+
+    return renderSubtabbedPage('favorites', [
+        {id: 'list', label: 'Favorites', html: renderFavoritesCard(favoritesInfo)},
+        ...(categoriesHtml ? [{id: 'categories', label: 'Categories', html: categoriesHtml}] : []),
+        {id: 'removed', label: `Removed (${removed.length})`, html: renderRemovedFavoritesCard(removed, removedFlash)},
+    ], true, defaultSection);
 }
 
 /**
@@ -3255,24 +3944,25 @@ function renderPythonWarning(): string {
     if (isPython3Available()) {
         return '';
     }
-    return '<p class="error flash">python3 introuvable sur cette machine - l\'import de starting pack '
-        + 'est indisponible.</p>';
+    return '<p class="error flash">python3 not found on this machine - starting pack import '
+        + 'is unavailable.</p>';
 }
 
 function renderImportCard(error?: string): string {
     return `
         <section class="card">
-            <h2>Importer un starting pack</h2>
-            <p class="info">Remplace intégralement les jeux/roms/artwork/favoris présents dans
-            le pack. Les autres jeux, joueurs et scores ne sont pas touchés.</p>
-            <p class="info">Un ZIP peut aussi ne contenir que des dossiers ${IMPORTABLE_MAME_DIRECTORIES
-                .map(d => escapeHtml(d.zipFolder)).join(', ')} (copiés tels quels dans la
-            configuration mame courante) - dans ce cas, pas besoin de manifest.json.</p>
+            <h2>Import a starting pack</h2>
+            <p class="info">Fully replaces the games/roms/artwork present in
+            the pack and adds its games to MAME's favorites (existing favorites are kept). Other
+            games, players and scores are left untouched.</p>
+            <p class="info">A ZIP can also contain only ${IMPORTABLE_MAME_DIRECTORIES
+                .map(d => escapeHtml(d.zipFolder)).join(', ')} folders (copied as-is into the
+            current mame configuration) - in that case, no manifest.json is needed.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/import" enctype="multipart/form-data">
-                <label for="pack">Fichier ZIP</label>
+                <label for="pack">ZIP file</label>
                 <input type="file" id="pack" name="pack" accept=".zip" required>
-                <button type="submit">Importer</button>
+                <button type="submit">Import</button>
             </form>
         </section>
     `;
@@ -3280,34 +3970,508 @@ function renderImportCard(error?: string): string {
 
 function humanFileSize(bytes: number): string {
     let size = bytes;
-    for (const unit of ['o', 'Kio', 'Mio', 'Gio']) {
+    for (const unit of ['B', 'KiB', 'MiB', 'GiB']) {
         if (size < 1024) {
             return `${size.toFixed(1)} ${unit}`;
         }
         size /= 1024;
     }
-    return `${size.toFixed(1)} Tio`;
+    return `${size.toFixed(1)} TiB`;
+}
+
+interface DiskSpace {
+    path: string;
+    freeBytes: number;
+    totalBytes: number;
+    // st_dev of the nearest existing ancestor - two paths with the same value share a
+    // filesystem (a pack is downloaded to the OS temp dir, then extracted to the roms dir).
+    deviceId: number;
+}
+
+/**
+ * Free space (available to a non-root user) on the filesystem holding `path`, or null when it
+ * can't be determined. Walks up to the nearest existing ancestor first: the roms directory may
+ * not be created yet on a fresh MAME home. statfsSync is cross-platform (Node >= 18.15).
+ */
+function getDiskSpace(path: string): DiskSpace | null {
+    let probe = path;
+    while (!existsSync(probe)) {
+        const parent = dirname(probe);
+        if (parent === probe) {
+            return null;
+        }
+        probe = parent;
+    }
+    try {
+        const stats = statfsSync(probe);
+        return {
+            path,
+            freeBytes: stats.bavail * stats.bsize,
+            totalBytes: stats.blocks * stats.bsize,
+            deviceId: statSync(probe).dev,
+        };
+    } catch {
+        return null;
+    }
+}
+
+// Walking a big roms folder (thousands of zips, CHD subfolders) is not free, and the MAME tab
+// re-renders on every action - remember the last result for a short while.
+const DIRECTORY_SIZE_CACHE_MS = 30_000;
+const directorySizeCache = new Map<string, {bytes: number; at: number}>();
+
+/**
+ * Total size of the regular files under `path` (recursive, symlinks not followed), 0 when it
+ * does not exist. Unreadable entries are skipped rather than failing the whole card.
+ */
+function getDirectorySize(path: string): number {
+    const cached = directorySizeCache.get(path);
+    if (cached && Date.now() - cached.at < DIRECTORY_SIZE_CACHE_MS) {
+        return cached.bytes;
+    }
+    let bytes = 0;
+    const pending = [path];
+    while (pending.length) {
+        const dir = pending.pop() as string;
+        let entries;
+        try {
+            entries = readdirSync(dir, {withFileTypes: true});
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            const entryPath = join(dir, entry.name);
+            if (entry.isDirectory()) {
+                pending.push(entryPath);
+            } else if (entry.isFile()) {
+                try {
+                    bytes += lstatSync(entryPath).size;
+                } catch {
+                    // vanished between readdir and stat - ignore
+                }
+            }
+        }
+    }
+    directorySizeCache.set(path, {bytes, at: Date.now()});
+    return bytes;
+}
+
+/**
+ * Combined size of the given folders, counting only those on the filesystem `deviceId` (the
+ * bar is about that one disk) and never twice: a folder nested inside another listed one is
+ * already part of it.
+ */
+function getInstalledContentBytes(paths: (string | null)[], deviceId: number): number {
+    const onDisk = [...new Set(paths.filter((path): path is string => !!path))].filter(path => {
+        try {
+            return statSync(path).dev === deviceId;
+        } catch {
+            return false;
+        }
+    });
+    return onDisk
+        .filter(path => !onDisk.some(other => other !== path && path.startsWith(other.replace(/[\\/]+$/, '') + sep)))
+        .reduce((total, path) => total + getDirectorySize(path), 0);
+}
+
+/**
+ * Distinct, stable colour per pack (its index in the repository listing, not its tick order), so
+ * the swatch beside a checkbox, its segment in the disk bar and its legend entry always match.
+ * The golden angle spreads consecutive hues apart however many packs there are.
+ */
+function packColor(index: number): string {
+    return `hsl(${Math.round((index * 137.508) % 360)}, 65%, 58%)`;
+}
+
+/**
+ * Free-space block for the repository card: one bar over the total size of the disk holding the
+ * roms - space already used in grey, then (filled in by the script in renderRepoPackPicker() as
+ * games are ticked/unticked) one coloured segment per pack the selected games come from, with a
+ * legend. A pack's segment is the extracted size of its selected games (rom zip + artwork, plus
+ * each BIOS/parent set they need, once) +5% for filesystem block overhead, the same margin as the
+ * import script's own preflight. Nothing is downloaded to a temporary file any more (the script
+ * reads just what it needs from the pack with HTTP Range requests), so only this disk matters.
+ */
+function renderDiskSpaceInfo(mameInfo: MameInfo): string {
+    const romPath = mameInfo.romPath;
+    const roms = romPath ? getDiskSpace(romPath) : null;
+    if (!roms) {
+        return '';
+    }
+    const usedBytes = Math.max(0, roms.totalBytes - roms.freeBytes);
+    // Part of the used space that is pack content already installed (roms + marquees/flyers/
+    // logos, what a pack carries - its ini files are negligible), before any pack is added; the
+    // rest being whatever else lives on the disk. Capped at the used total: these folders can
+    // hold more than the filesystem reports as used (e.g. compressed/deduplicated storage).
+    const romsBytes = Math.min(usedBytes, getInstalledContentBytes(
+        [roms.path, mameInfo.marqueePath, mameInfo.flyerPath, mameInfo.logoPath], roms.deviceId,
+    ));
+    const otherBytes = usedBytes - romsBytes;
+    const percentOf = (bytes: number): string => (
+        roms.totalBytes > 0 ? Math.min(100, bytes / roms.totalBytes * 100) : 0
+    ).toFixed(2);
+    return `
+        <div class="disk-space" data-total="${roms.totalBytes}" data-roms-free="${roms.freeBytes}">
+            <p class="info">Disk space for the roms
+            (<span class="current-path">${escapeHtml(roms.path)}</span>):
+            <strong>${escapeHtml(humanFileSize(roms.freeBytes))}</strong> free of
+            ${escapeHtml(humanFileSize(roms.totalBytes))}</p>
+            <div class="disk-bar-track">
+                <div class="disk-bar-used" style="width: ${percentOf(otherBytes)}%"
+                    title="Other data: ${escapeHtml(humanFileSize(otherBytes))}"></div>
+                <div class="disk-bar-roms" style="width: ${percentOf(romsBytes)}%"
+                    title="Roms &amp; artwork already installed: ${escapeHtml(humanFileSize(romsBytes))}"></div>
+            </div>
+            <p class="disk-zoom-note" hidden></p>
+            <ul class="disk-legend">
+                <li class="disk-legend-static"><span class="pack-swatch disk-bar-used"></span>Other data
+                    (${escapeHtml(humanFileSize(otherBytes))})</li>
+                <li class="disk-legend-static"><span class="pack-swatch disk-bar-roms"></span>Roms &amp; artwork already installed
+                    (${escapeHtml(humanFileSize(romsBytes))})</li>
+            </ul>
+            <p class="info disk-space-selection" hidden></p>
+        </div>
+    `;
+}
+
+/**
+ * `<pack>.manifest.json` next to a pack's zip on the repository (see docs/STARTER-PACK-REPO.md):
+ * the list of its games, which is all that is needed to tell what is already installed without
+ * downloading the pack. null on any failure (missing file, timeout, invalid JSON): the pack is
+ * then simply listed without that comparison instead of failing the whole browse.
+ */
+async function fetchRepoManifest(
+    repoUrl: string, packFilename: string, authorization: string,
+): Promise<StartingPackManifest | null> {
+    if (!/^[\w.-]+\.zip$/.test(packFilename)) {
+        return null;
+    }
+    try {
+        const response = await fetch(`${repoUrl}/${packFilename.replace(/\.zip$/, '')}.manifest.json`, {
+            headers: {Authorization: authorization},
+            signal: AbortSignal.timeout(10_000),
+        });
+        return response.ok ? await response.json() as StartingPackManifest : null;
+    } catch {
+        return null;
+    }
+}
+
+const MISSING_GAMES_SHOWN = 4;
+
+function renderPackOwnership(ownership: PackOwnership | undefined): string {
+    if (!ownership) {
+        return '';
+    }
+    if (isPackFullyOwned(ownership)) {
+        return `<span class="pack-status pack-status-owned">Already installed (${ownership.total}/${ownership.total} roms)</span>`;
+    }
+    if (ownership.owned === 0) {
+        return '<span class="pack-status">Not installed yet</span>';
+    }
+    // Some of it is installed, the rest is new to this machine: an updated pack, or a partial import.
+    const shown = ownership.missing.slice(0, MISSING_GAMES_SHOWN).map(escapeHtml).join(', ');
+    const more = ownership.missing.length > MISSING_GAMES_SHOWN
+        ? ` and ${ownership.missing.length - MISSING_GAMES_SHOWN} more` : '';
+    return `<span class="pack-status pack-status-update">Update available: ${ownership.missing.length} new game(s)
+        (${ownership.owned}/${ownership.total} roms installed) - ${shown}${more}</span>`;
+}
+
+const PACK_GAME_MARKS: {[status in PackGameDetail['status']]: {mark: string; title: string}} = {
+    installed: {mark: '✓', title: 'Already installed'},
+    new: {mark: '+', title: 'Not installed yet'},
+    'no-rom': {mark: '·', title: 'No rom file of its own'},
+};
+
+/**
+ * Expandable list of a pack's games. Each game that is not installed yet has its own checkbox
+ * (`game`, value "<pack>|<romName>"): the import then takes only the ticked ones from that pack.
+ * The same game listed by several packs is ticked everywhere at once (script in
+ * renderRepoPackPicker()) and fetched from the first of them only. Rendered next to the pack's
+ * <label>, never inside it: a click on a <summary> inside a <label> would also tick the pack's
+ * checkbox. The "new" marks are only highlighted when part of the pack is already installed (an
+ * update): for a pack never imported, every game being "new" is not worth a colour.
+ */
+function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
+    if (!pack.games?.length) {
+        return '';
+    }
+    const isUpdate = !!pack.ownership && pack.ownership.owned > 0 && !fullyOwned;
+    const items = pack.games.map(game => {
+        const {mark, title} = PACK_GAME_MARKS[game.status];
+        const meta = [game.year, game.manufacturer && decodeXmlEntities(game.manufacturer), game.categoryName]
+            .filter((part): part is string => !!part).map(escapeHtml).join(' · ');
+        const label = `${escapeHtml(decodeXmlEntities(game.fullname))}
+            ${meta ? `<span class="checkbox-row-detail">${meta}</span>` : ''}`;
+        const classes = `pack-game pack-game-${game.status}${game.status === 'new' && isUpdate ? ' pack-game-highlight' : ''}`;
+        // What the search box looks in (folded and matched in the page, see renderRepoPackPicker()).
+        const search = escapeHtml([
+            decodeXmlEntities(game.fullname), game.romName, game.manufacturer && decodeXmlEntities(game.manufacturer),
+            game.categoryName, game.year,
+        ].filter(Boolean).join(' '));
+        if (game.status === 'installed' || fullyOwned) {
+            return `
+                <li class="${classes}" data-search="${search}">
+                    <span class="pack-game-mark" title="${title}">${mark}</span>
+                    <span>${label}</span>
+                </li>
+            `;
+        }
+        return `
+            <li class="${classes}" data-search="${search}">
+                <label class="pack-game-label">
+                    <input type="checkbox" class="game-checkbox" name="game"
+                        value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
+                        data-rom="${escapeHtml(game.romName)}" data-size="${game.size}"
+                        data-bios="${escapeHtml(game.biosName ?? '')}">
+                    <span>${label}</span>
+                </label>
+            </li>
+        `;
+    }).join('');
+    return `
+        <details class="pack-details">
+            <summary>Games in this pack (${pack.games.length})</summary>
+            <ul class="pack-games">${items}</ul>
+        </details>
+    `;
 }
 
 function renderRepoPackPicker(packs: RepoPack[]): string {
     if (!packs.length) {
-        return '<p class="info flash">Aucun pack disponible sur ce dépôt.</p>';
+        return '<p class="info flash">No pack available on this repository.</p>';
     }
-    const options = packs.map(pack => {
+    const rows = packs.map((pack, index) => {
         const details = [
             humanFileSize(pack.size),
-            pack.gameCount !== undefined ? `${pack.gameCount} jeu(x)` : null,
-            pack.generatedAt ? new Date(pack.generatedAt).toLocaleDateString('fr-FR') : null,
+            pack.gameCount !== undefined ? `${pack.gameCount} game(s)` : null,
+            pack.generatedAt ? new Date(pack.generatedAt).toLocaleDateString('en-GB') : null,
         ].filter((part): part is string => part !== null).join(' — ');
-        return `<option value="${escapeHtml(pack.filename)}">${escapeHtml(pack.filename)} (${escapeHtml(details)})</option>`;
+        const color = packColor(index);
+        // Everything in the pack is already installed: nothing to fetch, so it cannot be ticked.
+        const owned = isPackFullyOwned(pack.ownership);
+        // Without its manifest there is no list of games to pick from (the import needs the rom
+        // names), so such a pack cannot be selected either.
+        const unavailable = !pack.games?.length;
+        return `
+            <div class="pack-row" data-pack="${escapeHtml(pack.filename)}" data-color="${color}"
+                data-bios-sizes="${escapeHtml(JSON.stringify(pack.biosSizes ?? {}))}">
+            <label class="checkbox-row${owned || unavailable ? ' pack-owned' : ''}">
+                <input type="checkbox" class="pack-toggle"${owned || unavailable ? ' disabled' : ''}>
+                <span class="pack-swatch" style="background-color: ${color}"></span>
+                <span>${escapeHtml(pack.filename)}<span class="checkbox-row-detail">${escapeHtml(details)}</span>
+                    ${unavailable
+                        ? '<span class="pack-status">Manifest unavailable - its games cannot be listed</span>'
+                        : renderPackOwnership(pack.ownership)}</span>
+            </label>
+            ${renderPackGames(pack, owned)}
+            </div>
+        `;
     }).join('');
+    // Submit stays disabled until at least one game is ticked (server re-checks either way).
+    // The search box sits outside the form: Enter in it must not submit the import.
     return `
+        <div class="pack-search">
+            <input type="search" id="packSearch" placeholder="Search a game, studio or category…"
+                autocomplete="off" aria-label="Search the games of the packs">
+            <p class="info pack-search-count" id="packSearchCount" hidden></p>
+        </div>
         <form method="post" action="/import/from-url"
-            onsubmit="return confirm('Ceci écrase les roms/favoris/médias déjà présents pour les jeux du pack. Continuer ?')">
-            <label for="packFilename">Pack à importer</label>
-            <select id="packFilename" name="packFilename" required>${options}</select>
-            <button type="submit">Télécharger et importer</button>
+            onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
+            <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
+            A game listed by several packs is fetched once. While a search is active, the pack boxes and
+            "Select all" only act on the games shown; ticked games stay ticked when they are hidden.</p>
+            ${rows}
+            <label class="checkbox-row">
+                <input type="checkbox" id="packSelectAll">
+                <span>Select all</span>
+            </label>
+            <button type="submit" id="packSubmit" disabled>Fetch and import</button>
         </form>
+        <script>(function () {
+            var rows = Array.prototype.slice.call(document.querySelectorAll('.pack-row'));
+            var all = document.getElementById('packSelectAll');
+            var submit = document.getElementById('packSubmit');
+            var disk = document.querySelector('.disk-space');
+            var summary = disk && disk.querySelector('.disk-space-selection');
+            var track = disk && disk.querySelector('.disk-bar-track');
+            var legend = disk && disk.querySelector('.disk-legend');
+            var zoomNote = disk && disk.querySelector('.disk-zoom-note');
+            var search = document.getElementById('packSearch');
+            var searchCount = document.getElementById('packSearchCount');
+            // Below this share of the disk, the selection is a sliver of the full bar (700 MB on
+            // a 1 TB disk): the bar then shows only the free space instead of the whole disk.
+            var ZOOM_BELOW = 0.02;
+            function formatSize(bytes) {
+                var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+                var i = 0;
+                while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+                return bytes.toFixed(1) + ' ' + units[i];
+            }
+            function gameBoxes(row) {
+                return Array.prototype.slice.call(row.querySelectorAll('.game-checkbox:not([disabled])'));
+            }
+            var allBoxes = [].concat.apply([], rows.map(gameBoxes));
+            // What a pack box / "Select all" acts on: the games a search leaves showing.
+            function isShown(box) { return !box.closest('li').hidden; }
+            function shownBoxes(row) { return gameBoxes(row).filter(isShown); }
+            // Adds one segment to the bar and its entry to the legend.
+            function addPart(bytes, total, label, color) {
+                var seg = document.createElement('div');
+                seg.className = 'disk-bar-seg';
+                seg.style.width = (bytes / total * 100).toFixed(2) + '%';
+                seg.style.backgroundColor = color;
+                seg.title = label + ': ' + formatSize(bytes);
+                track.appendChild(seg);
+                var item = document.createElement('li');
+                item.className = 'disk-legend-part';
+                var swatch = document.createElement('span');
+                swatch.className = 'pack-swatch';
+                swatch.style.backgroundColor = color;
+                item.appendChild(swatch);
+                item.appendChild(document.createTextNode(label + ' (' + formatSize(bytes) + ')'));
+                legend.appendChild(item);
+            }
+            // A game listed by several packs is only fetched from the first one (in page order)
+            // that has it ticked: the size and legend entry go to that pack alone.
+            function selection() {
+                var seen = {};
+                return rows.map(function (row) {
+                    var bios = {};
+                    var biosSizes = JSON.parse(row.dataset.biosSizes || '{}');
+                    var bytes = 0;
+                    var games = 0;
+                    gameBoxes(row).forEach(function (box) {
+                        if (!box.checked || seen[box.dataset.rom]) { return; }
+                        seen[box.dataset.rom] = true;
+                        games++;
+                        bytes += Number(box.dataset.size);
+                        var name = box.dataset.bios;
+                        if (name && !bios[name]) {
+                            bios[name] = true;
+                            bytes += Number(biosSizes[name] || 0);
+                        }
+                    });
+                    return {name: row.dataset.pack.replace(/[.]zip$/, ''), color: row.dataset.color, games: games, bytes: bytes};
+                });
+            }
+            function refresh() {
+                rows.forEach(function (row) {
+                    var boxes = shownBoxes(row);
+                    var ticked = boxes.filter(function (box) { return box.checked; }).length;
+                    var toggle = row.querySelector('.pack-toggle');
+                    toggle.checked = boxes.length > 0 && ticked === boxes.length;
+                    toggle.indeterminate = ticked > 0 && ticked < boxes.length;
+                });
+                // The import takes every ticked game, shown or not.
+                var pickedBoxes = allBoxes.filter(function (box) { return box.checked; });
+                submit.disabled = pickedBoxes.length === 0;
+                var shownAll = allBoxes.filter(isShown);
+                all.checked = shownAll.length > 0 && shownAll.every(function (box) { return box.checked; });
+                all.disabled = shownAll.length === 0;
+                if (!summary) { return; }
+                var total = Number(disk.dataset.total);
+                var free = Number(disk.dataset.romsFree);
+                var parts = selection().filter(function (part) { return part.games > 0; });
+                var games = parts.reduce(function (sum, part) { return sum + part.games; }, 0);
+                var fetched = parts.reduce(function (sum, part) { return sum + part.bytes; }, 0);
+                // +5% for filesystem block overhead, like the import script's own preflight check.
+                var needed = fetched * 1.05;
+                var enough = needed <= free;
+
+                Array.prototype.slice.call(track.querySelectorAll('.disk-bar-seg')).forEach(function (el) { el.remove(); });
+                Array.prototype.slice.call(legend.querySelectorAll('.disk-legend-part')).forEach(function (el) { el.remove(); });
+                // Zoomed: the bar spans the free space only (used segments hidden by CSS) and the
+                // needed bytes are relative to it. Never when they do not fit - that overflow
+                // has to show against the whole disk.
+                var zoomed = needed > 0 && needed <= free && needed < total * ZOOM_BELOW;
+                var scale = zoomed ? free : total;
+                disk.classList.toggle('disk-zoomed', zoomed);
+                zoomNote.hidden = !zoomed;
+                zoomNote.textContent = 'Zoomed on the free space (' + formatSize(free)
+                    + ') - the bar no longer shows the ' + formatSize(total) + ' disk as a whole.';
+                if (scale > 0) {
+                    parts.forEach(function (part) {
+                        addPart(part.bytes * 1.05, scale, part.name + ', ' + part.games + ' game(s)', part.color);
+                    });
+                }
+                track.classList.toggle('disk-bar-overflow', !enough);
+
+                summary.hidden = games === 0;
+                summary.className = 'disk-space-selection ' + (enough ? 'info' : 'error');
+                summary.textContent = games + ' game(s) from ' + parts.length + ' pack(s): '
+                    + formatSize(fetched) + ' to fetch, about ' + formatSize(needed)
+                    + ' needed, ' + formatSize(Math.max(0, free - needed)) + ' left afterwards'
+                    + (enough ? '.' : ' - not enough free disk space.');
+            }
+            // Ticking a game ticks the same game in every other pack that lists it.
+            function mirror(box) {
+                allBoxes.forEach(function (other) {
+                    if (other.dataset.rom === box.dataset.rom) { other.checked = box.checked; }
+                });
+            }
+            allBoxes.forEach(function (box) {
+                box.addEventListener('change', function () { mirror(box); refresh(); });
+            });
+            rows.forEach(function (row) {
+                row.querySelector('.pack-toggle').addEventListener('change', function (event) {
+                    shownBoxes(row).forEach(function (box) { box.checked = event.target.checked; mirror(box); });
+                    refresh();
+                });
+            });
+            all.addEventListener('change', function () {
+                allBoxes.filter(isShown).forEach(function (box) { box.checked = all.checked; mirror(box); });
+                refresh();
+            });
+
+            // Search: every term must appear (accents and case ignored) in the game's name, rom
+            // name, studio, category or year, or in its pack's name. A pack with no match is hidden,
+            // one with matches opens on them; clearing the search puts the packs back as they were.
+            function fold(text) {
+                return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+            }
+            var openBeforeSearch = null;
+            function applySearch() {
+                var terms = fold(search.value).split(/\\s+/).filter(Boolean);
+                var searching = terms.length > 0;
+                if (searching && openBeforeSearch === null) {
+                    openBeforeSearch = rows.map(function (row) {
+                        var details = row.querySelector('.pack-details');
+                        return details ? details.open : false;
+                    });
+                }
+                var games = 0;
+                var packs = 0;
+                rows.forEach(function (row, index) {
+                    var packName = fold(row.dataset.pack);
+                    var shown = 0;
+                    Array.prototype.forEach.call(row.querySelectorAll('.pack-game'), function (item) {
+                        var haystack = packName + ' ' + fold(item.dataset.search || '');
+                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; });
+                        item.hidden = !match;
+                        if (match) { shown++; }
+                    });
+                    row.hidden = searching && shown === 0;
+                    var details = row.querySelector('.pack-details');
+                    if (details) {
+                        details.open = searching ? shown > 0 : (openBeforeSearch ? openBeforeSearch[index] : details.open);
+                    }
+                    games += shown;
+                    if (shown > 0) { packs++; }
+                });
+                if (!searching) { openBeforeSearch = null; }
+                searchCount.hidden = !searching;
+                searchCount.textContent = games
+                    ? games + ' game(s) found in ' + packs + ' pack(s).'
+                    : 'No game matches this search.';
+                refresh();
+            }
+            search.addEventListener('input', applySearch);
+            search.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') { event.preventDefault(); }
+            });
+            refresh();
+        })();</script>
     `;
 }
 
@@ -3318,28 +4482,31 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
  * renderForm()): downloading and importing an arbitrary pack from a configured repo is no less
  * consequential than the manual upload form right above it.
  */
-function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string, info?: string): string {
+function renderRepoImportCard(
+    config: Config, mameInfo: MameInfo, packs?: RepoPack[], error?: string, info?: string,
+): string {
     return `
         <section class="card">
-            <h2>Dépôt de starting packs</h2>
-            <p class="info">Parcourt et importe un starting pack directement depuis un dépôt HTTP
-            protégé par mot de passe (voir docs/STARTER-PACK-REPO.md), sans passer par l'upload
-            (onglet Import) - utile pour un pack trop volumineux pour un formulaire navigateur.</p>
+            <h2>Starting pack repository</h2>
+            <p class="info">Browses and imports a starting pack directly from a password-protected
+            HTTP repository (see docs/STARTER-PACK-REPO.md), without going through the upload
+            (Import tab) - useful for a pack too large for a browser form.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/repo/save" novalidate>
-                <label for="repoUrl">URL du dépôt</label>
+                <label for="repoUrl">Repository URL</label>
                 <input type="text" id="repoUrl" name="repoUrl" value="${escapeHtml(config.repoUrl)}"
                     placeholder="https://repo.maui.afronob.com" autocomplete="off">
-                <label for="repoUser">Identifiant</label>
+                <label for="repoUser">Username</label>
                 <input type="text" id="repoUser" name="repoUser" value="${escapeHtml(config.repoUser)}" autocomplete="off">
-                <label for="repoPassword">Mot de passe</label>
+                <label for="repoPassword">Password</label>
                 <input type="password" id="repoPassword" name="repoPassword" value="${escapeHtml(config.repoPassword)}" autocomplete="off">
-                <button type="submit">Enregistrer</button>
+                <button type="submit">Save</button>
             </form>
             ${config.repoUrl ? `
+                ${renderDiskSpaceInfo(mameInfo)}
                 <form method="get" action="/import/from-url/packs">
-                    <button type="submit">Parcourir les packs disponibles</button>
+                    <button type="submit">Browse available packs</button>
                 </form>
                 ${packs ? renderRepoPackPicker(packs) : ''}
             ` : ''}
@@ -3348,26 +4515,26 @@ function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string
 }
 
 function renderUserStatusBadge(active: boolean): string {
-    return active ? '<span class="badge-yes">✓ actif</span>' : '<span class="badge-no">✗ inactif</span>';
+    return active ? '<span class="badge-yes">✓ active</span>' : '<span class="badge-no">✗ inactive</span>';
 }
 
 function renderCreateUserCard(error?: string): string {
     return `
         <section class="card">
-            <h2>Ajouter un joueur</h2>
+            <h2>Add a player</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/users/create">
-                <label for="pseudo_3">Pseudo 3 lettres (requis, unique)</label>
+                <label for="pseudo_3">Nickname, 3 letters (required, unique)</label>
                 <input type="text" id="pseudo_3" name="pseudo_3" maxlength="3" required>
-                <label for="realname">Nom</label>
+                <label for="realname">Name</label>
                 <input type="text" id="realname" name="realname">
                 <label for="email">Email</label>
                 <input type="email" id="email" name="email">
                 <label class="checkbox-row">
                     <input type="checkbox" name="active" checked>
-                    Actif
+                    Active
                 </label>
-                <button type="submit">Créer</button>
+                <button type="submit">Create</button>
             </form>
         </section>
     `;
@@ -3375,15 +4542,15 @@ function renderCreateUserCard(error?: string): string {
 
 function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
     const rows = users.map(user => {
-        const avatarFilename = `${user.pseudo_3}.png`;
-        const hasAvatar = avatarFilenames.indexOf(avatarFilename) >= 0;
+        const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
+        const hasAvatar = avatarFilename !== undefined;
         return `
         <tr>
             <td class="center">
                 <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
-                    <label class="avatar-upload" title="Changer l'avatar (PNG)">
+                    <label class="avatar-upload" title="Change the avatar (PNG)">
                         ${hasAvatar
-                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}" alt="">`
                             : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
                         <input type="file" name="avatar" accept="image/png" onchange="this.form.submit()">
                     </label>
@@ -3393,15 +4560,17 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
             <td class="center">${renderUserStatusBadge(user.active)}</td>
             <td class="center">
-                <form method="post" action="/users/${user.id_user}/toggle-active">
-                    <button type="submit">${user.active ? 'Désactiver' : 'Activer'}</button>
-                </form>
-            </td>
-            <td class="center">
-                <form method="post" action="/users/${user.id_user}/delete"
-                    onsubmit="return confirm('Supprimer ${escapeHtml(user.pseudo_3)} ?')">
-                    <button type="submit">Supprimer</button>
-                </form>
+                <div class="row-actions">
+                    <form method="post" action="/users/${user.id_user}/toggle-active">
+                        ${user.active
+                            ? renderIconButton('Deactivate', PAUSE_ICON_PATHS, 'warn')
+                            : renderIconButton('Activate', PLAY_ICON_PATHS, 'ok')}
+                    </form>
+                    <form method="post" action="/users/${user.id_user}/delete"
+                        onsubmit="return confirm('Delete ${escapeHtml(user.pseudo_3)}? The nickname stays reserved and an administrator can restore it later.')">
+                        ${renderIconButton('Delete player', TRASH_ICON_PATHS)}
+                    </form>
+                </div>
             </td>
         </tr>
     `;
@@ -3409,7 +4578,7 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
 
     return `
         <section class="card">
-            <h2>Joueurs (${users.length})</h2>
+            <h2>Players (${users.length})</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <div class="table-wrap">
@@ -3417,14 +4586,98 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                     <thead>
                         <tr>
                             <th class="center">Avatar</th>
-                            <th>Pseudo</th>
-                            <th>Nom</th>
-                            <th class="center">Statut</th>
-                            <th class="center"></th>
+                            <th>Nickname</th>
+                            <th>Name</th>
+                            <th class="center">Status</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows || '<tr><td colspan="6"><em>Aucun joueur</em></td></tr>'}</tbody>
+                    <tbody>${rows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
+                </table>
+            </div>
+        </section>
+    `;
+}
+
+interface UsersPageExtras {
+    isAdmin: boolean;
+    deleted: DeletedUserRow[];
+    deletedInfo?: string;
+    deletedError?: string;
+}
+
+/**
+ * Deleted players, restorable by an administrator (POST /users/:id/restore). A deleted player is
+ * only soft-deleted: the nickname stays reserved and their scores stay in the database (hidden
+ * from the hiscore views), so restoring brings all of it back. Same idea as the favorites
+ * "Removed" subtab.
+ */
+function renderDeletedUsersCard(
+    deleted: DeletedUserRow[], avatarFilenames: string[], error?: string, info?: string,
+): string {
+    const messages = `
+        ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+        ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
+    `;
+    if (!deleted.length) {
+        return `
+            <section class="card">
+                <h2>Deleted players</h2>
+                ${messages}
+                <p class="info">No deleted players.</p>
+            </section>
+        `;
+    }
+    const rows = deleted.map(({user, scoreCount}) => {
+        const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
+        return `
+        <tr>
+            <td class="center">${avatarFilename !== undefined
+                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
+            <td>${escapeHtml(user.pseudo_3)}</td>
+            <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
+            <td>${escapeHtml(new Date(user.deletionDate).toLocaleString('en-GB', {
+                dateStyle: 'short', timeStyle: 'short',
+            }))}</td>
+            <td class="center">${scoreCount}</td>
+            <td class="center">
+                <div class="row-actions">
+                    <form method="post" action="/users/${user.id_user}/restore"
+                        onsubmit="return confirm('Restore ${escapeHtml(user.pseudo_3)} with ${scoreCount} score(s)? Only do it for the player who owns this nickname.')">
+                        ${renderIconButton('Restore player', RESTORE_ICON_PATHS, 'ok')}
+                    </form>
+                    <form method="post" action="/users/${user.id_user}/purge"
+                        onsubmit="return confirm('Permanently delete ${escapeHtml(user.pseudo_3)} and ${scoreCount} score(s) from the database? The nickname becomes free again. This cannot be undone.')">
+                        ${renderIconButton('Delete permanently', TRASH_ICON_PATHS)}
+                    </form>
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
+
+    return `
+        <section class="card">
+            <h2>Deleted players (${deleted.length})</h2>
+            ${messages}
+            <p class="info">A deleted player's nickname stays reserved: nobody can register it, so
+            nobody inherits their scores. Restoring brings the player back with their scores and
+            avatar; only restore a player for the person who owns the nickname. Deleting permanently
+            removes the player, their scores and their avatar from the database for good, and frees
+            the nickname.</p>
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr>
+                            <th class="center">Avatar</th>
+                            <th>Nickname</th>
+                            <th>Name</th>
+                            <th>Deleted on</th>
+                            <th class="center">Scores</th>
+                            <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
                 </table>
             </div>
         </section>
@@ -3433,19 +4686,30 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
 
 function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
+    extras: UsersPageExtras = {isAdmin: false, deleted: []},
 ): string {
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
     // createError is kept separate from error/info (both list-card messages, e.g. from
     // toggle-active/delete/avatar upload) so a duplicate-pseudo error from /users/create lands
-    // back on "Ajouter", next to the form that produced it, instead of "Joueurs".
-    const defaultSubtab = createError !== undefined ? 'ajouter'
-        : (error !== undefined || info !== undefined) ? 'joueurs'
-            : undefined;
-    return renderSubtabbedPage('users', [
-        {id: 'ajouter', label: 'Ajouter', html: renderCreateUserCard(createError)},
-        {id: 'joueurs', label: 'Joueurs', html: renderUsersListCard(users, avatarFilenames, error, info)},
-    ], true, defaultSubtab);
+    // back on "Add", next to the form that produced it, instead of "Players".
+    const defaultSubtab = createError !== undefined ? 'add'
+        : (extras.deletedInfo !== undefined || extras.deletedError !== undefined) ? 'deleted'
+            : (error !== undefined || info !== undefined) ? 'players'
+                : undefined;
+    const sections: Subsection[] = [
+        {id: 'add', label: 'Add', html: renderCreateUserCard(createError)},
+        {id: 'players', label: 'Players', html: renderUsersListCard(users, avatarFilenames, error, info)},
+    ];
+    // Restoring a deleted player is the administrator's call (the route rejects anyone else too).
+    if (extras.isAdmin) {
+        sections.push({
+            id: 'deleted',
+            label: `Deleted (${extras.deleted.length})`,
+            html: renderDeletedUsersCard(extras.deleted, avatarFilenames, extras.deletedError, extras.deletedInfo),
+        });
+    }
+    return renderSubtabbedPage('users', sections, true, defaultSubtab);
 }
 
 /**
@@ -3454,12 +4718,12 @@ function renderUsersPage(
  */
 function describeUserError(error: unknown): string {
     if (error instanceof UniqueConstraintError) {
-        return 'Un joueur avec ce pseudo existe déjà.';
+        return 'A player with this nickname already exists.';
     }
     if (error instanceof ValidationError) {
         return error.errors.map(e => e.message).join(' ');
     }
-    return error instanceof Error ? error.message : 'Erreur inattendue.';
+    return error instanceof Error ? error.message : 'Unexpected error.';
 }
 
 function renderBrowsePage(target: PathField, currentDir: string, initialValue: string): string {
@@ -3471,7 +4735,7 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
             .map(entry => entry.name)
             .sort((a, b) => a.localeCompare(b));
     } catch {
-        error = `Impossible de lire le dossier "${currentDir}".`;
+        error = `Unable to read the folder "${currentDir}".`;
     }
 
     const parentDir = dirname(currentDir);
@@ -3491,15 +4755,15 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
 
     return renderPage(`
         <section class="card">
-            <h2>Choisir un dossier</h2>
+            <h2>Choose a folder</h2>
             <p class="current-path">${escapeHtml(currentDir)}</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <p>
-                <a class="button-link" href="${selectLink(currentDir)}">Choisir ce dossier</a>
-                ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Dossier parent</a>` : ''}
+                <a class="button-link" href="${selectLink(currentDir)}">Choose this folder</a>
+                ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Parent folder</a>` : ''}
             </p>
-            <ul class="browse-list">${rows || '<li><em>Aucun sous-dossier</em></li>'}</ul>
-            <p><a href="/?${carryQuery}">Annuler</a></p>
+            <ul class="browse-list">${rows || '<li><em>No subfolder</em></li>'}</ul>
+            <p><a href="/?${carryQuery}">Cancel</a></p>
         </section>
     `);
 }
@@ -3545,11 +4809,20 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     createSequelize();
 
     app.get('/background.jpg', (req, res) => {
-        res.sendFile(join(getStaticPath(), 'img/background.jpg'));
+        res.sendFile('img/background.jpg', {root: getStaticPath()});
+    });
+
+    app.get('/category-icons/:key.svg', (req, res) => {
+        const svg = CATEGORY_ICONS[req.params.key];
+        if (!svg) {
+            res.sendStatus(404);
+            return;
+        }
+        res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
     });
 
     app.get('/mame-logo.svg', (req, res) => {
-        res.sendFile(join(getStaticPath(), 'img/mame-logo.svg'));
+        res.sendFile('img/mame-logo.svg', {root: getStaticPath()});
     });
 
     app.get('/login', (req, res) => {
@@ -3566,12 +4839,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             // Same "not migrated yet" race /users already handles: this early in a fresh
             // install, the Electron renderer's Init.vue may not have run Database.update() yet.
             res.status(503).send(renderLoginPage(
-                'Base de données pas encore initialisée - lancez l\'application une première fois avant de vous connecter.',
+                'Database not initialized yet - launch the application once before signing in.',
             ));
             return;
         }
         if (!boUser || !bcrypt.compareSync(password, boUser.passwordHash)) {
-            res.status(401).send(renderLoginPage('Identifiant ou mot de passe incorrect.'));
+            res.status(401).send(renderLoginPage('Incorrect username or password.'));
             return;
         }
         req.session.boUserId = boUser.id;
@@ -3604,25 +4877,25 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const confirmPassword: string = req.body.confirmPassword || '';
 
         if (!bcrypt.compareSync(currentPassword, boUser.passwordHash)) {
-            res.status(401).send(renderAccountPage(boUser.username, boUser.role, 'Mot de passe actuel incorrect.'));
+            res.status(401).send(renderAccountPage(boUser.username, boUser.role, 'Incorrect current password.'));
             return;
         }
         if (newPassword.length < 4) {
             res.status(422).send(renderAccountPage(
-                boUser.username, boUser.role, 'Le nouveau mot de passe doit contenir au moins 4 caractères.',
+                boUser.username, boUser.role, 'The new password must be at least 4 characters long.',
             ));
             return;
         }
         if (newPassword !== confirmPassword) {
             res.status(422).send(renderAccountPage(
-                boUser.username, boUser.role, 'La confirmation ne correspond pas au nouveau mot de passe.',
+                boUser.username, boUser.role, 'The confirmation does not match the new password.',
             ));
             return;
         }
 
         boUser.passwordHash = bcrypt.hashSync(newPassword, 10);
         await boUser.save();
-        res.send(renderAccountPage(boUser.username, boUser.role, undefined, 'Mot de passe mis à jour.'));
+        res.send(renderAccountPage(boUser.username, boUser.role, undefined, 'Password updated.'));
     });
 
     app.get('/', (req, res) => {
@@ -3653,14 +4926,23 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }, hasScreenScraperCredentials(config)));
     });
 
-    app.get('/favorites', (req, res) => {
+    /**
+     * Cache-backed favorites tab (see the comment inside), shared by GET /favorites and the
+     * re-renders after POST /favorites/delete and /favorites/restore. `flash.section` is the
+     * subtab the message belongs to (and the one shown on load).
+     */
+    const renderFavoritesTab = async (flash?: RemovedFavoritesFlash & {section: 'list' | 'removed'}): Promise<string> => {
+        const categoriesHtml = await renderCategoriesCard();
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
+        const listFlash = flash?.section === 'list' ? flash : {};
+        const removedFlash = flash?.section === 'removed' ? flash : undefined;
 
         if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}));
-            return;
+            return renderFavoritesPage(
+                {rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
+            );
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
@@ -3670,7 +4952,127 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // the button that re-resolves everything and rewrites the cache.
         const cache = readFavoritesCache();
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
-        res.send(renderFavoritesPage({rows, cacheUpdatedAt: cache?.updatedAt ?? null}));
+        return renderFavoritesPage(
+            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
+        );
+    };
+
+    app.get('/favorites', async (req, res) => {
+        res.send(await renderFavoritesTab());
+    });
+
+    app.post('/favorites/delete', async (req, res) => {
+        const romName: string = (req.body.romName || '').trim();
+        // Same character set as parseFavorites()/getFavoriteRomNames(): anything else can't be
+        // a favorite this tab lists.
+        if (!/^[a-z0-9]+$/.test(romName)) {
+            res.status(422).send(await renderFavoritesTab({section: 'list', warning: 'Invalid rom name.'}));
+            return;
+        }
+        if (isMameConfigSessionAlive()) {
+            res.status(409).send(await renderFavoritesTab({
+                section: 'list',
+                warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
+            }));
+            return;
+        }
+
+        const {favoritesPath} = getMameLocations(getMameHomePath());
+        if (!favoritesPath) {
+            res.status(404).send(await renderFavoritesTab({section: 'list', warning: 'No favorites.ini file found.'}));
+            return;
+        }
+
+        const removal = removeFavorite(readFileSync(favoritesPath, 'utf8'), romName);
+        if (removal === null) {
+            res.status(422).send(await renderFavoritesTab({
+                section: 'list',
+                warning: `Unable to remove "${romName}": entry not found or unexpected favorites.ini format.`,
+            }));
+            return;
+        }
+
+        // Saved before favorites.ini is rewritten: if this write fails the favorite is still
+        // listed (worst case, a stale "removed" record the removed subtab hides), whereas the
+        // other order could lose the entry for good.
+        const cache = readFavoritesCache();
+        writeRemovedFavorites([
+            ...readRemovedFavorites().filter(item => item.romName !== romName),
+            {
+                romName,
+                fullname: removal.entry.split('\n')[1]?.trim() || cache?.entries[romName]?.fullname || romName,
+                removedAt: new Date().toISOString(),
+                entry: removal.entry,
+                cache: cache?.entries[romName],
+            },
+        ]);
+        writeFileSync(favoritesPath, removal.content, 'utf8');
+
+        // Drop the rom's cached name/BIOS too, keeping the rest of the cache (and its updatedAt)
+        // as it was - restored later, it gets its cache entry back from the removed record.
+        if (cache?.entries[romName]) {
+            delete cache.entries[romName];
+            writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
+        }
+
+        res.send(await renderFavoritesTab({
+            section: 'list', notice: `"${romName}" removed from the favorites (find it again in the "Removed" tab).`,
+        }));
+    });
+
+    app.post('/favorites/restore', async (req, res) => {
+        const romName: string = (req.body.romName || '').trim();
+        const removed = readRemovedFavorites();
+        const item = removed.find(candidate => candidate.romName === romName);
+        if (!item) {
+            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: `"${romName}" is not in the removed favorites.`}));
+            return;
+        }
+        if (isMameConfigSessionAlive()) {
+            res.status(409).send(await renderFavoritesTab({
+                section: 'removed',
+                warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
+            }));
+            return;
+        }
+
+        const {favoritesPath} = getMameLocations(getMameHomePath());
+        if (!favoritesPath) {
+            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: 'No favorites.ini file found.'}));
+            return;
+        }
+
+        const updated = addFavorite(readFileSync(favoritesPath, 'utf8'), item.entry);
+        // null = already listed (put back by mame's own menu in the meantime) or a corrupt saved
+        // entry - tell the two apart so the message is accurate.
+        if (updated === null && !getFavoriteRomNames(favoritesPath).includes(romName)) {
+            res.status(422).send(await renderFavoritesTab({
+                section: 'removed', warning: `Unable to restore "${romName}": the saved entry is invalid.`,
+            }));
+            return;
+        }
+        if (updated !== null) {
+            writeFileSync(favoritesPath, updated, 'utf8');
+        }
+
+        // Written after favorites.ini for the reverse reason of /favorites/delete: a failure here
+        // leaves the favorite restored (and merely still listed as removed until this rom is seen
+        // in favorites.ini - the removed subtab hides it), never a favorite lost.
+        writeRemovedFavorites(removed.filter(candidate => candidate.romName !== romName));
+        if (item.cache) {
+            const cache = readFavoritesCache();
+            if (cache) {
+                cache.entries[romName] = item.cache;
+                writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
+            }
+        }
+
+        res.send(await renderFavoritesTab({
+            section: 'removed',
+            notice: updated === null
+                ? `"${romName}" was already in the favorites.`
+                : `"${romName}" restored to the favorites.`,
+        }));
     });
 
     app.post('/favorites/refresh', (req, res) => {
@@ -3692,7 +5094,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write(renderPageHead('favorites'));
         res.write(`
             <section class="card">
-                <h2>Mise à jour des favoris (${context.romNames.length})…</h2>
+                <h2>Updating favorites (${context.romNames.length})…</h2>
                 ${PROGRESS_LOG_OPEN}
         `);
 
@@ -3711,14 +5113,28 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    /**
+     * Renders the Players tab. The deleted players (administrators only) are loaded here, on
+     * every render, so each route below keeps showing an up-to-date "Deleted" subtab without
+     * having to pass it along.
+     */
+    const usersPage = async (
+        req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
+        createError?: string, messages: {deletedInfo?: string; deletedError?: string} = {},
+    ): Promise<string> => {
+        const isAdmin = req.session.boRole === 'admin';
+        const deleted = isAdmin ? await listDeletedUsers().catch(() => []) : [];
+        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted, ...messages});
+    };
+
     app.get('/users', async (req, res) => {
         const avatarFilenames = getAvatarFilenames(new Config());
         try {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users, avatarFilenames));
+            res.send(await usersPage(req, users, avatarFilenames));
         } catch {
-            res.send(renderUsersPage([], avatarFilenames, 'Base de données introuvable ou pas encore initialisée - '
-                + 'lancez l\'application une première fois avant de gérer les joueurs.'));
+            res.send(await usersPage(req, [], avatarFilenames, 'Database not found or not initialized yet - '
+                + 'launch the application once before managing players.'));
         }
     });
 
@@ -3727,21 +5143,41 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const realname: string = (req.body.realname || '').trim();
         const email: string = (req.body.email || '').trim();
         const active = req.body.active === 'on';
-        const avatarFilenames = getAvatarFilenames(new Config());
+        const config = new Config();
 
         try {
+            // A deleted player's nickname stays reserved (see UserReservation.ts), whoever asks.
+            if (await findDeletedUser(pseudo3)) {
+                const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+                res.status(422).send(await usersPage(
+                    req, users, getAvatarFilenames(config), undefined, undefined,
+                    `The nickname "${pseudo3}" belongs to a deleted player and is reserved. An administrator `
+                    + 'can restore that player from the "Deleted" tab.',
+                ));
+                return;
+            }
             await User.create({
                 pseudo_3: pseudo3,
                 ...(realname ? {realname} : {}),
                 ...(email ? {email} : {}),
                 active,
             } as User);
+            // Every new player starts with a generated default avatar (see DefaultAvatar.ts); the
+            // list below is read after this so it shows it. An avatar failing to write must not
+            // turn a successful creation into an error page.
+            try {
+                ensureDefaultAvatar(config.avatarsPath, pseudo3);
+            } catch (avatarError) {
+                console.error(`[boServer] Default avatar for "${pseudo3}" failed:`, avatarError);
+            }
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users, avatarFilenames, undefined, `Joueur "${pseudo3}" créé.`));
+            res.send(await usersPage(req, 
+                users, getAvatarFilenames(config), undefined, `Player "${pseudo3}" created.`,
+            ));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
-            res.status(422).send(renderUsersPage(
-                users, avatarFilenames, undefined, undefined, describeUserError(error),
+            res.status(422).send(await usersPage(req, 
+                users, getAvatarFilenames(config), undefined, undefined, describeUserError(error),
             ));
         }
     });
@@ -3753,21 +5189,54 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             await user.save();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-        res.send(renderUsersPage(
+        res.send(await usersPage(req, 
             users, getAvatarFilenames(new Config()), undefined,
-            user ? `Joueur "${user.pseudo_3}" mis à jour.` : undefined,
+            user ? `Player "${user.pseudo_3}" updated.` : undefined,
         ));
     });
 
     app.post('/users/:id/delete', async (req, res) => {
         const user = await User.findByPk(req.params.id);
         if (user) {
+            // Soft delete (User is paranoid): the nickname stays reserved and the scores are kept,
+            // hidden from the hiscore views, until an administrator restores the player.
             await user.destroy();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-        res.send(renderUsersPage(
-            users, getAvatarFilenames(new Config()), undefined,
-            user ? `Joueur "${user.pseudo_3}" supprimé.` : undefined,
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), undefined,
+            user ? `Player "${user.pseudo_3}" deleted. The nickname stays reserved; an administrator can `
+                + 'restore it from the "Deleted" tab.' : undefined,
+        ));
+    });
+
+    app.post('/users/:id/purge', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const purged = await purgeDeletedUser(String(req.params.id), new Config().avatarsPath);
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
+            purged
+                ? {deletedInfo: `Player "${purged.user.pseudo_3}" permanently deleted, with ${purged.scoreCount} score(s).`}
+                : {deletedError: 'This player is not among the deleted players (already removed?).'},
+        ));
+    });
+
+    app.post('/users/:id/restore', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const restored = await restoreDeletedUser(String(req.params.id));
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
+            restored
+                ? {deletedInfo: `Player "${restored.pseudo_3}" restored, with their scores.`}
+                : {deletedError: 'This player is not among the deleted players (already restored?).'},
         ));
     });
 
@@ -3779,25 +5248,27 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
 
         if (!user) {
-            res.status(404).send(renderUsersPage(users, getAvatarFilenames(config), 'Joueur introuvable.'));
+            res.status(404).send(await usersPage(req, users, getAvatarFilenames(config), 'Player not found.'));
             return;
         }
         if (!req.file) {
             res.status(422).send(
-                renderUsersPage(users, getAvatarFilenames(config), 'Aucun fichier envoyé.'),
+                await usersPage(req, users, getAvatarFilenames(config), 'No file sent.'),
             );
             return;
         }
         if (req.file.mimetype !== 'image/png') {
-            res.status(422).send(renderUsersPage(
-                users, getAvatarFilenames(config), 'L\'avatar doit être une image PNG.',
+            res.status(422).send(await usersPage(req, 
+                users, getAvatarFilenames(config), 'The avatar must be a PNG image.',
             ));
             return;
         }
 
         writeFileSync(join(config.avatarsPath, `${user.pseudo_3}.png`), req.file.buffer);
-        res.send(renderUsersPage(
-            users, getAvatarFilenames(config), undefined, `Avatar mis à jour pour "${user.pseudo_3}".`,
+        // The uploaded PNG replaces the generated default, which would only be left unused.
+        rmSync(join(config.avatarsPath, `${user.pseudo_3}.svg`), {force: true});
+        res.send(await usersPage(req, 
+            users, getAvatarFilenames(config), undefined, `Avatar updated for "${user.pseudo_3}".`,
         ));
     });
 
@@ -3805,12 +5276,19 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         // basename() strips any directory components (e.g. "../../etc/passwd") from the
         // user-controlled route param before it ever reaches the filesystem.
-        const filePath = join(config.avatarsPath, basename(req.params.filename));
-        if (!existsSync(filePath)) {
+        const filename = basename(req.params.filename);
+        if (!existsSync(join(config.avatarsPath, filename))) {
             res.status(404).end();
             return;
         }
-        res.sendFile(filePath);
+        // Served with a `root`, not as an absolute path: Express 5's send() answers 404 for any
+        // absolute path holding a dot directory, and the avatars live under ~/.mame-awesome-ui.
+        // With a root only the part below it is checked. Same reason for res.download() below.
+        res.sendFile(filename, {root: config.avatarsPath}, (error) => {
+            if (error && !res.headersSent) {
+                res.status(404).end();
+            }
+        });
     });
 
     app.post('/favorites/download-media', async (req, res) => {
@@ -3846,8 +5324,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!marqueePath || !flyerPath || !logoPath) {
             res.send(renderScreenScraperPage(
                 ssValues, hasCreds, undefined, undefined,
-                'Dossiers marquees/flyers/logos introuvables - configurez et validez le binaire mame '
-                    + '(onglet MAME > Config).',
+                'Marquees/flyers/logos folders not found - configure and validate the mame binary '
+                    + '(MAME tab > Config).',
             ));
             return;
         }
@@ -3862,7 +5340,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.write(renderPageHead('screenscraper'));
         res.write(`
             <section class="card">
-                <h2>Téléchargement en cours…</h2>
+                <h2>Download in progress…</h2>
                 ${PROGRESS_LOG_OPEN}
         `);
 
@@ -3887,11 +5365,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         } catch (error) {
             console.error('[boServer] ScreenScraper download failed:', error);
             res.write(`</ul><p class="error">${
-                escapeHtml(error instanceof Error ? error.message : 'Erreur inattendue.')
+                escapeHtml(error instanceof Error ? error.message : 'Unexpected error.')
             }</p>`);
         }
 
-        res.write('<p><a class="button-link" href="/screenscraper">Retour à ScreenScraper</a></p>');
+        res.write('<p><a class="button-link" href="/screenscraper">Back to ScreenScraper</a></p>');
         res.write(renderPageTail());
         res.end();
     });
@@ -3910,7 +5388,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if (!req.file) {
             res.status(400).send(renderForm(
-                values, getMameInfo(config), isAdmin, undefined, undefined, undefined, 'Aucun fichier reçu.',
+                values, getMameInfo(config), isAdmin, undefined, undefined, undefined, 'No file received.',
             ));
             return;
         }
@@ -3921,7 +5399,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             rmSync(req.file.path, {force: true});
             res.status(500).send(renderForm(
                 values, getMameInfo(config), isAdmin, undefined, undefined, undefined,
-                'python3 introuvable sur cette machine - impossible d\'importer un starting pack.',
+                'python3 not found on this machine - unable to import a starting pack.',
             ));
             return;
         }
@@ -3933,7 +5411,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
         // the actual import both happen inside the script now - it mirrors this same logic and
         // reports failures through its own stdout/stderr lines, same as /import/from-url below.
-        const started = await runImportScript(res, 'Import en cours…', [req.file.path], {...process.env});
+        const started = await runImportScript(res, 'Import in progress…', [req.file.path], {...process.env});
         rmSync(req.file.path, {force: true});
         if (!started) {
             return;
@@ -3960,7 +5438,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // the manual upload right above it.
     app.post('/repo/save', (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -3976,7 +5454,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         res.send(renderForm(
             values, getMameInfo(config), true, undefined, undefined, undefined, undefined, undefined,
-            undefined, undefined, undefined, 'Configuration du dépôt enregistrée.',
+            undefined, undefined, undefined, 'Repository configuration saved.',
         ));
     });
 
@@ -3984,7 +5462,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // basic-auth credentials never need to reach the browser at all.
     app.get('/import/from-url/packs', async (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -3995,7 +5473,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!config.repoUrl) {
             res.status(422).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Renseignez l\'URL du dépôt avant de le parcourir.',
+                undefined, 'Enter the repository URL before browsing it.',
             ));
             return;
         }
@@ -4011,43 +5489,68 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 throw new Error(`HTTP ${response.status}`);
             }
             const data = await response.json() as {packs?: RepoPack[]};
+            const packs = data.packs ?? [];
+            const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+            const authorization = 'Basic '
+                + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64');
+            await Promise.all(packs.map(async pack => {
+                const [manifest, entrySizes] = await Promise.all([
+                    fetchRepoManifest(config.repoUrl, pack.filename, authorization),
+                    // Per-game sizes for the disk bar, from the ZIP's central directory alone
+                    // (two small range requests) - null if the server cannot do ranges.
+                    /^[\w.-]+\.zip$/.test(pack.filename)
+                        ? fetchRemoteZipEntrySizes(`${config.repoUrl}/${pack.filename}`, {Authorization: authorization})
+                        : Promise.resolve(null),
+                ]);
+                pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
+                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
+                pack.biosSizes = computeBiosSizes(manifest, entrySizes);
+            }));
             res.send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                data.packs ?? [],
+                packs,
             ));
         } catch (error) {
-            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(502).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, `Impossible de contacter le dépôt : ${message}`,
+                undefined, `Unable to reach the repository: ${message}`,
             ));
         }
     });
 
     app.post('/import/from-url', async (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         const mameInfo = getMameInfo(config);
-        // Flows into a URL and a child-process argv below - restricted to a bare filename (no
-        // path separators, no shell metacharacters) rather than trusting the <select> value.
-        const packFilename = typeof req.body.packFilename === 'string' ? req.body.packFilename : '';
+        // One "<pack>.zip|<romName>" per ticked game, grouped by pack (a game listed by several
+        // packs is kept for the first). urlencoded (extended: false) yields a string for one
+        // ticked box, an array for several; anything malformed is refused (see the function).
+        const selection = groupSelectedGames(req.body?.game);
 
         if (!config.repoUrl) {
             res.status(422).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'URL du dépôt non configurée.',
+                undefined, 'Repository URL not configured.',
             ));
             return;
         }
-        if (!/^[\w.-]+\.zip$/.test(packFilename)) {
+        if (selection && !selection.size) {
             res.status(422).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Nom de pack invalide.',
+                undefined, 'Tick at least one game to import.',
+            ));
+            return;
+        }
+        if (!selection) {
+            res.status(422).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, 'Invalid pack or game name.',
             ));
             return;
         }
@@ -4056,26 +5559,34 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!isPython3Available()) {
             res.status(500).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'python3 introuvable sur cette machine - impossible d\'importer depuis le dépôt.',
+                undefined, 'python3 not found on this machine - unable to import from the repository.',
             ));
             return;
         }
-
-        const packUrl = `${config.repoUrl}/${packFilename}`;
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('mame'));
 
+        // Packs are imported one after the other (one script run each, one progress card each):
+        // the script rewrites favorites.ini and shared category files, so runs must not overlap.
         // Credentials go through env, never argv, so they don't leak via `ps`/
         // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
         // trust level as ssDevPassword).
-        const started = await runImportScript(
-            res, `Import depuis le dépôt en cours… (${escapeHtml(packFilename)})`, ['--url', packUrl, '-y'],
-            {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
-        );
-        if (!started) {
-            return;
+        for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
+            const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
+            // --only: just these games are read from the pack (HTTP Range requests, no full download).
+            const started = await runImportScript(
+                res,
+                `${counter}Import from the repository in progress… (${escapeHtml(packFilename)}, ${romNames.length} game(s))`,
+                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(','), '-y'],
+                {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+                {index, total: selection.size},
+            );
+            // false = launch failure, runImportScript already closed the response.
+            if (!started) {
+                return;
+            }
         }
 
         const refreshedMameInfo = getMameInfo(config);
@@ -4084,7 +5595,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
             res.write(renderImportCard());
-            res.write(renderRepoImportCard(config));
+            res.write(renderRepoImportCard(config, refreshedMameInfo));
         }
         res.write(renderPageTail());
         res.end();
@@ -4102,14 +5613,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.openDevTools = req.body.openDevTools === 'on';
         config.fullscreen = req.body.fullscreen === 'on';
         config.save();
-        await sendMauiPage(req, res, config, {mauiInfo: 'Configuration enregistrée.'});
+        await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
     });
 
     // Backup/restore of mame-awesome-ui's own config/database - admin only (see the "Import /
     // export mame-awesome-ui" card, hidden from non-admins in renderMauiPage()).
     app.get('/maui/export', async (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4119,7 +5630,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!exportConfigFile && !exportDatabase) {
             config.load();
             await sendMauiPage(req, res, config, {
-                importExportError: 'Cochez au moins une case (JSON et/ou DB) avant d\'exporter.',
+                importExportError: 'Tick at least one box (JSON and/or DB) before exporting.',
             });
             return;
         }
@@ -4135,13 +5646,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!files.length) {
             config.load();
             await sendMauiPage(req, res, config, {
-                importExportError: 'Rien à exporter : le(s) fichier(s) sélectionné(s) n\'existe(nt) pas encore.',
+                importExportError: 'Nothing to export: the selected file(s) do not exist yet.',
             });
             return;
         }
 
         if (files.length === 1) {
-            res.download(files[0].path, files[0].name);
+            // `root`, not the absolute path: send() refuses (404) paths with a dot directory such
+            // as ~/.mame-awesome-ui (see the avatars route).
+            res.download(basename(files[0].path), files[0].name, {root: dirname(files[0].path)});
             return;
         }
 
@@ -4155,14 +5668,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.post('/maui/import', upload.single('file'), async (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
         config.load();
 
         if (!req.file) {
-            await sendMauiPage(req, res, config, {importExportError: 'Aucun fichier fourni.'});
+            await sendMauiPage(req, res, config, {importExportError: 'No file provided.'});
             return;
         }
 
@@ -4179,47 +5692,47 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
                 if (!configEntry && !dbEntry) {
                     await sendMauiPage(req, res, config, {
-                        importExportError: 'Le ZIP ne contient ni mame-awesome-ui-config.json ni '
+                        importExportError: 'The ZIP contains neither mame-awesome-ui-config.json nor '
                             + 'mame-awesome-ui.sqlite.',
                     });
                     return;
                 }
                 if (configEntry) {
                     writeFileSync(config.configPath, configEntry.getData());
-                    restored.push('la configuration');
+                    restored.push('the configuration');
                 }
                 if (dbEntry) {
                     writeFileSync(getDatabasePath(), dbEntry.getData());
-                    restored.push('la base de données');
+                    restored.push('the database');
                 }
             } else if (originalName.endsWith('.json')) {
                 // Throws on malformed JSON, caught below - avoids overwriting the current
                 // config with a file the app would then fail to load on next start.
                 JSON.parse(req.file.buffer.toString('utf8'));
                 writeFileSync(config.configPath, req.file.buffer);
-                restored.push('la configuration');
+                restored.push('the configuration');
             } else if (originalName.endsWith('.sqlite') || originalName.endsWith('.db')) {
                 // Same sqlite file header every real .sqlite file starts with - cheap sanity
                 // check against uploading an unrelated file under this extension.
                 if (req.file.buffer.subarray(0, 16).toString('utf8') !== 'SQLite format 3\0') {
                     await sendMauiPage(req, res, config, {
-                        importExportError: 'Ce fichier ne ressemble pas à une base de données '
-                            + 'sqlite valide.',
+                        importExportError: 'This file does not look like a valid '
+                            + 'sqlite database.',
                     });
                     return;
                 }
                 writeFileSync(getDatabasePath(), req.file.buffer);
-                restored.push('la base de données');
+                restored.push('the database');
             } else {
                 await sendMauiPage(req, res, config, {
-                    importExportError: 'Format non reconnu : utilisez un .json, un .sqlite/.db ou '
-                        + 'un .zip contenant les deux.',
+                    importExportError: 'Unrecognized format: use a .json, a .sqlite/.db or '
+                        + 'a .zip containing both.',
                 });
                 return;
             }
         } catch (error) {
             await sendMauiPage(req, res, config, {
-                importExportError: `Import échoué : ${error instanceof Error ? error.message : String(error)}`,
+                importExportError: `Import failed: ${error instanceof Error ? error.message : String(error)}`,
             });
             return;
         }
@@ -4228,11 +5741,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // store instances (see store.ts's initServices) were built from the files just
         // overwritten, so only a full process restart picks up the import.
         res.send(renderPage(
-            '<section class="card"><h2>Import effectué</h2>'
-            + `<p class="error">Restauré : ${restored.join(', ')}. L'application va se fermer `
-            + 'dans un instant. <strong>Relancez-la manuellement</strong> pour prendre en compte '
-            + 'les fichiers importés (<code>just serve</code> en développement, ou l\'exécutable '
-            + 'habituel en production).</p></section>',
+            '<section class="card"><h2>Import complete</h2>'
+            + `<p class="error">Restored: ${restored.join(', ')}. The application will close `
+            + 'in a moment. <strong>Relaunch it manually</strong> to take the imported '
+            + 'files into account (<code>just serve</code> in development, or the usual '
+            + 'executable in production).</p></section>',
             'maui',
         ));
 
@@ -4241,7 +5754,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     // Not role-gated beyond being logged in for a real release - installing one of those onto
     // the device the BO itself runs on is exactly what a "user"-role account (e.g. puckman) is
-    // meant to be able to do, same trust level as everything else on the "Général" MAUI subtab.
+    // meant to be able to do, same trust level as everything else on the "General" MAUI subtab.
     // A dev build (GitHub prerelease published from develop, see getUpdateInfo()) stays
     // admin-only even though the asset itself needs no auth to download - checked server-side
     // below, not just by hiding the row in renderUpdateCard(), since the tagName/assetUrl pair
@@ -4254,20 +5767,20 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const isAdmin = req.session.boRole === 'admin';
 
         if (!isSelfUpdateCapable() || !assetUrl) {
-            await sendMauiPage(req, res, config, {updateInfoError: 'Installation indisponible sur cette machine.'});
+            await sendMauiPage(req, res, config, {updateInfoError: 'Installation unavailable on this machine.'});
             return;
         }
 
         const preUpdateInfo = await getUpdateInfo();
         if (!isAdmin && preUpdateInfo.devBuilds.some(build => build.tagName === tagName)) {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('maui'));
-        await runUpdateInstall(res, `Installation de la version ${tagName}…`, assetUrl);
+        await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
 
         const updateInfo = await getUpdateInfo();
         res.write(renderMauiCard(config));
@@ -4301,7 +5814,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.save();
 
         res.send(renderScreenScraperPage(
-            values, hasScreenScraperCredentials(config), undefined, 'Configuration ScreenScraper enregistrée.',
+            values, hasScreenScraperCredentials(config), undefined, 'ScreenScraper configuration saved.',
         ));
     });
 
@@ -4337,7 +5850,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
                 {mamePath}, getMameInfo(config), isAdmin,
-                `Le dossier "${mamePath}" n'existe pas.`,
+                `The folder "${mamePath}" does not exist.`,
             ));
             return;
         }
@@ -4345,7 +5858,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
                 {mamePath}, getMameInfo(config), isAdmin,
-                `Aucun binaire mame trouvé dans "${mamePath}".`,
+                `No mame binary found in "${mamePath}".`,
             ));
             return;
         }
@@ -4355,8 +5868,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         } catch (error) {
             res.status(422).send(renderForm(
                 {mamePath}, getMameInfo(config), isAdmin,
-                'Échec de l\'initialisation de mame ("-createconfig") : '
-                    + `${error instanceof Error ? error.message : 'erreur inattendue'}.`,
+                'Failed to initialize mame ("-createconfig"): '
+                    + `${error instanceof Error ? error.message : 'unexpected error'}.`,
             ));
             return;
         }
@@ -4366,10 +5879,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.save();
 
         res.send(renderPage(
-            '<section class="card"><h2>Configuration enregistrée</h2><p>'
-            + 'L\'application redémarre automatiquement.</p>'
-            + '<p>Retour à la configuration MAME dans <span id="redirect-countdown">5</span> '
-            + 'seconde(s)… <a href="/">Y aller maintenant</a>.</p></section>'
+            '<section class="card"><h2>Configuration saved</h2><p>'
+            + 'The application restarts automatically.</p>'
+            + '<p>Back to the MAME configuration in <span id="redirect-countdown">5</span> '
+            + 'second(s)… <a href="/">Go now</a>.</p></section>'
             + '<script>'
             + 'var secondsLeft = 5;'
             + 'var countdownEl = document.getElementById("redirect-countdown");'
@@ -4391,7 +5904,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const isAdmin = req.session.boRole === 'admin';
 
         if (!isAdmin) {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
 
@@ -4399,7 +5912,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath || ''},
                 getMameInfo(config), isAdmin,
-                'Aucune configuration valide enregistrée : impossible de lancer mame.',
+                'No valid configuration saved: unable to launch mame.',
             ));
             return;
         }
@@ -4409,7 +5922,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath},
                 getMameInfo(config), isAdmin,
-                `Le binaire "${mameBinary}" est introuvable.`,
+                `The binary "${mameBinary}" was not found.`,
             ));
             return;
         }
@@ -4434,7 +5947,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             {mamePath: config.mamePath},
             getMameInfo(config), isAdmin,
             undefined,
-            'Mame a été lancé, vérifiez qu\'une fenêtre s\'est bien ouverte sur la machine qui héberge mame-awesome-ui.',
+            'Mame was launched, check that a window actually opened on the machine hosting mame-awesome-ui.',
         ));
     });
 
@@ -4454,7 +5967,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             saved = setMameIniValue(mameIniPath, 'pluginspath', pluginsPath) && saved;
             // As soon as pluginspath points at a folder that actually has plugins in it,
             // initialize/complete plugin.ini right away instead of making the user click the
-            // separate "Réparer plugin.ini" button as a second step.
+            // separate "Repair plugin.ini" button as a second step.
             const availablePlugins = getAvailablePlugins(resolveDirectoryPath(pluginsPath, iniPath));
             if (availablePlugins.length) {
                 pluginsAdded = repairPluginIni(pluginIniPath, availablePlugins);
@@ -4467,9 +5980,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             undefined,
             undefined,
             saved
-                ? 'Options MAME mises à jour dans mame.ini.'
-                    + (pluginsAdded ? ` ${pluginsAdded} plugin(s) initialisé(s) dans plugin.ini.` : '')
-                : 'mame.ini introuvable - configurez et lancez mame au moins une fois avant de changer ces options.',
+                ? 'MAME options updated in mame.ini.'
+                    + (pluginsAdded ? ` ${pluginsAdded} plugin(s) initialized in plugin.ini.` : '')
+                : 'mame.ini not found - configure and launch mame at least once before changing these options.',
         ));
     });
 
@@ -4490,14 +6003,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             undefined,
             undefined,
             added
-                ? `${added} plugin(s) ajouté(s) à plugin.ini (valeurs par défaut de mame).`
-                : 'Rien à réparer : plugin.ini contient déjà tous les plugins détectés (ou aucun plugin trouvé - vérifiez le dossier des plugins ci-dessous).',
+                ? `${added} plugin(s) added to plugin.ini (mame default values).`
+                : 'Nothing to repair: plugin.ini already contains all the detected plugins (or no plugin was found - check the plugins folder below).',
         ));
     });
 
     app.post('/input-probe', (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4522,7 +6035,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined,
-                {selectedRom: romName, error: 'Rom invalide ou introuvable dans le dossier des roms.'},
+                {selectedRom: romName, error: 'Invalid rom, or not found in the roms folder.'},
             ));
             return;
         }
@@ -4536,14 +6049,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ));
         } catch (error) {
             console.error(`[boServer] Input probe failed for "${romName}":`, error);
-            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined,
                 {
                     selectedRom: romName,
-                    error: `Échec du sondage de "${romName}" : ${message}`
-                        + ' (timeout, code de sortie non nul, ou binaire introuvable).',
+                    error: `Probe of "${romName}" failed: ${message}`
+                        + ' (timeout, non-zero exit code, or binary not found).',
                 },
             ));
         }
@@ -4551,7 +6064,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.post('/input-probe/devices', (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4580,18 +6093,18 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ));
         } catch (error) {
             console.error('[boServer] Device probe failed:', error);
-            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-                {error: `Échec du sondage des périphériques : ${message} (timeout, code de sortie non nul, ou binaire introuvable).`},
+                {error: `Device probe failed: ${message} (timeout, non-zero exit code, or binary not found).`},
             ));
         }
     });
 
     app.post('/input-probe/mame/start', (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4610,7 +6123,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.post('/input-probe/mame/stop', (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4625,7 +6138,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.post('/input-probe/remap', (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4652,7 +6165,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 undefined,
-                {portType, error: 'MAME n\'est pas lancé - clique sur "Lancer MAME" d\'abord.'},
+                {portType, error: 'MAME is not running - click "Launch MAME" first.'},
             ));
             return;
         }
@@ -4661,8 +6174,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             const token = captureOnePress();
             const remapState: RemapState = token
                 ? {portType, capturedToken: token}
-                : {portType, error: 'Aucun appui détecté dans le délai imparti (30s) - réessaie ' +
-                    '(la fenêtre MAME doit avoir le focus).'};
+                : {portType, error: 'No press detected within the allotted time (30s) - try again ' +
+                    '(the MAME window must have focus).'};
             if (token) {
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
                 setDefaultCfgUiInput(cfgPath, portType, token);
@@ -4687,7 +6200,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ));
         } catch (error) {
             console.error(`[boServer] Remap capture failed for "${portType}":`, error);
-            const message = error instanceof Error ? error.message : 'erreur inattendue';
+            const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
                 undefined, // error
@@ -4700,14 +6213,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 undefined, // repoError
                 undefined, // repoInfo
                 undefined, // deviceProbeState
-                {portType, error: `Échec de la capture : ${message}`},
+                {portType, error: `Capture failed: ${message}`},
             ));
         }
     });
 
     app.post('/reset', async (req, res) => {
         if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action réservée aux administrateurs.');
+            res.status(403).send('Action reserved to administrators.');
             return;
         }
         const config = new Config();
@@ -4739,7 +6252,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             try {
                 rmSync(mameInfo.iniPath, {recursive: true, force: true});
                 deleted.push(
-                    `tout le répertoire ${mameInfo.iniPath} et son contenu (configuration, roms, médias, `
+                    `the whole ${mameInfo.iniPath} directory and its content (configuration, roms, media, `
                     + 'hiscores, cfg, nvram, snapshots...)',
                 );
             } catch (error) {
@@ -4750,7 +6263,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (deleteHiscores) {
             try {
                 rmSync(getHiscorePath(mameInfo.iniPath), {recursive: true, force: true});
-                deleted.push('les hiscores');
+                deleted.push('the hiscores');
             } catch (error) {
                 console.error('[boServer] Failed to remove hiscore directory:', error);
             }
@@ -4767,14 +6280,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                     console.error(`[boServer] Failed to remove games directory "${gamesPath}":`, error);
                 }
             });
-            deleted.push('les roms et médias des jeux (roms, marquees, flyers, logos)');
+            deleted.push('the games roms and media (roms, marquees, flyers, logos)');
         }
 
         if (deleteFavorites) {
             try {
                 // Cast: gated above on !!mameInfo.favoritesPath.
                 rmSync(mameInfo.favoritesPath as string, {force: true});
-                deleted.push('le fichier des favoris (favorites.ini)');
+                deleted.push('the favorites file (favorites.ini)');
             } catch (error) {
                 console.error('[boServer] Failed to remove favorites.ini:', error);
             }
@@ -4782,13 +6295,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if (deleteConfig) {
             config.delete();
-            deleted.push('la configuration de mame-awesome-ui');
+            deleted.push('the mame-awesome-ui configuration');
         }
 
         if (deleteDatabase) {
             try {
                 rmSync(getDatabasePath(), {force: true});
-                deleted.push('la base de données');
+                deleted.push('the database');
             } catch (error) {
                 console.error('[boServer] Failed to remove database file:', error);
             }
@@ -4799,10 +6312,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 res.send(renderForm(
                     {mamePath: config.mamePath || ''}, mameInfo, true,
                     undefined, undefined, undefined, undefined,
-                    'Aucune case cochée : rien à supprimer.',
+                    'No box ticked: nothing to delete.',
                 ));
             } else {
-                await sendMauiPage(req, res, config, {dangerZoneInfo: 'Aucune case cochée : rien à supprimer.'});
+                await sendMauiPage(req, res, config, {dangerZoneInfo: 'No box ticked: nothing to delete.'});
             }
             return;
         }
@@ -4816,7 +6329,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // once, at app startup - a restart is what makes it re-bootstrap them from scratch.
         const needsRestart = deleteConfig || deleteDatabase || deleteMameHome;
         const backHref = zone === 'mame' ? '/' : '/maui';
-        const deletedInfo = `Supprimé : ${deleted.join(', ')}.`;
+        const deletedInfo = `Deleted: ${deleted.join(', ')}.`;
 
         // No restart needed (hiscores/games media/favorites) - land back on the zone's own page
         // with an inline message, same as every other action in the BO (renderForm/
@@ -4836,17 +6349,17 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         res.send(renderPage(
-            '<section class="card"><h2>Suppression effectuée</h2>'
+            '<section class="card"><h2>Deletion complete</h2>'
             + `<p class="error">${deletedInfo}</p>`
-            + '<p>L\'application va se fermer dans un instant. '
-                + '<strong>Relancez-la manuellement</strong> pour terminer l\'opération '
-                + '(<code>just serve</code> en développement, ou l\'exécutable habituel en '
-                + 'production) - recharger cette page ou l\'application ne suffit pas : le '
-                + 'renderer garde en mémoire les services construits sur l\'ancienne '
-                + 'configuration tant que le process n\'a pas complètement redémarré.</p>'
-                + '<p id="restart-wait-message" class="info">En attente du redémarrage… '
-                + 'cette page vous ramènera automatiquement à l\'accueil dès que le serveur '
-                + 'sera de nouveau disponible.</p>'
+            + '<p>The application will close in a moment. '
+                + '<strong>Relaunch it manually</strong> to complete the operation '
+                + '(<code>just serve</code> in development, or the usual executable in '
+                + 'production) - reloading this page or the application is not enough: the '
+                + 'renderer keeps the services built on the old configuration in memory '
+                + 'until the process has fully restarted.</p>'
+                + '<p id="restart-wait-message" class="info">Waiting for the restart… '
+                + 'this page will automatically take you back to the home page as soon as the '
+                + 'server is available again.</p>'
                 + `<script>${
                     // Polls the BO server itself (the same process this reset just told to
                     // exit - see onReset below) until it answers again, then redirects -

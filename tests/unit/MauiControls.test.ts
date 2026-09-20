@@ -11,9 +11,9 @@ describe('describeGamepadInputs', () => {
     };
 
     it('lists every button and axis half that produces the key', () => {
-        expect(describeGamepadInputs(mapping, 'Enter')).toEqual(['Bouton 0', 'Bouton 2']);
-        expect(describeGamepadInputs(mapping, 'ArrowLeft')).toEqual(['Axe 0 −']);
-        expect(describeGamepadInputs(mapping, 'ArrowDown')).toEqual(['Axe 1 +']);
+        expect(describeGamepadInputs(mapping, 'Enter')).toEqual(['Button 0', 'Button 2']);
+        expect(describeGamepadInputs(mapping, 'ArrowLeft')).toEqual(['Axis 0 −']);
+        expect(describeGamepadInputs(mapping, 'ArrowDown')).toEqual(['Axis 1 +']);
     });
 
     it('returns nothing for a key the mapping never produces', () => {
@@ -21,14 +21,14 @@ describe('describeGamepadInputs', () => {
     });
 
     it('appends the button name when given', () => {
-        expect(describeGamepadInputs(mapping, 'Enter', {0: 'A'})).toEqual(['Bouton 0 (A)', 'Bouton 2']);
+        expect(describeGamepadInputs(mapping, 'Enter', {0: 'A'})).toEqual(['Button 0 (A)', 'Button 2']);
     });
 
     it('reads the real "standard" entry of controllers.json', () => {
         const standard = (controllers as {standard: ControllerMapping}).standard;
-        expect(describeGamepadInputs(standard, MAUI_KEYS.enter, STANDARD_BUTTON_NAMES)).toEqual(['Bouton 0 (A)']);
+        expect(describeGamepadInputs(standard, MAUI_KEYS.enter, STANDARD_BUTTON_NAMES)).toEqual(['Button 0 (A)']);
         expect(describeGamepadInputs(standard, MAUI_KEYS.up, STANDARD_BUTTON_NAMES))
-            .toEqual(['Bouton 12 (croix haut)', 'Axe 1 −']);
+            .toEqual(['Button 12 (d-pad up)', 'Axis 1 −']);
     });
 
     it('gives every MAUI key at least one input on the "standard" layout', () => {
@@ -38,8 +38,8 @@ describe('describeGamepadInputs', () => {
         for (const key of Object.values(MAUI_KEYS)) {
             expect(describeGamepadInputs(standard, key), key).not.toEqual([]);
         }
-        expect(describeGamepadInputs(standard, MAUI_KEYS.space, STANDARD_BUTTON_NAMES)).toEqual(['Bouton 1 (B)']);
-        expect(describeGamepadInputs(standard, MAUI_KEYS.p, STANDARD_BUTTON_NAMES)).toEqual(['Bouton 2 (X)']);
+        expect(describeGamepadInputs(standard, MAUI_KEYS.space, STANDARD_BUTTON_NAMES)).toEqual(['Button 1 (B)']);
+        expect(describeGamepadInputs(standard, MAUI_KEYS.p, STANDARD_BUTTON_NAMES)).toEqual(['Button 2 (X)']);
     });
 });
 
@@ -48,7 +48,9 @@ describe('MAUI_CONTROL_CONTEXTS', () => {
         const known = new Set<string>(Object.values(MAUI_KEYS));
         for (const control of MAUI_CONTROL_CONTEXTS.flatMap(context => context.controls)) {
             expect(known.has(control.key)).toBe(true);
-            expect(keyLabel(control.key)).not.toBe(control.key);
+            // Not `not.toBe(control.key)`: "Enter" is now its own label, but every key still needs a
+            // readable one (the space key is " ", which would render as nothing).
+            expect(keyLabel(control.key).trim()).not.toBe('');
         }
     });
 

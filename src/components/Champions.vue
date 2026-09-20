@@ -18,6 +18,7 @@ import Hiscore from '@/model/Hiscore.model';
 import {join} from 'path';
 import {format} from 'url';
 import {emitter} from '@/emitter';
+import {findAvatarFile} from '@/class/AvatarFiles';
 import {getConfiguration, getUserService} from '@/services';
 import * as SequelizeTS from 'sequelize-typescript';
 
@@ -34,7 +35,8 @@ async function onGameChange() {
     const result = await props.game.$get(
         'hiscores',
         {
-            include: [{model: User}],
+            // required: a deleted player's scores stay in the database but are not shown
+            include: [{model: User, required: true}],
             attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]},
             limit: 3,
             order: [['score', 'DESC']],
@@ -46,9 +48,10 @@ async function onGameChange() {
 }
 
 function getAvatar(user: User) {
-    if (avatars.value.indexOf(user.pseudo_3 + '.png') >= 0) {
+    const avatarFile = findAvatarFile(avatars.value, user.pseudo_3);
+    if (avatarFile) {
         return format({
-            pathname: join(getConfiguration().avatarsPath, user.pseudo_3 + '.png'),
+            pathname: join(getConfiguration().avatarsPath, avatarFile),
             protocol: 'file',
             slashes: true,
         });

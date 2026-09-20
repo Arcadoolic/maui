@@ -11,7 +11,7 @@
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
                 <h1>{{selectedGame.shortname}}</h1>
-                <p>({{selectedGame.year}}<template v-if="hasPlayerInfo">, {{selectedGame.players}}</template>)</p>
+                <p>{{selectedGame.year}}<template v-if="selectedGame.studio"> ({{selectedGame.studioLabel}})</template><template v-if="hasPlayerInfo"> - {{selectedGame.players}}</template></p>
             </div>
         </transition>
 
@@ -51,7 +51,10 @@ import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
-import Category from '@/model/Category.model';
+import {
+    CarouselCategory, HISCORES_ONLY_CATEGORY, isDynamicCategory, isMergedCategory,
+} from '@/types/CarouselCategory';
+import {mergeTtlCategories} from '@/class/CarouselCategories';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
@@ -67,8 +70,12 @@ let gameService: GameService;
 const games = ref<Game[]>([]);
 const selectedGameIndex = ref(0);
 
-const categories = ref<Category[]>([]);
+const categories = ref<CarouselCategory[]>([]);
 const selectedCategoryIndex = ref(0);
+// Category whose name the bottom title shows. selectedCategoryIndex moves at once (the carousel
+// icons need it to start turning), which made the title change its text while it was still
+// sliding out: this one only catches up once the title is hidden (see onCategoryChange()).
+const displayedCategoryIndex = ref(0);
 const hasPlayerInfo = ref(false);
 
 const timeouts: {
@@ -95,8 +102,8 @@ const loaderTitle = ref('Button pressing');
 const selectedGame = computed(() => games.value[selectedGameIndex.value] || null);
 
 const category = computed(() => {
-    if (selectedCategoryIndex.value) {
-        return categories.value[selectedCategoryIndex.value - 1];
+    if (displayedCategoryIndex.value) {
+        return categories.value[displayedCategoryIndex.value - 1];
     }
     return {name: 'All Games'};
 });
@@ -134,15 +141,30 @@ function onGameChange(previous: boolean) {
         ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1);
 }
 
+async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
+    if (!categoryIndex) {
+        return await gameService.loadGames();
+    }
+    const selected = categories.value[categoryIndex - 1];
+    if (isDynamicCategory(selected)) {
+        return await gameService.loadHiscoreGames();
+    }
+    if (isMergedCategory(selected)) {
+        return await gameService.loadGamesByCategoryIds(selected.categoryIds);
+    }
+    return await selected.$get('games', {order: ['romName']}) as Game[] || [];
+}
+
 function onCategoryChange(previous: boolean) {
     const showGameFn = async () => {
+        // The title finished sliding out (showTitle is false since the switch started): swap its
+        // text now, it slides back in with the new name once the games are loaded below.
+        displayedCategoryIndex.value = selectedCategoryIndex.value;
         // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
         // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
         // within its category no longer matched where it sits in the full list (e.g. "005" first
         // alphabetically, but wherever insertion order placed it inside its category).
-        games.value = (!selectedCategoryIndex.value) ? await gameService.loadGames() :
-            await categories.value[selectedCategoryIndex.value - 1]
-                .$get('games', {order: ['romName']}) as Game[] || [];
+        games.value = await loadCategoryGames(selectedCategoryIndex.value);
 
         selectedGameIndex.value = 0;
         flyer.value = generateFlyerPath();
@@ -265,7 +287,11 @@ if (!getIsInit()) {
     gameService = getGameService();
 
     onMounted(async () => {
-        categories.value = await gameService.loadCategories();
+        const storedCategories = mergeTtlCategories(await gameService.loadCategories());
+        // Right after "All Games". Only offered once at least one game has extractable
+        // hiscores: an empty category would be a dead end in the carousel.
+        const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
+        categories.value = hasHiscoreGames ? [HISCORES_ONLY_CATEGORY, ...storedCategories] : storedCategories;
         games.value = await gameService.loadGames();
         hasPlayerInfo.value = !!mameService.nplayersIniPath;
 
