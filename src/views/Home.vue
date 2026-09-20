@@ -11,7 +11,7 @@
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
                 <h1>{{selectedGame.shortname}}</h1>
-                <p>({{selectedGame.year}}<template v-if="hasPlayerInfo">, {{selectedGame.players}}</template>)</p>
+                <p>{{selectedGame.year}}<template v-if="selectedGame.studio"> ({{selectedGame.studio}})</template><template v-if="hasPlayerInfo"> - {{selectedGame.players}}</template></p>
             </div>
         </transition>
 
