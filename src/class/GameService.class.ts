@@ -199,6 +199,17 @@ export default class GameService {
     }
 
     /**
+     * Games of several stored categories at once (a merged carousel entry, see
+     * mergeTtlCategories()), in the same order as "All games".
+     */
+    public async loadGamesByCategoryIds(categoryIds: number[]) {
+        return await Game.findAll({
+            where: {id_category: categoryIds},
+            order: ['romName'],
+        });
+    }
+
+    /**
      * Load categories from database
      */
     public async loadCategories() {
