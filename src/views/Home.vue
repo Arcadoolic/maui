@@ -72,6 +72,10 @@ const selectedGameIndex = ref(0);
 
 const categories = ref<CarouselCategory[]>([]);
 const selectedCategoryIndex = ref(0);
+// Category whose name the bottom title shows. selectedCategoryIndex moves at once (the carousel
+// icons need it to start turning), which made the title change its text while it was still
+// sliding out: this one only catches up once the title is hidden (see onCategoryChange()).
+const displayedCategoryIndex = ref(0);
 const hasPlayerInfo = ref(false);
 
 const timeouts: {
@@ -98,8 +102,8 @@ const loaderTitle = ref('Button pressing');
 const selectedGame = computed(() => games.value[selectedGameIndex.value] || null);
 
 const category = computed(() => {
-    if (selectedCategoryIndex.value) {
-        return categories.value[selectedCategoryIndex.value - 1];
+    if (displayedCategoryIndex.value) {
+        return categories.value[displayedCategoryIndex.value - 1];
     }
     return {name: 'All Games'};
 });
@@ -153,6 +157,9 @@ async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
 
 function onCategoryChange(previous: boolean) {
     const showGameFn = async () => {
+        // The title finished sliding out (showTitle is false since the switch started): swap its
+        // text now, it slides back in with the new name once the games are loaded below.
+        displayedCategoryIndex.value = selectedCategoryIndex.value;
         // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
         // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
         // within its category no longer matched where it sits in the full list (e.g. "005" first
