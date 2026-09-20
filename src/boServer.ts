@@ -1,4 +1,4 @@
-import express, {Response} from 'express';
+import express, {Request, Response} from 'express';
 import session from 'express-session';
 import {Server} from 'http';
 import {
@@ -23,6 +23,11 @@ import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
 import {removeFavorite, addFavorite} from '@/class/MameIniParser';
+import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
+import {
+    findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
+} from '@/class/UserReservation';
+import {findAvatarFile} from '@/class/AvatarFiles';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
@@ -1332,6 +1337,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .badge-no {
             color: #ff6b6b;
         }
+        .row-actions {
+            display: inline-flex;
+            gap: 8px;
+        }
         .asset-icons {
             display: inline-flex;
             gap: 8px;
@@ -1355,6 +1364,9 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         form > button.icon-button.icon-button-ok[type="submit"]:last-child {
             color: #6bff8a;
+        }
+        form > button.icon-button.icon-button-warn[type="submit"]:last-child {
+            color: #ffd166;
         }
         button.icon-button:hover:not(:disabled) {
             background-color: rgba(255, 255, 255, 0.12);
@@ -3217,14 +3229,19 @@ function renderAssetIcons(row: FavoriteMediaStatus): string {
 }
 
 /** Icon-only submit button; `label` is its tooltip and accessible name. */
-function renderIconButton(label: string, svgPaths: string, ok: boolean = false): string {
-    return `<button type="submit" class="icon-button${ok ? ' icon-button-ok' : ''}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' = 'danger'): string {
+    // danger (red) is the default: removing/deleting; ok (green): restoring/enabling; warn
+    // (amber): switching something off without losing it.
+    const toneClass = tone === 'danger' ? '' : ` icon-button-${tone}`;
+    return `<button type="submit" class="icon-button${toneClass}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
         <svg ${ICON_SVG_ATTRS}>${svgPaths}</svg>
     </button>`;
 }
 
 const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
+const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
+const PAUSE_ICON_PATHS = '<path d="M5.5 3v10M10.5 3v10"/>';
 
 /**
  * Splits a MAME description ("Ghosts'n Goblins (World? set 1)", sometimes with several
@@ -3394,7 +3411,7 @@ function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFa
             <td class="center">
                 <form method="post" action="/favorites/restore">
                     <input type="hidden" name="romName" value="${escapeHtml(item.romName)}">
-                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, true)}
+                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
                 </form>
             </td>
         </tr>
@@ -3595,15 +3612,15 @@ function renderCreateUserCard(error?: string): string {
 
 function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
     const rows = users.map(user => {
-        const avatarFilename = `${user.pseudo_3}.png`;
-        const hasAvatar = avatarFilenames.indexOf(avatarFilename) >= 0;
+        const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
+        const hasAvatar = avatarFilename !== undefined;
         return `
         <tr>
             <td class="center">
                 <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
                     <label class="avatar-upload" title="Change the avatar (PNG)">
                         ${hasAvatar
-                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}" alt="">`
                             : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
                         <input type="file" name="avatar" accept="image/png" onchange="this.form.submit()">
                     </label>
@@ -3613,15 +3630,17 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
             <td class="center">${renderUserStatusBadge(user.active)}</td>
             <td class="center">
-                <form method="post" action="/users/${user.id_user}/toggle-active">
-                    <button type="submit">${user.active ? 'Deactivate' : 'Activate'}</button>
-                </form>
-            </td>
-            <td class="center">
-                <form method="post" action="/users/${user.id_user}/delete"
-                    onsubmit="return confirm('Delete ${escapeHtml(user.pseudo_3)}?')">
-                    <button type="submit">Delete</button>
-                </form>
+                <div class="row-actions">
+                    <form method="post" action="/users/${user.id_user}/toggle-active">
+                        ${user.active
+                            ? renderIconButton('Deactivate', PAUSE_ICON_PATHS, 'warn')
+                            : renderIconButton('Activate', PLAY_ICON_PATHS, 'ok')}
+                    </form>
+                    <form method="post" action="/users/${user.id_user}/delete"
+                        onsubmit="return confirm('Delete ${escapeHtml(user.pseudo_3)}? The nickname stays reserved and an administrator can restore it later.')">
+                        ${renderIconButton('Delete player', TRASH_ICON_PATHS)}
+                    </form>
+                </div>
             </td>
         </tr>
     `;
@@ -3641,10 +3660,94 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                             <th>Name</th>
                             <th class="center">Status</th>
                             <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
+                </table>
+            </div>
+        </section>
+    `;
+}
+
+interface UsersPageExtras {
+    isAdmin: boolean;
+    deleted: DeletedUserRow[];
+    deletedInfo?: string;
+    deletedError?: string;
+}
+
+/**
+ * Deleted players, restorable by an administrator (POST /users/:id/restore). A deleted player is
+ * only soft-deleted: the nickname stays reserved and their scores stay in the database (hidden
+ * from the hiscore views), so restoring brings all of it back. Same idea as the favorites
+ * "Removed" subtab.
+ */
+function renderDeletedUsersCard(
+    deleted: DeletedUserRow[], avatarFilenames: string[], error?: string, info?: string,
+): string {
+    const messages = `
+        ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+        ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
+    `;
+    if (!deleted.length) {
+        return `
+            <section class="card">
+                <h2>Deleted players</h2>
+                ${messages}
+                <p class="info">No deleted players.</p>
+            </section>
+        `;
+    }
+    const rows = deleted.map(({user, scoreCount}) => {
+        const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
+        return `
+        <tr>
+            <td class="center">${avatarFilename !== undefined
+                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
+            <td>${escapeHtml(user.pseudo_3)}</td>
+            <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
+            <td>${escapeHtml(new Date(user.deletionDate).toLocaleString('en-GB', {
+                dateStyle: 'short', timeStyle: 'short',
+            }))}</td>
+            <td class="center">${scoreCount}</td>
+            <td class="center">
+                <div class="row-actions">
+                    <form method="post" action="/users/${user.id_user}/restore"
+                        onsubmit="return confirm('Restore ${escapeHtml(user.pseudo_3)} with ${scoreCount} score(s)? Only do it for the player who owns this nickname.')">
+                        ${renderIconButton('Restore player', RESTORE_ICON_PATHS, 'ok')}
+                    </form>
+                    <form method="post" action="/users/${user.id_user}/purge"
+                        onsubmit="return confirm('Permanently delete ${escapeHtml(user.pseudo_3)} and ${scoreCount} score(s) from the database? The nickname becomes free again. This cannot be undone.')">
+                        ${renderIconButton('Delete permanently', TRASH_ICON_PATHS)}
+                    </form>
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
+
+    return `
+        <section class="card">
+            <h2>Deleted players (${deleted.length})</h2>
+            ${messages}
+            <p class="info">A deleted player's nickname stays reserved: nobody can register it, so
+            nobody inherits their scores. Restoring brings the player back with their scores and
+            avatar; only restore a player for the person who owns the nickname. Deleting permanently
+            removes the player, their scores and their avatar from the database for good, and frees
+            the nickname.</p>
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr>
+                            <th class="center">Avatar</th>
+                            <th>Nickname</th>
+                            <th>Name</th>
+                            <th>Deleted on</th>
+                            <th class="center">Scores</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows || '<tr><td colspan="6"><em>No players</em></td></tr>'}</tbody>
+                    <tbody>${rows}</tbody>
                 </table>
             </div>
         </section>
@@ -3653,6 +3756,7 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
 
 function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
+    extras: UsersPageExtras = {isAdmin: false, deleted: []},
 ): string {
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
@@ -3660,12 +3764,22 @@ function renderUsersPage(
     // toggle-active/delete/avatar upload) so a duplicate-pseudo error from /users/create lands
     // back on "Add", next to the form that produced it, instead of "Players".
     const defaultSubtab = createError !== undefined ? 'add'
-        : (error !== undefined || info !== undefined) ? 'players'
-            : undefined;
-    return renderSubtabbedPage('users', [
+        : (extras.deletedInfo !== undefined || extras.deletedError !== undefined) ? 'deleted'
+            : (error !== undefined || info !== undefined) ? 'players'
+                : undefined;
+    const sections: Subsection[] = [
         {id: 'add', label: 'Add', html: renderCreateUserCard(createError)},
         {id: 'players', label: 'Players', html: renderUsersListCard(users, avatarFilenames, error, info)},
-    ], true, defaultSubtab);
+    ];
+    // Restoring a deleted player is the administrator's call (the route rejects anyone else too).
+    if (extras.isAdmin) {
+        sections.push({
+            id: 'deleted',
+            label: `Deleted (${extras.deleted.length})`,
+            html: renderDeletedUsersCard(extras.deleted, avatarFilenames, extras.deletedError, extras.deletedInfo),
+        });
+    }
+    return renderSubtabbedPage('users', sections, true, defaultSubtab);
 }
 
 /**
@@ -3765,11 +3879,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     createSequelize();
 
     app.get('/background.jpg', (req, res) => {
-        res.sendFile(join(getStaticPath(), 'img/background.jpg'));
+        res.sendFile('img/background.jpg', {root: getStaticPath()});
     });
 
     app.get('/mame-logo.svg', (req, res) => {
-        res.sendFile(join(getStaticPath(), 'img/mame-logo.svg'));
+        res.sendFile('img/mame-logo.svg', {root: getStaticPath()});
     });
 
     app.get('/login', (req, res) => {
@@ -4057,13 +4171,27 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    /**
+     * Renders the Players tab. The deleted players (administrators only) are loaded here, on
+     * every render, so each route below keeps showing an up-to-date "Deleted" subtab without
+     * having to pass it along.
+     */
+    const usersPage = async (
+        req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
+        createError?: string, messages: {deletedInfo?: string; deletedError?: string} = {},
+    ): Promise<string> => {
+        const isAdmin = req.session.boRole === 'admin';
+        const deleted = isAdmin ? await listDeletedUsers().catch(() => []) : [];
+        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted, ...messages});
+    };
+
     app.get('/users', async (req, res) => {
         const avatarFilenames = getAvatarFilenames(new Config());
         try {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users, avatarFilenames));
+            res.send(await usersPage(req, users, avatarFilenames));
         } catch {
-            res.send(renderUsersPage([], avatarFilenames, 'Database not found or not initialized yet - '
+            res.send(await usersPage(req, [], avatarFilenames, 'Database not found or not initialized yet - '
                 + 'launch the application once before managing players.'));
         }
     });
@@ -4073,21 +4201,41 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const realname: string = (req.body.realname || '').trim();
         const email: string = (req.body.email || '').trim();
         const active = req.body.active === 'on';
-        const avatarFilenames = getAvatarFilenames(new Config());
+        const config = new Config();
 
         try {
+            // A deleted player's nickname stays reserved (see UserReservation.ts), whoever asks.
+            if (await findDeletedUser(pseudo3)) {
+                const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+                res.status(422).send(await usersPage(
+                    req, users, getAvatarFilenames(config), undefined, undefined,
+                    `The nickname "${pseudo3}" belongs to a deleted player and is reserved. An administrator `
+                    + 'can restore that player from the "Deleted" tab.',
+                ));
+                return;
+            }
             await User.create({
                 pseudo_3: pseudo3,
                 ...(realname ? {realname} : {}),
                 ...(email ? {email} : {}),
                 active,
             } as User);
+            // Every new player starts with a generated default avatar (see DefaultAvatar.ts); the
+            // list below is read after this so it shows it. An avatar failing to write must not
+            // turn a successful creation into an error page.
+            try {
+                ensureDefaultAvatar(config.avatarsPath, pseudo3);
+            } catch (avatarError) {
+                console.error(`[boServer] Default avatar for "${pseudo3}" failed:`, avatarError);
+            }
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(renderUsersPage(users, avatarFilenames, undefined, `Player "${pseudo3}" created.`));
+            res.send(await usersPage(req, 
+                users, getAvatarFilenames(config), undefined, `Player "${pseudo3}" created.`,
+            ));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
-            res.status(422).send(renderUsersPage(
-                users, avatarFilenames, undefined, undefined, describeUserError(error),
+            res.status(422).send(await usersPage(req, 
+                users, getAvatarFilenames(config), undefined, undefined, describeUserError(error),
             ));
         }
     });
@@ -4099,7 +4247,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             await user.save();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-        res.send(renderUsersPage(
+        res.send(await usersPage(req, 
             users, getAvatarFilenames(new Config()), undefined,
             user ? `Player "${user.pseudo_3}" updated.` : undefined,
         ));
@@ -4108,12 +4256,45 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/users/:id/delete', async (req, res) => {
         const user = await User.findByPk(req.params.id);
         if (user) {
+            // Soft delete (User is paranoid): the nickname stays reserved and the scores are kept,
+            // hidden from the hiscore views, until an administrator restores the player.
             await user.destroy();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-        res.send(renderUsersPage(
-            users, getAvatarFilenames(new Config()), undefined,
-            user ? `Player "${user.pseudo_3}" deleted.` : undefined,
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), undefined,
+            user ? `Player "${user.pseudo_3}" deleted. The nickname stays reserved; an administrator can `
+                + 'restore it from the "Deleted" tab.' : undefined,
+        ));
+    });
+
+    app.post('/users/:id/purge', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const purged = await purgeDeletedUser(String(req.params.id), new Config().avatarsPath);
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
+            purged
+                ? {deletedInfo: `Player "${purged.user.pseudo_3}" permanently deleted, with ${purged.scoreCount} score(s).`}
+                : {deletedError: 'This player is not among the deleted players (already removed?).'},
+        ));
+    });
+
+    app.post('/users/:id/restore', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const restored = await restoreDeletedUser(String(req.params.id));
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
+            restored
+                ? {deletedInfo: `Player "${restored.pseudo_3}" restored, with their scores.`}
+                : {deletedError: 'This player is not among the deleted players (already restored?).'},
         ));
     });
 
@@ -4125,24 +4306,26 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
 
         if (!user) {
-            res.status(404).send(renderUsersPage(users, getAvatarFilenames(config), 'Player not found.'));
+            res.status(404).send(await usersPage(req, users, getAvatarFilenames(config), 'Player not found.'));
             return;
         }
         if (!req.file) {
             res.status(422).send(
-                renderUsersPage(users, getAvatarFilenames(config), 'No file sent.'),
+                await usersPage(req, users, getAvatarFilenames(config), 'No file sent.'),
             );
             return;
         }
         if (req.file.mimetype !== 'image/png') {
-            res.status(422).send(renderUsersPage(
+            res.status(422).send(await usersPage(req, 
                 users, getAvatarFilenames(config), 'The avatar must be a PNG image.',
             ));
             return;
         }
 
         writeFileSync(join(config.avatarsPath, `${user.pseudo_3}.png`), req.file.buffer);
-        res.send(renderUsersPage(
+        // The uploaded PNG replaces the generated default, which would only be left unused.
+        rmSync(join(config.avatarsPath, `${user.pseudo_3}.svg`), {force: true});
+        res.send(await usersPage(req, 
             users, getAvatarFilenames(config), undefined, `Avatar updated for "${user.pseudo_3}".`,
         ));
     });
@@ -4151,12 +4334,19 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         // basename() strips any directory components (e.g. "../../etc/passwd") from the
         // user-controlled route param before it ever reaches the filesystem.
-        const filePath = join(config.avatarsPath, basename(req.params.filename));
-        if (!existsSync(filePath)) {
+        const filename = basename(req.params.filename);
+        if (!existsSync(join(config.avatarsPath, filename))) {
             res.status(404).end();
             return;
         }
-        res.sendFile(filePath);
+        // Served with a `root`, not as an absolute path: Express 5's send() answers 404 for any
+        // absolute path holding a dot directory, and the avatars live under ~/.mame-awesome-ui.
+        // With a root only the part below it is checked. Same reason for res.download() below.
+        res.sendFile(filename, {root: config.avatarsPath}, (error) => {
+            if (error && !res.headersSent) {
+                res.status(404).end();
+            }
+        });
     });
 
     app.post('/favorites/download-media', async (req, res) => {
@@ -4487,7 +4677,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         if (files.length === 1) {
-            res.download(files[0].path, files[0].name);
+            // `root`, not the absolute path: send() refuses (404) paths with a dot directory such
+            // as ~/.mame-awesome-ui (see the avatars route).
+            res.download(basename(files[0].path), files[0].name, {root: dirname(files[0].path)});
             return;
         }
 
