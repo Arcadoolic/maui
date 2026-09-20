@@ -3,7 +3,7 @@ import session from 'express-session';
 import {Server} from 'http';
 import {
     existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
-    chmodSync, renameSync, createWriteStream,
+    chmodSync, renameSync, createWriteStream, statfsSync, statSync, lstatSync,
 } from 'fs';
 import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
@@ -951,15 +951,26 @@ function escapeHtml(value: string): string {
  */
 function runImportScript(
     res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
+    overall?: {index: number; total: number},
 ): Promise<boolean> {
     const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
-    res.write(`<section class="card"><h2>${title}</h2>${PROGRESS_LOG_OPEN}`);
+    const barId = `import-progress-${++importProgressCounter}`;
+    // A downloaded pack (--url) spends its first half downloading; a local file has no such phase.
+    const hasDownload = scriptArgs.includes('--url');
+    res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
+        + PROGRESS_LOG_OPEN);
 
     return new Promise(resolve => {
-        const child = spawn('python3', [scriptPath, ...scriptArgs], {env});
+        const child = spawn('python3', [scriptPath, ...scriptArgs], {env: {...env, MAUI_PROGRESS: '1'}});
 
+        const updateBar = (call: string): void => {
+            res.write(`<script>mauiImportProgress.${call}</script>`);
+        };
         const writeLine = (line: string): void => {
-            if (line.trim()) {
+            const progress = /^@@PROGRESS (download|import) (\d+) (\d+)$/.exec(line.trim());
+            if (progress) {
+                updateBar(`update(${JSON.stringify(barId)},${JSON.stringify(progress[1])},${progress[2]},${progress[3]})`);
+            } else if (line.trim()) {
                 res.write(`<li>${escapeHtml(line)}</li>`);
             }
         };
@@ -993,13 +1004,87 @@ function runImportScript(
             resolve(false);
         });
 
-        child.on('close', () => {
+        child.on('close', (code) => {
             stdoutSplitter.flush();
             stderrSplitter.flush();
+            updateBar(`finish(${JSON.stringify(barId)},${code === 0})`);
             res.write('</ul></section>');
             resolve(true);
         });
     });
+}
+
+let importProgressCounter = 0;
+
+/**
+ * Progress bar(s) for one import run, driven by the `<script>mauiImportProgress.update(...)`
+ * lines runImportScript() streams as the script reports its `@@PROGRESS` lines. Bar 1 is the
+ * current pack (download, then games imported); a second, thinner one shows the whole batch when
+ * several packs are imported in a row. The helper is (re)defined with each run: it is
+ * idempotent, and a streamed page has no other single place to put it.
+ */
+function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {index: number; total: number}): string {
+    const overallBar = overall && overall.total > 1 ? `
+        <div class="progress-label"><span>Pack ${overall.index + 1} of ${overall.total}</span></div>
+        <div class="progress-track progress-track-thin"><div class="progress-fill" data-overall></div></div>
+    ` : '';
+    return `
+        <div class="import-progress" id="${id}" data-download="${hasDownload ? '1' : '0'}"
+            data-index="${overall ? overall.index : 0}" data-total="${overall ? overall.total : 1}">
+            <div class="progress-label"><span data-label>Starting…</span><span data-percent></span></div>
+            <div class="progress-track"><div class="progress-fill progress-indeterminate" data-fill></div></div>
+            ${overallBar}
+        </div>
+        <script>
+        window.mauiImportProgress = window.mauiImportProgress || (function () {
+            function size(bytes) {
+                var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+                var i = 0;
+                while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+                return bytes.toFixed(1) + ' ' + units[i];
+            }
+            function draw(root, label, fraction, overallFraction) {
+                var fill = root.querySelector('[data-fill]');
+                var known = fraction !== null;
+                fill.classList.toggle('progress-indeterminate', !known);
+                fill.style.width = known ? (fraction * 100).toFixed(1) + '%' : '';
+                root.querySelector('[data-label]').textContent = label;
+                root.querySelector('[data-percent]').textContent = known ? Math.round(fraction * 100) + '%' : '';
+                var overall = root.querySelector('[data-overall]');
+                if (overall && overallFraction !== null) { overall.style.width = (overallFraction * 100).toFixed(1) + '%'; }
+            }
+            return {
+                update: function (id, phase, done, total) {
+                    var root = document.getElementById(id);
+                    if (!root) { return; }
+                    var hasDownload = root.dataset.download === '1';
+                    var fraction = total > 0 ? Math.min(done / total, 1) : null;
+                    var label = phase === 'download'
+                        ? 'Downloading' + (total > 0 ? ' — ' + size(done) + ' / ' + size(total) : ' — ' + size(done))
+                        : 'Importing games — ' + done + ' / ' + total;
+                    // Download = first half of a pack's own progress, import = second half.
+                    var packFraction = fraction === null ? null
+                        : hasDownload ? (phase === 'download' ? fraction / 2 : 0.5 + fraction / 2) : fraction;
+                    var index = Number(root.dataset.index), count = Number(root.dataset.total);
+                    draw(root, label, fraction, packFraction === null ? null : (index + packFraction) / count);
+                },
+                finish: function (id, ok) {
+                    var root = document.getElementById(id);
+                    if (!root) { return; }
+                    var fill = root.querySelector('[data-fill]');
+                    fill.classList.remove('progress-indeterminate');
+                    fill.style.width = '100%';
+                    fill.classList.add(ok ? 'progress-done' : 'progress-failed');
+                    root.querySelector('[data-label]').textContent = ok ? 'Done' : 'Finished with errors — see the log below';
+                    root.querySelector('[data-percent]').textContent = '';
+                    var overall = root.querySelector('[data-overall]');
+                    var index = Number(root.dataset.index), count = Number(root.dataset.total);
+                    if (overall) { overall.style.width = ((index + 1) / count * 100).toFixed(1) + '%'; }
+                }
+            };
+        })();
+        </script>
+    `;
 }
 
 function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
@@ -1421,6 +1506,74 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .found-no {
             color: #ff6b6b;
         }
+        .disk-bar-track {
+            display: flex;
+            height: 22px;
+            margin: 8px 0;
+            background-color: #111111;
+            border: 1px solid #333333;
+            border-radius: 11px;
+            overflow: hidden;
+        }
+        .disk-bar-track.disk-bar-overflow {
+            border-color: #ff6b6b;
+            box-shadow: 0 0 0 1px #ff6b6b;
+        }
+        .disk-bar-used {
+            background-color: #555555;
+        }
+        /* Roms already on disk: lighter neutral grey, so the coloured segments stay the "new" part. */
+        .disk-bar-roms {
+            background-color: #b5bcc4;
+        }
+        /* One coloured segment per ticked pack (background set inline); flex-shrink 0 so a
+           selection larger than the disk overflows (clipped, red outline) instead of squeezing. */
+        .disk-bar-seg {
+            flex-shrink: 0;
+            min-width: 3px;
+            border-left: 1px solid #000000;
+            transition: width 0.25s ease-out;
+        }
+        .disk-bar-temp, .pack-swatch.disk-bar-temp {
+            background-image: repeating-linear-gradient(45deg, #777777 0 4px, #333333 4px 8px);
+        }
+        .disk-zoomed .disk-bar-track > .disk-bar-used,
+        .disk-zoomed .disk-bar-track > .disk-bar-roms,
+        .disk-zoomed .disk-legend-static {
+            display: none;
+        }
+        .disk-zoom-note {
+            margin: 0 0 4px;
+            font-size: 0.85em;
+            color: #8ab4f8;
+        }
+        .disk-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 16px;
+            list-style: none;
+            padding: 0;
+            margin: 0 0 12px;
+            font-size: 0.85em;
+            color: #cccccc;
+        }
+        .pack-swatch {
+            display: inline-block;
+            flex: 0 0 auto;
+            width: 12px;
+            height: 12px;
+            margin: 3px 6px 0 0;
+            border-radius: 2px;
+            vertical-align: baseline;
+        }
+        /* Out-ranks ".checkbox-row > span" (flex: 1 1 auto), which would stretch the swatch. */
+        .checkbox-row > .pack-swatch {
+            flex: 0 0 12px;
+        }
+        .disk-legend .pack-swatch {
+            margin-top: 0;
+            vertical-align: -1px;
+        }
         .progress-log {
             list-style: none;
             padding: 0;
@@ -1429,6 +1582,53 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             overflow-y: auto;
             font-family: monospace;
             font-size: 0.9em;
+        }
+        .import-progress {
+            margin: 12px 0;
+        }
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 8px 0 4px;
+            font-size: 0.9em;
+            color: #cccccc;
+        }
+        .progress-track {
+            height: 18px;
+            background-color: #111111;
+            border: 1px solid #333333;
+            border-radius: 9px;
+            overflow: hidden;
+        }
+        .progress-track-thin {
+            height: 8px;
+            border-radius: 4px;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0;
+            background-color: #8ab4f8;
+            transition: width 0.25s ease-out;
+        }
+        .progress-fill.progress-done {
+            background-color: #6bff8a;
+        }
+        .progress-fill.progress-failed {
+            background-color: #ff6b6b;
+        }
+        /* Total unknown (server sent no Content-Length): a sliding stripe instead of a bar that
+           would sit at 0% and look frozen. */
+        .progress-fill.progress-indeterminate {
+            width: 100%;
+            background-image: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.35) 50%, transparent 100%);
+            background-size: 40% 100%;
+            background-repeat: no-repeat;
+            animation: progress-slide 1.2s linear infinite;
+        }
+        @keyframes progress-slide {
+            0% { background-position: -40% 0; }
+            100% { background-position: 140% 0; }
         }
         .progress-log li {
             padding: 4px 0;
@@ -2621,7 +2821,7 @@ function renderForm(
             sections.push({
                 id: 'repository',
                 label: 'Repository',
-                html: renderRepoImportCard(config, repoPacks, repoError, repoInfo),
+                html: renderRepoImportCard(config, mameInfo, repoPacks, repoError, repoInfo),
             });
             sections.push({
                 id: 'danger',
@@ -3526,25 +3726,287 @@ function humanFileSize(bytes: number): string {
     return `${size.toFixed(1)} TiB`;
 }
 
+interface DiskSpace {
+    path: string;
+    freeBytes: number;
+    totalBytes: number;
+    // st_dev of the nearest existing ancestor - two paths with the same value share a
+    // filesystem (a pack is downloaded to the OS temp dir, then extracted to the roms dir).
+    deviceId: number;
+}
+
+/**
+ * Free space (available to a non-root user) on the filesystem holding `path`, or null when it
+ * can't be determined. Walks up to the nearest existing ancestor first: the roms directory may
+ * not be created yet on a fresh MAME home. statfsSync is cross-platform (Node >= 18.15).
+ */
+function getDiskSpace(path: string): DiskSpace | null {
+    let probe = path;
+    while (!existsSync(probe)) {
+        const parent = dirname(probe);
+        if (parent === probe) {
+            return null;
+        }
+        probe = parent;
+    }
+    try {
+        const stats = statfsSync(probe);
+        return {
+            path,
+            freeBytes: stats.bavail * stats.bsize,
+            totalBytes: stats.blocks * stats.bsize,
+            deviceId: statSync(probe).dev,
+        };
+    } catch {
+        return null;
+    }
+}
+
+// Walking a big roms folder (thousands of zips, CHD subfolders) is not free, and the MAME tab
+// re-renders on every action - remember the last result for a short while.
+const DIRECTORY_SIZE_CACHE_MS = 30_000;
+const directorySizeCache = new Map<string, {bytes: number; at: number}>();
+
+/**
+ * Total size of the regular files under `path` (recursive, symlinks not followed), 0 when it
+ * does not exist. Unreadable entries are skipped rather than failing the whole card.
+ */
+function getDirectorySize(path: string): number {
+    const cached = directorySizeCache.get(path);
+    if (cached && Date.now() - cached.at < DIRECTORY_SIZE_CACHE_MS) {
+        return cached.bytes;
+    }
+    let bytes = 0;
+    const pending = [path];
+    while (pending.length) {
+        const dir = pending.pop() as string;
+        let entries;
+        try {
+            entries = readdirSync(dir, {withFileTypes: true});
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            const entryPath = join(dir, entry.name);
+            if (entry.isDirectory()) {
+                pending.push(entryPath);
+            } else if (entry.isFile()) {
+                try {
+                    bytes += lstatSync(entryPath).size;
+                } catch {
+                    // vanished between readdir and stat - ignore
+                }
+            }
+        }
+    }
+    directorySizeCache.set(path, {bytes, at: Date.now()});
+    return bytes;
+}
+
+/**
+ * Combined size of the given folders, counting only those on the filesystem `deviceId` (the
+ * bar is about that one disk) and never twice: a folder nested inside another listed one is
+ * already part of it.
+ */
+function getInstalledContentBytes(paths: (string | null)[], deviceId: number): number {
+    const onDisk = [...new Set(paths.filter((path): path is string => !!path))].filter(path => {
+        try {
+            return statSync(path).dev === deviceId;
+        } catch {
+            return false;
+        }
+    });
+    return onDisk
+        .filter(path => !onDisk.some(other => other !== path && path.startsWith(other.replace(/[\\/]+$/, '') + sep)))
+        .reduce((total, path) => total + getDirectorySize(path), 0);
+}
+
+/**
+ * Distinct, stable colour per pack (its index in the repository listing, not its tick order), so
+ * the swatch beside a checkbox, its segment in the disk bar and its legend entry always match.
+ * The golden angle spreads consecutive hues apart however many packs there are.
+ */
+function packColor(index: number): string {
+    return `hsl(${Math.round((index * 137.508) % 360)}, 65%, 58%)`;
+}
+
+/**
+ * Free-space block for the repository card: one bar over the total size of the disk holding the
+ * roms - already used space in grey, then (filled in by the script in renderRepoPackPicker() as
+ * packs are ticked/unticked) one coloured segment per selected pack, with a legend. The estimate
+ * mirrors what scripts/import-starting-pack.py needs: packs are mostly already-compressed ROM
+ * zips, so extracted size ~= download size, +5% for filesystem block overhead (same margin as
+ * its own preflight), and the download itself sits in the temp dir until its import finishes -
+ * on the same filesystem as the roms it counts too (hatched segment), but only the largest one
+ * at a time (packs are imported sequentially, each temp file removed afterwards). When the temp
+ * dir is on another filesystem, its free space is only shown/checked as text: one bar, one disk.
+ */
+function renderDiskSpaceInfo(mameInfo: MameInfo): string {
+    const romPath = mameInfo.romPath;
+    const roms = romPath ? getDiskSpace(romPath) : null;
+    if (!roms) {
+        return '';
+    }
+    const temp = getDiskSpace(os.tmpdir());
+    const sameDisk = !temp || temp.deviceId === roms.deviceId;
+    const usedBytes = Math.max(0, roms.totalBytes - roms.freeBytes);
+    // Part of the used space that is pack content already installed (roms + marquees/flyers/
+    // logos, what a pack carries - its ini files are negligible), before any pack is added; the
+    // rest being whatever else lives on the disk. Capped at the used total: these folders can
+    // hold more than the filesystem reports as used (e.g. compressed/deduplicated storage).
+    const romsBytes = Math.min(usedBytes, getInstalledContentBytes(
+        [roms.path, mameInfo.marqueePath, mameInfo.flyerPath, mameInfo.logoPath], roms.deviceId,
+    ));
+    const otherBytes = usedBytes - romsBytes;
+    const percentOf = (bytes: number): string => (
+        roms.totalBytes > 0 ? Math.min(100, bytes / roms.totalBytes * 100) : 0
+    ).toFixed(2);
+    return `
+        <div class="disk-space" data-total="${roms.totalBytes}" data-roms-free="${roms.freeBytes}"
+            data-temp-free="${temp ? temp.freeBytes : 0}" data-same-disk="${sameDisk ? '1' : '0'}">
+            <p class="info">Disk space for the roms
+            (<span class="current-path">${escapeHtml(roms.path)}</span>):
+            <strong>${escapeHtml(humanFileSize(roms.freeBytes))}</strong> free of
+            ${escapeHtml(humanFileSize(roms.totalBytes))}</p>
+            <div class="disk-bar-track">
+                <div class="disk-bar-used" style="width: ${percentOf(otherBytes)}%"
+                    title="Other data: ${escapeHtml(humanFileSize(otherBytes))}"></div>
+                <div class="disk-bar-roms" style="width: ${percentOf(romsBytes)}%"
+                    title="Roms &amp; artwork already installed: ${escapeHtml(humanFileSize(romsBytes))}"></div>
+            </div>
+            <p class="disk-zoom-note" hidden></p>
+            <ul class="disk-legend">
+                <li class="disk-legend-static"><span class="pack-swatch disk-bar-used"></span>Other data
+                    (${escapeHtml(humanFileSize(otherBytes))})</li>
+                <li class="disk-legend-static"><span class="pack-swatch disk-bar-roms"></span>Roms &amp; artwork already installed
+                    (${escapeHtml(humanFileSize(romsBytes))})</li>
+            </ul>
+            ${sameDisk ? '' : `<p class="info">Free disk space for downloads
+            (<span class="current-path">${escapeHtml(temp!.path)}</span>):
+            <strong>${escapeHtml(humanFileSize(temp!.freeBytes))}</strong></p>`}
+            <p class="info disk-space-selection" hidden></p>
+        </div>
+    `;
+}
+
 function renderRepoPackPicker(packs: RepoPack[]): string {
     if (!packs.length) {
         return '<p class="info flash">No pack available on this repository.</p>';
     }
-    const options = packs.map(pack => {
+    const rows = packs.map((pack, index) => {
         const details = [
             humanFileSize(pack.size),
             pack.gameCount !== undefined ? `${pack.gameCount} game(s)` : null,
             pack.generatedAt ? new Date(pack.generatedAt).toLocaleDateString('en-GB') : null,
         ].filter((part): part is string => part !== null).join(' — ');
-        return `<option value="${escapeHtml(pack.filename)}">${escapeHtml(pack.filename)} (${escapeHtml(details)})</option>`;
+        const color = packColor(index);
+        return `
+            <label class="checkbox-row">
+                <input type="checkbox" name="packFilename" value="${escapeHtml(pack.filename)}" class="pack-checkbox"
+                    data-size="${pack.size}" data-color="${color}">
+                <span class="pack-swatch" style="background-color: ${color}"></span>
+                <span>${escapeHtml(pack.filename)}<span class="checkbox-row-detail">${escapeHtml(details)}</span></span>
+            </label>
+        `;
     }).join('');
+    // Submit stays disabled until at least one pack is ticked (server re-checks either way).
     return `
         <form method="post" action="/import/from-url"
-            onsubmit="return confirm('This overwrites the roms and media of the pack games (and the category files, if any), then adds these games to your MAME favorites without touching yours. Continue?')">
-            <label for="packFilename">Pack to import</label>
-            <select id="packFilename" name="packFilename" required>${options}</select>
-            <button type="submit">Download and import</button>
+            onsubmit="return confirm('This overwrites the roms and media of the games in the selected packs (and the category files, if any), then adds these games to your MAME favorites without touching yours. Continue?')">
+            <p class="info">Pack(s) to import:</p>
+            ${rows}
+            <label class="checkbox-row">
+                <input type="checkbox" id="packSelectAll">
+                <span>Select all</span>
+            </label>
+            <button type="submit" id="packSubmit" disabled>Download and import</button>
         </form>
+        <script>(function () {
+            var boxes = Array.prototype.slice.call(document.querySelectorAll('.pack-checkbox'));
+            var all = document.getElementById('packSelectAll');
+            var submit = document.getElementById('packSubmit');
+            var disk = document.querySelector('.disk-space');
+            var summary = disk && disk.querySelector('.disk-space-selection');
+            var track = disk && disk.querySelector('.disk-bar-track');
+            var legend = disk && disk.querySelector('.disk-legend');
+            var zoomNote = disk && disk.querySelector('.disk-zoom-note');
+            // Below this share of the disk, the selection is a sliver of the full bar (700 MB on
+            // a 1 TB disk): the bar then shows only the free space instead of the whole disk.
+            var ZOOM_BELOW = 0.02;
+            function formatSize(bytes) {
+                var units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+                var i = 0;
+                while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+                return bytes.toFixed(1) + ' ' + units[i];
+            }
+            function name(box) { return box.value.replace(/[.]zip$/, ''); }
+            // Adds one segment to the bar and its entry to the legend. style is either a
+            // background colour or the hatched "temporary download" class.
+            function addPart(bytes, total, label, color, extraClass) {
+                var seg = document.createElement('div');
+                seg.className = 'disk-bar-seg ' + (extraClass || '');
+                seg.style.width = (bytes / total * 100).toFixed(2) + '%';
+                if (color) { seg.style.backgroundColor = color; }
+                seg.title = label + ': ' + formatSize(bytes);
+                track.appendChild(seg);
+                var item = document.createElement('li');
+                item.className = 'disk-legend-part';
+                var swatch = document.createElement('span');
+                swatch.className = 'pack-swatch ' + (extraClass || '');
+                if (color) { swatch.style.backgroundColor = color; }
+                item.appendChild(swatch);
+                item.appendChild(document.createTextNode(label + ' (' + formatSize(bytes) + ')'));
+                legend.appendChild(item);
+            }
+            function refresh() {
+                var picked = boxes.filter(function (box) { return box.checked; });
+                submit.disabled = picked.length === 0;
+                all.checked = picked.length === boxes.length;
+                if (!summary) { return; }
+                var total = Number(disk.dataset.total);
+                var free = Number(disk.dataset.romsFree);
+                var sameDisk = disk.dataset.sameDisk === '1';
+                var sizes = picked.map(function (box) { return Number(box.dataset.size); });
+                var downloads = sizes.reduce(function (sum, size) { return sum + size; }, 0);
+                var largest = Math.max.apply(null, sizes.concat([0]));
+                var needed = downloads * 1.05 + (sameDisk ? largest : 0);
+                var enough = needed <= free && (sameDisk || largest <= Number(disk.dataset.tempFree));
+
+                Array.prototype.slice.call(track.querySelectorAll('.disk-bar-seg')).forEach(function (el) { el.remove(); });
+                Array.prototype.slice.call(legend.querySelectorAll('.disk-legend-part')).forEach(function (el) { el.remove(); });
+                // Zoomed: the bar spans the free space only (used segments hidden by CSS) and the
+                // needed bytes are relative to it. Never when they do not fit - that overflow
+                // has to show against the whole disk.
+                var zoomed = needed > 0 && needed <= free && needed < total * ZOOM_BELOW;
+                var scale = zoomed ? free : total;
+                disk.classList.toggle('disk-zoomed', zoomed);
+                zoomNote.hidden = !zoomed;
+                zoomNote.textContent = 'Zoomed on the free space (' + formatSize(free)
+                    + ') - the bar no longer shows the ' + formatSize(total) + ' disk as a whole.';
+                if (scale > 0) {
+                    picked.forEach(function (box) {
+                        addPart(Number(box.dataset.size) * 1.05, scale, name(box), box.dataset.color);
+                    });
+                    if (sameDisk && largest > 0) {
+                        addPart(largest, scale, 'Temporary download (largest pack)', '', 'disk-bar-temp');
+                    }
+                }
+                track.classList.toggle('disk-bar-overflow', !enough);
+
+                summary.hidden = picked.length === 0;
+                summary.className = 'disk-space-selection ' + (enough ? 'info' : 'error');
+                summary.textContent = picked.length + ' pack(s) selected: '
+                    + formatSize(downloads) + ' to download, about ' + formatSize(needed)
+                    + ' needed, ' + formatSize(Math.max(0, free - needed)) + ' left afterwards'
+                    + (enough ? '.' : ' - not enough free disk space.');
+            }
+            refresh();
+            all.addEventListener('change', function () {
+                boxes.forEach(function (box) { box.checked = all.checked; });
+                refresh();
+            });
+            boxes.forEach(function (box) { box.addEventListener('change', refresh); });
+        })();</script>
     `;
 }
 
@@ -3555,7 +4017,9 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
  * renderForm()): downloading and importing an arbitrary pack from a configured repo is no less
  * consequential than the manual upload form right above it.
  */
-function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string, info?: string): string {
+function renderRepoImportCard(
+    config: Config, mameInfo: MameInfo, packs?: RepoPack[], error?: string, info?: string,
+): string {
     return `
         <section class="card">
             <h2>Starting pack repository</h2>
@@ -3575,6 +4039,7 @@ function renderRepoImportCard(config: Config, packs?: RepoPack[], error?: string
                 <button type="submit">Save</button>
             </form>
             ${config.repoUrl ? `
+                ${renderDiskSpaceInfo(mameInfo)}
                 <form method="get" action="/import/from-url/packs">
                     <button type="submit">Browse available packs</button>
                 </form>
@@ -4569,9 +5034,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         const mameInfo = getMameInfo(config);
-        // Flows into a URL and a child-process argv below - restricted to a bare filename (no
-        // path separators, no shell metacharacters) rather than trusting the <select> value.
-        const packFilename = typeof req.body.packFilename === 'string' ? req.body.packFilename : '';
+        // Flows into a URL and a child-process argv below - restricted to bare filenames (no
+        // path separators, no shell metacharacters) rather than trusting the checkbox values.
+        // urlencoded (extended: false) yields a string for one ticked box, an array for several.
+        const rawPackFilenames: unknown[] = [req.body.packFilename].flat();
+        const packFilenames = [...new Set(rawPackFilenames)];
 
         if (!config.repoUrl) {
             res.status(422).send(renderForm(
@@ -4580,7 +5047,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ));
             return;
         }
-        if (!/^[\w.-]+\.zip$/.test(packFilename)) {
+        if (!packFilenames.length) {
+            res.status(422).send(renderForm(
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, 'Tick at least one pack to import.',
+            ));
+            return;
+        }
+        if (!packFilenames.every((name): name is string => typeof name === 'string' && /^[\w.-]+\.zip$/.test(name))) {
             res.status(422).send(renderForm(
                 values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
                 undefined, 'Invalid pack name.',
@@ -4597,21 +5071,28 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
 
-        const packUrl = `${config.repoUrl}/${packFilename}`;
-
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('mame'));
 
+        // Packs are imported one after the other (one script run each, one progress card each):
+        // the script rewrites favorites.ini and shared category files, so runs must not overlap.
         // Credentials go through env, never argv, so they don't leak via `ps`/
         // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
         // trust level as ssDevPassword).
-        const started = await runImportScript(
-            res, `Import from the repository in progress… (${escapeHtml(packFilename)})`, ['--url', packUrl, '-y'],
-            {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
-        );
-        if (!started) {
-            return;
+        for (const [index, packFilename] of packFilenames.entries()) {
+            const counter = packFilenames.length > 1 ? `[${index + 1}/${packFilenames.length}] ` : '';
+            const started = await runImportScript(
+                res,
+                `${counter}Import from the repository in progress… (${escapeHtml(packFilename)})`,
+                ['--url', `${config.repoUrl}/${packFilename}`, '-y'],
+                {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+                {index, total: packFilenames.length},
+            );
+            // false = launch failure, runImportScript already closed the response.
+            if (!started) {
+                return;
+            }
         }
 
         const refreshedMameInfo = getMameInfo(config);
@@ -4620,7 +5101,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
             res.write(renderImportCard());
-            res.write(renderRepoImportCard(config));
+            res.write(renderRepoImportCard(config, refreshedMameInfo));
         }
         res.write(renderPageTail());
         res.end();
