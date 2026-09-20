@@ -4,6 +4,19 @@ import type {CarouselCategory, MergedCategory} from '@/types/CarouselCategory';
 const TTL_PREFIX = /^TTL \* /;
 
 /**
+ * Icon key of a category: its name minus mame's "TTL * " prefix (discrete-logic games, e.g.
+ * "TTL * Shooter" - same icon as the non-TTL category since it's the same kind of game), with
+ * every run of separators turned into '_' and lowercased ("Ball & Paddle" -> "ball_paddle"). It
+ * is both the CSS class the Home carousel maps to src/assets/categories/<key>.svg and the icon
+ * file name the BO Categories tab looks up. The replace() needs /g: without it, only the first
+ * run of separators became '_' and any later one (e.g. the second space in "Musical Instrument
+ * Accessory") stayed literal, breaking the key.
+ */
+export function getCategoryIconKey(categoryName: string): string {
+    return categoryName.replace(TTL_PREFIX, '').replace(/[\s\W]+/g, '_').toLowerCase();
+}
+
+/**
  * mame's genre.ini keeps its discrete-logic games (Pong...) in a "TTL * <genre>" category next to
  * the plain "<genre>" one. In the carousel that showed the same name and icon twice, so each pair
  * becomes one entry ("Ball & Paddle") holding the games of both. A "TTL * X" with no "X" of its
