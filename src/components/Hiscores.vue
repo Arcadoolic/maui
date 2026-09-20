@@ -28,6 +28,7 @@ import User from '@/model/User.model';
 import {join} from 'path';
 import {format} from 'url';
 import {emitter} from '@/emitter';
+import {findAvatarFile} from '@/class/AvatarFiles';
 import {getConfiguration, getUserService} from '@/services';
 
 const props = defineProps<{game: Game}>();
@@ -44,15 +45,16 @@ async function onGameChange() {
     loading.value = true;
     scores.value = await props.game.$get(
         'hiscores',
-        {include: [{model: User}], limit: MAX_HISCORES_DISPLAYED, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
+        {include: [{model: User, required: true}], limit: MAX_HISCORES_DISPLAYED, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
     ) as Hiscore[] || [];
     loading.value = false;
 }
 
 function getAvatar(user: User) {
-    if (avatars.value.indexOf(user.pseudo_3 + '.png') >= 0) {
+    const avatarFile = findAvatarFile(avatars.value, user.pseudo_3);
+    if (avatarFile) {
         return format({
-            pathname: join(getConfiguration().avatarsPath, user.pseudo_3 + '.png'),
+            pathname: join(getConfiguration().avatarsPath, avatarFile),
             protocol: 'file',
             slashes: true,
         });

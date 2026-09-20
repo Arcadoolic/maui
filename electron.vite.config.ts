@@ -148,6 +148,13 @@ export default defineConfig({
         define: {MAUI_BUILD_VERSION_SUFFIX: JSON.stringify(buildVersionSuffix)},
         resolve: {alias},
         build: {
+            // The main process is emitted as CommonJS and electron-vite leaves every `dependencies`
+            // entry as a runtime `require()`. boring-avatars (default avatars, see
+            // src/class/DefaultAvatar.ts) is an ES-module-only package: required, it comes back as
+            // the module namespace `{default: Avatar}` instead of the component, and React then
+            // fails to render it. Bundled into the main output it is imported normally; react and
+            // react-dom stay external (CommonJS, and it keeps a single React instance).
+            externalizeDeps: {exclude: ['boring-avatars']},
             rollupOptions: {
                 input: {index: resolve(__dirname, 'src/background.ts')},
             },
