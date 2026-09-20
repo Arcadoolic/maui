@@ -97,7 +97,7 @@ export default class ScreenScraperClient {
             res = await fetch(`${API_BASE_URL}?${params.toString()}`);
             text = await res.text();
         } catch (error) {
-            return {status: 'error', message: error instanceof Error ? error.message : 'Erreur réseau.'};
+            return {status: 'error', message: error instanceof Error ? error.message : 'Network error.'};
         }
 
         // ScreenScraper's "rom not found" response: HTTP 404 with a plain-text body, not JSON.
@@ -117,7 +117,7 @@ export default class ScreenScraperClient {
             // ScreenScraper sometimes replies 200 with a plain-text error body (e.g. quota reached).
             return /quota|limite|threads/i.test(text)
                 ? {status: 'quota-exceeded', message: text.slice(0, 200)}
-                : {status: 'error', message: 'Réponse ScreenScraper illisible.'};
+                : {status: 'error', message: 'Unreadable ScreenScraper response.'};
         }
 
         const jeu = json?.response?.jeu;
@@ -142,7 +142,7 @@ export default class ScreenScraperClient {
         try {
             const res = await fetch(url);
             if (!res.ok) {
-                return {status: 'error', message: `Téléchargement ${mediaType} : HTTP ${res.status}`};
+                return {status: 'error', message: `${mediaType} download: HTTP ${res.status}`};
             }
             const buffer = Buffer.from(await res.arrayBuffer());
             writeFileSync(destinationPath, buffer);
@@ -150,7 +150,7 @@ export default class ScreenScraperClient {
         } catch (error) {
             return {
                 status: 'error',
-                message: `Téléchargement ${mediaType} : ${error instanceof Error ? error.message : 'erreur inconnue'}`,
+                message: `${mediaType} download: ${error instanceof Error ? error.message : 'unknown error'}`,
             };
         }
     }

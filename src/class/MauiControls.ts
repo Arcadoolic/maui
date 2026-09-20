@@ -41,28 +41,28 @@ export interface MauiControlContext {
 export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
     {
         id: 'home',
-        title: 'Liste des jeux',
+        title: 'Game list',
         controls: [
-            {key: MAUI_KEYS.up, role: 'Jeu précédent (revient au dernier après le premier)'},
-            {key: MAUI_KEYS.down, role: 'Jeu suivant (revient au premier après le dernier)'},
-            {key: MAUI_KEYS.left, role: 'Catégorie précédente (si des catégories existent)'},
-            {key: MAUI_KEYS.right, role: 'Catégorie suivante (si des catégories existent)'},
-            {key: MAUI_KEYS.enter, role: 'Valider : lancer le jeu sélectionné'},
-            {key: MAUI_KEYS.space, role: 'Afficher / masquer les scores du jeu'},
+            {key: MAUI_KEYS.up, role: 'Previous game (wraps to the last one after the first)'},
+            {key: MAUI_KEYS.down, role: 'Next game (wraps to the first one after the last)'},
+            {key: MAUI_KEYS.left, role: 'Previous category (if categories exist)'},
+            {key: MAUI_KEYS.right, role: 'Next category (if categories exist)'},
+            {key: MAUI_KEYS.enter, role: 'Confirm: launch the selected game'},
+            {key: MAUI_KEYS.space, role: 'Show / hide the game scores'},
             {key: MAUI_KEYS.space, longPressMs: LONG_PRESS_MS.quit, role: 'Quitter MAUI'},
-            {key: MAUI_KEYS.p, longPressMs: LONG_PRESS_MS.newPlayer, role: 'Créer un nouveau joueur (trigramme)'},
+            {key: MAUI_KEYS.p, longPressMs: LONG_PRESS_MS.newPlayer, role: 'Create a new player (3-letter tag)'},
         ],
     },
     {
         id: 'registration',
-        title: 'Création d\'un joueur (trigramme)',
+        title: 'Player creation (3-letter tag)',
         controls: [
-            {key: MAUI_KEYS.up, role: 'Lettre précédente (Z après A)'},
-            {key: MAUI_KEYS.down, role: 'Lettre suivante (A après Z)'},
-            {key: MAUI_KEYS.left, role: 'Lettre du trigramme précédente'},
-            {key: MAUI_KEYS.right, role: 'Lettre du trigramme suivante'},
-            {key: MAUI_KEYS.p, role: 'Valider le trigramme (après au moins un appui de saisie)'},
-            {key: MAUI_KEYS.space, role: 'Annuler'},
+            {key: MAUI_KEYS.up, role: 'Previous letter (Z after A)'},
+            {key: MAUI_KEYS.down, role: 'Next letter (A after Z)'},
+            {key: MAUI_KEYS.left, role: 'Previous tag letter'},
+            {key: MAUI_KEYS.right, role: 'Next tag letter'},
+            {key: MAUI_KEYS.p, role: 'Confirm the tag (after at least one input press)'},
+            {key: MAUI_KEYS.space, role: 'Cancel'},
         ],
     },
 ];
@@ -72,8 +72,8 @@ const KEY_LABELS: Record<string, string> = {
     [MAUI_KEYS.down]: '↓',
     [MAUI_KEYS.left]: '←',
     [MAUI_KEYS.right]: '→',
-    [MAUI_KEYS.enter]: 'Entrée',
-    [MAUI_KEYS.space]: 'Espace',
+    [MAUI_KEYS.enter]: 'Enter',
+    [MAUI_KEYS.space]: 'Space',
     [MAUI_KEYS.p]: 'P',
 };
 
@@ -85,12 +85,12 @@ export function keyLabel(key: string): string {
 export const STANDARD_BUTTON_NAMES: Record<number, string> = {
     0: 'A', 1: 'B', 2: 'X', 3: 'Y', 4: 'LB', 5: 'RB', 6: 'LT', 7: 'RT',
     8: 'Back', 9: 'Start', 10: 'L3', 11: 'R3',
-    12: 'croix haut', 13: 'croix bas', 14: 'croix gauche', 15: 'croix droite', 16: 'Guide',
+    12: 'd-pad up', 13: 'd-pad down', 14: 'd-pad left', 15: 'd-pad right', 16: 'Guide',
 };
 
 /**
  * Every physical input of `mapping` (a controllers.json entry) that produces `key`, e.g.
- * ["Bouton 0 (A)", "Axe 1 −"]. Axis entries are keyed by direction, as in Gamepads.class.ts:
+ * ["Button 0 (A)", "Axis 1 −"]. Axis entries are keyed by direction, as in Gamepads.class.ts:
  * "0" is the negative half of the axis, "1" the positive half. Buttons are numbered from 0, like
  * the Gamepad API (and unlike MAME's JOYCODE_x_BUTTONn, which counts from 1).
  */
@@ -101,13 +101,13 @@ export function describeGamepadInputs(
     for (const [index, mappedKey] of Object.entries(mapping.buttons)) {
         if (mappedKey === key) {
             const name = buttonNames[Number(index)];
-            inputs.push(name ? `Bouton ${index} (${name})` : `Bouton ${index}`);
+            inputs.push(name ? `Button ${index} (${name})` : `Button ${index}`);
         }
     }
     for (const [index, directions] of Object.entries(mapping.axes)) {
         for (const [direction, mappedKey] of Object.entries(directions)) {
             if (mappedKey === key) {
-                inputs.push(`Axe ${index} ${direction === '0' ? '−' : '+'}`);
+                inputs.push(`Axis ${index} ${direction === '0' ? '−' : '+'}`);
             }
         }
     }
