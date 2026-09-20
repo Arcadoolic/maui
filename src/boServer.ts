@@ -29,6 +29,8 @@ import {
 } from '@/class/PackOwnership';
 import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
+import {getCategoryIconKey, mergeTtlCategories} from '@/class/CarouselCategories';
+import {HISCORES_ONLY_CATEGORY, isMergedCategory} from '@/types/CarouselCategory';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
 import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
 import {
@@ -1580,6 +1582,53 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .pack-details summary {
             cursor: pointer;
             color: #8ab4f8;
+        }
+        .category-row {
+            border-top: 1px solid #333;
+        }
+        .category-row summary {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 0;
+            cursor: pointer;
+        }
+        .category-icon {
+            width: 40px;
+            height: 40px;
+            flex: none;
+        }
+        .category-name {
+            flex: 1;
+        }
+        .category-count {
+            color: #999;
+            font-size: 0.9em;
+        }
+        .category-games {
+            list-style: none;
+            margin: 0 0 8px 52px;
+            padding: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            font-size: 0.9em;
+        }
+        .category-games li {
+            padding: 2px 0;
+        }
+        /* Name, rom name and year · studio · players on one line (wrapping only when too long);
+           .checkbox-row-detail is display: block by default. */
+        .category-games .checkbox-row-detail {
+            display: inline;
+            margin: 0 0 0 8px;
+        }
+        .category-game-meta {
+            margin-left: 8px;
+            color: #999;
+            font-size: 0.9em;
+        }
+        .category-game-meta::before {
+            content: '— ';
         }
         .pack-games {
             list-style: none;
@@ -3726,17 +3775,135 @@ function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFa
     `;
 }
 
+// The Home carousel's category icons, embedded as text in this bundle (the BO has no access to
+// the renderer's hashed asset files, and src/ is not shipped): keyed by file name without
+// extension ("shooter", "_default"...), i.e. by getCategoryIconKey(), the same key the carousel
+// derives its CSS class from.
+const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
+    Object.entries(import.meta.glob('./assets/categories/*.svg', {query: '?raw', import: 'default', eager: true}))
+        .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
+);
+
+interface BoCategoryGame {
+    romName: string;
+    fullname: string;
+    year: number | null;
+    studio: string;
+    // Game.players: from Multiplayer.ini (via player_alt/player_sim), "1 player" when it says nothing.
+    players: string;
+}
+
+interface BoCategory {
+    name: string;
+    iconKey: string;
+    games: BoCategoryGame[];
+}
+
+/**
+ * The categories the Home carousel shows (TTL twins merged, same as mergeTtlCategories(); the
+ * dynamic "Hiscores Only" first when some game supports hiscores, like Home.vue), each with its
+ * games, plus a last "No category" entry for the games genre.ini doesn't know. Read from the
+ * database like the carousel does, so it is what the cabinet displays, not what genre.ini says.
+ */
+async function loadBoCategories(): Promise<BoCategory[]> {
+    const categories = await Category.findAll({order: ['name'], include: [{model: Game, required: true}]});
+    const toGame = (game: Game): BoCategoryGame => ({
+        romName: game.romName,
+        fullname: game.fullname || game.romName,
+        year: game.year || null,
+        studio: game.studio,
+        players: game.players,
+    });
+    const byName = (a: {fullname: string}, b: {fullname: string}) => a.fullname.localeCompare(b.fullname);
+
+    const result: BoCategory[] = mergeTtlCategories(categories).map(entry => {
+        const ids = isMergedCategory(entry) ? entry.categoryIds : [entry.id_category];
+        const games = categories.filter(category => ids.includes(category.id_category))
+            .flatMap(category => category.games.map(toGame)).sort(byName);
+        return {name: entry.name, iconKey: getCategoryIconKey(entry.name), games};
+    });
+
+    const hiscoreGames = await Game.findAll({where: {hi: true}});
+    if (hiscoreGames.length) {
+        result.unshift({
+            name: HISCORES_ONLY_CATEGORY.name,
+            iconKey: getCategoryIconKey(HISCORES_ONLY_CATEGORY.name),
+            games: hiscoreGames.map(toGame).sort(byName),
+        });
+    }
+
+    const uncategorized = (await Game.findAll()).filter(game => game.id_category == null);
+    if (uncategorized.length) {
+        result.push({name: 'No category', iconKey: '_default', games: uncategorized.map(toGame).sort(byName)});
+    }
+    return result;
+}
+
+/**
+ * "Categories" subtab of the Games tab: one row per carousel category with its icon and game
+ * count, unfolding into the list of its games. '' when the database can't be read (not migrated
+ * yet - same race as /login), which hides the subtab rather than breaking the whole Games tab.
+ */
+async function renderCategoriesCard(): Promise<string> {
+    let categories: BoCategory[];
+    try {
+        categories = await loadBoCategories();
+    } catch {
+        return '';
+    }
+    if (!categories.length) {
+        return `
+            <section class="card">
+                <h2>Categories</h2>
+                <p class="info">No game in the database yet.</p>
+            </section>
+        `;
+    }
+    const rows = categories.map(category => {
+        const iconKey = category.iconKey in CATEGORY_ICONS ? category.iconKey : '_default';
+        const games = category.games.map(game => {
+            const meta = [game.year, game.studio, game.players].filter(Boolean).map(part => escapeHtml(String(part)));
+            return `
+            <li>${escapeHtml(decodeXmlEntities(game.fullname))}
+                <span class="checkbox-row-detail">${escapeHtml(game.romName)}</span>
+                <span class="category-game-meta">${meta.join(' · ')}</span></li>
+        `;
+        }).join('');
+        return `
+            <details class="category-row">
+                <summary>
+                    <img class="category-icon" src="/category-icons/${escapeHtml(iconKey)}.svg" alt="">
+                    <span class="category-name">${escapeHtml(category.name)}</span>
+                    <span class="category-count">${category.games.length} game${category.games.length === 1 ? '' : 's'}</span>
+                </summary>
+                <ul class="category-games">${games}</ul>
+            </details>
+        `;
+    }).join('');
+    return `
+        <section class="card">
+            <h2>Categories (${categories.length})</h2>
+            <p class="info">Grouped like the cabinet's carousel: mame's "TTL *" twins are merged into
+            their plain category, and "Hiscores Only" lists the games whose scores can be extracted
+            (they also belong to their own category). Each game shows its year, studio and player
+            count (from Multiplayer.ini).</p>
+            ${rows}
+        </section>
+    `;
+}
+
 /**
  * Games tab: current favorites, and the ones removed from it (restorable). Both are always
  * present so a removed favorite stays reachable even when favorites.ini ends up empty (in which
  * case the first card is just the "no favorites" message).
  *
  * removedFlash/defaultSection: which of the two a response is "about" (see renderSubtabbedPage()).
- * A flash on favoritesInfo belongs to the first one, removedFlash to the second.
+ * A flash on favoritesInfo belongs to the first one, removedFlash to the second. categoriesHtml
+ * (see renderCategoriesCard()) is the "Categories" subtab, absent when empty.
  */
 function renderFavoritesPage(
     favoritesInfo: FavoritesInfo, removedFlash?: RemovedFavoritesFlash,
-    defaultSection: 'list' | 'removed' = 'list',
+    defaultSection: 'list' | 'removed' = 'list', categoriesHtml = '',
 ): string {
     // A rom put back by another route (or by mame's own menu) since it was removed isn't
     // "removed" anymore - don't offer to restore what's already there.
@@ -3748,6 +3915,7 @@ function renderFavoritesPage(
 
     return renderSubtabbedPage('favorites', [
         {id: 'list', label: 'Favorites', html: renderFavoritesCard(favoritesInfo)},
+        ...(categoriesHtml ? [{id: 'categories', label: 'Categories', html: categoriesHtml}] : []),
         {id: 'removed', label: `Removed (${removed.length})`, html: renderRemovedFavoritesCard(removed, removedFlash)},
     ], true, defaultSection);
 }
@@ -4644,6 +4812,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.sendFile('img/background.jpg', {root: getStaticPath()});
     });
 
+    app.get('/category-icons/:key.svg', (req, res) => {
+        const svg = CATEGORY_ICONS[req.params.key];
+        if (!svg) {
+            res.sendStatus(404);
+            return;
+        }
+        res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+    });
+
     app.get('/mame-logo.svg', (req, res) => {
         res.sendFile('img/mame-logo.svg', {root: getStaticPath()});
     });
@@ -4754,7 +4931,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
      * re-renders after POST /favorites/delete and /favorites/restore. `flash.section` is the
      * subtab the message belongs to (and the one shown on load).
      */
-    const renderFavoritesTab = (flash?: RemovedFavoritesFlash & {section: 'list' | 'removed'}): string => {
+    const renderFavoritesTab = async (flash?: RemovedFavoritesFlash & {section: 'list' | 'removed'}): Promise<string> => {
+        const categoriesHtml = await renderCategoriesCard();
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
@@ -4762,7 +4940,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const removedFlash = flash?.section === 'removed' ? flash : undefined;
 
         if ('error' in context) {
-            return renderFavoritesPage({rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section);
+            return renderFavoritesPage(
+                {rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
+            );
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
@@ -4773,24 +4953,24 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const cache = readFavoritesCache();
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
-            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, ...listFlash}, removedFlash, flash?.section,
+            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
         );
     };
 
-    app.get('/favorites', (req, res) => {
-        res.send(renderFavoritesTab());
+    app.get('/favorites', async (req, res) => {
+        res.send(await renderFavoritesTab());
     });
 
-    app.post('/favorites/delete', (req, res) => {
+    app.post('/favorites/delete', async (req, res) => {
         const romName: string = (req.body.romName || '').trim();
         // Same character set as parseFavorites()/getFavoriteRomNames(): anything else can't be
         // a favorite this tab lists.
         if (!/^[a-z0-9]+$/.test(romName)) {
-            res.status(422).send(renderFavoritesTab({section: 'list', warning: 'Invalid rom name.'}));
+            res.status(422).send(await renderFavoritesTab({section: 'list', warning: 'Invalid rom name.'}));
             return;
         }
         if (isMameConfigSessionAlive()) {
-            res.status(409).send(renderFavoritesTab({
+            res.status(409).send(await renderFavoritesTab({
                 section: 'list',
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
@@ -4799,13 +4979,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(renderFavoritesTab({section: 'list', warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab({section: 'list', warning: 'No favorites.ini file found.'}));
             return;
         }
 
         const removal = removeFavorite(readFileSync(favoritesPath, 'utf8'), romName);
         if (removal === null) {
-            res.status(422).send(renderFavoritesTab({
+            res.status(422).send(await renderFavoritesTab({
                 section: 'list',
                 warning: `Unable to remove "${romName}": entry not found or unexpected favorites.ini format.`,
             }));
@@ -4835,21 +5015,21 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
         }
 
-        res.send(renderFavoritesTab({
+        res.send(await renderFavoritesTab({
             section: 'list', notice: `"${romName}" removed from the favorites (find it again in the "Removed" tab).`,
         }));
     });
 
-    app.post('/favorites/restore', (req, res) => {
+    app.post('/favorites/restore', async (req, res) => {
         const romName: string = (req.body.romName || '').trim();
         const removed = readRemovedFavorites();
         const item = removed.find(candidate => candidate.romName === romName);
         if (!item) {
-            res.status(404).send(renderFavoritesTab({section: 'removed', warning: `"${romName}" is not in the removed favorites.`}));
+            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: `"${romName}" is not in the removed favorites.`}));
             return;
         }
         if (isMameConfigSessionAlive()) {
-            res.status(409).send(renderFavoritesTab({
+            res.status(409).send(await renderFavoritesTab({
                 section: 'removed',
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
@@ -4858,7 +5038,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(renderFavoritesTab({section: 'removed', warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: 'No favorites.ini file found.'}));
             return;
         }
 
@@ -4866,7 +5046,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // null = already listed (put back by mame's own menu in the meantime) or a corrupt saved
         // entry - tell the two apart so the message is accurate.
         if (updated === null && !getFavoriteRomNames(favoritesPath).includes(romName)) {
-            res.status(422).send(renderFavoritesTab({
+            res.status(422).send(await renderFavoritesTab({
                 section: 'removed', warning: `Unable to restore "${romName}": the saved entry is invalid.`,
             }));
             return;
@@ -4887,7 +5067,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }
         }
 
-        res.send(renderFavoritesTab({
+        res.send(await renderFavoritesTab({
             section: 'removed',
             notice: updated === null
                 ? `"${romName}" was already in the favorites.`

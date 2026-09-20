@@ -12,6 +12,7 @@
 
 <script setup lang="ts">
 import type {CarouselCategory} from '@/types/CarouselCategory';
+import {getCategoryIconKey} from '@/class/CarouselCategories';
 
 const props = withDefaults(defineProps<{
     categories: CarouselCategory[];
@@ -46,12 +47,7 @@ function getCategoryClasses(index: number) {
         next2,
     };
     if (index > 0) {
-        // Strip mame's "TTL * " prefix (discrete-logic games, e.g. "TTL * Shooter") first - same
-        // icon as the non-TTL category since it's the same kind of game. The replace() needs /g:
-        // without it, only the first run of separators became '_' and any later one (e.g. the
-        // second space in "Musical Instrument Accessory") stayed literal, breaking the class name.
-        const name = props.categories[index - 1].name.replace(/^TTL \* /, '');
-        const classLogo = name.replace(/[\s\W]+/g, '_').toLowerCase();
+        const classLogo = getCategoryIconKey(props.categories[index - 1].name);
         classes[classLogo] = true;
     }
     return classes;
@@ -106,6 +102,10 @@ function getCategoryClasses(index: number) {
         transform: translate3d(-50%, 200%, 0) scale(0.4);
     }
 
+    .categories .category.arcade {
+        background-image: url(../assets/categories/arcade.svg);
+    }
+
     .categories .category.ball_paddle {
         background-image: url(../assets/categories/ball_paddle.svg);
     }
@@ -128,6 +128,10 @@ function getCategoryClasses(index: number) {
 
     .categories .category.maze {
         background-image: url(../assets/categories/maze.svg);
+    }
+
+    .categories .category.multigame {
+        background-image: url(../assets/categories/multigame.svg);
     }
 
     .categories .category.multiplay {

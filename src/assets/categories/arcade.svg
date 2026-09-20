@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="140px" height="140px" viewBox="228 351 140 140">
+<circle fill="#1FA4A0" cx="298" cy="421" r="70"/>
+<!-- Screen with a tiny shoot'em up -->
+<rect x="260" y="369" width="76" height="50" rx="7" fill="#CECCBF"/>
+<rect x="265" y="374" width="66" height="40" rx="4" fill="#1B2233"/>
+<path fill="#F8EB48" d="M298,396l6,12h-12z"/>
+<rect x="296" y="384" width="4" height="8" fill="#FFFFFF"/>
+<rect x="274" y="379" width="8" height="5" fill="#E9225B"/>
+<rect x="314" y="381" width="8" height="5" fill="#E9225B"/>
+<!-- Control deck -->
+<path fill="#384850" d="M250,470l8-38h80l8,38z"/>
+<path fill="#556F7B" d="M258,432h80l1.7,8h-83.4z"/>
+<!-- Joystick -->
+<ellipse cx="276" cy="452" rx="12" ry="5" fill="#1B2233"/>
+<rect x="274" y="436" width="4" height="16" fill="#CECCBF"/>
+<circle cx="276" cy="432" r="10" fill="#E9225B"/>
+<circle cx="272.500" cy="428.500" r="3" fill="#F4A6BE"/>
+<!-- Buttons -->
+<circle cx="306" cy="452" r="7" fill="#F8EB48"/>
+<circle cx="324" cy="452" r="7" fill="#32ABDF"/>
+</svg>

@@ -2,6 +2,7 @@ import {BelongsTo, Column, DataType, ForeignKey, HasMany, HasOne, Model, Table} 
 import Category from './Category.model';
 import Hiscore from '@/model/Hiscore.model';
 import {decodeXmlEntities} from '@/class/XmlEntities';
+import {studioInParentheses} from '@/class/StudioLabel';
 
 @Table({
     timestamps: true,
@@ -81,6 +82,14 @@ export default class Game extends Model<Game> {
      */
     public get studio(): string {
         return this.manufacturer ? decodeXmlEntities(this.manufacturer) : '';
+    }
+
+    /**
+     * The studio for display inside parentheses (year (studio) - players): a license note it
+     * already carries in parentheses is flattened, see studioInParentheses().
+     */
+    public get studioLabel(): string {
+        return studioInParentheses(this.studio);
     }
 
     public get players() {

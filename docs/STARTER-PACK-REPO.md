@@ -10,6 +10,9 @@ d'implémentation (BO, script Python `--url`, etc.). Ce document ne couvre
 que ce qui est **déjà en production** : publier un pack et régénérer les
 manifests, à la main, aujourd'hui.
 
+Inventaire des packs préparés, méthode de copie des ROMs et reste à couvrir :
+[STARTER-PACKS.md](STARTER-PACKS.md).
+
 ---
 
 ## 1. Accès au serveur
