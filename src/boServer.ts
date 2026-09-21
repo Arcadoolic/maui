@@ -829,6 +829,39 @@ function favoriteRowFromCache(context: FavoritesContext, romName: string, cache:
     };
 }
 
+/**
+ * Re-resolves every favorite's name/BIOS (a blocking `mame -lx` per rom, see resolveFavoriteRow())
+ * and rewrites the favorites cache, streaming one progress line per favorite to `res` as they
+ * resolve. Shared by "Update favorites" (POST /favorites/refresh) and the repository import,
+ * which refreshes the favorites by itself once it has added games. The caller has already sent
+ * the response head; this writes the open "Updating favorites" card and closes it again.
+ */
+function streamFavoritesRefresh(
+    res: Response, context: FavoritesContext,
+): {rows: FavoriteRow[]; cache: FavoritesCache} {
+    // Stream the page as favorites are resolved instead of blocking on the whole list: each
+    // one is a blocking `mame -lx` process spawn, so with enough favorites the unstreamed
+    // version could take a long time to send anything at all - same fix already applied to
+    // /favorites/download-media.
+    res.write(`
+        <section class="card">
+            <h2>Updating favorites (${context.romNames.length})…</h2>
+            ${PROGRESS_LOG_OPEN}
+    `);
+
+    const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
+    const rows: FavoriteRow[] = context.romNames.map((romName) => {
+        const row = resolveFavoriteRow(context, romName);
+        cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
+        res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+        return row;
+    });
+    const cache = writeFavoritesCache(cacheEntries);
+
+    res.write('</ul></section>');
+    return {rows, cache};
+}
+
 function hasScreenScraperCredentials(config: Config): boolean {
     return !!(config.ssDevId && config.ssDevPassword && config.ssSoftName
         && config.ssUserId && config.ssUserPassword);
@@ -1193,6 +1226,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             background-size: cover;
             background-repeat: repeat;
             background-position: 0 0;
+            /* "cover" is sized on the page's height by default: while a streamed page (updates,
+               imports, favorites refresh) keeps growing, the image kept zooming in. Fixed sizes it
+               on the viewport instead, so it stays put whatever the page length. */
+            background-attachment: fixed;
         }
         body {
             color: #ffffff;
@@ -3750,7 +3787,11 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
         `;
     }
 
-    const rows = favoritesInfo.rows.map(row => `
+    // favorites.ini keeps mame's own order (new favorites are appended at the end), so the list is
+    // sorted here, by name, for both the tab and the "Update favorites" result. A favorite not
+    // resolved yet has no name, its romName stands in until the next update.
+    const sortedRows = [...favoritesInfo.rows].sort((a, b) => a.fullname.localeCompare(b.fullname));
+    const rows = sortedRows.map(row => `
         <tr data-search="${escapeHtml(getFavoriteSearchText(row))}">
             <td>${row.cached ? renderGameName(row.fullname, row.romName) : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${escapeHtml(row.romName)}</td>
@@ -5224,29 +5265,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
 
-        // Stream the page as favorites are resolved instead of blocking on the whole list: each
-        // one is a blocking `mame -lx` process spawn (see resolveFavoriteRow()), so with enough
-        // favorites the unstreamed version could take a long time to send anything at all -
-        // same fix already applied to /favorites/download-media below.
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('favorites'));
-        res.write(`
-            <section class="card">
-                <h2>Updating favorites (${context.romNames.length})…</h2>
-                ${PROGRESS_LOG_OPEN}
-        `);
-
-        const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
-        const rows: FavoriteRow[] = context.romNames.map((romName) => {
-            const row = resolveFavoriteRow(context, romName);
-            cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
-            res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
-            return row;
-        });
-        const cache = writeFavoritesCache(cacheEntries);
-
-        res.write('</ul></section>');
+        const {rows, cache} = streamFavoritesRefresh(res, context);
         res.write(renderFavoritesCard({rows, cacheUpdatedAt: cache.updatedAt}));
         res.write(renderPageTail());
         res.end();
@@ -5726,6 +5748,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             if (!started) {
                 return;
             }
+        }
+
+        // The import just rewrote favorites.ini: resolve the new games' names/BIOS now instead of
+        // leaving the favorites tab on "not resolved yet" until "Update favorites" is clicked.
+        const favoritesContext = getFavoritesContext(config);
+        if ('error' in favoritesContext) {
+            res.write(`<section class="card"><h2>Updating favorites</h2>
+                <p class="info">Favorites not updated: ${escapeHtml(favoritesContext.error)}</p></section>`);
+        } else {
+            streamFavoritesRefresh(res, favoritesContext);
         }
 
         const refreshedMameInfo = getMameInfo(config);
