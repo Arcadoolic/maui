@@ -73,6 +73,35 @@ export default class Game extends Model<Game> {
     })
     public player_sim!: number;
 
+    /**
+     * Number of times the game was launched from the front-end (see GameService.incrementPlayCount()).
+     * Not part of saveGamesFromRomNames()'s updateOnDuplicate list, so a favorites resync keeps it.
+     */
+    @Column({
+        type: DataType.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+    })
+    public play_count!: number;
+
+    /**
+     * The cabinet's opinion of the game: 1 thumbs up, 0 neutral (also "not voted yet": both are
+     * asked again once the game is quit), -1 thumbs down. See GameVote.ts.
+     */
+    @Column({
+        type: DataType.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+    })
+    public vote!: number;
+
+    /** When the game was last launched from the front-end; null = never played. */
+    @Column({
+        type: DataType.DATE,
+        allowNull: true,
+    })
+    public last_played_at!: Date | null;
+
     @HasMany(() => Hiscore)
     public hiscores!: InstanceType<typeof Hiscore>[];
 

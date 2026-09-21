@@ -22,7 +22,11 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
-import {removeFavorite, addFavorite} from '@/class/MameIniParser';
+import {addFavorite} from '@/class/MameIniParser';
+import {
+    FavoritesCacheEntry, FavoritesCache, RemovedFavorite, getFavoritesCachePath, readFavoritesCache,
+    writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
+} from '@/class/FavoritesStore';
 import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     PackOwnership,
@@ -39,6 +43,8 @@ import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
 } from '@/class/UserReservation';
 import {findAvatarFile} from '@/class/AvatarFiles';
+import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
+import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
@@ -190,87 +196,6 @@ function getDatabasePath(): string {
         mkdirSync(appDataPath, {recursive: true});
     }
     return join(appDataPath, 'mame-awesome-ui.sqlite');
-}
-
-/**
- * Same fixed <home>/.mame-awesome-ui path as getDatabasePath(), for the favorites name/BIOS
- * cache (see FavoritesCache below) - resolving a favorite's fullname/BIOS is a blocking `mame
- * -lx` process spawn per rom (see getGameXmlInfo()), so the favorites tab reads this cache
- * instead of re-running it on every page load; only "Update favorites" re-resolves and
- * rewrites it.
- */
-function getFavoritesCachePath(): string {
-    const appDataPath = join(os.homedir(), '.mame-awesome-ui');
-    if (!existsSync(appDataPath)) {
-        mkdirSync(appDataPath, {recursive: true});
-    }
-    return join(appDataPath, 'favorites-cache.json');
-}
-
-interface FavoritesCacheEntry {
-    fullname: string;
-    biosName: string | null;
-    deviceRoms: string[];
-}
-
-interface FavoritesCache {
-    updatedAt: string;
-    entries: { [romName: string]: FavoritesCacheEntry };
-}
-
-function readFavoritesCache(): FavoritesCache | null {
-    const cachePath = getFavoritesCachePath();
-    if (!existsSync(cachePath)) {
-        return null;
-    }
-    try {
-        return JSON.parse(readFileSync(cachePath, 'utf8'));
-    } catch {
-        // Corrupt/unreadable cache file - treat as absent rather than failing the whole tab.
-        return null;
-    }
-}
-
-function writeFavoritesCache(entries: { [romName: string]: FavoritesCacheEntry }): FavoritesCache {
-    const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
-    writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
-    return cache;
-}
-
-/**
- * A favorite removed from the Games tab: the exact favorites.ini block mame had written for it
- * (see removeFavorite()), plus its cached name/BIOS, so "Restore" can put both back as they were.
- * Stored beside the favorites cache rather than in favorites.ini itself, which is mame's own file
- * (it rewrites it from memory on exit and would drop anything foreign).
- */
-interface RemovedFavorite {
-    romName: string;
-    fullname: string;
-    removedAt: string;
-    entry: string;
-    cache?: FavoritesCacheEntry;
-}
-
-function getRemovedFavoritesPath(): string {
-    return join(dirname(getFavoritesCachePath()), 'removed-favorites.json');
-}
-
-function readRemovedFavorites(): RemovedFavorite[] {
-    const path = getRemovedFavoritesPath();
-    if (!existsSync(path)) {
-        return [];
-    }
-    try {
-        const parsed = JSON.parse(readFileSync(path, 'utf8'));
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        // Corrupt/unreadable file - treat as empty rather than failing the whole tab.
-        return [];
-    }
-}
-
-function writeRemovedFavorites(removed: RemovedFavorite[]): void {
-    writeFileSync(getRemovedFavoritesPath(), JSON.stringify(removed));
 }
 
 /**
@@ -735,9 +660,48 @@ interface FavoritesInfo {
     // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
     // always live, regardless of cache age - see getFavoriteMediaStatus().
     cacheUpdatedAt?: string | null;
+    // Launch count per rom (see loadGameStats()); a rom absent from it, or no map at all (database
+    // not migrated yet), shows no count.
+    stats?: Map<string, GameStats>;
     // One-shot flash messages after a favorite was removed (POST /favorites/delete).
     notice?: string;
     warning?: string;
+}
+
+/**
+ * What the database knows about a game's play history (Game.play_count/vote/last_played_at), for
+ * the favorites list and the Votes subtab. Soft-deleted games included: a game taken out of the
+ * favorites (thumbs down, or removed from the BO) keeps its history.
+ */
+interface GameStats {
+    romName: string;
+    fullname: string;
+    playCount: number;
+    vote: Vote;
+    lastPlayedAt: Date | null;
+}
+
+/**
+ * Every game's GameStats by rom name, or null when the database can't be read (no file yet, or
+ * not migrated yet - same race as /login and renderCategoriesCard()): callers then just leave
+ * these columns out instead of breaking the whole Games tab.
+ */
+async function loadGameStats(): Promise<Map<string, GameStats> | null> {
+    try {
+        const games = await Game.findAll({
+            attributes: ['romName', 'fullname', 'play_count', 'vote', 'last_played_at'],
+            paranoid: false,
+        });
+        return new Map(games.map(game => [game.romName, {
+            romName: game.romName,
+            fullname: game.fullname || game.romName,
+            playCount: game.play_count || 0,
+            vote: parseVote(game.vote) ?? VOTE_NEUTRAL,
+            lastPlayedAt: game.last_played_at ? new Date(game.last_played_at) : null,
+        }]));
+    } catch {
+        return null;
+    }
 }
 
 interface FavoritesContext {
@@ -1634,6 +1598,34 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         /* Long game names are cut with an ellipsis instead of widening the table; the info icon
            stays visible after the cut text. */
+        .vote-buttons {
+            display: inline-flex;
+            gap: 6px;
+        }
+        /* The three vote icons of a row: unlike the single Remove/Restore button above (styled as a
+           form's :last-child), each needs the icon-button look. The selected one is lit up in its
+           own color, the others stay grey. */
+        form.vote-buttons > button.icon-button[type="submit"] {
+            display: inline-flex;
+            padding: 5px;
+            margin-top: 0;
+            color: #777777;
+            background-color: transparent;
+            border: 1px solid #444444;
+        }
+        form.vote-buttons > button.icon-button[aria-pressed="true"] {
+            border-color: currentColor;
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        form.vote-buttons > button.up[aria-pressed="true"] {
+            color: #6bff8a;
+        }
+        form.vote-buttons > button.neutral[aria-pressed="true"] {
+            color: #ffd166;
+        }
+        form.vote-buttons > button.down[aria-pressed="true"] {
+            color: #ff6b6b;
+        }
         .game-name-cell {
             display: flex;
             align-items: center;
@@ -3494,6 +3486,14 @@ function renderMauiCard(config: Config, info?: string): string {
                     <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
                     Open DevTools on startup (development mode)
                 </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
+                    Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="thumbsDownRemovesFavorite" ${config.thumbsDownRemovesFavorite ? 'checked' : ''}>
+                    A thumbs down removes the game from the favorites (restorable from the Games tab, "Removed")
+                </label>
                 <button type="submit">Save</button>
             </form>
         </section>
@@ -3779,6 +3779,11 @@ function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok'
 }
 
 const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
+const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
+    + '<path d="M5 7l2.6-4.5c1.2 0 1.9 1 1.6 2.1L8.8 6.5h3.4c1 0 1.7.9 1.5 1.9l-.9 4c-.2.7-.8 1.1-1.5 1.1H5"/>';
+const THUMB_DOWN_ICON_PATHS = `<g transform="rotate(180 8 8)">${THUMB_UP_ICON_PATHS}</g>`;
+// Eyes are zero-length round-capped lines: dots that keep the stroke-only look of the other icons.
+const NEUTRAL_ICON_PATHS = '<circle cx="8" cy="8" r="6"/><path d="M5.5 10h5"/><path d="M6 6.5v.01M10 6.5v.01"/>';
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
 const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
 const PAUSE_ICON_PATHS = '<path d="M5.5 3v10M10.5 3v10"/>';
@@ -3903,6 +3908,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             <td>${escapeHtml(row.romName)}</td>
             <td>${renderBiosCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
+            <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
             <td class="center">
                 <form method="post" action="/favorites/delete">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
@@ -3944,6 +3950,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th>Shortname</th>
                             <th>Bios / Devices</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
+                            <th class="center" title="Times the game was launched">Plays</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
@@ -4049,6 +4056,154 @@ function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFa
             </div>
         </section>
     `;
+}
+
+interface VoteRow extends GameStats {
+    inFavorites: boolean;
+    // A record in removed-favorites.json, so "Restore" has something to put back.
+    restorable: boolean;
+}
+
+const VOTE_LABELS: Record<Vote, string> = {
+    [VOTE_UP]: 'Thumbs up',
+    [VOTE_NEUTRAL]: 'Neutral',
+    [VOTE_DOWN]: 'Thumbs down',
+};
+
+function formatLastPlayed(lastPlayedAt: Date | null): string {
+    return lastPlayedAt
+        ? escapeHtml(lastPlayedAt.toLocaleString('en-GB', {dateStyle: 'short', timeStyle: 'short'}))
+        : '<em>-</em>';
+}
+
+/**
+ * "Votes" subtab of the Games tab: every game played (or voted on) with its launch count, last
+ * launch and vote - changeable from here - so a cabinet's owner can sort through a big imported
+ * list. Games that left the favorites (a thumbs down with the removal option on, or removed from
+ * the BO) stay listed, with a way back.
+ */
+function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: RemovedFavoritesFlash = {}): string {
+    const messages = `
+        ${flash.notice ? `<p class="info flash">${escapeHtml(flash.notice)}</p>` : ''}
+        ${flash.warning ? `<p class="error flash">${escapeHtml(flash.warning)}</p>` : ''}
+    `;
+    const thumbsDownEffect = removesFavorite
+        ? 'removes the game from the favorites (it stays here, and in the "Removed" subtab, to be restored)'
+        : 'only lists the game here, it stays in the favorites';
+    const explanation = `
+        <p class="info">Once a game is quit on the cabinet, the player is asked for a thumbs up,
+        neutral or thumbs down (a neutral vote is asked again next time). A thumbs down
+        ${thumbsDownEffect}
+        - see the MAUI tab to change that, or to turn the question off.</p>
+    `;
+    if (!rows.length) {
+        return `
+            <section class="card">
+                <h2>Votes</h2>
+                ${messages}
+                ${explanation}
+                <p class="info">No game played yet.</p>
+            </section>
+        `;
+    }
+
+    const sorted = [...rows].sort((a, b) =>
+        (b.lastPlayedAt?.getTime() ?? 0) - (a.lastPlayedAt?.getTime() ?? 0) || a.fullname.localeCompare(b.fullname));
+    const voteIcons: Record<Vote, {cssClass: string, paths: string}> = {
+        [VOTE_UP]: {cssClass: 'up', paths: THUMB_UP_ICON_PATHS},
+        [VOTE_NEUTRAL]: {cssClass: 'neutral', paths: NEUTRAL_ICON_PATHS},
+        [VOTE_DOWN]: {cssClass: 'down', paths: THUMB_DOWN_ICON_PATHS},
+    };
+    const buttons = (row: VoteRow) => ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
+        <button type="submit" name="vote" value="${vote}" class="icon-button ${voteIcons[vote].cssClass}"
+            aria-pressed="${row.vote === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
+            <svg ${ICON_SVG_ATTRS}>${voteIcons[vote].paths}</svg>
+        </button>
+    `).join('');
+    const tableRows = sorted.map(row => `
+        <tr data-vote="${row.vote}" data-in-favorites="${row.inFavorites}">
+            <td>${renderGameName(row.fullname, row.romName)}</td>
+            <td>${escapeHtml(row.romName)}</td>
+            <td class="center">${row.playCount}</td>
+            <td>${formatLastPlayed(row.lastPlayedAt)}</td>
+            <td>
+                <form method="post" action="/votes/set" class="vote-buttons">
+                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
+                    ${buttons(row)}
+                </form>
+            </td>
+            <td class="center">${row.inFavorites ? '' : `Not in favorites${row.restorable ? `
+                <form method="post" action="/favorites/restore">
+                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
+                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
+                </form>` : ''}`}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <section class="card">
+            <h2>Votes (${rows.length})</h2>
+            ${messages}
+            ${explanation}
+            <div class="table-search">
+                <select id="votesFilter" aria-label="Filter the votes">
+                    <option value="">All games</option>
+                    <option value="0">To vote (neutral)</option>
+                    <option value="1">Thumbs up</option>
+                    <option value="-1">Thumbs down</option>
+                    <option value="out">Not in favorites</option>
+                </select>
+            </div>
+            <div class="table-wrap">
+                <table class="favorites-table" id="votesTable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Shortname</th>
+                            <th class="center">Plays</th>
+                            <th>Last played</th>
+                            <th>Vote</th>
+                            <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${tableRows}</tbody>
+                </table>
+            </div>
+            <script>(function () {
+                var filter = document.getElementById('votesFilter');
+                var rows = Array.prototype.slice.call(document.querySelectorAll('#votesTable tbody tr'));
+                filter.addEventListener('change', function () {
+                    rows.forEach(function (row) {
+                        row.hidden = filter.value !== '' && (filter.value === 'out'
+                            ? row.dataset.inFavorites !== 'false'
+                            : row.dataset.vote !== filter.value);
+                    });
+                });
+            })();</script>
+        </section>
+    `;
+}
+
+/**
+ * The Votes subtab's content, or '' when the database can't be read (not migrated yet - same race
+ * as renderCategoriesCard()), which hides the subtab.
+ */
+async function renderVotesTab(flash: RemovedFavoritesFlash = {}): Promise<string> {
+    const stats = await loadGameStats();
+    if (!stats) {
+        return '';
+    }
+    const config = new Config();
+    config.load();
+    const {favoritesPath} = getMameLocations(getMameHomePath());
+    const favorites = new Set(favoritesPath ? getFavoriteRomNames(favoritesPath) : []);
+    const restorable = new Set(readRemovedFavorites().map(item => item.romName));
+    const rows: VoteRow[] = [...stats.values()]
+        .filter(game => game.lastPlayedAt || game.vote !== VOTE_NEUTRAL)
+        .map(game => ({
+            ...game, inFavorites: favorites.has(game.romName), restorable: restorable.has(game.romName),
+        }));
+    return renderVotesCard(rows, config.thumbsDownRemovesFavorite, flash);
 }
 
 // The Home carousel's category icons, embedded as text in this bundle (the BO has no access to
@@ -4179,7 +4334,7 @@ async function renderCategoriesCard(): Promise<string> {
  */
 function renderFavoritesPage(
     favoritesInfo: FavoritesInfo, removedFlash?: RemovedFavoritesFlash,
-    defaultSection: 'list' | 'removed' = 'list', categoriesHtml = '',
+    defaultSection: 'list' | 'removed' | 'votes' = 'list', categoriesHtml = '', votesHtml = '',
 ): string {
     // A rom put back by another route (or by mame's own menu) since it was removed isn't
     // "removed" anymore - don't offer to restore what's already there.
@@ -4191,6 +4346,7 @@ function renderFavoritesPage(
 
     return renderSubtabbedPage('favorites', [
         {id: 'list', label: 'Favorites', html: renderFavoritesCard(favoritesInfo)},
+        ...(votesHtml ? [{id: 'votes', label: 'Votes', html: votesHtml}] : []),
         ...(categoriesHtml ? [{id: 'categories', label: 'Categories', html: categoriesHtml}] : []),
         {id: 'removed', label: `Removed (${removed.length})`, html: renderRemovedFavoritesCard(removed, removedFlash)},
     ], true, defaultSection);
@@ -5092,7 +5248,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
     // this must not be recreated per-request.
-    createSequelize();
+    const sequelize = createSequelize();
+    // A database created by an older version of the app: bring it up to date right away instead of
+    // waiting for the renderer's own Database.update() (Init.vue), which may not have run yet
+    // when a page of this server is opened. No file yet = first launch, Init.vue installs it.
+    if (existsSync(getDatabasePath())) {
+        runMigrations(sequelize).catch((error) => {
+            console.error('[boServer] Database migration failed:', error);
+        });
+    }
 
     app.get('/background.jpg', (req, res) => {
         res.sendFile('img/background.jpg', {root: getStaticPath()});
@@ -5217,8 +5381,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
      * re-renders after POST /favorites/delete and /favorites/restore. `flash.section` is the
      * subtab the message belongs to (and the one shown on load).
      */
-    const renderFavoritesTab = async (flash?: RemovedFavoritesFlash & {section: 'list' | 'removed'}): Promise<string> => {
+    const renderFavoritesTab = async (
+        flash?: RemovedFavoritesFlash & {section: 'list' | 'removed' | 'votes'},
+    ): Promise<string> => {
         const categoriesHtml = await renderCategoriesCard();
+        const votesHtml = await renderVotesTab(flash?.section === 'votes' ? flash : {});
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
@@ -5227,7 +5394,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         if ('error' in context) {
             return renderFavoritesPage(
-                {rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
+                {rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section, categoriesHtml, votesHtml,
             );
         }
 
@@ -5239,7 +5406,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const cache = readFavoritesCache();
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
-            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
+            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...listFlash},
+            removedFlash, flash?.section, categoriesHtml, votesHtml,
         );
     };
 
@@ -5269,36 +5437,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
 
-        const removal = removeFavorite(readFileSync(favoritesPath, 'utf8'), romName);
-        if (removal === null) {
+        if (removeFavoriteFromDisk(favoritesPath, romName) === null) {
             res.status(422).send(await renderFavoritesTab({
                 section: 'list',
                 warning: `Unable to remove "${romName}": entry not found or unexpected favorites.ini format.`,
             }));
             return;
-        }
-
-        // Saved before favorites.ini is rewritten: if this write fails the favorite is still
-        // listed (worst case, a stale "removed" record the removed subtab hides), whereas the
-        // other order could lose the entry for good.
-        const cache = readFavoritesCache();
-        writeRemovedFavorites([
-            ...readRemovedFavorites().filter(item => item.romName !== romName),
-            {
-                romName,
-                fullname: removal.entry.split('\n')[1]?.trim() || cache?.entries[romName]?.fullname || romName,
-                removedAt: new Date().toISOString(),
-                entry: removal.entry,
-                cache: cache?.entries[romName],
-            },
-        ]);
-        writeFileSync(favoritesPath, removal.content, 'utf8');
-
-        // Drop the rom's cached name/BIOS too, keeping the rest of the cache (and its updatedAt)
-        // as it was - restored later, it gets its cache entry back from the removed record.
-        if (cache?.entries[romName]) {
-            delete cache.entries[romName];
-            writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
         }
 
         res.send(await renderFavoritesTab({
@@ -5361,7 +5505,49 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }));
     });
 
-    app.post('/favorites/refresh', (req, res) => {
+    app.post('/votes/set', async (req, res) => {
+        const romName: string = (req.body.romName || '').trim();
+        const vote = parseVote(req.body.vote);
+        if (!/^[a-z0-9]+$/.test(romName) || vote === null) {
+            res.status(422).send(await renderFavoritesTab({section: 'votes', warning: 'Invalid vote.'}));
+            return;
+        }
+
+        let updated: number;
+        try {
+            // paranoid: false - a game already out of the favorites keeps its vote editable.
+            [updated] = await Game.update({vote}, {where: {romName}, paranoid: false});
+        } catch {
+            res.status(503).send(await renderFavoritesTab({
+                section: 'list', warning: 'Database not ready yet - launch the application once, then retry.',
+            }));
+            return;
+        }
+        if (!updated) {
+            res.status(404).send(await renderFavoritesTab({section: 'votes', warning: `Unknown game "${romName}".`}));
+            return;
+        }
+
+        const flash: RemovedFavoritesFlash = {notice: `Vote saved for "${romName}": ${VOTE_LABELS[vote].toLowerCase()}.`};
+        const config = new Config();
+        config.load();
+        const {favoritesPath} = getMameLocations(getMameHomePath());
+        if (vote === VOTE_DOWN && config.thumbsDownRemovesFavorite && favoritesPath
+            && getFavoriteRomNames(favoritesPath).includes(romName)) {
+            if (isMameConfigSessionAlive()) {
+                flash.warning = 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini. '
+                    + 'The game stays in the favorites for now.';
+            } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
+                flash.notice += ' Removed from the favorites (find it again in the "Removed" subtab).'
+                    + ' The change shows up on the cabinet the next time MAUI starts.';
+            } else {
+                flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
+            }
+        }
+        res.send(await renderFavoritesTab({section: 'votes', ...flash}));
+    });
+
+    app.post('/favorites/refresh', async (req, res) => {
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
@@ -5375,7 +5561,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('favorites'));
         const {rows, cache} = streamFavoritesRefresh(res, context);
-        res.write(renderFavoritesCard({rows, cacheUpdatedAt: cache.updatedAt}));
+        res.write(renderFavoritesCard({
+            rows, cacheUpdatedAt: cache.updatedAt, stats: await loadGameStats() ?? undefined,
+        }));
         res.write(renderPageTail());
         res.end();
     });
@@ -5898,6 +6086,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.load();
         config.openDevTools = req.body.openDevTools === 'on';
         config.fullscreen = req.body.fullscreen === 'on';
+        config.voteEnabled = req.body.voteEnabled === 'on';
+        config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
         config.save();
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
     });

@@ -60,6 +60,17 @@ export default class Config {
     // the main use case.
     public fullscreen: boolean = true;
 
+    // Whether the player is asked for a thumbs up / neutral / thumbs down once a game is quit
+    // (Home.vue, see GameVote.ts). The vote can always be set from the BO, this only controls the
+    // prompt on the cabinet itself.
+    public voteEnabled: boolean = true;
+
+    // Whether a thumbs down also takes the game out of mame's favorites (restorable from the BO's
+    // "Removed" tab). Off = the game stays, and the BO's Votes tab just lists the ones that
+    // weren't liked - what a cabinet builder sorting through a big imported game list wants
+    // the other way round.
+    public thumbsDownRemovesFavorite: boolean = true;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
 
@@ -92,6 +103,8 @@ export default class Config {
 
             this.openDevTools = configFile.openDevTools === true;
             this.fullscreen = configFile.fullscreen !== false;
+            this.voteEnabled = configFile.voteEnabled !== false;
+            this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
 
             this._configLoaded = true;
             return true;
@@ -116,6 +129,8 @@ export default class Config {
                 bezelAspect: this.bezelAspect,
                 openDevTools: this.openDevTools,
                 fullscreen: this.fullscreen,
+                voteEnabled: this.voteEnabled,
+                thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
             }),
         );
     }

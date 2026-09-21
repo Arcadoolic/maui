@@ -5,6 +5,14 @@ import MameService from '@/class/MameService.class';
 import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
 import Log from 'electron-log';
+// Sequelize's own helpers (literal...) come from sequelize-typescript, never from the sequelize package
+// itself: imported in the renderer, that makes vite-plugin-electron-renderer generate a module
+// exporting every key of sequelize, one of which ("DOUBLE PRECISION") isn't a valid identifier - a
+// SyntaxError that leaves the window black. Same *TS import shape as Database.class.ts.
+import * as SequelizeTS from 'sequelize-typescript';
+const Sequelize = SequelizeTS.Sequelize;
+import {Vote, VOTE_DOWN} from '@/class/GameVote';
+import {removeFavoriteFromDisk} from '@/class/FavoritesStore';
 
 export default class GameService {
     protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
@@ -56,7 +64,9 @@ export default class GameService {
 
         // Disable unwanted games
         const romToDisable = existingGames.filter((i) => romNames.indexOf(i) < 0);
-        Game.destroy({ where: { romName: romToDisable }} );
+        // Awaited: applyVote() reloads the games right after this, and must not still see the game
+        // it just took out of the favorites.
+        await Game.destroy({ where: { romName: romToDisable }} );
 
         for (const romName of romNames) {
             if (existingGames.indexOf(romName) >= 0) {
@@ -111,6 +121,8 @@ export default class GameService {
             updateOnDuplicate: ['hi', 'id_category', 'player_alt', 'player_sim'],
             logging: Log.log,
         });
+        // The list loadGames() cached no longer matches the table.
+        this.games = undefined;
     }
 
     /**
@@ -172,6 +184,50 @@ export default class GameService {
             sim: 0,
             alt: 0,
         };
+    }
+
+    /**
+     * Record a launch of a game: one more play, and it is now the last one played. The count is
+     * atomic (SQL `play_count = play_count + 1`), so it doesn't depend on the possibly stale
+     * in-memory Game instance.
+     * @param romName
+     */
+    public async recordLaunch(romName: string) {
+        await Game.update(
+            {play_count: Sequelize.literal('play_count + 1'), last_played_at: new Date()},
+            {where: {romName}},
+        );
+    }
+
+    /**
+     * The game launched most recently that is still in the favorites - what the front-end points
+     * at when it starts. Null until a game was played.
+     */
+    public async loadLastPlayedGame() {
+        return await Game.findOne({
+            where: Sequelize.literal('last_played_at IS NOT NULL'),
+            order: [['last_played_at', 'DESC']],
+        });
+    }
+
+    /**
+     * Save the cabinet's vote on a game (see GameVote.ts). A thumbs down also takes the game out
+     * of mame's favorites when `removeFromFavorites` is set (BO, MAUI tab) - the game is then
+     * soft-deleted by the same favorites resync Init.vue runs on every start, and stays
+     * restorable from the BO's "Removed" tab. Returns whether the game left the favorites.
+     */
+    public async applyVote(game: Game, vote: Vote, removeFromFavorites: boolean): Promise<boolean> {
+        await Game.update({vote}, {where: {romName: game.romName}});
+        game.vote = vote;
+        if (vote !== VOTE_DOWN || !removeFromFavorites) {
+            return false;
+        }
+        const favoritesPath = this.mameService.favoritesPath;
+        if (!favoritesPath || removeFavoriteFromDisk(favoritesPath, game.romName) === null) {
+            return false;
+        }
+        await this.saveGamesFromRomNames(this.mameService.getRomListFromFavorites());
+        return true;
     }
 
     /**
