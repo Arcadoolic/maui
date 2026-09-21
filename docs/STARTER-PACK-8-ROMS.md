@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `asteroid`, `astdelux`, `bzone`, `centiped`, `ccastles`, `gauntlet`, `gravitar`, `harddriv`, `irobot`, `klax`, `llander`, `marble`, `missile`, `milliped`, `paperboy`, `pong`, `roadblst`, `stunrun`, `starwars`, `tempest`, `atetris`, `toobin`, `vindictr`, `warlords`
 - **Zips copiés** : 24 (13.5 Mio)
 
@@ -40,7 +40,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-8-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-8-ROMS.md \
     --title "Starter pack 8 — Atari : sélection de ROMs" \
     asteroid astdelux bzone centiped ccastles gauntlet gravitar harddriv irobot klax llander marble missile milliped paperboy pong roadblst stunrun starwars tempest atetris toobin vindictr warlords
 ```

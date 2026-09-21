@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `puckman`, `galaga`, `galaxian`, `digdug`, `digdug2`, `mappy`, `polepos`, `xevious`, `rallyx`, `nrallyx`, `bosco`, `superpac`, `todruaga`, `pacland`, `galaga88`, `dspirit`, `motos`, `rthunder`, `splatter`
 - **Zips copiés** : 24 (5.4 Mio)
 
@@ -40,7 +40,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-4-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-4-ROMS.md \
     --title "Starter pack 4 — Namco : sélection de ROMs" \
     puckman galaga galaxian digdug digdug2 mappy polepos xevious rallyx nrallyx bosco superpac todruaga pacland galaga88 dspirit motos rthunder splatter
 ```

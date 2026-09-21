@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `baddudes`, `btime`, `captaven`, `cobracom`, `hbarrel`, `kchamp`, `karnov`, `midres`, `robocop`, `slyspy`, `sidepckt`, `twocrude`, `vaportra`, `spinmast`
 - **Zips copiés** : 15 (26.1 Mio)
 
@@ -31,7 +31,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-9-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-9-ROMS.md \
     --title "Starter pack 9 — Data East : sélection de ROMs" \
     baddudes btime captaven cobracom hbarrel kchamp karnov midres robocop slyspy sidepckt twocrude vaportra spinmast
 ```

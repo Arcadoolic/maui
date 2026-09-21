@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `mk`, `mk2`, `mk3`, `umk3`, `nbajam`, `nbajamte`, `rampage`, `spyhunt`, `tapper`, `rbtapper`, `defender`, `joust`, `720`, `tron`, `crusnusa`
 - **Zips copiés** : 17 (127.1 Mio)
 
@@ -33,7 +33,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-11-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-11-ROMS.md \
     --title "Starter pack 11 — Midway : sélection de ROMs" \
     mk mk2 mk3 umk3 nbajam nbajamte rampage spyhunt tapper rbtapper defender joust 720 tron crusnusa
 ```

@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `rtype`, `kungfum`, `imgfight`, `xmultipl`, `uccops`, `inthunt`, `gunforce`, `10yard`, `spelunkr`, `rtype2`, `nbbatman`, `hharry`
 - **Zips copiés** : 12 (30.0 Mio)
 
@@ -28,7 +28,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-18-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-18-ROMS.md \
     --title "Starter pack 18 — Irem : sélection de ROMs" \
     rtype kungfum imgfight xmultipl uccops inthunt gunforce 10yard spelunkr rtype2 nbbatman hharry
 ```

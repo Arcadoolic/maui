@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `stargate`, `robotron`, `sinistar`, `bubbles`, `blaster`, `joust2`, `mpatrol`, `splat`, `inferno`, `narc`, `smashtv`, `strkforc`
 - **Zips copiés** : 12 (9.9 Mio)
 
@@ -28,7 +28,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-13-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-13-ROMS.md \
     --title "Starter pack 13 — Williams : sélection de ROMs" \
     stargate robotron sinistar bubbles blaster joust2 mpatrol splat inferno narc smashtv strkforc
 ```

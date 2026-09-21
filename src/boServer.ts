@@ -1647,10 +1647,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .pack-game[hidden], .pack-row[hidden] {
             display: none;
         }
-        .pack-search {
+        .pack-search, .table-search {
             margin: 16px 0 0;
         }
-        .pack-search-count {
+        .pack-search-count, .table-search-count {
             margin: 8px 0 0;
         }
         .pack-game-label {
@@ -3638,6 +3638,19 @@ function renderBiosCell(row: FavoriteRow): string {
     return parts.length ? escapeHtml(parts.join(', ')) : '<em>-</em>';
 }
 
+/**
+ * What the favorites search matches a row against: the three searchable columns - shortname
+ * (romName), name (the full description, including the parenthesized region/revision info that
+ * the table only shows as a tooltip) and Bios / Devices (biosName and deviceRoms, as in
+ * renderBiosCell()). Not-yet-resolved favorites (no cache entry) only have their romName.
+ */
+function getFavoriteSearchText(row: FavoriteRow): string {
+    if (!row.cached) {
+        return row.romName;
+    }
+    return [row.romName, row.fullname, ...(row.biosName ? [row.biosName] : []), ...row.deviceRoms].join(' ');
+}
+
 function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     const flash = `
         ${favoritesInfo.notice ? `<p class="info flash">${escapeHtml(favoritesInfo.notice)}</p>` : ''}
@@ -3655,7 +3668,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     }
 
     const rows = favoritesInfo.rows.map(row => `
-        <tr>
+        <tr data-search="${escapeHtml(getFavoriteSearchText(row))}">
             <td>${escapeHtml(row.romName)}</td>
             <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${renderBiosCell(row)}</td>
@@ -3688,8 +3701,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                     <button type="submit">Update favorites</button>
                 </form>
             </div>
+            <div class="table-search">
+                <input type="search" id="favoritesSearch" placeholder="Search a shortname, name, bios or device…"
+                    autocomplete="off" aria-label="Search the favorites">
+                <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
+            </div>
             <div class="table-wrap">
-                <table class="favorites-table">
+                <table class="favorites-table" id="favoritesTable">
                     <thead>
                         <tr>
                             <th>Shortname</th>
@@ -3702,6 +3720,35 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                     <tbody>${rows}</tbody>
                 </table>
             </div>
+            <script>(function () {
+                // Search: every term must appear (accents and case ignored) in a row's shortname,
+                // name or bios / devices (its data-search, see getFavoriteSearchText()). Rows are
+                // only hidden, so the remove buttons keep working on what is shown.
+                var search = document.getElementById('favoritesSearch');
+                var count = document.getElementById('favoritesSearchCount');
+                var rows = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable tbody tr'));
+                function fold(text) {
+                    return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+                }
+                function applySearch() {
+                    var terms = fold(search.value).split(/\\s+/).filter(Boolean);
+                    var shown = 0;
+                    rows.forEach(function (row) {
+                        var haystack = fold(row.dataset.search || '');
+                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; });
+                        row.hidden = !match;
+                        if (match) { shown++; }
+                    });
+                    count.hidden = terms.length === 0;
+                    count.textContent = shown
+                        ? shown + ' favorite(s) found out of ' + rows.length + '.'
+                        : 'No favorite matches this search.';
+                }
+                search.addEventListener('input', applySearch);
+                search.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') { event.preventDefault(); }
+                });
+            })();</script>
             <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
             roms and artwork stay on disk). The change shows up on the cabinet the next time MAUI
             starts. Do not do it while a MAME game is open: MAME rewrites this file when it

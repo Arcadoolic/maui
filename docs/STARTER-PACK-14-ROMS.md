@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `mooncrst`, `moonqsr`, `mshuttle`, `seicross`, `magmax`, `terracre`, `dangar`, `legion`, `terraf`, `armedf`, `cclimber`, `friskyt`, `wiping`, `dacholer`, `skelagon`, `itaten`, `cop01`, `galivan`, `mightguy`, `ninjemak`, `kozure`, `horekid`, `cclimbr2`, `rjammer`, `dynamski`
 - **Zips copiés** : 25 (5.3 Mio)
 
@@ -41,7 +41,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-14-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-14-ROMS.md \
     --title "Starter pack 14 — Nichibutsu : sélection de ROMs" \
     mooncrst moonqsr mshuttle seicross magmax terracre dangar legion terraf armedf cclimber friskyt wiping dacholer skelagon itaten cop01 galivan mightguy ninjemak kozure horekid cclimbr2 rjammer dynamski
 ```

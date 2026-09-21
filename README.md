@@ -4,8 +4,8 @@
   # Mame Awesome UI
   *A gamepad-friendly arcade cabinet front-end for MAME*
 
-  [![Release](https://img.shields.io/github/actions/workflow/status/afronob/mame-awesome-ui/release.yml?branch=main&style=flat-square&label=release)](https://github.com/afronob/mame-awesome-ui/actions)
-  [![Latest release](https://img.shields.io/github/v/release/afronob/mame-awesome-ui?style=flat-square)](https://github.com/afronob/mame-awesome-ui/releases)
+  [![Release](https://img.shields.io/github/actions/workflow/status/Arcadoolic/maui/release.yml?branch=main&style=flat-square&label=release)](https://github.com/Arcadoolic/maui/actions)
+  [![Latest release](https://img.shields.io/github/v/release/Arcadoolic/maui?style=flat-square)](https://github.com/Arcadoolic/maui/releases)
   [![Node.js](https://img.shields.io/badge/Node.js->=24-3c873a?style=flat-square)](https://nodejs.org)
   [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-informational?style=flat-square)](#platform-support)
 
