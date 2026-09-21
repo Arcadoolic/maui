@@ -1,9 +1,8 @@
-// Type-only contract shared between scripts/build-starting-pack.ts (producer) and
-// src/boServer.ts (consumer). Unlike the rest of this codebase's mame-ini/path-resolution
-// helpers - deliberately duplicated everywhere rather than imported, to avoid pulling
-// @electron/remote into electron-free contexts - this file is pure interfaces, erased at
-// compile time, so importing it carries none of that risk. Sharing it keeps producer and
-// consumer from silently drifting apart on the manifest shape.
+// Type-only contract for the manifest of a starting pack, as read by src/boServer.ts and
+// scripts/import-starting-pack.py. The packs are built by tooling that lives outside this
+// repository and carries its own copy of this file: this one is the reference for what the app
+// accepts, so a change to the manifest shape must be mirrored there (and bump formatVersion
+// when older packs would no longer import).
 
 export interface StartingPackGameEntry {
     romName: string;

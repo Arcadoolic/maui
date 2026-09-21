@@ -68,7 +68,3 @@ build: install
 # Lint and auto-fix files
 lint:
     npm run lint:fix
-
-# Build a starting pack ZIP (favorites + roms + artwork) from the local MAME home
-starting-pack output="./mame-starting-pack.zip": install
-    npm run starting-pack -- --output {{output}}
