@@ -11,9 +11,10 @@ Sources are the "ROMs" folders of a collection laid out like `MAME 0.289 ROMs (m
 `MAME 0.289 ROMs (bios-devices)`: in a merged set a clone has no zip of its own, its ROMs live in
 the parent's zip, which is why the parent is always part of the selection.
 
-Stdlib only. Run on the machine that has both the collection and the `mame` binary:
-    python3 scripts/select-roms.py --source /var/mnt/capsule-emulation/Mame_0289 \\
-        --dest ~/.mame/roms --markdown docs/STARTER-PACK-1-ROMS.md \\
+Stdlib only. Run on the machine that has both the collection and the `mame` binary. The
+collection's location is machine-specific: set MAUI_ROMS_SOURCE in a `.env` file at the repo root
+(copy `.env.example`), or pass --source. MAUI_ROMS_DEST / --dest defaults to ~/.mame/roms.
+    python3 scripts/select-roms.py --markdown docs/STARTER-PACK-1-ROMS.md \\
         dkong dkongjr dkong3 mario popeye punchout spnchout sheriff spacefev radarscp
 Afterwards, `mame -rompath <dest> -verifyroms <name>` checks a set is complete.
 """
@@ -31,6 +32,27 @@ import xml.etree.ElementTree as ET
 def fail(message):
     print(f'[select-roms] {message}', file=sys.stderr)
     sys.exit(1)
+
+
+def load_dotenv():
+    """Loads KEY=VALUE lines from the repo root's `.env` (git-ignored, see `.env.example`) into
+    os.environ, without overriding a variable the shell already set. Blank lines and `#` comments
+    are skipped, a value may be wrapped in single or double quotes, and an empty value is treated
+    as unset."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding='utf-8') as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+                value = value[1:-1]
+            if value:
+                os.environ.setdefault(key.strip(), value)
 
 
 def list_xml(mame, name):
@@ -193,17 +215,26 @@ def write_markdown(path, args, mame_version, requested, rows, missing, unknown):
 
 
 def main():
+    load_dotenv()
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('machines', nargs='+', help='machine names, as in `mame -listfull`')
-    parser.add_argument('--source', required=True,
-                        help='collection root, holding one or more "... ROMs ..." folders')
-    parser.add_argument('--dest', default=os.path.join('~', '.mame', 'roms'))
+    parser.add_argument('--source', default=os.environ.get('MAUI_ROMS_SOURCE'),
+                        help='collection root, holding one or more "... ROMs ..." folders '
+                             '(default: $MAUI_ROMS_SOURCE, e.g. from .env)')
+    parser.add_argument('--dest', default=os.environ.get('MAUI_ROMS_DEST') or os.path.join('~', '.mame', 'roms'),
+                        help='roms directory to copy into (default: $MAUI_ROMS_DEST, else ~/.mame/roms)')
     parser.add_argument('--mame', default='mame', help='mame binary (default: mame from PATH)')
     parser.add_argument('--markdown', help='write the frozen selection to this .md file')
     parser.add_argument('--title', default='Sélection de ROMs du starter pack', help='title of the .md file')
     parser.add_argument('--dry-run', action='store_true', help='resolve and report, copy nothing')
     args = parser.parse_args()
 
+    if not args.source:
+        fail('collection introuvable : renseigner MAUI_ROMS_SOURCE dans .env (voir .env.example) '
+             'ou passer --source.')
+    args.source = os.path.expanduser(args.source)
+    if not os.path.isdir(args.source):
+        fail(f'dossier de collection introuvable : {args.source}')
     args.dest = os.path.expanduser(args.dest)
     if not shutil.which(args.mame):
         fail(f'binaire mame introuvable ("{args.mame}").')

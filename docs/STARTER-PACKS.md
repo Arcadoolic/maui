@@ -40,10 +40,11 @@ distributeurs ou de lots). Les noms de fichiers du dépôt sont ceux des packs d
    `mame` ne doit tourner pendant qu'on le modifie).
 2. Vérifier les noms avec `mame -listfull <nom>`. Une liste collée contient souvent des noms qui ne
    sont pas des shortnames MAME (voir « Noms non résolus » ci-dessous) : les mapper et le dire.
-3. Copier depuis la source réseau, en `--dry-run` d'abord :
+3. Copier depuis la source réseau, en `--dry-run` d'abord. L'emplacement de la collection est propre
+   à chaque machine : le renseigner une fois dans `.env` (`cp .env.example .env`, variable
+   `MAUI_ROMS_SOURCE`, fichier ignoré par git), ou passer `--source`.
    ```bash
-   python3 -B scripts/select-roms.py --source /var/mnt/capsule-emulation/Mame_0289 \
-       --dest ~/.mame/roms --markdown docs/STARTER-PACK-<n>-ROMS.md \
+   python3 -B scripts/select-roms.py --markdown docs/STARTER-PACK-<n>-ROMS.md \
        --title "Starter pack <n> — <thème> : sélection de ROMs" <noms>
    ```
    Le script résout parents, BIOS et devices via `mame -listxml` et ne copie que des zips.
