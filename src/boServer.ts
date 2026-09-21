@@ -1001,15 +1001,25 @@ function escapeHtml(value: string): string {
  */
 function runImportScript(
     res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
-    overall?: {index: number; total: number},
+    overall?: {index: number; total: number}, tabbed = false,
 ): Promise<boolean> {
     const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
     const barId = `import-progress-${++importProgressCounter}`;
     // A pack downloaded whole (--url alone) spends its first half downloading; a local file, or a
     // pack read partially (--url with --only), has no such phase.
     const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
-    res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
-        + PROGRESS_LOG_OPEN);
+    // Tabbed: one panel of the tab card opened by renderImportTabsOpen() instead of a card of its
+    // own; `overall.index` is its tab. Panels start hidden, mauiImportTabs.start() shows it.
+    const tab = tabbed && overall ? overall.index : null;
+    if (tab !== null) {
+        res.write(`<div class="import-panel" data-import-panel="${tab}" hidden><h3>${title}</h3>`
+            + `${renderImportProgressBar(barId, hasDownload, overall)}${PROGRESS_LOG_OPEN}`
+            + `<script>mauiImportTabs.start(${tab})</script>`);
+    } else {
+        res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
+            + PROGRESS_LOG_OPEN);
+    }
+    const closeBlock = tab !== null ? '</div>' : '</section>';
 
     return new Promise(resolve => {
         const child = spawn('python3', [scriptPath, ...scriptArgs], {env: {...env, MAUI_PROGRESS: '1'}});
@@ -1049,7 +1059,7 @@ function runImportScript(
         child.stderr.on('data', stderrSplitter.push);
 
         child.on('error', (error) => {
-            res.write(`</ul><p class="error">${escapeHtml(`Launch failed: ${error.message}`)}</p></section>`);
+            res.write(`</ul><p class="error">${escapeHtml(`Launch failed: ${error.message}`)}</p>${closeBlock}`);
             res.write(renderPageTail());
             res.end();
             resolve(false);
@@ -1059,7 +1069,10 @@ function runImportScript(
             stdoutSplitter.flush();
             stderrSplitter.flush();
             updateBar(`finish(${JSON.stringify(barId)},${code === 0})`);
-            res.write('</ul></section>');
+            res.write(`</ul>${closeBlock}`);
+            if (tab !== null) {
+                res.write(`<script>mauiImportTabs.finish(${tab},${code === 0})</script>`);
+            }
             resolve(true);
         });
     });
@@ -1068,23 +1081,77 @@ function runImportScript(
 let importProgressCounter = 0;
 
 /**
+ * Opens the card that holds a multi-pack import: one tab per pack (all known up front, so the bar
+ * is complete from the start - a pack's tab stays disabled until its import starts) and the
+ * panels runImportScript() then streams into it (`tabbed`). The page follows the pack being
+ * imported until the user picks a tab by hand. The caller closes it with '</div></section>'.
+ */
+function renderImportTabsOpen(packFilenames: string[]): string {
+    // The tab only carries its number (the total is in the "Pack N of M" bar above); the pack's
+    // name is in data-name, shown in that bar (mauiImportProgress) and as the tab's tooltip.
+    const packName = (filename: string): string => escapeHtml(filename.replace(/\.zip$/i, ''));
+    const tabs = packFilenames.map((filename, index) =>
+        `<button type="button" class="import-tab" data-import-tab="${index}" data-name="${packName(filename)}"`
+        + ` title="${packName(filename)}" disabled>${index + 1}</button>`).join('');
+    return `
+        <section class="card">
+            <h2>Import from the repository</h2>
+            <div class="progress-label"><span data-overall-label>Pack 1 of ${packFilenames.length} — ${packName(packFilenames[0])}</span></div>
+            <div class="progress-track progress-track-thin"><div class="progress-fill" data-overall></div></div>
+            <div class="import-tabs" role="tablist">${tabs}</div>
+            <div class="import-panels">
+        <script>
+        window.mauiImportTabs = (function () {
+            var picked = false;
+            function tab(i) { return document.querySelector('[data-import-tab="' + i + '"]'); }
+            function select(i) {
+                Array.prototype.forEach.call(document.querySelectorAll('[data-import-tab]'), function (t) {
+                    t.classList.toggle('active', t.dataset.importTab === String(i));
+                });
+                Array.prototype.forEach.call(document.querySelectorAll('[data-import-panel]'), function (panel) {
+                    panel.hidden = panel.dataset.importPanel !== String(i);
+                    // A hidden log can't scroll: put the newest lines back in view once shown.
+                    Array.prototype.forEach.call(panel.querySelectorAll('.progress-log'), function (log) {
+                        log.scrollTop = log.scrollHeight;
+                    });
+                });
+            }
+            document.addEventListener('click', function (event) {
+                var target = event.target.closest ? event.target.closest('[data-import-tab]') : null;
+                if (!target || target.disabled) { return; }
+                picked = true;
+                select(target.dataset.importTab);
+            });
+            return {
+                start: function (i) {
+                    tab(i).disabled = false;
+                    tab(i).classList.add('running');
+                    if (!picked) { select(i); }
+                },
+                finish: function (i, ok) {
+                    tab(i).classList.remove('running');
+                    tab(i).classList.add(ok ? 'done' : 'failed');
+                }
+            };
+        })();
+        </script>
+    `;
+}
+
+/**
  * Progress bar(s) for one import run, driven by the `<script>mauiImportProgress.update(...)`
  * lines runImportScript() streams as the script reports its `@@PROGRESS` lines. Bar 1 is the
- * current pack (download, then games imported); a second, thinner one shows the whole batch when
- * several packs are imported in a row. The helper is (re)defined with each run: it is
+ * current pack (download, then games imported); the thinner "Pack N of M" bar of the whole batch
+ * lives above the tabs (see renderImportTabsOpen()) and is the page's single [data-overall] element,
+ * which this helper drives. The helper is (re)defined with each run: it is
  * idempotent, and a streamed page has no other single place to put it.
  */
 function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {index: number; total: number}): string {
-    const overallBar = overall && overall.total > 1 ? `
-        <div class="progress-label"><span>Pack ${overall.index + 1} of ${overall.total}</span></div>
-        <div class="progress-track progress-track-thin"><div class="progress-fill" data-overall></div></div>
-    ` : '';
     return `
         <div class="import-progress" id="${id}" data-download="${hasDownload ? '1' : '0'}"
             data-index="${overall ? overall.index : 0}" data-total="${overall ? overall.total : 1}">
             <div class="progress-label"><span data-label>Starting…</span><span data-percent></span></div>
             <div class="progress-track"><div class="progress-fill progress-indeterminate" data-fill></div></div>
-            ${overallBar}
         </div>
         <script>
         window.mauiImportProgress = window.mauiImportProgress || (function () {
@@ -1101,8 +1168,14 @@ function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {in
                 fill.style.width = known ? (fraction * 100).toFixed(1) + '%' : '';
                 root.querySelector('[data-label]').textContent = label;
                 root.querySelector('[data-percent]').textContent = known ? Math.round(fraction * 100) + '%' : '';
-                var overall = root.querySelector('[data-overall]');
+                var overall = document.querySelector('[data-overall]');
                 if (overall && overallFraction !== null) { overall.style.width = (overallFraction * 100).toFixed(1) + '%'; }
+                var overallLabel = document.querySelector('[data-overall-label]');
+                if (overallLabel) {
+                    var packTab = document.querySelector('[data-import-tab="' + root.dataset.index + '"]');
+                    overallLabel.textContent = 'Pack ' + (Number(root.dataset.index) + 1) + ' of ' + root.dataset.total
+                        + (packTab ? ' \u2014 ' + packTab.dataset.name : '');
+                }
             }
             return {
                 update: function (id, phase, done, total) {
@@ -1128,7 +1201,7 @@ function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {in
                     fill.classList.add(ok ? 'progress-done' : 'progress-failed');
                     root.querySelector('[data-label]').textContent = ok ? 'Done' : 'Finished with errors — see the log below';
                     root.querySelector('[data-percent]').textContent = '';
-                    var overall = root.querySelector('[data-overall]');
+                    var overall = document.querySelector('[data-overall]');
                     var index = Number(root.dataset.index), count = Number(root.dataset.total);
                     if (overall) { overall.style.width = ((index + 1) / count * 100).toFixed(1) + '%'; }
                 }
@@ -1856,6 +1929,39 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .tabs.compact a.active {
             opacity: 1;
+        }
+        /* Multi-pack import (see renderImportTabsOpen()): one tab per pack, the pack's own
+           progress in the panel below. Buttons, unlike the .tabs links, so the generic white
+           button style is reset here. */
+        .import-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 4px 0 16px;
+            border-bottom: 1px solid #333333;
+        }
+        .import-tab {
+            padding: 6px 12px;
+            color: #aaaaaa;
+            background-color: transparent;
+            border-radius: 0;
+            border-bottom: 2px solid transparent;
+            font-size: 0.85em;
+        }
+        .import-tab:hover:not(:disabled) {
+            color: #ffffff;
+            background-color: transparent;
+        }
+        .import-tab.active {
+            color: #ffffff;
+            border-bottom-color: #8ab4f8;
+        }
+        .import-tab.running::before { content: '\\25CF '; color: #8ab4f8; }
+        .import-tab.done::before { content: '\\2713 '; color: #6bff8a; }
+        .import-tab.failed::before { content: '\\2717 '; color: #ff6b6b; }
+        .import-panel h3 {
+            margin: 0 0 8px;
+            font-size: 1em;
         }
         .subtabs {
             display: flex;
@@ -5734,6 +5840,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Credentials go through env, never argv, so they don't leak via `ps`/
         // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
         // trust level as ssDevPassword).
+        // Several packs: one tab per pack instead of one card each (17 packs made a very long page).
+        const tabbed = selection.size > 1;
+        if (tabbed) {
+            res.write(renderImportTabsOpen([...selection.keys()]));
+        }
         for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
             const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
             // --only: just these games are read from the pack (HTTP Range requests, no full download).
@@ -5743,11 +5854,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(','), '-y'],
                 {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
                 {index, total: selection.size},
+                tabbed,
             );
             // false = launch failure, runImportScript already closed the response.
             if (!started) {
                 return;
             }
+        }
+        if (tabbed) {
+            res.write('</div></section>');
         }
 
         // The import just rewrote favorites.ini: resolve the new games' names/BIOS now instead of
