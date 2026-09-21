@@ -82,11 +82,6 @@ just lint
 npm test
 ```
 
-**Build a starting pack** (favorites + ROMs + artwork ZIP from the local MAME home):
-```bash
-just starting-pack [output=./mame-starting-pack.zip]
-```
-
 **Generate a database migration:**
 ```bash
 npx sequelize-cli migration:generate --name=<name>

@@ -49,7 +49,6 @@ just serve    # npm install, then electron:serve (dev, hot-reload)
 just build    # npm install, then electron:build (packaged app)
 just lint     # npm run lint:fix (eslint --fix)
 just install  # npm install only
-just starting-pack  # build a starting pack ZIP (favorites + roms + artwork) from the local MAME home
 ```
 
 Only ever run **one** `serve`/`build` at a time — both trigger `npm install`, and concurrent installs race on rebuilding the native `sqlite3` module (corrupts the `node-gyp`/`make` build directory).
@@ -61,7 +60,6 @@ Other useful commands (no `just` recipe):
 npm test                                              # run the Vitest characterization tests
 npx sequelize-cli migration:generate --name=<name>   # new file in migrations/
 electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3 native binding
-just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+artwork ZIP from local MAME home
 ```
 
 ## Architecture

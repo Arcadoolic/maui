@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Import a MAUI starting pack ZIP (built by scripts/build-starting-pack.ts).
+"""Import a MAUI starting pack ZIP (built by the starting pack tooling, which lives outside this
+repository).
 
 The single implementation for starting-pack import: both of src/boServer.ts's BO routes
 (`/import`, a manual upload, and `/import/from-url`, browsing repo.maui.afronob.com) spawn this
@@ -19,7 +20,7 @@ Usage (on the machine hosting the MAME home, e.g. the Pi, after scp'ing the pack
     python3 import-starting-pack.py /home/puckman/mega-starting-pack-20260916.zip
     python3 import-starting-pack.py --yes /home/puckman/mega-starting-pack-20260916.zip
 
-Or straight from repo.maui.afronob.com (see docs/STARTER-PACK-REPO.md), no local file needed:
+Or straight from repo.maui.afronob.com, no local file needed:
     MAUI_REPO_USER=admin MAUI_REPO_PASSWORD=... \\
         python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip -y
 

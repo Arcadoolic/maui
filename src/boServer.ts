@@ -80,9 +80,8 @@ interface ScreenScraperValues {
     bezelAspect: '4:3' | '16:9';
 }
 
-// One entry per pack on repo.maui.afronob.com's index.json (see
-// scripts/generate-repo-manifests.py) - only the fields the picker actually displays are typed
-// here, not the full manifest.
+// One entry per pack on repo.maui.afronob.com's index.json (generated on the repository side) -
+// only the fields the picker actually displays are typed here, not the full manifest.
 interface RepoPack {
     filename: string;
     size: number;
@@ -4191,7 +4190,7 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
 }
 
 /**
- * `<pack>.manifest.json` next to a pack's zip on the repository (see docs/STARTER-PACK-REPO.md):
+ * `<pack>.manifest.json` next to a pack's zip on the repository:
  * the list of its games, which is all that is needed to tell what is already installed without
  * downloading the pack. null on any failure (missing file, timeout, invalid JSON): the pack is
  * then simply listed without that comparison instead of failing the whole browse.
@@ -4555,7 +4554,7 @@ function renderRepoImportCard(
         <section class="card">
             <h2>Starting pack repository</h2>
             <p class="info">Browses and imports a starting pack directly from a password-protected
-            HTTP repository (see docs/STARTER-PACK-REPO.md), without going through the upload
+            HTTP repository, without going through the upload
             (Import tab) - useful for a pack too large for a browser form.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}

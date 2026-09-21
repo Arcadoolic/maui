@@ -14,7 +14,6 @@
         "test:watch": "vitest",
         "electron:build": "electron-vite build && electron-builder --config electron-builder.yml",
         "electron:serve": "electron-vite dev --watch",
-        "starting-pack": "ts-node -P scripts/tsconfig.json scripts/build-starting-pack.ts",
         "postinstall": "electron-builder install-app-deps",
         "postuninstall": "electron-builder install-app-deps",
         "rebuild": "electron-rebuild -f -w sqlite3",
