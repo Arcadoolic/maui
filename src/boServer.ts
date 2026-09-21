@@ -29,6 +29,7 @@ import {
 } from '@/class/PackOwnership';
 import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
+import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
 import {getCategoryIconKey, mergeTtlCategories} from '@/class/CarouselCategories';
 import {HISCORES_ONLY_CATEGORY, isMergedCategory} from '@/types/CarouselCategory';
@@ -3201,7 +3202,7 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
         }
 
         writeLine(
-            'Update installed. Restart the Pi (or "sudo systemctl restart getty@tty1") '
+            'Update installed. Use "Restart the application" below (or restart the Pi) '
             + 'to apply the new version. The previous version stays available in '
             + '~/squashfs-root.old while the new one is being validated.',
         );
@@ -3213,6 +3214,29 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
     }
 
     res.write('</ul></section>');
+}
+
+/**
+ * `<script>` for a page shown while the process serving it is about to go down and come back
+ * (a reset that closes the app, a kiosk session restart): it polls this same BO server until it
+ * answers again, then goes to `backHref` - rather than relying on the user to come back on their
+ * own once it is up.
+ */
+function renderRestartWaitScript(backHref: string): string {
+    // Only trusts a successful response *after* one has already failed: right after the page
+    // loads the old process may still be up for a moment (the exit/restart is delayed so this
+    // response can finish flushing), and an immediate success there would just bounce straight
+    // back with nothing actually restarted yet.
+    return `<script>${
+        'var backHref = ' + JSON.stringify(backHref) + ';'
+        + 'var sawDown = false;'
+        + 'var poll = function () {'
+        + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
+        + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
+        + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
+        + '};'
+        + 'setTimeout(poll, 1000);'
+    }</script>`;
 }
 
 function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, confirmLabel: string): string {
@@ -3252,6 +3276,14 @@ function renderUpdateCard(
         <section class="card">
             <h2>Update</h2>
             <p class="info">Currently installed version: <strong>${escapeHtml(updateInfo.currentVersion)}</strong></p>
+            ${updateInfo.capable ? `
+                <form method="post" action="/maui/update/restart"
+                    onsubmit="return confirm('Restart the application now? The screen goes blank for a moment, then it reopens on the version installed in ~/squashfs-root.')">
+                    <button type="submit">Restart the application</button>
+                </form>
+                <p class="info">Relaunches the cabinet session (needed after an installation to run the
+                new version). Any game in progress is closed.</p>
+            ` : ''}
             ${!updateInfo.capable ? `
                 <p class="error">Automatic installation is unavailable on this machine (expected:
                 Linux, not in development, AppImage extracted in ~/squashfs-root - see
@@ -5858,6 +5890,43 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    // Same access as the installation just above (any BO account): restarting only relaunches the
+    // app on what ~/squashfs-root already holds, it changes nothing on disk. Refused unless this is
+    // the dedicated Pi layout (isSelfUpdateCapable()) and sudo allows that one command without a
+    // password (docs/RASPBERRY-PI-DEPLOY.md §5.7) - checked up front so a missing rule shows an
+    // explanation instead of a page waiting for a restart that never comes.
+    app.post('/maui/update/restart', async (req, res) => {
+        const config = new Config();
+        config.load();
+
+        if (!isSelfUpdateCapable()) {
+            await sendMauiPage(req, res, config, {updateInfoError: 'Restart unavailable on this machine.'});
+            return;
+        }
+        if (!await canRestartKiosk()) {
+            await sendMauiPage(req, res, config, {
+                updateInfoError: 'The application cannot be restarted from here: the user is not allowed to '
+                    + 'run the restart through sudo without a password (see docs/RASPBERRY-PI-DEPLOY.md §5.7).',
+            });
+            return;
+        }
+
+        res.send(renderPage(
+            '<section class="card"><h2>Restarting the application</h2>'
+            + '<p class="info">The screen goes blank for a moment, then the application reopens on the '
+            + 'version installed in <code>~/squashfs-root</code>.</p>'
+            + '<p id="restart-wait-message" class="info">Waiting for the restart… this page will '
+            + 'automatically take you back to the MAUI tab as soon as the server is available again.</p>'
+            + renderRestartWaitScript('/maui')
+            + '</section>',
+            'maui',
+        ));
+
+        // Delayed so this response finishes flushing before the session - this process included -
+        // goes down.
+        setTimeout(restartKiosk, 500);
+    });
+
     app.post('/screenscraper/save', (req, res) => {
         const values: ScreenScraperValues = {
             ssDevId: (req.body.ssDevId || '').trim(),
@@ -6425,24 +6494,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 + '<p id="restart-wait-message" class="info">Waiting for the restart… '
                 + 'this page will automatically take you back to the home page as soon as the '
                 + 'server is available again.</p>'
-                + `<script>${
-                    // Polls the BO server itself (the same process this reset just told to
-                    // exit - see onReset below) until it answers again, then redirects -
-                    // rather than relying on the user to remember to come back once they've
-                    // relaunched it manually. Only trusts a successful response *after* one
-                    // has already failed: right after this page loads the old process may
-                    // still be up for a moment (see the 300ms exit delay below), and an
-                    // immediate success there would just bounce straight back with nothing
-                    // actually restarted yet.
-                    'var backHref = ' + JSON.stringify(backHref) + ';'
-                    + 'var sawDown = false;'
-                    + 'var poll = function () {'
-                    + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
-                    + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
-                    + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
-                    + '};'
-                    + 'setTimeout(poll, 1000);'
-                }</script>`
+                + renderRestartWaitScript(backHref)
             + '</section>',
             zone,
         ));
