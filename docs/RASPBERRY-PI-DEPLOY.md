@@ -242,7 +242,7 @@ cat > /tmp/puckman-restart-kiosk << 'EOF'
 # par exemple après une mise à jour de MAUI. Rien d'autre : commandes exactes, pas de joker.
 puckman ALL=(root) NOPASSWD: /usr/bin/systemctl restart getty@tty1, /usr/bin/systemctl reset-failed getty@tty1
 EOF
-visudo -cf /tmp/puckman-restart-kiosk
+/usr/sbin/visudo -cf /tmp/puckman-restart-kiosk   # /usr/sbin n'est pas dans le PATH d'un utilisateur normal
 
 # 2. L'installer avec les bons propriétaire et droits (sudo refuse un fichier lisible par d'autres)
 sudo install -o root -g root -m 0440 /tmp/puckman-restart-kiosk /etc/sudoers.d/puckman-restart-kiosk
@@ -253,12 +253,18 @@ Vérifier (depuis SSH ou `tty2`, voir ci-dessous) :
 
 ```bash
 command -v systemctl                      # doit afficher /usr/bin/systemctl, le chemin de la règle
+sudo -k                                   # oublie le mot de passe mis en cache par un sudo précédent
 sudo -n -l | grep getty                   # liste les deux commandes autorisées
+sudo -n systemctl reset-failed getty@tty1 # sans effet ici, mais prouve l'absence de mot de passe
 sudo -n systemctl restart getty@tty1      # relance la session, sans mot de passe
 ```
 
 `-n` fait échouer `sudo` au lieu de demander un mot de passe : si la règle est
-absente ou invalide, la dernière commande répond `sudo: a password is required`.
+absente ou invalide, ces deux dernières commandes répondent `sudo: a password
+is required`. `sudo -k` évite un faux positif : un `sudo` récent, avec mot de
+passe, reste valable quelques minutes et ferait tout passer. Ne pas se fier à
+`sudo -n -l <commande>` : dès qu'une règle `NOPASSWD` existe, il répond « permis »
+pour toute commande que `sudo` autorise, mot de passe ou non.
 
 - `restart getty@tty1` ferme la session de `tty1`, donc l'app et X avec elle.
   Le lancer **depuis SSH ou `tty2`**, pas depuis un terminal de la session
