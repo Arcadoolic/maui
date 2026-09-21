@@ -1,5 +1,5 @@
 import {existsSync, mkdirSync} from 'fs';
-import {join, resolve as resolvePath} from 'path';
+import {join} from 'path';
 import * as os from 'os';
 import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
@@ -9,9 +9,8 @@ import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
-import {Umzug, SequelizeStorage} from 'umzug';
 import * as Log from 'electron-log';
-import {isPackaged} from '@/isPackaged';
+import {runMigrations} from '@/class/Migrations';
 
 export default class Database {
     protected databasePath!: string;
@@ -77,50 +76,6 @@ export default class Database {
      * Perform all migrations and seeds
      */
     public async update() {
-        // In production, migrations ship inside app.asar (electron-builder's fixed archive name),
-        // not as an extraResources copy: they need to sit alongside node_modules so a migration's
-        // own `require('bcryptjs')` (etc.) resolves - Node walks up from the migration file's own
-        // directory to find node_modules, and a plain extraResources copy outside the asar has no
-        // such ancestor.
-        const migrationsPath = isPackaged()
-            ? join(process.resourcesPath!, 'app.asar', 'migrations')
-            : resolvePath('./migrations');
-        const queryInterface = this.sequelize.getQueryInterface();
-
-        const umzug = new Umzug({
-            // Same "SequelizeMeta" table and "name" column umzug 2 used, recording the full file
-            // name (with its .js extension): databases already migrated by the previous version
-            // keep their history instead of replaying every migration.
-            storage: new SequelizeStorage({sequelize: this.sequelize}),
-            context: queryInterface,
-            migrations: {
-                glob: ['*.js', {cwd: migrationsPath}],
-                // Migrations are plain `up(queryInterface, Sequelize)` modules written for
-                // umzug 2's positional parameters: keep calling them that way.
-                resolve: ({name, path}) => {
-                    const migration = require(path!);
-                    const oldStyleDone = () => {
-                        throw new Error('Migration tried to use old style "done" callback.');
-                    };
-                    return {
-                        name,
-                        up: async () => migration.up(queryInterface, Sequelize, oldStyleDone),
-                        down: async () => migration.down?.(queryInterface, Sequelize, oldStyleDone),
-                    };
-                },
-            },
-            logger: undefined,
-        });
-
-        try {
-            const migrations = await umzug.up();
-            for (const migration of migrations) {
-                Log.log('[Database] Migration "' + migration.name + '\' success.');
-            }
-        } catch (error) {
-            Log.error('[Migration] Error on migration.');
-            Log.error(error);
-            throw error;
-        }
+        await runMigrations(this.sequelize, Log);
     }
 }

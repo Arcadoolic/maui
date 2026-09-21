@@ -78,14 +78,22 @@ export default class MameService {
     }
 
     /**
-     * Read, parse and extract romNames from mame favorites.ini file
+     * Path of mame's favorites.ini, or null when it doesn't exist yet (fresh MAME install, no
+     * favorite added).
      */
-    public getRomListFromFavorites() {
-        const favoritePath = Helpers.getFirstExistingDirectory(
+    public get favoritesPath(): string | null {
+        return Helpers.getFirstExistingDirectory(
             this.uiIni.ui_path,
             this.iniPath,
             'favorites.ini',
-        );
+        ) || null;
+    }
+
+    /**
+     * Read, parse and extract romNames from mame favorites.ini file
+     */
+    public getRomListFromFavorites() {
+        const favoritePath = this.favoritesPath;
         if (!favoritePath) {
             // No favorites.ini yet (e.g. fresh MAME install, no favorite added) - treat as empty list
             return [];

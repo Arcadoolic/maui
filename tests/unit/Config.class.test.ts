@@ -256,7 +256,31 @@ describe('Config.save', () => {
             'ssSoftName',
             'ssUserId',
             'ssUserPassword',
+            'thumbsDownRemovesFavorite',
+            'voteEnabled',
         ]);
+    });
+
+    it('turns the vote prompt and the thumbs down removal on by default, and reads them back', () => {
+        const config = new Config();
+        config.mamePath = '/opt/mame';
+        expect(config.voteEnabled).toBe(true);
+        expect(config.thumbsDownRemovesFavorite).toBe(true);
+
+        config.voteEnabled = false;
+        config.thumbsDownRemovesFavorite = false;
+        config.save();
+        const read = new Config();
+        read.load();
+        expect(read.voteEnabled).toBe(false);
+        expect(read.thumbsDownRemovesFavorite).toBe(false);
+
+        // A config file written before these settings existed keeps the defaults.
+        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
+        const legacy = new Config();
+        legacy.load();
+        expect(legacy.voteEnabled).toBe(true);
+        expect(legacy.thumbsDownRemovesFavorite).toBe(true);
     });
 });
 

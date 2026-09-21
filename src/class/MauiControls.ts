@@ -65,6 +65,16 @@ export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
             {key: MAUI_KEYS.space, role: 'Cancel'},
         ],
     },
+    {
+        id: 'vote',
+        title: 'Vote after a game (thumbs up / neutral / thumbs down)',
+        controls: [
+            {key: MAUI_KEYS.left, role: 'Move towards thumbs down'},
+            {key: MAUI_KEYS.right, role: 'Move towards thumbs up'},
+            {key: MAUI_KEYS.enter, role: 'Confirm the selected vote (neutral by default)'},
+            {key: MAUI_KEYS.space, role: 'Decide later (stays neutral, asked again next time)'},
+        ],
+    },
 ];
 
 const KEY_LABELS: Record<string, string> = {
