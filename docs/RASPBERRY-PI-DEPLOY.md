@@ -226,6 +226,49 @@ sudo systemctl enable --now getty@tty2
 `Ctrl+Alt+F2` donne alors un vrai prompt de connexion, indépendant de l'état
 de X/matchbox/l'app sur `tty1`.
 
+### 5.7 Relancer l'app sans mot de passe (sudoers)
+
+Après une mise à jour (§7), reprendre sur la nouvelle version passe par
+`sudo systemctl restart getty@tty1` : `agetty` relance la session, `startx` et
+l'app repartent sur le nouveau `~/squashfs-root`. Pour que `puckman` puisse le
+faire sans saisir de mot de passe, on lui ouvre **uniquement** ces deux
+commandes, en chemins exacts et sans joker :
+
+```bash
+# 1. Écrire la règle dans un fichier temporaire et la faire valider par visudo
+#    (une erreur de syntaxe dans /etc/sudoers.d peut bloquer sudo pour tout le monde)
+cat > /tmp/puckman-restart-kiosk << 'EOF'
+# Permet à l'utilisateur de la borne de relancer sa session graphique (autologin sur tty1),
+# par exemple après une mise à jour de MAUI. Rien d'autre : commandes exactes, pas de joker.
+puckman ALL=(root) NOPASSWD: /usr/bin/systemctl restart getty@tty1, /usr/bin/systemctl reset-failed getty@tty1
+EOF
+visudo -cf /tmp/puckman-restart-kiosk
+
+# 2. L'installer avec les bons propriétaire et droits (sudo refuse un fichier lisible par d'autres)
+sudo install -o root -g root -m 0440 /tmp/puckman-restart-kiosk /etc/sudoers.d/puckman-restart-kiosk
+rm /tmp/puckman-restart-kiosk
+```
+
+Vérifier (depuis SSH ou `tty2`, voir ci-dessous) :
+
+```bash
+command -v systemctl                      # doit afficher /usr/bin/systemctl, le chemin de la règle
+sudo -n -l | grep getty                   # liste les deux commandes autorisées
+sudo -n systemctl restart getty@tty1      # relance la session, sans mot de passe
+```
+
+`-n` fait échouer `sudo` au lieu de demander un mot de passe : si la règle est
+absente ou invalide, la dernière commande répond `sudo: a password is required`.
+
+- `restart getty@tty1` ferme la session de `tty1`, donc l'app et X avec elle.
+  Le lancer **depuis SSH ou `tty2`**, pas depuis un terminal de la session
+  kiosk, qui serait coupé au milieu de la commande.
+- `reset-failed getty@tty1` sert au piège du §5.5 (`start-limit-hit`) : il
+  remet le compteur d'échecs à zéro avant de relancer.
+- Le nom du fichier ne doit contenir ni `.` ni `~` (sudo ignore ces fichiers).
+- Le BO ne déclenche pas ce redémarrage lui-même pour l'instant (§7.1) : la
+  règle rend seulement la commande possible sans mot de passe.
+
 ## 6. Audio (sortie HDMI)
 
 Le Pi 4 expose deux cartes ALSA HDMI (`vc4hdmi0`/`vc4hdmi1`, une par port
@@ -379,7 +422,8 @@ développement (prereleases GitHub publiées automatiquement à chaque push sur
 aux tests). Comme la méthode manuelle ci-dessous, le BO ne redémarre pas lui-même la
 session kiosk : une fois l'installation terminée, il faut relancer
 `sudo systemctl restart getty@tty1` (ou redémarrer le Pi) pour reprendre
-sur la nouvelle version.
+sur la nouvelle version. Sans mot de passe pour `puckman` une fois la règle
+sudoers du §5.7 en place.
 
 ### 7.2 En repli, en SSH direct (BO inaccessible, pas de réseau)
 
@@ -393,6 +437,7 @@ rm -rf ~/squashfs-root
 cd ~ && ./mame-awesome-ui-X.Y.Z-arm64.AppImage --appimage-extract
 
 # Recharger la session graphique pour repartir sur le nouveau squashfs-root
+# (sans mot de passe si la règle sudoers du §5.7 est installée)
 sudo systemctl restart getty@tty1
 ```
 
