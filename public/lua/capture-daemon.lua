@@ -1,7 +1,8 @@
 -- Bundled with mame-awesome-ui (see boServer.ts's startMameConfigSession()/captureOnePress()).
 -- Launched as a real, visible MAME window (not headless) that an admin explicitly starts and
--- stops from the BO's "Configuration globale des entrées" card, and keeps focused while pressing
--- buttons - like most SDL apps, MAME only receives joystick input while it has OS focus. Runs for
+-- stops from the BO's remap cards. It is launched with -background_input (see boServer.ts), since
+-- MAME otherwise ignores joystick input while its window isn't focused - which it never is when
+-- the BO runs in a browser on the same machine. Runs for
 -- as long as the admin leaves it open, serving any number of captures without relaunching MAME
 -- (and, just as importantly, without device indices like JOYCODE_1 vs JOYCODE_2 shifting between
 -- captures - those are assigned fresh at every MAME launch, so several short-lived one-shot

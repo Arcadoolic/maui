@@ -2780,6 +2780,11 @@ function startMameConfigSession(
             '-skip_gameinfo',
             '-autoboot_delay', '0',
             '-autoboot_script', scriptPath,
+            // Without it MAME ignores the gamepad while its window isn't the focused one - which is
+            // always the case when the BO is driven from a browser on the very same machine (the
+            // click on "Capture a press" gives the focus to the browser). Checked with a virtual
+            // uinput pad against 0.289: no press seen unfocused without it, captured with it.
+            '-background_input',
             '-inipath', iniPath,
             '-homepath', iniPath,
         ],
@@ -2810,9 +2815,9 @@ function stopMameConfigSession(): void {
 /**
  * Arms the running config session for one press and blocks - poll/sleep, same spirit as the
  * execFileSync-based probes elsewhere in this file, just spread across a loop instead of one
- * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the admin needs time
- * to click back into MAME's window and press the right button - see capture-daemon.lua's comment
- * on focus). Returns the exact token MAME resolved the press to (e.g. "JOYCODE_1_BUTTON5"), null
+ * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the admin may need
+ * to walk over to the cabinet's pad; the session runs with -background_input, see
+ * startMameConfigSession(), so MAME doesn't need the focus). Returns the exact token MAME resolved the press to (e.g. "JOYCODE_1_BUTTON5"), null
  * if no session is running or nothing was captured in time.
  */
 function captureOnePress(): string | null {
@@ -2999,10 +3004,9 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             Launch MAME below (a real window, not in the background) and leave it open
             for the whole configuration - all captures then share the same startup, so the
             same gamepad indexes from start to finish.
-            <strong>2.</strong> Click "Capture a press" for the wanted command, then
-            <strong>give the MAME window focus</strong> (click inside it) and press the
-            button within 30 seconds - MAME only receives gamepad input while it is in the
-            foreground. <strong>3.</strong> Close MAME when done. The result is written
+            <strong>2.</strong> Click "Capture a press" for the wanted command, then press the
+            button on the gamepad within 30 seconds (MAME picks it up even when its window is
+            not the one in front). <strong>3.</strong> Close MAME when done. The result is written
             directly to <code>default.cfg</code> (valid for all games, unless a specific game
             has its own override). <strong>Currently</strong> reflects what is really saved
             in the file, not just the last capture.</p>
@@ -3173,9 +3177,9 @@ function renderGameRemapCard(
                     <em>global</em> as long as you haven't changed it.</li>
                     <li>Click <strong>Capture a press</strong> on the command to change: the page then
                     waits up to 30 seconds.</li>
-                    <li><strong>Click inside the MAME window</strong> (it only receives the gamepad
-                    while it is in the foreground), then <strong>press the button</strong> (or push the
-                    direction) wanted on the gamepad. The result shows here and is saved at once.</li>
+                    <li><strong>Press the button</strong> (or push the direction) wanted on the gamepad -
+                    MAME picks it up even when its window is not the one in front. The result shows
+                    here and is saved at once.</li>
                     <li><strong>Reset</strong> gives a command back its global binding. When you are
                     done, use <strong>Close MAME</strong> (not the window's own close button, which
                     would discard the changes).</li>
@@ -7059,7 +7063,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             const remapState: RemapState = token
                 ? {portType, capturedToken: token}
                 : {portType, error: 'No press detected within the allotted time (30s) - try again ' +
-                    '(the MAME window must have focus).'};
+                    '(is the gamepad connected, and MAME still open?).'};
             if (token) {
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
                 setDefaultCfgUiInput(cfgPath, portType, token);
@@ -7191,7 +7195,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             const gameRemapState: GameRemapState = token
                 ? {romName, fieldId, capturedToken: token}
                 : {romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
-                    '(the MAME window must have focus).'};
+                    '(is the gamepad connected, and MAME still open?).'};
             if (token) {
                 setGameCfgOverride(cfgPath, romName, field, token);
                 const released = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token);
