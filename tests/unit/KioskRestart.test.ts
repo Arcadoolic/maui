@@ -2,7 +2,7 @@ import {describe, it, expect} from 'vitest';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 
 describe('canRestartKiosk', () => {
-    it('asks sudo, without prompting, about the exact command of the documented sudoers rule', async () => {
+    it('runs the rule\'s harmless reset-failed through sudo -n, which cannot prompt', async () => {
         let call: {file: string; args: string[]} | undefined;
         const allowed = await canRestartKiosk((file, args, _options, callback) => {
             call = {file, args};
@@ -12,7 +12,7 @@ describe('canRestartKiosk', () => {
         expect(allowed).toBe(true);
         expect(call).toEqual({
             file: 'sudo',
-            args: ['-n', '-l', '/usr/bin/systemctl', 'restart', 'getty@tty1'],
+            args: ['-n', '/usr/bin/systemctl', 'reset-failed', 'getty@tty1'],
         });
     });
 

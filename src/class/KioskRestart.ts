@@ -5,9 +5,12 @@ import {execFile, spawn} from 'child_process';
 // on whatever ~/squashfs-root holds, e.g. right after an update.
 const KIOSK_SERVICE = 'getty@tty1';
 
-// Absolute path, and exactly the command the sudoers rule of §5.7 allows: sudo matches the command
+// Absolute path, and exactly the commands the sudoers rule of §5.7 allows: sudo matches the command
 // and its arguments as written, so any change here has to be mirrored in that rule.
-const RESTART_COMMAND = ['/usr/bin/systemctl', 'restart', KIOSK_SERVICE];
+const SYSTEMCTL = '/usr/bin/systemctl';
+const RESTART_COMMAND = [SYSTEMCTL, 'restart', KIOSK_SERVICE];
+// The rule's other command, used as a harmless probe: on a healthy unit it does nothing.
+const PROBE_COMMAND = [SYSTEMCTL, 'reset-failed', KIOSK_SERVICE];
 
 type ExecFile = (
     file: string, args: string[], options: {timeout: number}, callback: (error: Error | null) => void,
@@ -17,14 +20,15 @@ type Spawn = (
 ) => {unref(): void};
 
 /**
- * Whether the current user may restart the kiosk session without a password. `sudo -n -l <command>`
- * exits 0 only when the sudoers policy permits exactly that command without asking for anything
- * (-n makes it fail instead of prompting), and runs nothing: a missing rule, a rule needing a
- * password or no sudo at all all come out as false.
+ * Whether the current user may restart the kiosk session without a password: runs the rule's
+ * harmless `reset-failed` for real through `sudo -n` (-n makes it fail instead of prompting). A
+ * missing rule, one that needs a password, or no sudo at all come out as false. Not
+ * `sudo -n -l <command>`: once any NOPASSWD rule exists, that reports "allowed" for every command
+ * sudo permits at all, password or not.
  */
 export function canRestartKiosk(exec: ExecFile = execFile as ExecFile): Promise<boolean> {
     return new Promise(resolve => {
-        exec('sudo', ['-n', '-l', ...RESTART_COMMAND], {timeout: 5000}, error => resolve(!error));
+        exec('sudo', ['-n', ...PROBE_COMMAND], {timeout: 5000}, error => resolve(!error));
     });
 }
 

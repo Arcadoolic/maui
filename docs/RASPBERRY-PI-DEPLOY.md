@@ -274,8 +274,8 @@ pour toute commande que `sudo` autorise, mot de passe ou non.
 - Le nom du fichier ne doit contenir ni `.` ni `~` (sudo ignore ces fichiers).
 - Le bouton **Restart the application** du BO (onglet MAUI > Update, §7.1)
   lance cette même commande : sans la règle, il affiche une erreur au lieu de
-  relancer. Il vérifie la règle avant d'agir (`sudo -n -l`), donc il ne coupe
-  rien si elle manque. Si tu changes la commande ici, il faut aussi changer
+  relancer. Il vérifie la règle avant d'agir (en lançant `reset-failed`, sans effet
+  sur une unité saine), donc il ne coupe rien si elle manque. Si tu changes la commande ici, il faut aussi changer
   `src/class/KioskRestart.ts`.
 
 ## 6. Audio (sortie HDMI)
