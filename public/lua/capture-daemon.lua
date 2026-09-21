@@ -98,6 +98,47 @@ if not dump_ok then
     io.stderr:write('[capture-daemon] ui-seqs dump error: ' .. tostring(dump_err) .. '\n')
 end
 
+-- Dumps the running game's remappable input fields (directions, buttons, coin, start) once at
+-- startup, one "<PORT_TYPE>|<tag>|<mask>|<defvalue>|<default sequence>|<field name>" line each - see
+-- MameCfg.ts's parseGameFields(). A per-game cfg <port> only takes effect when it carries the exact
+-- tag/mask/defvalue of the field it targets, and only MAME knows those, so the per-game remap card
+-- writes them back verbatim from here. The port type token (what a cfg's <port type="..."> holds)
+-- comes from ioport.types, keyed by numeric type + player.
+local GAME_FIELDS_PATH = CAPTURE_DIR .. '/game-fields.txt'
+
+local function is_remappable(token)
+    return token:find('^P[1-4]_JOYSTICK_UP$') or token:find('^P[1-4]_JOYSTICK_DOWN$')
+        or token:find('^P[1-4]_JOYSTICK_LEFT$') or token:find('^P[1-4]_JOYSTICK_RIGHT$')
+        or token:find('^P[1-4]_BUTTON%d+$')
+        or token:find('^COIN[1-4]$') or token:find('^START[1-4]$')
+end
+
+local function dump_game_fields()
+    local tokens = {}
+    for _, port_type in pairs(manager.machine.ioport.types) do
+        tokens[port_type.type .. '/' .. (port_type.player or 0)] = tostring(port_type.token)
+    end
+    local lines = {}
+    for _, port in pairs(manager.machine.ioport.ports) do
+        for name, field in pairs(port.fields) do
+            local token = tokens[field.type .. '/' .. field.player]
+            if token and is_remappable(token) then
+                local ok, default_seq = pcall(function()
+                    return input:seq_to_tokens(field:default_input_seq('standard'))
+                end)
+                table.insert(lines, string.format('%s|%s|%d|%d|%s|%s',
+                    token, port.tag, field.mask, field.defvalue, ok and default_seq or '', name))
+            end
+        end
+    end
+    write_file(GAME_FIELDS_PATH, table.concat(lines, '\n') .. '\n')
+end
+
+local fields_ok, fields_err = pcall(dump_game_fields)
+if not fields_ok then
+    io.stderr:write('[capture-daemon] game-fields dump error: ' .. tostring(fields_err) .. '\n')
+end
+
 local last_seen_request = nil
 local armed_nonce = nil
 
