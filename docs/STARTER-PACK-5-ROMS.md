@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `mslug`, `mslug2`, `mslug3`, `mslugx`, `kof97`, `kof98`, `kof99`, `samsho`, `samsho2`, `garou`, `aof`, `fatfury1`, `wjammers`, `bstars2`, `maglord`, `kizuna`, `2020bb`
 - **Zips copiés** : 18 (569.1 Mio)
 
@@ -34,7 +34,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-5-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-5-ROMS.md \
     --title "Starter pack 5 — Neo Geo : sélection de ROMs" \
     mslug mslug2 mslug3 mslugx kof97 kof98 kof99 samsho samsho2 garou aof fatfury1 wjammers bstars2 maglord kizuna 2020bb
 ```

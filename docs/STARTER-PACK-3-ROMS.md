@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `aburner2`, `aliensyn`, `outrun`, `sharrier`, `goldnaxe`, `vf`, `vcop`, `hangon`, `columns`, `shinobi`, `shdancer`, `toutrun`, `dnmtdeka`, `diehard`
 - **Zips copiés** : 18 (52.7 Mio)
 
@@ -34,7 +34,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-3-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-3-ROMS.md \
     --title "Starter pack 3 — Sega : sélection de ROMs" \
     aburner2 aliensyn outrun sharrier goldnaxe vf vcop hangon columns shinobi shdancer toutrun dnmtdeka diehard
 ```

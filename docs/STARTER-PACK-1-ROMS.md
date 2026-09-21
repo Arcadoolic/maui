@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `dkong`, `dkongjr`, `dkong3`, `mario`, `popeye`, `punchout`, `spnchout`, `sheriff`, `spacefev`, `radarscp`
 - **Zips copiés** : 10 (1.7 Mio)
 
@@ -26,7 +26,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-1-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-1-ROMS.md \
     dkong dkongjr dkong3 mario popeye punchout spnchout sheriff spacefev radarscp
 ```
 

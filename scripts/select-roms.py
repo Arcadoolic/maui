@@ -135,6 +135,15 @@ def human_size(size):
     return f'{size:.1f} Gio'
 
 
+def display_path(path):
+    """`path` with the home directory folded back to `~`, so a generated .md (committed to the
+    repo) does not carry the name of whoever ran the script."""
+    home = os.path.expanduser('~')
+    if path == home or path.startswith(home + os.sep):
+        return '~' + path[len(home):]
+    return path
+
+
 def write_markdown(path, args, mame_version, requested, rows, missing, unknown):
     total = sum(row['size'] for row in rows)
     lines = [
@@ -145,7 +154,7 @@ def write_markdown(path, args, mame_version, requested, rows, missing, unknown):
         'flyers, marquees ou logos.',
         '',
         f'- **Source** : `{args.source}`',
-        f'- **Destination** : `{args.dest}`',
+        f'- **Destination** : `{display_path(args.dest)}`',
         f'- **Jeux demandés** : {", ".join(f"`{n}`" for n in requested)}',
         f'- **Zips copiés** : {len(rows)} ({human_size(total)})',
         '',
@@ -171,7 +180,7 @@ def write_markdown(path, args, mame_version, requested, rows, missing, unknown):
         '',
         '```bash',
         'python3 scripts/select-roms.py \\',
-        f'    --source {args.source} --dest {args.dest} --markdown {args.markdown} \\',
+        f'    --source {args.source} --dest {display_path(args.dest)} --markdown {args.markdown} \\',
         f'    --title "{args.title}" \\',
         f'    {" ".join(requested)}',
         '```',

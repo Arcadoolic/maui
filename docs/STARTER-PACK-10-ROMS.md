@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `invaders`, `elevator`, `bublbobl`, `arkanoid`, `opwolf`, `chasehq`, `pbobblen`
 - **Zips copiés** : 10 (15.0 Mio)
 
@@ -26,7 +26,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-10-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-10-ROMS.md \
     --title "Starter pack 10 — Taito : sélection de ROMs" \
     invaders elevator bublbobl arkanoid opwolf chasehq pbobblen
 ```

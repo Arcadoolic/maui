@@ -18,12 +18,8 @@ Inventaire des packs préparés, méthode de copie des ROMs et reste à couvrir 
 ## 1. Accès au serveur
 
 ```bash
-ssh -J mccoy.info.local afronob@miyamoto.afronob.com
+ssh afronob@miyamoto.afronob.com
 ```
-
-Le SSH direct depuis le réseau de dev échoue — toujours passer par le jump
-host `mccoy.info.local`. `afronob` a un `sudo -n ALL` (pas de mot de passe
-sudo à saisir).
 
 ## 2. Accès au dépôt (côté consommateur : navigateur, `curl`, script BO)
 
@@ -77,16 +73,12 @@ encore présent).
 ### 3.1. Upload du zip
 
 ```bash
-scp -o ProxyJump=mccoy.info.local mon-pack.zip afronob@miyamoto.afronob.com:/tmp/
-ssh -J mccoy.info.local afronob@miyamoto.afronob.com '
+scp mon-pack.zip afronob@miyamoto.afronob.com:/tmp/
+ssh afronob@miyamoto.afronob.com '
     sudo install -o www-data -g www-data -m 664 /tmp/mon-pack.zip /data/production/repo-maui/zip/mon-pack.zip
     rm /tmp/mon-pack.zip
 '
 ```
-
-`sudo install` plutôt qu'un simple déplacement : pose direct les bons
-owner/permissions (`www-data:www-data`, `664`) sans dépendre d'un
-`newgrp www-data`/relogin de la session courante.
 
 > 💡 Un module rsync `[repo-maui]` existe déjà dans `/etc/rsyncd.conf` sur
 > ce serveur (pointant vers `/data/production/repo-maui`, uid/gid
@@ -98,7 +90,7 @@ owner/permissions (`www-data:www-data`, `664`) sans dépendre d'un
 ### 3.2. Régénération des manifests + `index.json`
 
 ```bash
-ssh -J mccoy.info.local afronob@miyamoto.afronob.com \
+ssh afronob@miyamoto.afronob.com \
     'cd /data/production/repo-maui && python3 generate-repo-manifests.py'
 ```
 
@@ -124,9 +116,9 @@ permet).
 Pour redéployer une nouvelle version du script lui-même (après une
 modification dans ce repo) :
 ```bash
-scp -o ProxyJump=mccoy.info.local scripts/generate-repo-manifests.py \
+scp scripts/generate-repo-manifests.py \
     afronob@miyamoto.afronob.com:/tmp/generate-repo-manifests.py
-ssh -J mccoy.info.local afronob@miyamoto.afronob.com \
+ssh afronob@miyamoto.afronob.com \
     'sudo install -o afronob -g afronob -m 755 /tmp/generate-repo-manifests.py /data/production/repo-maui/generate-repo-manifests.py && rm /tmp/generate-repo-manifests.py'
 ```
 

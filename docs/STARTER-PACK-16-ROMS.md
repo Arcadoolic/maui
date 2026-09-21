@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `kof94`, `kof95`, `kof96`, `kof2000`, `kof2001`, `kof2002`, `samsho3`, `samsho4`, `fatfury2`, `fatfury3`, `fatfursp`, `aof2`, `aof3`, `alpham2`, `bstars`, `burningf`, `lastblad`, `shocktro`, `wh1`, `nitd`
 - **Zips copiés** : 21 (637.4 Mio)
 
@@ -37,7 +37,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-16-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-16-ROMS.md \
     --title "Starter pack 16 — SNK (Neo Geo 2) : sélection de ROMs" \
     kof94 kof95 kof96 kof2000 kof2001 kof2002 samsho3 samsho4 fatfury2 fatfury3 fatfursp aof2 aof3 alpham2 bstars burningf lastblad shocktro wh1 nitd
 ```

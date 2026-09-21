@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `blockade`, `comotion`, `depthch`, `hustle`, `frogs`, `headon`, `005`, `elim2`, `elim4`
 - **Zips copiés** : 8 (234.4 Kio)
 
@@ -24,7 +24,7 @@ Copie figée générée le 2026-09-20 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-15-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-15-ROMS.md \
     --title "Starter pack 15 — Gremlin : sélection de ROMs" \
     blockade comotion depthch hustle frogs headon 005 elim2 elim4
 ```

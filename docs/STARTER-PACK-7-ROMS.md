@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `contra`, `scontra`, `tmnt`, `tmnt2`, `simpsons`, `ssriders`, `xmen`, `asterix`, `aliens`, `jackal`, `rushatck`, `yiear`, `pooyan`, `scramble`, `scobra`, `timeplt`, `gyruss`, `trackfld`, `hyperspt`, `salamand`, `gradius`, `lifefrce`
 - **Zips copiés** : 21 (40.2 Mio)
 
@@ -37,7 +37,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-7-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-7-ROMS.md \
     --title "Starter pack 7 — Konami : sélection de ROMs" \
     contra scontra tmnt tmnt2 simpsons ssriders xmen asterix aliens jackal rushatck yiear pooyan scramble scobra timeplt gyruss trackfld hyperspt salamand gradius lifefrce
 ```

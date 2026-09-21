@@ -3,7 +3,7 @@
 Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289). Ne contient que les zips de ROMs nécessaires : ni artwork, ni flyers, marquees ou logos.
 
 - **Source** : `/var/mnt/capsule-emulation/Mame_0289`
-- **Destination** : `/home/afronob/.mame/roms`
+- **Destination** : `~/.mame/roms`
 - **Jeux demandés** : `sf`, `sf2`, `sf2ce`, `sf2hf`, `ffight`, `gng`, `ghouls`, `strider`, `1942`, `1943`, `captcomm`, `knights`, `kod`, `dino`, `willow`, `ssf2`, `ssf2t`, `sfa`, `sfa2`, `sfa3`, `xmcota`, `msh`, `xmvsf`, `mshvsf`, `mvsc`, `dstlk`, `nwarr`, `ddtod`, `ddsom`, `19xx`, `jojoba`
 - **Zips copiés** : 32 (634.1 Mio)
 
@@ -48,7 +48,7 @@ Copie figée générée le 2026-09-19 par `scripts/select-roms.py` (MAME 0.289).
 
 ```bash
 python3 scripts/select-roms.py \
-    --source /var/mnt/capsule-emulation/Mame_0289 --dest /home/afronob/.mame/roms --markdown docs/STARTER-PACK-6-ROMS.md \
+    --source /var/mnt/capsule-emulation/Mame_0289 --dest ~/.mame/roms --markdown docs/STARTER-PACK-6-ROMS.md \
     --title "Starter pack 6 — Capcom : sélection de ROMs" \
     sf sf2 sf2ce sf2hf ffight gng ghouls strider 1942 1943 captcomm knights kod dino willow ssf2 ssf2t sfa sfa2 sfa3 xmcota msh xmvsf mshvsf mvsc dstlk nwarr ddtod ddsom 19xx jojoba
 ```

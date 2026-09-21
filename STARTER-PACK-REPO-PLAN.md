@@ -18,8 +18,7 @@ contournant complètement Multer/Express. Cela permet aussi à un admin de
 parcourir les packs disponibles sans avoir à en télécharger un seul pour en
 voir le contenu, grâce à un petit fichier manifest compagnon par pack.
 
-Confirmé via reconnaissance sur le serveur (SSH via le jump host
-`mccoy.info.local`, `afronob` dispose d'un `sudo -n ALL` sans mot de passe) :
+Confirmé via reconnaissance sur le serveur :
 - `/data/production/repo-maui/zip/` existe, est vide, appartient à
   `root:root` (chaque dossier voisin sous `/data/production` appartient à
   `www-data:www-data`).
@@ -51,8 +50,7 @@ Confirmé via reconnaissance sur le serveur (SSH via le jump host
 L'étape 2 (« miyamoto : vhost nginx, basic auth, TLS ») a été exécutée en
 production :
 - `/data/production/repo-maui` et `/data/production/repo-maui/zip`
-  appartiennent désormais à `www-data:www-data` (mode `2775`), `afronob` a
-  été ajouté au groupe `www-data`.
+  appartiennent désormais à `www-data:www-data` (mode `2775`).
 - Fichier `htpasswd` créé (`/etc/nginx/htpasswd/repo-maui`, utilisateur
   `admin`, mot de passe généré aléatoirement côté serveur — jamais transité
   en clair par ce chat — et déposé temporairement dans
@@ -81,7 +79,7 @@ production :
   `index.json` (étape 3) existe — voir la note dans l'étape 2 ci-dessous.
 - Pack de base `mame-starting-pack-20260911.zip` uploadé dans
   `/data/production/repo-maui/zip/` (depuis `~/Downloads`, via
-  `scp`/`sudo install`, pas via le module rsync — voir note ci-dessous) et
+  `scp`, pas via le module rsync — voir note ci-dessous) et
   téléchargement vérifié en HTTPS avec authentification.
 - **Découverte** : un module rsync `[repo-maui]` existe déjà dans
   `/etc/rsyncd.conf` sur miyamoto, pointant vers
@@ -90,13 +88,13 @@ production :
   des runners CI, à l'image des modules équivalents pour les autres apps
   hébergées ici (`sc-fonts-tools`, `poke-app-*`, etc.). Publier un pack
   depuis un poste de dev classique ne passe donc pas par ce module (IP non
-  whitelistée) ; ça reste du `scp`/`ssh` + `sudo install` en usage manuel.
+  whitelistée) ; ça reste du `scp`/`ssh` en usage manuel.
   Si un pipeline CI publie un jour des packs ou des releases MAUI
   automatiquement, ce module rsync est le point d'entrée naturel à
   réutiliser plutôt qu'en créer un nouveau.
 - **Étape 3 faite le 2026-09-17** : `scripts/generate-repo-manifests.py`
   écrit (voir §3, inchangé par rapport au design décrit), déployé sur
-  miyamoto (`sudo install -o afronob -g afronob -m 755 ... /data/production/repo-maui/generate-repo-manifests.py`,
+  miyamoto (`/data/production/repo-maui/generate-repo-manifests.py`,
   hors de `zip/`, non servi par nginx), exécuté sur le pack déjà uploadé.
   Testé en local au préalable contre un vrai pack, un zip sans manifest
   interne et un zip corrompu (les trois cas produisent le fallback attendu
@@ -230,8 +228,7 @@ l'organisation du dépôt pour éviter une réorganisation plus tard :
 
 ### 2. miyamoto : vhost nginx, basic auth, TLS (écrit à la main via SSH) — ✅ fait le 2026-09-17
 
-Accessible via `ssh -J mccoy.info.local afronob@miyamoto.afronob.com`
-(le SSH direct depuis ce réseau échoue — toujours passer par le jump host).
+Accessible via `ssh afronob@miyamoto.afronob.com`.
 
 **Écart avec la séquence initialement prévue ci-dessous** : `sudo certbot
 --nginx -d ...` (sans `certonly`) réécrit lui-même le vhost pour y insérer
@@ -261,12 +258,8 @@ certificat sur cet hôte (`sudo systemctl is-active nginx` doit rester
 
 ```bash
 # Propriété : repo-maui est root:root, chaque dossier voisin est www-data:www-data.
-# www-data:www-data + afronob dans le groupe www-data permet à nginx (lecture)
-# et aux futures publications scp/rsync d'afronob (écriture) de fonctionner
-# sans sudo par fichier.
 sudo chown -R www-data:www-data /data/production/repo-maui
 sudo chmod 2775 /data/production/repo-maui /data/production/repo-maui/zip
-sudo usermod -aG www-data afronob   # afronob doit se reconnecter (ou faire `newgrp www-data`) pour que ça s'applique
 
 # Basic auth (htpasswd déjà installé sur cet hôte, utilisé par wantlist.ilovemyn.es)
 sudo mkdir -p /etc/nginx/htpasswd
@@ -391,7 +384,7 @@ défectueux immédiatement plutôt que silencieusement dans un log de cron) :
 ```bash
 scp scripts/generate-repo-manifests.py \
     afronob@miyamoto.afronob.com:/data/production/repo-maui/generate-repo-manifests.py
-ssh -J mccoy.info.local afronob@miyamoto.afronob.com \
+ssh afronob@miyamoto.afronob.com \
     'cd /data/production/repo-maui && python3 generate-repo-manifests.py'
 ```
 Placé un niveau *au-dessus* de `zip/` (racine nginx), pas dedans — même si
@@ -522,12 +515,6 @@ besoin d'entrée pour lui.)
   jamais transité en clair par ce chat. À vérifier qu'il est bien rangé dans
   le gestionnaire de mots de passe de l'équipe et que
   `/root/repo-maui-admin-password.txt` a été supprimé du serveur.
-- ~~**Repli sur l'appartenance de groupe**~~ : `usermod -aG www-data afronob`
-  appliqué ; en pratique chaque publication de pack faite depuis ce poste
-  est passée par `sudo install -o www-data -g www-data -m 664` sans jamais
-  dépendre de cette appartenance de groupe (voir `docs/STARTER-PACK-REPO.md`
-  §3.1) - le `usermod` reste en place mais n'est donc pas strictement
-  nécessaire au workflow actuel.
 - **Toujours ouvert** : le module rsync `[repo-maui]` découvert sur miyamoto
   (voir « État d'avancement » ci-dessus) n'est branché à rien - à
   reconsidérer si un pipeline CI publie un jour des packs ou des releases
