@@ -1431,6 +1431,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         table.favorites-table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 0.85em;
         }
         table.favorites-table th,
         table.favorites-table td {
@@ -1519,6 +1520,28 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: inline-flex;
             vertical-align: middle;
             color: #8ab4f8;
+            cursor: help;
+        }
+        /* Long game names are cut with an ellipsis instead of widening the table; the info icon
+           stays visible after the cut text. */
+        .game-name-cell {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 360px;
+        }
+        .game-name-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .game-name-cell .info-icon,
+        .game-name-cell .hiscore-icon {
+            flex: 0 0 auto;
+        }
+        .hiscore-icon {
+            display: inline-flex;
+            color: #ffd700;
             cursor: help;
         }
         .found-icon {
@@ -3633,18 +3656,37 @@ function splitGameName(fullname: string): { name: string; extra: string | null }
     return {name, extra: groups.join(' ')};
 }
 
-function renderGameName(fullname: string): string {
+/**
+ * Gold cup shown next to a game's name when mhiex can extract its hiscores (the "Hiscores Only"
+ * carousel category, see hasHiscoreExtraction()).
+ */
+const HISCORE_CUP_ICON = `<span class="hiscore-icon" title="Hiscores can be extracted for this game (mhiex)">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 2h8v4a4 4 0 0 1-8 0z" fill="currentColor"/>
+            <path d="M4 3.5H2.25v1A2.5 2.5 0 0 0 4.5 7M12 3.5h1.75v1A2.5 2.5 0 0 1 11.5 7" fill="none"
+                stroke="currentColor" stroke-width="1.25"/>
+            <path d="M8 10v2.5M5.5 14h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+    </span>`;
+
+/**
+ * Game name cell content. Pass `romName` to also flag (gold cup) a game whose hiscores can be
+ * extracted.
+ */
+function renderGameName(fullname: string, romName?: string): string {
     const {name, extra} = splitGameName(fullname);
-    if (!extra) {
-        return escapeHtml(name);
-    }
-    return `${escapeHtml(name)} <span class="info-icon" title="${escapeHtml(extra)}">
+    // The name is cut with an ellipsis by CSS (see .game-name-cell) when too long for the column;
+    // its title carries the full text. The search matches data-search, not this markup.
+    const nameHtml = `<span class="game-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+    const infoIcon = extra ? `<span class="info-icon" title="${escapeHtml(extra)}">
         <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
             <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
             <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
             <rect x="7.25" y="7" width="1.5" height="5" fill="currentColor"/>
         </svg>
-    </span>`;
+    </span>` : '';
+    const hiscoreIcon = romName && hasHiscoreExtraction(romName) ? HISCORE_CUP_ICON : '';
+    return `<span class="game-name-cell">${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
 }
 
 function renderDownloadSummary(summary: DownloadSummary): string {
@@ -3710,8 +3752,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
 
     const rows = favoritesInfo.rows.map(row => `
         <tr data-search="${escapeHtml(getFavoriteSearchText(row))}">
+            <td>${row.cached ? renderGameName(row.fullname, row.romName) : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${escapeHtml(row.romName)}</td>
-            <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${renderBiosCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
             <td class="center">
@@ -3743,7 +3785,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 </form>
             </div>
             <div class="table-search">
-                <input type="search" id="favoritesSearch" placeholder="Search a shortname, name, bios or device…"
+                <input type="search" id="favoritesSearch" placeholder="Search a name, shortname, bios or device…"
                     autocomplete="off" aria-label="Search the favorites">
                 <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
             </div>
@@ -3751,8 +3793,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 <table class="favorites-table" id="favoritesTable">
                     <thead>
                         <tr>
-                            <th>Shortname</th>
                             <th>Name</th>
+                            <th>Shortname</th>
                             <th>Bios / Devices</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center"></th>
