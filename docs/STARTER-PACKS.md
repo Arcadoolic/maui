@@ -4,7 +4,7 @@ Point d'entrée des starting packs thématiques (favoris + ROMs + artwork). Chaq
 copie de ROMs figée dans `docs/STARTER-PACK-<n>-ROMS.md` (générée par `scripts/select-roms.py`),
 et le zip final est publié sur le dépôt HTTP décrit dans [STARTER-PACK-REPO.md](STARTER-PACK-REPO.md).
 
-État au 2026-09-20 : 18 packs préparés, 17 publiés sur le dépôt (`index.json`, 274 jeux uniques,
+État au 2026-09-21 : 20 packs préparés, 17 publiés sur le dépôt (`index.json`, 274 jeux uniques,
 aucun jeu dans deux packs).
 
 ## Packs
@@ -29,6 +29,8 @@ aucun jeu dans deux packs).
 | 16 | SNK (Neo Geo 2, complète le 5) | `snk-pack` | 20 | [16](STARTER-PACK-16-ROMS.md) |
 | 17 | Jaleco | `jaleco-pack` | 19 | [17](STARTER-PACK-17-ROMS.md) |
 | 18 | Irem | *pas encore publié* | 12 | [18](STARTER-PACK-18-ROMS.md) |
+| 19 | Tecmo (+ Bomb Jack, Star Force, Riot…) | *pas encore publié* | 14 | [19](STARTER-PACK-19-ROMS.md) |
+| 20 | Seibu Kaihatsu (+ Seibu Denshi : Stinger, Scion) | `seibu-pack` (à publier) | 15 | [20](STARTER-PACK-20-ROMS.md) |
 
 Le thème d'un pack est celui du studio demandé, pas une règle stricte : les packs 12, 14 et 17
 mélangent des jeux de plusieurs éditeurs (Centuri, Nichibutsu et Jaleco sont surtout des noms de
@@ -66,6 +68,16 @@ supprimé et il reste hors pack.
 
 Pour les récupérer : trouver les CHD, les poser à côté des zips, puis les ajouter au pack.
 
+## Jeux écartés : visuels absents
+
+Le pack 20 ne garde que les jeux qui ont un flyer **et** un logo (le marquee est généré à partir
+d'eux) : sont donc écartés les jeux à qui il manque l'un des deux. Leurs ROMs sont sur le partage.
+
+- `r2dx_v33` (Raiden DX), `metlfrzr` (Metal Freezer), `kungfut` (Kung-Fu Taikun), `shtrider` (Shot Rider),
+  `failgate` (Fail Gate), `mustache` (Mustache Boy) — pack 20. `r2dx_v33` et `metlfrzr` n'ont aucun visuel ;
+  les autres n'ont qu'un logo.
+- Écartés aussi du pack 20 pour leur statut d'émulation `preliminary` : `zeroteam`, `cupsoc`.
+
 ## Noms non résolus
 
 Noms collés qui n'existent pas dans MAME 0.289, en attente d'une réponse :
@@ -76,6 +88,11 @@ Noms collés qui n'existent pas dans MAME 0.289, en attente d'une réponse :
 Noms remplacés par un shortname (à revérifier en cas de doute) :
 
 - `munchmo` → `mnchmobl` (Munch Mobile, driver `munchmo`) — pack 12.
+- `geminiw` → `gemini` (Gemini Wing, World) — pack 19.
+- `wc90` → `twcup90` (Tecmo World Cup '90, World set 1) — pack 19.
+- `dynduke` → `dbldynj` (The Double Dynamites, Japan, 13NOV89) — pack 20 : même jeu que Dynamite Duke, révision de
+  novembre plus récente que le set Europe de septembre (`dynduke`), gardée à sa place ; `dbldynu` (US) est dans son zip.
+- `raidendx` → `r2dx_v33` (Raiden DX, nouveau PCB V33, 1996) — pack 20, plus récent ; il a ensuite été écarté (voir « Jeux écartés : visuels absents »).
 - `yard` → `10yard` (10-Yard Fight, World set 1) — pack 18.
 - `pbobblen` (pack 10) est la version Neo Geo de Puzzle Bobble, pas l'arcade Taito `pbobble`.
 
@@ -91,7 +108,6 @@ d'IGS), les bootlegs et les machines sans éditeur sont volontairement ignorés.
 |---|---|---|
 | Toaplan | 28 | `tigerh`, `fshark`, `twincobr`, `truxton`, `zerowing`, `outzone`, `batsugun`, `vimana` |
 | Technos Japan | 28 | `ddragon`, `ddragon2`, `renegade`, `spdodgeb`, `vball`, `wwfsstar`, `wwfwfest`, `xsleena` |
-| Tecmo | 37 | `rygar`, `wildfang`, `silkworm`, `gemini`, `solomon` |
 | Kaneko | 42 | `berlwall`, `gtmr`, `gtmr2`, `bonkadv`, `shogwarr` |
 | Cave | 23 | `donpachi`, `ddonpach`, `esprade`, `guwange`, `mushisam`, `ket` |
 | Psikyo | 23 | `gunbird`, `gunbird2`, `s1945`, `s1945ii`, `tengai`, `samuraia` |
