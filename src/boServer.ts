@@ -2125,10 +2125,9 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
 }
 
 /**
- * Directory mame's hiscore plugin writes .hi files into (see HiscoreService.class.ts, which
- * symlinks iniPath/hi -> iniPath/hiscore since mame-hi-extractor hardcodes reading from "hi").
- * Duplicated here rather than imported for the same @electron/remote reason as the rest of this
- * file's helpers.
+ * Directory mame's hiscore plugin writes .hi files into (the one @arcadoolic/mhiex reads from,
+ * see HiscoreService.class.ts). Duplicated here rather than imported for the same
+ * @electron/remote reason as the rest of this file's helpers.
  */
 function getHiscorePath(iniPath: string): string {
     return join(iniPath, 'hiscore');

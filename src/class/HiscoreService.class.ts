@@ -1,6 +1,4 @@
-import {lstatSync, symlinkSync} from 'fs';
-import {join} from 'path';
-import MameHiExtractor from 'mame-hi-extractor';
+import {MameHiExtractor} from '@arcadoolic/mhiex';
 import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
@@ -11,37 +9,8 @@ export default class HiscoreService {
     protected userService!: UserService;
 
     public constructor(mamePath: string, userService: UserService) {
-        HiscoreService.ensureHiSymlink(mamePath);
         this.hiExtractor = new MameHiExtractor(mamePath);
         this.userService = userService;
-    }
-
-    /**
-     * mame-hi-extractor reads <mamePath>/hi/<romName>.hi (hardcoded in its AbstractExtractor),
-     * but mame's own hiscore plugin actually writes to <mamePath>/hiscore/<romName>.hi. Bridge
-     * that mismatch with a symlink instead of patching the third-party dependency.
-     */
-    protected static ensureHiSymlink(mamePath: string) {
-        const hiPath = join(mamePath, 'hi');
-        try {
-            lstatSync(hiPath);
-            return; // already a symlink, directory or file here - leave it alone
-        } catch {
-            // nothing at hiPath yet
-        }
-        try {
-            // Windows: a 'dir' symlink needs Developer Mode or admin rights and fails with EPERM
-            // otherwise. A junction needs neither, but only resolves an absolute target - unlike
-            // the relative one used below, which junctions would silently misresolve.
-            if (process.platform === 'win32') {
-                symlinkSync(join(mamePath, 'hiscore'), hiPath, 'junction');
-            } else {
-                symlinkSync('hiscore', hiPath, 'dir');
-            }
-        } catch (e) {
-            Log.error('[HiscoreService] Failed to create the "hi" -> "hiscore" symlink.');
-            Log.error(e);
-        }
     }
 
     /**
@@ -71,7 +40,7 @@ export default class HiscoreService {
         }
         for (const game of games) {
             try {
-                const hiscoreExtractor = this.hiExtractor.get(game.romName);
+                const hiscoreExtractor = await this.hiExtractor.get(game.romName);
                 if (!hiscoreExtractor) {
                     continue;
                 }
@@ -102,7 +71,7 @@ export default class HiscoreService {
             } catch (e) {
                 if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
                     // No .hi file yet: the game hasn't been played long enough to produce a
-                    // score. mame-hi-extractor's exist()/hasHiscore() only checks whether the
+                    // score. mhiex's exist()/hasHiscore() only checks whether the
                     // rom is a *supported* game, not whether its .hi file is actually present
                     // on disk - get() itself throws ENOENT for that case. Not an error.
                     continue;
