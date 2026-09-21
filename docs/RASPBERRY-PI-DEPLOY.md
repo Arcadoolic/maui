@@ -266,8 +266,11 @@ absente ou invalide, la dernière commande répond `sudo: a password is required
 - `reset-failed getty@tty1` sert au piège du §5.5 (`start-limit-hit`) : il
   remet le compteur d'échecs à zéro avant de relancer.
 - Le nom du fichier ne doit contenir ni `.` ni `~` (sudo ignore ces fichiers).
-- Le BO ne déclenche pas ce redémarrage lui-même pour l'instant (§7.1) : la
-  règle rend seulement la commande possible sans mot de passe.
+- Le bouton **Restart the application** du BO (onglet MAUI > Update, §7.1)
+  lance cette même commande : sans la règle, il affiche une erreur au lieu de
+  relancer. Il vérifie la règle avant d'agir (`sudo -n -l`), donc il ne coupe
+  rien si elle manque. Si tu changes la commande ici, il faut aussi changer
+  `src/class/KioskRestart.ts`.
 
 ## 6. Audio (sortie HDMI)
 
@@ -419,11 +422,12 @@ Accessible à tout compte BO (rôle `user` compris, ex. `puckman`) pour les
 releases publiées ; les comptes `admin` ont en plus accès aux builds de
 développement (prereleases GitHub publiées automatiquement à chaque push sur
 `develop` par le workflow `Build` - pas encore promus vers `main`, à réserver
-aux tests). Comme la méthode manuelle ci-dessous, le BO ne redémarre pas lui-même la
-session kiosk : une fois l'installation terminée, il faut relancer
-`sudo systemctl restart getty@tty1` (ou redémarrer le Pi) pour reprendre
-sur la nouvelle version. Sans mot de passe pour `puckman` une fois la règle
-sudoers du §5.7 en place.
+aux tests). Le BO ne redémarre pas la session kiosk tout seul à la fin de l'installation :
+le bouton **Restart the application**, en haut de la carte *Update*, le fait à la
+demande (il relance `getty@tty1`, donc la session, `startx` et l'app sur la
+nouvelle version ; la page attend le retour du serveur puis revient sur
+l'onglet). Il demande la règle sudoers du §5.7. À défaut, relancer à la main
+`sudo systemctl restart getty@tty1` (ou redémarrer le Pi).
 
 ### 7.2 En repli, en SSH direct (BO inaccessible, pas de réseau)
 
