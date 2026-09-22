@@ -53,7 +53,7 @@ import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
 import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
 } from '@/class/UserReservation';
-import {findAvatarFile} from '@/class/AvatarFiles';
+import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
 import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
@@ -1351,17 +1351,26 @@ function renderSubtabbedPage(
     if (sections.length <= 1) {
         return renderPage(sections.map(section => section.html).join(''), active, authenticated);
     }
+    // role="tablist"/"tab"/"tabpanel": unlike the primary nav (real page links), this switches
+    // panels client-side within one page - the actual ARIA tabs pattern applies here.
+    // aria-selected/tabindex are set to their real values by the tail script's activate(), once
+    // it has picked which section to open - every link starts unselected/unreachable-by-Tab here
+    // so a screen reader or keyboard user never sees two "tabs" claim to be selected at once
+    // before that script runs.
     const nav = `
-        <nav class="subtabs" data-default-subtab="${escapeHtml(defaultSectionId || '')}">
+        <nav class="subtabs" role="tablist" data-default-subtab="${escapeHtml(defaultSectionId || '')}">
             ${sections.map(section => `
-                <a href="#${escapeHtml(section.id)}" class="subtab-link" data-subtab="${escapeHtml(section.id)}">
+                <a href="#${escapeHtml(section.id)}" class="subtab-link" data-subtab="${escapeHtml(section.id)}"
+                    role="tab" aria-selected="false" aria-controls="subtab-panel-${escapeHtml(section.id)}"
+                    id="subtab-tab-${escapeHtml(section.id)}" tabindex="-1">
                     ${escapeHtml(section.label)}
                 </a>
             `).join('')}
         </nav>
     `;
     const panels = sections.map(section => `
-        <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}">${section.html}</div>
+        <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}" role="tabpanel"
+            id="subtab-panel-${escapeHtml(section.id)}" aria-labelledby="subtab-tab-${escapeHtml(section.id)}">${section.html}</div>
     `).join('');
     return renderPage(nav + panels, active, authenticated, true);
 }
@@ -1385,6 +1394,15 @@ const PROGRESS_LOG_OPEN = '<ul class="progress-log"><script>(function () {'
     + 'new MutationObserver(function () { log.scrollTop = log.scrollHeight; }).observe(log, {childList: true});'
     + '})();</script>';
 
+/**
+ * One primary nav link, with `aria-current="page"` alongside the `.active` class it always had -
+ * these are real page-loaded links (not a JS tab widget), so a screen reader should hear "current
+ * page" the same way a sighted user sees the underline, instead of nothing at all.
+ */
+function renderNavTabLink(href: string, label: string, isActive: boolean): string {
+    return `<a href="${href}" class="${isActive ? 'active' : ''}"${isActive ? ' aria-current="page"' : ''}>${label}</a>`;
+}
+
 function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
     return `<!DOCTYPE html>
 <html lang="en">
@@ -1392,9 +1410,41 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     <meta charset="utf-8">
     <title>mame-awesome-ui - Configuration</title>
     <style>
+        /* Design tokens (Phase 0 of docs/BO-UX-REVAMP.md): every color/spacing/radius below is
+           defined once here and referenced by var() everywhere else in this block, instead of
+           the hex literals copy-pasted per render*() function that used to drift apart. */
+        :root {
+            --bg: #000000;
+            /* Cards used to sit on rgba(0,0,0,0.55): fine over the darker parts of the tiled
+               background photo, but text contrast could drop under WCAG AA over its brighter
+               areas. Raised opacity is the actual accessibility fix; the two-tier surfaces let a
+               page still show a little of the background through most cards while the login card
+               (the very first thing an unauthenticated/non-technical visitor sees, nothing else
+               on screen to anchor it) gets the more opaque one. */
+            --surface: rgba(0, 0, 0, 0.82);
+            --surface-strong: rgba(0, 0, 0, 0.9);
+            --surface-inset: #111111;
+            --border: #333333;
+            --border-subtle: #222222;
+            --text: #ffffff;
+            --text-muted: #aaaaaa;
+            --accent: #8ab4f8;
+            --success: #6bff8a;
+            --warn: #ffd166;
+            --danger: #ff6b6b;
+            --danger-strong: #c0392b;
+            --radius-sm: 4px;
+            --radius-md: 6px;
+            --radius-lg: 8px;
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 16px;
+            --space-4: 24px;
+            --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+        }
         html {
             min-height: 100%;
-            background-color: #000000;
+            background-color: var(--bg);
             background-image: url('/background.jpg');
             background-size: cover;
             background-repeat: repeat;
@@ -1404,8 +1454,25 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
                on the viewport instead, so it stays put whatever the page length. */
             background-attachment: fixed;
         }
+        /* Visually hidden until focused: a keyboard/screen-reader user tabbing in from the
+           address bar can jump straight past the nav to <main> instead of tabbing through every
+           top-level tab link first. Sighted mouse users never see it. */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 8px;
+            z-index: 100;
+            padding: 8px 16px;
+            background-color: var(--text);
+            color: var(--bg);
+            border-radius: var(--radius-sm);
+            text-decoration: none;
+        }
+        .skip-link:focus {
+            top: 8px;
+        }
         body {
-            color: #ffffff;
+            color: var(--text);
             font-family: sans-serif;
             box-sizing: border-box;
             /* Grows with the viewport (tables like Users/Favorites need the room) instead of
@@ -1432,42 +1499,61 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             font-size: 0.8em;
             font-weight: bold;
         }
+        /* Segmented-control look: a capsule holding every tab, the active one its own solid pill
+           instead of an underline - same black/white/accent palette as everywhere else, just
+           more depth (background + shadow) than a flat line ever gave it. */
         .tabs {
-            display: flex;
+            display: inline-flex;
+            flex-wrap: wrap;
             justify-content: center;
-            gap: 4px;
+            gap: 2px;
             margin-top: 16px;
-            border-bottom: 1px solid #333333;
+            padding: 4px;
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            /* An inline-flex box (unlike a block-level flex one) shrinks to its content's width
+               and is centered by header's own text-align: center - the capsule wraps snugly
+               around the tabs instead of stretching edge to edge. max-width keeps a narrow
+               viewport from overflowing before flex-wrap gets a chance to break it into rows. */
+            max-width: 100%;
         }
         .tabs a {
             display: inline-block;
             padding: 8px 16px;
-            color: #aaaaaa;
+            color: var(--text-muted);
             text-decoration: none;
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
+            border-radius: 999px;
+            transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
         }
         .tabs a:hover {
-            color: #ffffff;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
         }
         .tabs a.active {
-            color: #ffffff;
-            border-bottom-color: #8ab4f8;
+            color: var(--bg);
+            background-color: var(--text);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+        .tabs a.active:hover {
+            /* Already the strongest state on the bar - a hover background would just dim the
+               solid pill for no reason. */
+            background-color: var(--text);
         }
         .card {
-            background-color: rgba(0, 0, 0, 0.55);
-            border-radius: 8px;
+            background-color: var(--surface);
+            border-radius: var(--radius-lg);
             padding: 24px 16px;
             margin-bottom: 24px;
         }
         .card h2 {
             margin-top: 0;
             font-size: 1.1em;
-            border-bottom: 1px solid #333333;
+            border-bottom: 1px solid var(--border);
             padding-bottom: 8px;
         }
         a {
-            color: #8ab4f8;
+            color: var(--accent);
         }
         label {
             display: block;
@@ -1481,7 +1567,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             transition: outline-color 0.15s ease;
         }
         input:focus, select:focus {
-            outline: 2px solid #8ab4f8;
+            outline: 2px solid var(--accent);
             outline-offset: -1px;
         }
         button {
@@ -1489,7 +1575,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             color: #000000;
             background-color: #ffffff;
             border: none;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             cursor: pointer;
             transition: background-color 0.15s ease, opacity 0.15s ease;
         }
@@ -1500,21 +1586,40 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             opacity: 0.5;
             cursor: not-allowed;
         }
+        /* Every interactive element gets a visible keyboard focus ring, not just input/select
+           above: buttons and links used to have none at all, so tabbing through a page (or
+           through the primary/sub tabs, both plain <a>) gave no indication of where focus was. */
+        a:focus-visible, button:focus-visible, summary:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        /* Irreversible actions (Danger Zone "Delete the selection" buttons): previously the same
+           plain white button as "Save", with nothing to tell them apart at a glance beyond the
+           confirm() dialog that fires on click. Same shape/size as a normal button so it doesn't
+           jump around the layout, distinct color so the destructive intent is visible before
+           that dialog even appears. */
+        button.button-danger {
+            color: var(--text);
+            background-color: var(--danger-strong);
+        }
+        button.button-danger:hover:not(:disabled) {
+            background-color: #d84a3a;
+        }
         form > button[type="submit"]:last-child {
             margin-top: 24px;
         }
         .error, .info {
             padding: 10px 14px;
             margin: 12px 0 0;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             border-left: 3px solid currentColor;
         }
         .error {
-            color: #ff6b6b;
+            color: var(--danger);
             background-color: rgba(255, 107, 107, 0.12);
         }
         .info {
-            color: #8ab4f8;
+            color: var(--accent);
             background-color: rgba(138, 180, 248, 0.12);
         }
         /* Numbered steps in an info box: keeps room for the markers the .info padding would eat. */
@@ -1583,22 +1688,22 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .hi-badge {
             margin-left: 6px;
             padding: 0 5px;
-            border: 1px solid #6bff8a;
+            border: 1px solid var(--success);
             border-radius: 3px;
-            color: #6bff8a;
+            color: var(--success);
             font-size: 11px;
             vertical-align: middle;
         }
         .checkbox-row-detail {
             display: block;
             margin-top: 2px;
-            color: #aaaaaa;
+            color: var(--text-muted);
             font-size: 0.9em;
         }
         .current-path {
             font-family: monospace;
             word-break: break-all;
-            background-color: #111111;
+            background-color: var(--surface-inset);
             padding: 8px;
         }
         .info-field {
@@ -1606,13 +1711,13 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .info-field dt {
             font-size: 0.85em;
-            color: #aaaaaa;
+            color: var(--text-muted);
         }
         .info-field dd {
             margin: 4px 0 0;
             font-family: monospace;
             word-break: break-all;
-            background-color: #111111;
+            background-color: var(--surface-inset);
             padding: 8px;
         }
         .info-field dd ul {
@@ -1640,7 +1745,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .browse-list li {
             padding: 6px 0;
-            border-bottom: 1px solid #222222;
+            border-bottom: 1px solid var(--border-subtle);
         }
         .table-wrap {
             overflow-x: auto;
@@ -1654,7 +1759,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         table.favorites-table td {
             text-align: left;
             padding: 6px 8px;
-            border-bottom: 1px solid #222222;
+            border-bottom: 1px solid var(--border-subtle);
             white-space: nowrap;
         }
         table.favorites-table th.center,
@@ -1662,10 +1767,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             text-align: center;
         }
         .badge-yes {
-            color: #6bff8a;
+            color: var(--success);
         }
         .badge-no {
-            color: #ff6b6b;
+            color: var(--danger);
         }
         .row-actions {
             display: inline-flex;
@@ -1686,17 +1791,28 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
            push it out of its table row's alignment. */
         form > button.icon-button[type="submit"]:last-child {
             display: inline-flex;
-            padding: 5px;
+            align-items: center;
+            justify-content: center;
+            /* Was padding: 5px (~26px total with the 16px icon) - under the ~40-44px touch
+               target guideline, and this sits in dense table rows on a BO reachable from any
+               phone/tablet on the LAN. Not raised all the way to 44px here: that would need
+               revisiting row height/density across every table this appears in (Favorites,
+               Players, removed-favorites...), left for the Phase 2 pass in
+               docs/BO-UX-REVAMP.md. min-width/height (not just padding) keep it square even
+               though the icon itself doesn't fill the box uniformly. */
+            min-width: 32px;
+            min-height: 32px;
+            padding: 8px;
             margin-top: 0;
-            color: #ff6b6b;
+            color: var(--danger);
             background-color: transparent;
             border: 1px solid currentColor;
         }
         form > button.icon-button.icon-button-ok[type="submit"]:last-child {
-            color: #6bff8a;
+            color: var(--success);
         }
         form > button.icon-button.icon-button-warn[type="submit"]:last-child {
-            color: #ffd166;
+            color: var(--warn);
         }
         button.icon-button:hover:not(:disabled) {
             background-color: rgba(255, 255, 255, 0.12);
@@ -1712,7 +1828,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #222222;
+            background: var(--border-subtle);
             color: #888888;
             font-size: 18px;
         }
@@ -1736,7 +1852,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .info-icon {
             display: inline-flex;
             vertical-align: middle;
-            color: #8ab4f8;
+            color: var(--accent);
             cursor: help;
         }
         /* Long game names are cut with an ellipsis instead of widening the table; the info icon
@@ -1750,7 +1866,11 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
            own color, the others stay grey. */
         form.vote-buttons > button.icon-button[type="submit"] {
             display: inline-flex;
-            padding: 5px;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            min-height: 32px;
+            padding: 8px;
             margin-top: 0;
             color: #777777;
             background-color: transparent;
@@ -1761,13 +1881,13 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             background-color: rgba(255, 255, 255, 0.08);
         }
         form.vote-buttons > button.up[aria-pressed="true"] {
-            color: #6bff8a;
+            color: var(--success);
         }
         form.vote-buttons > button.neutral[aria-pressed="true"] {
-            color: #ffd166;
+            color: var(--warn);
         }
         form.vote-buttons > button.down[aria-pressed="true"] {
-            color: #ff6b6b;
+            color: var(--danger);
         }
         .game-name-cell {
             display: flex;
@@ -1796,23 +1916,23 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             margin-right: 6px;
         }
         .found-yes {
-            color: #6bff8a;
+            color: var(--success);
         }
         .found-no {
-            color: #ff6b6b;
+            color: var(--danger);
         }
         .disk-bar-track {
             display: flex;
             height: 22px;
             margin: 8px 0;
-            background-color: #111111;
-            border: 1px solid #333333;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
             border-radius: 11px;
             overflow: hidden;
         }
         .disk-bar-track.disk-bar-overflow {
-            border-color: #ff6b6b;
-            box-shadow: 0 0 0 1px #ff6b6b;
+            border-color: var(--danger);
+            box-shadow: 0 0 0 1px var(--danger);
         }
         .disk-bar-used {
             background-color: #555555;
@@ -1837,7 +1957,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .disk-zoom-note {
             margin: 0 0 4px;
             font-size: 0.85em;
-            color: #8ab4f8;
+            color: var(--accent);
         }
         .disk-legend {
             display: flex;
@@ -1859,7 +1979,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .pack-details summary {
             cursor: pointer;
-            color: #8ab4f8;
+            color: var(--accent);
         }
         .category-row {
             border-top: 1px solid #333;
@@ -1946,10 +2066,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .pack-game-mark {
             flex: 0 0 14px;
             text-align: center;
-            color: #aaaaaa;
+            color: var(--text-muted);
         }
         .pack-game-installed .pack-game-mark {
-            color: #6bff8a;
+            color: var(--success);
         }
         .pack-game-highlight {
             color: #f8eb48;
@@ -1961,10 +2081,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: block;
             margin-top: 2px;
             font-size: 0.85em;
-            color: #aaaaaa;
+            color: var(--text-muted);
         }
         .pack-status-owned {
-            color: #6bff8a;
+            color: var(--success);
         }
         .pack-status-update {
             color: #f8eb48;
@@ -2008,8 +2128,8 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .progress-track {
             height: 18px;
-            background-color: #111111;
-            border: 1px solid #333333;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
             border-radius: 9px;
             overflow: hidden;
         }
@@ -2020,14 +2140,14 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .progress-fill {
             height: 100%;
             width: 0;
-            background-color: #8ab4f8;
+            background-color: var(--accent);
             transition: width 0.25s ease-out;
         }
         .progress-fill.progress-done {
-            background-color: #6bff8a;
+            background-color: var(--success);
         }
         .progress-fill.progress-failed {
-            background-color: #ff6b6b;
+            background-color: var(--danger);
         }
         /* Total unknown (server sent no Content-Length): a sliding stripe instead of a bar that
            would sit at 0% and look frozen. */
@@ -2044,7 +2164,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .progress-log li {
             padding: 4px 0;
-            border-bottom: 1px solid #222222;
+            border-bottom: 1px solid var(--border-subtle);
         }
         .progress-log li:last-child {
             animation: pulse 1s ease-in-out infinite;
@@ -2057,6 +2177,9 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
            back (smaller, dimmed except the active tab) so the subtabs row below reads as the
            primary navigation for the page actually being looked at, without hiding the way
            back to the other top-level tabs. */
+        .tabs.compact {
+            padding: 3px;
+        }
         .tabs.compact a {
             padding: 6px 12px;
             font-size: 0.85em;
@@ -2073,11 +2196,11 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             flex-wrap: wrap;
             gap: 4px;
             margin: 4px 0 16px;
-            border-bottom: 1px solid #333333;
+            border-bottom: 1px solid var(--border);
         }
         .import-tab {
             padding: 6px 12px;
-            color: #aaaaaa;
+            color: var(--text-muted);
             background-color: transparent;
             border-radius: 0;
             border-bottom: 2px solid transparent;
@@ -2089,21 +2212,29 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .import-tab.active {
             color: #ffffff;
-            border-bottom-color: #8ab4f8;
+            border-bottom-color: var(--accent);
         }
-        .import-tab.running::before { content: '\\25CF '; color: #8ab4f8; }
-        .import-tab.done::before { content: '\\2713 '; color: #6bff8a; }
-        .import-tab.failed::before { content: '\\2717 '; color: #ff6b6b; }
+        .import-tab.running::before { content: '\\25CF '; color: var(--accent); }
+        .import-tab.done::before { content: '\\2713 '; color: var(--success); }
+        .import-tab.failed::before { content: '\\2717 '; color: var(--danger); }
         .import-panel h3 {
             margin: 0 0 8px;
             font-size: 1em;
         }
+        /* Same segmented-control family as .tabs above, one size down and left-aligned (it's a
+           page's own secondary nav, not the site-wide one) - and its active pill is the accent
+           color rather than plain white, so the two levels stay visually distinct: white pill =
+           which top-level tab, blue pill = which subtab within it. Accent was already this row's
+           "you are here" color before (the old underline), just applied to a filled pill now. */
         .subtabs {
-            display: flex;
+            display: inline-flex;
             flex-wrap: wrap;
-            gap: 4px;
+            gap: 2px;
             margin: 4px 0 20px;
-            border-bottom: 1px solid #333333;
+            padding: 3px;
+            background-color: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-subtle);
+            border-radius: 999px;
             animation: subtabs-slide-in 0.2s ease-out;
         }
         @keyframes subtabs-slide-in {
@@ -2112,18 +2243,23 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .subtabs a {
             display: inline-block;
-            padding: 8px 16px;
-            color: #aaaaaa;
+            padding: 6px 14px;
+            color: var(--text-muted);
             text-decoration: none;
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
+            border-radius: 999px;
+            font-size: 0.9em;
+            transition: color 0.15s ease, background-color 0.15s ease;
         }
         .subtabs a:hover {
-            color: #ffffff;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
         }
         .subtabs a.active {
-            color: #8ab4f8;
-            border-bottom-color: #8ab4f8;
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .subtabs a.active:hover {
+            background-color: var(--accent);
         }
         .subtab-panel {
             display: none;
@@ -2134,57 +2270,165 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     </style>
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to content</a>
     <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
     <header>
         <h1>mame-awesome-ui</h1>
-        ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}">
-            <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
-            <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Games</a>
-            <a href="/users" class="${active === 'users' ? 'active' : ''}">Players</a>
-            <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
-            <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
-            <a href="/account" class="${active === 'account' ? 'active' : ''}">My account</a>
+        ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
+            ${renderNavTabLink('/', 'MAME', active === 'mame')}
+            ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
+            ${renderNavTabLink('/users', 'Players', active === 'users')}
+            ${renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper')}
+            ${renderNavTabLink('/maui', 'MAUI', active === 'maui')}
+            ${renderNavTabLink('/account', 'My account', active === 'account')}
         </nav>` : ''}
     </header>
+    <main id="main">
     `;
 }
 
 function renderPageTail(): string {
     return `
+    </main>
     <script>
-        // Every action here is a plain form POST/GET (full page navigation, no AJAX) - the only
-        // feedback the browser gives on its own during that navigation is the tab's spinner,
-        // easy to miss. Disable + relabel whichever button actually triggered the submission
-        // (event.submitter, not just "the first submit button in the form" - several forms have
-        // more than one, e.g. formaction-overriding browse buttons) so a click always visibly
-        // registers, even before the new page has finished loading. No need to re-enable it: the
-        // navigation this triggers replaces the whole DOM (or, for a confirm() dialog the user
-        // cancels, defaultPrevented is set below and this is skipped entirely).
+        // Most forms here are POSTs whose response is the exact same full-page HTML a GET would
+        // render (see e.g. renderFavoritesTab()) - the server has no separate "fragment" vs
+        // "whole page" response shape. That let every one of them respond in place instead of
+        // navigating: intercept the submit, POST via fetch(), then replace the document with
+        // whatever HTML comes back. The address bar never leaves the GET page it started on, so
+        // refreshing afterward re-runs that GET, not the action - previously every action left
+        // the browser sitting on its own POST URL, and a refresh there replayed it (a delete, a
+        // vote, a save... whatever the last click was), because the server had no
+        // Post/Redirect/Get in place. This fixes that for free, without touching any of those
+        // handlers, since the response they already send is exactly what gets displayed either
+        // way.
         //
-        // The mutation itself is deferred one tick (setTimeout(fn, 0)) instead of applied
-        // synchronously in this handler: Chrome submits a form on Enter by internally
-        // simulating a click on its default button, and disabling that same button
-        // synchronously from within the 'submit' event it's still in the middle of dispatching
-        // aborts that in-flight click - the submission silently never happens. A real pointer
-        // click isn't affected (its own default action already committed before 'submit'
-        // fires), so this broke keyboard-only ("press Enter") submission specifically, while
-        // clicking the button kept working - reported against exactly this symptom on the
-        // login page. Deferring lets the browser finish submitting first either way.
+        // Left alone (see the data-stream check below): forms whose POST response is a
+        // multi-chunk res.write() stream the browser paints incrementally as it arrives (long
+        // imports, favorites refresh, media download, self-update) - swapping those in only once
+        // the whole fetch() resolves would throw away the "watch it happen live" log entirely.
+        // Those still fully navigate, so they keep the older replay-on-refresh gap for now (see
+        // docs/BO-UX-REVAMP.md) until they're worth teaching this same script to read
+        // fetch()'s response body as a stream instead of a single text() blob.
         document.addEventListener('submit', function (event) {
             if (event.defaultPrevented) {
                 return;
             }
-            var button = event.submitter;
-            if (button && button.tagName === 'BUTTON' && !button.disabled) {
-                setTimeout(function () {
-                    // An icon-only button has no text to relabel (assigning textContent would
-                    // replace its <svg> with a bare "…") - just disabling it is feedback enough.
-                    if (!button.classList.contains('icon-button')) {
-                        button.textContent = button.textContent + '…';
-                    }
-                    button.disabled = true;
-                }, 0);
+            var form = event.target;
+            var button = event.submitter; // null for a plain requestSubmit() with no argument.
+            // A submitter's formmethod/formaction override the form's own - same resolution a
+            // real submission would use (the Browse buttons rely on exactly this to GET /browse
+            // instead of POSTing the form they sit in).
+            var method = ((button && button.getAttribute('formmethod')) || form.getAttribute('method') || 'get')
+                .toLowerCase();
+            if (method !== 'post') {
+                return; // A GET is always safe to reload - no need to intercept it.
             }
+            var eligible = button && button.tagName === 'BUTTON' && !button.disabled;
+            // An icon-only button has no text to relabel (assigning textContent would replace
+            // its <svg> with a bare "…") - just disabling it is feedback enough.
+            var relabel = eligible && !button.classList.contains('icon-button');
+            var originalText = eligible ? button.textContent : null;
+
+            if (form.hasAttribute('data-stream')) {
+                // Real navigation is still happening (see the comment above the listener). The
+                // mutation itself is deferred one tick instead of applied synchronously here:
+                // Chrome submits a form on Enter by internally simulating a click on its default
+                // button, and disabling that same button synchronously from within the 'submit'
+                // event it's still in the middle of dispatching aborts that in-flight click, so
+                // the submission silently never happens (keyboard-only "press Enter" submission
+                // broke this way, reported against exactly this symptom on the login page - a
+                // real pointer click isn't affected, its own default action already committed
+                // before 'submit' fires). Deferring lets the browser finish submitting first
+                // either way. No need to re-enable it afterward: the navigation this triggers
+                // replaces the whole DOM.
+                if (eligible) {
+                    setTimeout(function () {
+                        if (relabel) {
+                            button.textContent = originalText + '…';
+                        }
+                        button.disabled = true;
+                    }, 0);
+                }
+                return;
+            }
+
+            event.preventDefault();
+            if (eligible) {
+                if (relabel) {
+                    button.textContent = originalText + '…';
+                }
+                button.disabled = true;
+            }
+            var action = (button && button.getAttribute('formaction')) || form.getAttribute('action') || location.href;
+            // A <form> with no enctype (nearly all of them: login, favorites, users, saves...)
+            // submits as application/x-www-form-urlencoded, which express.urlencoded() (the only
+            // body parser mounted for those routes) expects - passing a FormData body to fetch()
+            // always sends multipart/form-data instead, regardless of the form's own enctype,
+            // which left req.body undefined on every route without its own multer instance (only
+            // the handful of file-upload routes have one). URLSearchParams as the body keeps the
+            // encoding those routes actually expect; only the enctype="multipart/form-data" forms
+            // (the file uploads) still need a real FormData.
+            var enctype = (button && button.getAttribute('formenctype')) || form.getAttribute('enctype') || '';
+            var body;
+            if (enctype === 'multipart/form-data') {
+                body = new FormData(form);
+                if (button && button.name) {
+                    // Native submission includes the clicked submit button's own name/value
+                    // (several forms tell apart which of theirs was pressed this way, e.g. the
+                    // Browse buttons' "target" field) - FormData(form)/URLSearchParams alone
+                    // don't add it.
+                    body.append(button.name, button.value);
+                }
+            } else {
+                body = new URLSearchParams();
+                new FormData(form).forEach(function (value, key) {
+                    if (typeof value === 'string') {
+                        body.append(key, value);
+                    }
+                });
+                if (button && button.name) {
+                    body.append(button.name, button.value);
+                }
+            }
+            var scrollY = window.scrollY;
+            fetch(action, {method: 'POST', body: body})
+                .then(function (response) {
+                    // A handful of these (login, logout, /repo/save) res.redirect() elsewhere on
+                    // success instead of responding in place - fetch() follows that transparently,
+                    // so response.redirected/response.url say where it actually ended up. Those
+                    // belong on the address bar for real (e.g. landing on "/" after signing in),
+                    // unlike every in-place response above: a real navigation there also sidesteps
+                    // the GET /login page's own gap (it doesn't redirect an already-authenticated
+                    // visitor away by itself), and refreshing a real URL is always safe anyway.
+                    if (response.redirected) {
+                        location.href = response.url;
+                        return null;
+                    }
+                    return response.text();
+                })
+                .then(function (html) {
+                    if (html === null) {
+                        return;
+                    }
+                    // Full-document replacement, not innerHTML: the response is a complete
+                    // <!DOCTYPE html>...</html> page (styles, nav, every inline <script> below
+                    // included), same as a real navigation would have rendered - this makes the
+                    // browser parse it as one, scripts included, without ever changing the URL.
+                    document.open();
+                    document.write(html);
+                    document.close();
+                    window.scrollTo(0, scrollY);
+                })
+                .catch(function () {
+                    if (eligible) {
+                        button.disabled = false;
+                        if (relabel) {
+                            button.textContent = originalText;
+                        }
+                    }
+                    alert('Could not reach the application - check your connection and try again.');
+                });
         });
 
         // Subtabs (see renderSubtabbedPage()): every panel is already in the DOM, server-
@@ -2208,7 +2452,13 @@ function renderPageTail(): string {
                     panel.classList.toggle('active', panel.dataset.subtabPanel === id);
                 });
                 links.forEach(function (link) {
-                    link.classList.toggle('active', link.dataset.subtab === id);
+                    var selected = link.dataset.subtab === id;
+                    link.classList.toggle('active', selected);
+                    // Keeps the ARIA tab state (and Tab-key stops) in sync with which panel is
+                    // actually visible - see renderSubtabbedPage()'s nav markup, which starts
+                    // every link at aria-selected="false"/tabindex="-1" until this runs.
+                    link.setAttribute('aria-selected', selected ? 'true' : 'false');
+                    link.tabIndex = selected ? 0 : -1;
                 });
             }
             links.forEach(function (link) {
@@ -2535,7 +2785,7 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                             will recreate it on its next launch.</span>
                         </span>
                 </label>
-                <button type="submit">Delete the selection</button>
+                <button type="submit" class="button-danger">Delete the selection</button>
             </form>
         </section>
     `;
@@ -3421,7 +3671,7 @@ function renderMauiDangerZoneCard(info?: string): string {
                     <input type="checkbox" name="deleteDatabase">
                     Delete the database (games, players, scores)
                 </label>
-                <button type="submit">Delete the selection</button>
+                <button type="submit" class="button-danger">Delete the selection</button>
             </form>
         </section>
     `;
@@ -3779,7 +4029,7 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
             <td class="center">
                 ${release.assetUrl && !release.isCurrent ? `
-                    <form method="post" action="/maui/update/install"
+                    <form method="post" action="/maui/update/install" data-stream
                         onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
                         <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
                         <input type="hidden" name="assetUrl" value="${escapeHtml(release.assetUrl)}">
@@ -4082,7 +4332,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
             <h2>Media download</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${summary ? renderDownloadSummary(summary) : ''}
-            <form method="post" action="/favorites/download-media">
+            <form method="post" action="/favorites/download-media" data-stream>
                 <p class="info">Downloads the missing marquees/flyers/logos from ScreenScraper for all
                 the favorites. Synchronous processing, may take several minutes depending on the number of favorites
                 (a delay is enforced between calls) - do not close this page during the download.</p>
@@ -4308,7 +4558,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 <span>${cacheStatus}${unresolvedCount
                     ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
                     : ''}</span>
-                <form method="post" action="/favorites/refresh">
+                <form method="post" action="/favorites/refresh" data-stream>
                     <button type="submit">Update favorites</button>
                 </form>
             </div>
@@ -4766,7 +5016,7 @@ function renderImportCard(error?: string): string {
                 .map(d => escapeHtml(d.zipFolder)).join(', ')} folders (copied as-is into the
             current mame configuration) - in that case, no manifest.json is needed.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <form method="post" action="/import" enctype="multipart/form-data">
+            <form method="post" action="/import" enctype="multipart/form-data" data-stream>
                 <label for="pack">ZIP file</label>
                 <input type="file" id="pack" name="pack" accept=".zip" required>
                 <button type="submit">Import</button>
@@ -5089,7 +5339,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             </label>
             <p class="info pack-search-count" id="packSearchCount" hidden></p>
         </div>
-        <form method="post" action="/import/from-url"
+        <form method="post" action="/import/from-url" data-stream
             onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
             A game listed by several packs is fetched once. While a search or the hiscores filter is active,
@@ -5358,6 +5608,7 @@ function renderCreateUserCard(error?: string): string {
 }
 
 function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+    const avatarsPath = new Config().avatarsPath;
     const rows = users.map(user => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const hasAvatar = avatarFilename !== undefined;
@@ -5367,9 +5618,12 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                 <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
                     <label class="avatar-upload" title="Change the avatar (PNG)">
                         ${hasAvatar
-                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}" alt="">`
+                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
                             : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
-                        <input type="file" name="avatar" accept="image/png" onchange="this.form.submit()">
+                        <!-- requestSubmit(), not submit(): the latter bypasses the 'submit' event
+                        entirely (a DOM quirk), which would skip the AJAX interception below and
+                        leave the browser stuck on this POST's own URL (see renderPageTail()). -->
+                        <input type="file" name="avatar" accept="image/png" onchange="this.form.requestSubmit()">
                     </label>
                 </form>
             </td>
@@ -5445,12 +5699,13 @@ function renderDeletedUsersCard(
             </section>
         `;
     }
+    const avatarsPath = new Config().avatarsPath;
     const rows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         return `
         <tr>
             <td class="center">${avatarFilename !== undefined
-                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
