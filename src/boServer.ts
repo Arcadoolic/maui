@@ -2327,15 +2327,38 @@ function renderPageTail(): string {
                 button.disabled = true;
             }
             var action = (button && button.getAttribute('formaction')) || form.getAttribute('action') || location.href;
-            var formData = new FormData(form);
-            if (button && button.name) {
-                // Native submission includes the clicked submit button's own name/value (several
-                // forms tell apart which of theirs was pressed this way, e.g. the Browse
-                // buttons' "target" field) - FormData(form) alone doesn't add it.
-                formData.append(button.name, button.value);
+            // A <form> with no enctype (nearly all of them: login, favorites, users, saves...)
+            // submits as application/x-www-form-urlencoded, which express.urlencoded() (the only
+            // body parser mounted for those routes) expects - passing a FormData body to fetch()
+            // always sends multipart/form-data instead, regardless of the form's own enctype,
+            // which left req.body undefined on every route without its own multer instance (only
+            // the handful of file-upload routes have one). URLSearchParams as the body keeps the
+            // encoding those routes actually expect; only the enctype="multipart/form-data" forms
+            // (the file uploads) still need a real FormData.
+            var enctype = (button && button.getAttribute('formenctype')) || form.getAttribute('enctype') || '';
+            var body;
+            if (enctype === 'multipart/form-data') {
+                body = new FormData(form);
+                if (button && button.name) {
+                    // Native submission includes the clicked submit button's own name/value
+                    // (several forms tell apart which of theirs was pressed this way, e.g. the
+                    // Browse buttons' "target" field) - FormData(form)/URLSearchParams alone
+                    // don't add it.
+                    body.append(button.name, button.value);
+                }
+            } else {
+                body = new URLSearchParams();
+                new FormData(form).forEach(function (value, key) {
+                    if (typeof value === 'string') {
+                        body.append(key, value);
+                    }
+                });
+                if (button && button.name) {
+                    body.append(button.name, button.value);
+                }
             }
             var scrollY = window.scrollY;
-            fetch(action, {method: 'POST', body: formData})
+            fetch(action, {method: 'POST', body: body})
                 .then(function (response) {
                     // A handful of these (login, logout, /repo/save) res.redirect() elsewhere on
                     // success instead of responding in place - fetch() follows that transparently,
