@@ -1499,28 +1499,46 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             font-size: 0.8em;
             font-weight: bold;
         }
+        /* Segmented-control look: a capsule holding every tab, the active one its own solid pill
+           instead of an underline - same black/white/accent palette as everywhere else, just
+           more depth (background + shadow) than a flat line ever gave it. */
         .tabs {
-            display: flex;
+            display: inline-flex;
             flex-wrap: wrap;
             justify-content: center;
-            gap: 4px;
+            gap: 2px;
             margin-top: 16px;
-            border-bottom: 1px solid var(--border);
+            padding: 4px;
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            /* An inline-flex box (unlike a block-level flex one) shrinks to its content's width
+               and is centered by header's own text-align: center - the capsule wraps snugly
+               around the tabs instead of stretching edge to edge. max-width keeps a narrow
+               viewport from overflowing before flex-wrap gets a chance to break it into rows. */
+            max-width: 100%;
         }
         .tabs a {
             display: inline-block;
             padding: 8px 16px;
             color: var(--text-muted);
             text-decoration: none;
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
+            border-radius: 999px;
+            transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
         }
         .tabs a:hover {
             color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
         }
         .tabs a.active {
-            color: var(--text);
-            border-bottom-color: var(--accent);
+            color: var(--bg);
+            background-color: var(--text);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+        .tabs a.active:hover {
+            /* Already the strongest state on the bar - a hover background would just dim the
+               solid pill for no reason. */
+            background-color: var(--text);
         }
         .card {
             background-color: var(--surface);
@@ -2159,6 +2177,9 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
            back (smaller, dimmed except the active tab) so the subtabs row below reads as the
            primary navigation for the page actually being looked at, without hiding the way
            back to the other top-level tabs. */
+        .tabs.compact {
+            padding: 3px;
+        }
         .tabs.compact a {
             padding: 6px 12px;
             font-size: 0.85em;
@@ -2200,12 +2221,20 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             margin: 0 0 8px;
             font-size: 1em;
         }
+        /* Same segmented-control family as .tabs above, one size down and left-aligned (it's a
+           page's own secondary nav, not the site-wide one) - and its active pill is the accent
+           color rather than plain white, so the two levels stay visually distinct: white pill =
+           which top-level tab, blue pill = which subtab within it. Accent was already this row's
+           "you are here" color before (the old underline), just applied to a filled pill now. */
         .subtabs {
-            display: flex;
+            display: inline-flex;
             flex-wrap: wrap;
-            gap: 4px;
+            gap: 2px;
             margin: 4px 0 20px;
-            border-bottom: 1px solid var(--border);
+            padding: 3px;
+            background-color: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-subtle);
+            border-radius: 999px;
             animation: subtabs-slide-in 0.2s ease-out;
         }
         @keyframes subtabs-slide-in {
@@ -2214,18 +2243,23 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .subtabs a {
             display: inline-block;
-            padding: 8px 16px;
+            padding: 6px 14px;
             color: var(--text-muted);
             text-decoration: none;
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
+            border-radius: 999px;
+            font-size: 0.9em;
+            transition: color 0.15s ease, background-color 0.15s ease;
         }
         .subtabs a:hover {
-            color: #ffffff;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
         }
         .subtabs a.active {
-            color: var(--accent);
-            border-bottom-color: var(--accent);
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .subtabs a.active:hover {
+            background-color: var(--accent);
         }
         .subtab-panel {
             display: none;
