@@ -2257,39 +2257,121 @@ function renderPageTail(): string {
     return `
     </main>
     <script>
-        // Every action here is a plain form POST/GET (full page navigation, no AJAX) - the only
-        // feedback the browser gives on its own during that navigation is the tab's spinner,
-        // easy to miss. Disable + relabel whichever button actually triggered the submission
-        // (event.submitter, not just "the first submit button in the form" - several forms have
-        // more than one, e.g. formaction-overriding browse buttons) so a click always visibly
-        // registers, even before the new page has finished loading. No need to re-enable it: the
-        // navigation this triggers replaces the whole DOM (or, for a confirm() dialog the user
-        // cancels, defaultPrevented is set below and this is skipped entirely).
+        // Most forms here are POSTs whose response is the exact same full-page HTML a GET would
+        // render (see e.g. renderFavoritesTab()) - the server has no separate "fragment" vs
+        // "whole page" response shape. That let every one of them respond in place instead of
+        // navigating: intercept the submit, POST via fetch(), then replace the document with
+        // whatever HTML comes back. The address bar never leaves the GET page it started on, so
+        // refreshing afterward re-runs that GET, not the action - previously every action left
+        // the browser sitting on its own POST URL, and a refresh there replayed it (a delete, a
+        // vote, a save... whatever the last click was), because the server had no
+        // Post/Redirect/Get in place. This fixes that for free, without touching any of those
+        // handlers, since the response they already send is exactly what gets displayed either
+        // way.
         //
-        // The mutation itself is deferred one tick (setTimeout(fn, 0)) instead of applied
-        // synchronously in this handler: Chrome submits a form on Enter by internally
-        // simulating a click on its default button, and disabling that same button
-        // synchronously from within the 'submit' event it's still in the middle of dispatching
-        // aborts that in-flight click - the submission silently never happens. A real pointer
-        // click isn't affected (its own default action already committed before 'submit'
-        // fires), so this broke keyboard-only ("press Enter") submission specifically, while
-        // clicking the button kept working - reported against exactly this symptom on the
-        // login page. Deferring lets the browser finish submitting first either way.
+        // Left alone (see the data-stream check below): forms whose POST response is a
+        // multi-chunk res.write() stream the browser paints incrementally as it arrives (long
+        // imports, favorites refresh, media download, self-update) - swapping those in only once
+        // the whole fetch() resolves would throw away the "watch it happen live" log entirely.
+        // Those still fully navigate, so they keep the older replay-on-refresh gap for now (see
+        // docs/BO-UX-REVAMP.md) until they're worth teaching this same script to read
+        // fetch()'s response body as a stream instead of a single text() blob.
         document.addEventListener('submit', function (event) {
             if (event.defaultPrevented) {
                 return;
             }
-            var button = event.submitter;
-            if (button && button.tagName === 'BUTTON' && !button.disabled) {
-                setTimeout(function () {
-                    // An icon-only button has no text to relabel (assigning textContent would
-                    // replace its <svg> with a bare "…") - just disabling it is feedback enough.
-                    if (!button.classList.contains('icon-button')) {
-                        button.textContent = button.textContent + '…';
-                    }
-                    button.disabled = true;
-                }, 0);
+            var form = event.target;
+            var button = event.submitter; // null for a plain requestSubmit() with no argument.
+            // A submitter's formmethod/formaction override the form's own - same resolution a
+            // real submission would use (the Browse buttons rely on exactly this to GET /browse
+            // instead of POSTing the form they sit in).
+            var method = ((button && button.getAttribute('formmethod')) || form.getAttribute('method') || 'get')
+                .toLowerCase();
+            if (method !== 'post') {
+                return; // A GET is always safe to reload - no need to intercept it.
             }
+            var eligible = button && button.tagName === 'BUTTON' && !button.disabled;
+            // An icon-only button has no text to relabel (assigning textContent would replace
+            // its <svg> with a bare "…") - just disabling it is feedback enough.
+            var relabel = eligible && !button.classList.contains('icon-button');
+            var originalText = eligible ? button.textContent : null;
+
+            if (form.hasAttribute('data-stream')) {
+                // Real navigation is still happening (see the comment above the listener). The
+                // mutation itself is deferred one tick instead of applied synchronously here:
+                // Chrome submits a form on Enter by internally simulating a click on its default
+                // button, and disabling that same button synchronously from within the 'submit'
+                // event it's still in the middle of dispatching aborts that in-flight click, so
+                // the submission silently never happens (keyboard-only "press Enter" submission
+                // broke this way, reported against exactly this symptom on the login page - a
+                // real pointer click isn't affected, its own default action already committed
+                // before 'submit' fires). Deferring lets the browser finish submitting first
+                // either way. No need to re-enable it afterward: the navigation this triggers
+                // replaces the whole DOM.
+                if (eligible) {
+                    setTimeout(function () {
+                        if (relabel) {
+                            button.textContent = originalText + '…';
+                        }
+                        button.disabled = true;
+                    }, 0);
+                }
+                return;
+            }
+
+            event.preventDefault();
+            if (eligible) {
+                if (relabel) {
+                    button.textContent = originalText + '…';
+                }
+                button.disabled = true;
+            }
+            var action = (button && button.getAttribute('formaction')) || form.getAttribute('action') || location.href;
+            var formData = new FormData(form);
+            if (button && button.name) {
+                // Native submission includes the clicked submit button's own name/value (several
+                // forms tell apart which of theirs was pressed this way, e.g. the Browse
+                // buttons' "target" field) - FormData(form) alone doesn't add it.
+                formData.append(button.name, button.value);
+            }
+            var scrollY = window.scrollY;
+            fetch(action, {method: 'POST', body: formData})
+                .then(function (response) {
+                    // A handful of these (login, logout, /repo/save) res.redirect() elsewhere on
+                    // success instead of responding in place - fetch() follows that transparently,
+                    // so response.redirected/response.url say where it actually ended up. Those
+                    // belong on the address bar for real (e.g. landing on "/" after signing in),
+                    // unlike every in-place response above: a real navigation there also sidesteps
+                    // the GET /login page's own gap (it doesn't redirect an already-authenticated
+                    // visitor away by itself), and refreshing a real URL is always safe anyway.
+                    if (response.redirected) {
+                        location.href = response.url;
+                        return null;
+                    }
+                    return response.text();
+                })
+                .then(function (html) {
+                    if (html === null) {
+                        return;
+                    }
+                    // Full-document replacement, not innerHTML: the response is a complete
+                    // <!DOCTYPE html>...</html> page (styles, nav, every inline <script> below
+                    // included), same as a real navigation would have rendered - this makes the
+                    // browser parse it as one, scripts included, without ever changing the URL.
+                    document.open();
+                    document.write(html);
+                    document.close();
+                    window.scrollTo(0, scrollY);
+                })
+                .catch(function () {
+                    if (eligible) {
+                        button.disabled = false;
+                        if (relabel) {
+                            button.textContent = originalText;
+                        }
+                    }
+                    alert('Could not reach the application - check your connection and try again.');
+                });
         });
 
         // Subtabs (see renderSubtabbedPage()): every panel is already in the DOM, server-
@@ -3890,7 +3972,7 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
             <td class="center">
                 ${release.assetUrl && !release.isCurrent ? `
-                    <form method="post" action="/maui/update/install"
+                    <form method="post" action="/maui/update/install" data-stream
                         onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
                         <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
                         <input type="hidden" name="assetUrl" value="${escapeHtml(release.assetUrl)}">
@@ -4193,7 +4275,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
             <h2>Media download</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${summary ? renderDownloadSummary(summary) : ''}
-            <form method="post" action="/favorites/download-media">
+            <form method="post" action="/favorites/download-media" data-stream>
                 <p class="info">Downloads the missing marquees/flyers/logos from ScreenScraper for all
                 the favorites. Synchronous processing, may take several minutes depending on the number of favorites
                 (a delay is enforced between calls) - do not close this page during the download.</p>
@@ -4419,7 +4501,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 <span>${cacheStatus}${unresolvedCount
                     ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
                     : ''}</span>
-                <form method="post" action="/favorites/refresh">
+                <form method="post" action="/favorites/refresh" data-stream>
                     <button type="submit">Update favorites</button>
                 </form>
             </div>
@@ -4877,7 +4959,7 @@ function renderImportCard(error?: string): string {
                 .map(d => escapeHtml(d.zipFolder)).join(', ')} folders (copied as-is into the
             current mame configuration) - in that case, no manifest.json is needed.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <form method="post" action="/import" enctype="multipart/form-data">
+            <form method="post" action="/import" enctype="multipart/form-data" data-stream>
                 <label for="pack">ZIP file</label>
                 <input type="file" id="pack" name="pack" accept=".zip" required>
                 <button type="submit">Import</button>
@@ -5200,7 +5282,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             </label>
             <p class="info pack-search-count" id="packSearchCount" hidden></p>
         </div>
-        <form method="post" action="/import/from-url"
+        <form method="post" action="/import/from-url" data-stream
             onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
             A game listed by several packs is fetched once. While a search or the hiscores filter is active,
@@ -5480,7 +5562,10 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                         ${hasAvatar
                             ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}" alt="">`
                             : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
-                        <input type="file" name="avatar" accept="image/png" onchange="this.form.submit()">
+                        <!-- requestSubmit(), not submit(): the latter bypasses the 'submit' event
+                        entirely (a DOM quirk), which would skip the AJAX interception below and
+                        leave the browser stuck on this POST's own URL (see renderPageTail()). -->
+                        <input type="file" name="avatar" accept="image/png" onchange="this.form.requestSubmit()">
                     </label>
                 </form>
             </td>

@@ -46,6 +46,11 @@ Faiblesses identifiées :
   fois. Pas de glossaire ni d'aide contextuelle.
 - **Zéro test** sur `boServer.ts` (`tests/` n'a rien dessus) : tout
   refactor UI se fait sans filet.
+- **Une action se rejoue au F5** (corrigé, voir Phase 0bis) : chaque route
+  POST répondait directement avec la page re-rendue
+  (`res.send(await renderFavoritesTab(...))`), sans Post/Redirect/Get - le
+  navigateur restait donc sur l'URL du POST, et rafraîchir la page
+  rejouait l'action (suppression, vote, sauvegarde...).
 
 ## Approche retenue
 
@@ -77,6 +82,29 @@ partagé par tous les écrans :
   (`tablist`/`tab`/`tabpanel`) sur les sous-onglets.
 - Cibles tactiles des boutons icône remontées à ~40px.
 
+### Phase 0bis — Actions en arrière-plan (ce chantier)
+Corrige "un F5 rejoue l'action" en interceptant les formulaires côté client
+au lieu de toucher aux ~30 routes POST une par une :
+- Un unique `document.addEventListener('submit', ...)` dans
+  `renderPageTail()` intercepte tout `<form method="post">`, poste en
+  `fetch()`, puis remplace le document entier (`document.open/write/close`)
+  par la réponse - qui est déjà exactement le HTML qu'un GET aurait rendu.
+  L'URL affichée ne bouge jamais : F5 relance un GET, jamais l'action.
+- Si la réponse est un vrai `res.redirect()` (login, logout, `/repo/save`),
+  `fetch()` le suit et `response.redirected`/`response.url` disent où :
+  dans ce cas une vraie navigation (`location.href = response.url`) est
+  faite à la place, pour que l'URL affichée soit correcte.
+- Exclu (attribut `data-stream` sur le `<form>`, laissé en navigation
+  classique) : les 5 routes dont la réponse est un flux `res.write()`
+  affiché progressivement (`/import`, `/import/from-url`,
+  `/favorites/refresh`, `/favorites/download-media`,
+  `/maui/update/install`) - un remplacement en bloc à la fin du fetch
+  perdrait le journal de progression en direct. Elles gardent le problème
+  du F5 pour l'instant.
+- L'upload d'avatar (`onchange="this.form.submit()"`) est passé à
+  `requestSubmit()` : `submit()` ne déclenche pas l'évènement `submit` (une
+  bizarrerie du DOM), donc l'interception ne s'appliquait pas.
+
 ### Phase 1 — Clarté du contenu (à planifier)
 - Glossaire/info-bulles pour le jargon MAME (bouton "?" à côté des termes
   techniques plutôt que de réécrire toute la terminologie).
@@ -100,6 +128,7 @@ refactor, pour arrêter de travailler sans filet.
 ## Suivi
 
 - [x] Phase 0 — fondations (branche `feat/bo-ux-foundations`)
+- [x] Phase 0bis — actions en arrière-plan (branche `feat/bo-ux-foundations`)
 - [ ] Phase 1 — clarté du contenu
 - [ ] Phase 2 — écran par écran
 - [ ] Phase 3 — tests de régression
