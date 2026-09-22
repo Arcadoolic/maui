@@ -103,10 +103,17 @@ electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3
   `just serve` checks this automatically (`_check-sandbox` recipe) and prints
   this fix if misconfigured; `just build` does not run the check.
 - **Electron binary missing after install**: `electron-vite dev` fails with
-  `Error: Electron uninstall` (empty `node_modules/electron/dist/`) when
+  `Error: Electron uninstall` (missing `node_modules/electron/path.txt`) when
   Electron's own postinstall download fails silently during `npm install`
-  (network hiccup, proxy). Fix: `node node_modules/electron/install.js`,
-  then reapply the sandbox chmod above (fresh binary resets it to 755).
+  (network hiccup, proxy) — `electron-vite`'s own `getElectronPath()` throws
+  instead of re-downloading like `electron`'s `index.js` does. `just
+  serve`/`just build` check this automatically (`_check-electron-binary`
+  recipe) and re-run `node node_modules/electron/install.js` if needed. On
+  Linux, reapply the sandbox chmod above afterward (fresh binary resets it
+  to 755) — `_check-sandbox` runs after `_check-electron-binary` in `just
+  serve` and will print the fix if needed, but `just build` doesn't run
+  that check. Running `npm install`/`electron-vite` directly, outside
+  `just`, still needs the manual fix.
 
 ## Git workflow
 

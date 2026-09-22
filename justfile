@@ -12,6 +12,20 @@ install:
     echo "just: building native deps with PYTHON=$PYTHON"
     npm install
 
+# Verify the Electron binary downloaded correctly, re-fetch it if not
+_check-electron-binary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # electron's own postinstall download can fail silently during npm install
+    # (network hiccup, proxy), leaving path.txt (and dist/) missing. electron's
+    # own index.js re-downloads on demand when that happens, but electron-vite's
+    # getElectronPath() doesn't: it just throws "Error: Electron uninstall"
+    # before background.ts ever runs. Re-fetch here so serve/build don't fail.
+    path_file="node_modules/electron/path.txt"
+    [ -e "$path_file" ] && exit 0
+    echo "just: Electron binary missing, re-running its install script..." >&2
+    node node_modules/electron/install.js
+
 # Verify Electron's setuid sandbox helper can run (Linux only, no-op elsewhere)
 _check-sandbox:
     #!/usr/bin/env bash
@@ -52,11 +66,11 @@ _check-sandbox:
     exit 1
 
 # Run the app in development mode (Electron, hot-reload)
-serve: install _check-sandbox
+serve: install _check-electron-binary _check-sandbox
     npm run electron:serve
 
 # Build production Electron app
-build: install
+build: install _check-electron-binary
     #!/usr/bin/env bash
     set -euo pipefail
     # electron-builder.yml's artifactName expands env.ARTIFACT_SUFFIX unconditionally - CI sets it
