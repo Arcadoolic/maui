@@ -53,7 +53,7 @@ import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
 import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
 } from '@/class/UserReservation';
-import {findAvatarFile} from '@/class/AvatarFiles';
+import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
 import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
@@ -5574,6 +5574,7 @@ function renderCreateUserCard(error?: string): string {
 }
 
 function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+    const avatarsPath = new Config().avatarsPath;
     const rows = users.map(user => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const hasAvatar = avatarFilename !== undefined;
@@ -5583,7 +5584,7 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                 <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
                     <label class="avatar-upload" title="Change the avatar (PNG)">
                         ${hasAvatar
-                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}" alt="">`
+                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
                             : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
                         <!-- requestSubmit(), not submit(): the latter bypasses the 'submit' event
                         entirely (a DOM quirk), which would skip the AJAX interception below and
@@ -5664,12 +5665,13 @@ function renderDeletedUsersCard(
             </section>
         `;
     }
+    const avatarsPath = new Config().avatarsPath;
     const rows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         return `
         <tr>
             <td class="center">${avatarFilename !== undefined
-                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
