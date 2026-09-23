@@ -1539,6 +1539,11 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         header h1 {
             margin: 0;
             font-size: 1.4em;
+            line-height: 0;
+        }
+        .header-logo {
+            width: min(360px, 90vw);
+            height: auto;
         }
         .app-version {
             position: fixed;
@@ -2445,7 +2450,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     <a class="skip-link" href="#main">Skip to content</a>
     <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
     <header>
-        <h1>mame-awesome-ui</h1>
+        <h1><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></h1>
         ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
@@ -6070,7 +6075,7 @@ export function startBoServer(
     // The BO is reachable from the whole LAN (app.listen() has no host argument), so every route
     // below this guard requires a logged-in session except the login page itself and the static
     // assets it needs (background/logo) to render.
-    const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg']);
+    const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg', '/maui-logo.png']);
     app.use((req, res, next) => {
         if (PUBLIC_PATHS.has(req.path) || req.session.boUserId) {
             next();
@@ -6112,6 +6117,10 @@ export function startBoServer(
             return;
         }
         res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+    });
+
+    app.get('/maui-logo.png', (req, res) => {
+        res.sendFile('img/maui-logo.png', {root: getStaticPath()});
     });
 
     app.get('/mame-logo.svg', (req, res) => {
