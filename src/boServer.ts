@@ -2095,6 +2095,21 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .pack-search, .table-search {
             margin: 16px 0 0;
         }
+        .table-search-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .table-search-controls input {
+            flex: 1 1 240px;
+        }
+        .table-search-controls input, .table-search-controls select {
+            margin-top: 0;
+        }
+        .table-search-controls select {
+            width: auto;
+            flex: 0 1 auto;
+        }
         .pack-search-count, .table-search-count {
             margin: 8px 0 0;
         }
@@ -4595,10 +4610,14 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     // sorted here, by name, for both the tab and the "Update favorites" result. A favorite not
     // resolved yet has no name, its romName stands in until the next update.
     const sortedRows = [...favoritesInfo.rows].sort((a, b) => a.fullname.localeCompare(b.fullname));
+    // undefined: no category known at all (database unreadable) - no icons, no category filter.
+    const categoryOf = (row: FavoriteRow): GameCategory | null | undefined => favoritesInfo.stats
+        ? favoritesInfo.stats.get(row.romName)?.category ?? null
+        : undefined;
     const rows = sortedRows.map(row => `
-        <tr data-search="${escapeHtml(getFavoriteSearchText(row))}">
+        <tr data-search="${escapeHtml(getFavoriteSearchText(row))}" data-category="${escapeHtml(categoryOf(row)?.name ?? '')}">
             <td>${row.cached
-                ? renderGameName(row.fullname, row.romName, favoritesInfo.stats ? favoritesInfo.stats.get(row.romName)?.category ?? null : undefined)
+                ? renderGameName(row.fullname, row.romName, categoryOf(row))
                 : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${renderShortnameCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
@@ -4611,6 +4630,27 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             </td>
         </tr>
     `).join('');
+
+    // Category filter options: every category a favorite is in, with its favorite count, then the
+    // favorites genre.ini doesn't know. Their value is data-category above ('' for none).
+    const categoryCounts = new Map<string, number>();
+    let uncategorizedCount = 0;
+    for (const row of sortedRows) {
+        const name = categoryOf(row)?.name;
+        if (name) {
+            categoryCounts.set(name, (categoryCounts.get(name) ?? 0) + 1);
+        } else {
+            uncategorizedCount++;
+        }
+    }
+    const categoryFilter = favoritesInfo.stats ? `
+        <select id="favoritesCategory" aria-label="Filter the favorites by category">
+            <option value="*">All categories (${sortedRows.length})</option>
+            ${[...categoryCounts].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) =>
+                `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${count})</option>`).join('')}
+            ${uncategorizedCount ? `<option value="">No category (${uncategorizedCount})</option>` : ''}
+        </select>
+    ` : '';
 
     const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
     const cacheStatus = favoritesInfo.cacheUpdatedAt
@@ -4632,8 +4672,11 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 </form>
             </div>
             <div class="table-search">
-                <input type="search" id="favoritesSearch" placeholder="Search a name, shortname, bios or device…"
-                    autocomplete="off" aria-label="Search the favorites">
+                <div class="table-search-controls">
+                    <input type="search" id="favoritesSearch" placeholder="Search a name, shortname, bios or device…"
+                        autocomplete="off" aria-label="Search the favorites">
+                    ${categoryFilter}
+                </div>
                 <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
             </div>
             <div class="table-wrap">
@@ -4652,9 +4695,11 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             </div>
             <script>(function () {
                 // Search: every term must appear (accents and case ignored) in a row's shortname,
-                // name or bios / devices (its data-search, see getFavoriteSearchText()). Rows are
-                // only hidden, so the remove buttons keep working on what is shown.
+                // name or bios / devices (its data-search, see getFavoriteSearchText()), and the row
+                // must be in the chosen category (its data-category; '*' for all). Rows are only
+                // hidden, so the remove buttons keep working on what is shown.
                 var search = document.getElementById('favoritesSearch');
+                var category = document.getElementById('favoritesCategory');
                 var count = document.getElementById('favoritesSearchCount');
                 var rows = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable tbody tr'));
                 function fold(text) {
@@ -4662,19 +4707,22 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 }
                 function applySearch() {
                     var terms = fold(search.value).split(/\\s+/).filter(Boolean);
+                    var chosen = category ? category.value : '*';
                     var shown = 0;
                     rows.forEach(function (row) {
                         var haystack = fold(row.dataset.search || '');
-                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; });
+                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; })
+                            && (chosen === '*' || row.dataset.category === chosen);
                         row.hidden = !match;
                         if (match) { shown++; }
                     });
-                    count.hidden = terms.length === 0;
+                    count.hidden = terms.length === 0 && chosen === '*';
                     count.textContent = shown
                         ? shown + ' favorite(s) found out of ' + rows.length + '.'
                         : 'No favorite matches this search.';
                 }
                 search.addEventListener('input', applySearch);
+                if (category) { category.addEventListener('change', applySearch); }
                 search.addEventListener('keydown', function (event) {
                     if (event.key === 'Enter') { event.preventDefault(); }
                 });
