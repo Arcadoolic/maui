@@ -1813,6 +1813,22 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: inline-flex;
             cursor: help;
         }
+        .asset-icon[data-preview] {
+            cursor: zoom-in;
+        }
+        .asset-preview {
+            position: fixed;
+            z-index: 50;
+            max-width: 240px;
+            max-height: 180px;
+            object-fit: contain;
+            padding: 4px;
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        }
         /* Icon-only submit button (favorites Remove/Restore): compact, outlined in its own color
            instead of the plain white button. The extra selector parts beat the generic
            "form > button[type=submit]:last-child" 24px top margin above, which would otherwise
@@ -4408,19 +4424,70 @@ const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 16 16" fill="none" s
 
 /**
  * One asset (marquee/flyer/logo) presence icon: green when the file exists, red when it doesn't.
- * A missing one is also struck through, so the state doesn't rest on red vs. green alone.
+ * A missing one is also struck through, so the state doesn't rest on red vs. green alone. A
+ * present one carries its image URL (data-preview, served by GET /media/...), shown as a
+ * thumbnail following the mouse while hovered (see ASSET_PREVIEW_SCRIPT) - instead of the
+ * tooltip, which would cover it.
  */
-function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean): string {
+function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean, romName: string): string {
     const label = `${kind}: ${found ? 'present' : 'missing'}`;
-    return `<span class="asset-icon ${found ? 'badge-yes' : 'badge-no'}" title="${label}" role="img" aria-label="${label}">
+    const hover = found
+        ? `data-preview="/media/${kind.toLowerCase()}/${encodeURIComponent(romName)}.png"`
+        : `title="${label}"`;
+    return `<span class="asset-icon ${found ? 'badge-yes' : 'badge-no'}" ${hover} role="img" aria-label="${label}">
         <svg ${ICON_SVG_ATTRS}>${ASSET_ICON_PATHS[kind]}${found ? '' : '<path d="M2 14L14 2"/>'}</svg>
     </span>`;
 }
 
-function renderAssetIcons(row: FavoriteMediaStatus): string {
-    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee)}${
-        renderAssetIcon('Flyer', row.hasFlyer)}${renderAssetIcon('Logo', row.hasLogo)}</span>`;
+function renderAssetIcons(row: FavoriteMediaStatus & {romName: string}): string {
+    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee, row.romName)}${
+        renderAssetIcon('Flyer', row.hasFlyer, row.romName)}${renderAssetIcon('Logo', row.hasLogo, row.romName)}</span>`;
 }
+
+/**
+ * Asset thumbnail that follows the mouse over any [data-preview] icon (see renderAssetIcon()):
+ * one shared <img>, fixed-positioned next to the cursor and flipped to the other side of it near
+ * the viewport's right/bottom edges. pointer-events: none, so it never steals the hover itself.
+ */
+const ASSET_PREVIEW_SCRIPT = `<img class="asset-preview" id="assetPreview" alt="" hidden>
+            <script>(function () {
+                var preview = document.getElementById('assetPreview');
+                var OFFSET = 16;
+                var last = null;
+                function place(event) {
+                    last = event;
+                    var width = preview.offsetWidth;
+                    var height = preview.offsetHeight;
+                    var x = event.clientX + OFFSET;
+                    var y = event.clientY + OFFSET;
+                    if (x + width > window.innerWidth) { x = event.clientX - OFFSET - width; }
+                    if (y + height > window.innerHeight) { y = event.clientY - OFFSET - height; }
+                    preview.style.left = Math.max(0, x) + 'px';
+                    preview.style.top = Math.max(0, y) + 'px';
+                }
+                document.addEventListener('mouseover', function (event) {
+                    var icon = event.target.closest && event.target.closest('[data-preview]');
+                    if (!icon) { return; }
+                    preview.src = icon.dataset.preview;
+                    preview.hidden = false;
+                    place(event);
+                });
+                document.addEventListener('mousemove', function (event) {
+                    if (!preview.hidden) { place(event); }
+                });
+                document.addEventListener('mouseout', function (event) {
+                    var icon = event.target.closest && event.target.closest('[data-preview]');
+                    if (icon && !icon.contains(event.relatedTarget)) {
+                        preview.hidden = true;
+                        preview.removeAttribute('src');
+                    }
+                });
+                // The image is only sized once loaded: re-place it then, or it would overflow the
+                // edge it was meant to flip away from.
+                preview.addEventListener('load', function () {
+                    if (last && !preview.hidden) { place(last); }
+                });
+            })();</script>`;
 
 /** Icon-only submit button; `label` is its tooltip and accessible name. */
 function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' = 'danger'): string {
@@ -4801,8 +4868,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             can be restored. The change shows up on the cabinet the next time MAUI
             starts. Do not do it while a MAME game is open: MAME rewrites this file when it
             closes.</p>
+            ${ASSET_PREVIEW_SCRIPT}
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
-            present, red (struck through) when it is missing. To download the missing artwork
+            present (hover it to preview the image), red (struck through) when it is missing. To download the missing artwork
             from ScreenScraper, use the button in the
             <a href="/screenscraper">ScreenScraper</a> tab.</p>
         </section>
@@ -6307,6 +6375,26 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.send(await usersPage(req, 
             users, getAvatarFilenames(config), undefined, `Avatar updated for "${user.pseudo_3}".`,
         ));
+    });
+
+    // A favorite's marquee/flyer/logo, for the favorites list's hover previews (see
+    // renderAssetIcon()). Read from the directories ui.ini points at, like the presence icons.
+    app.get('/media/:kind/:file', (req, res) => {
+        const {marqueePath, flyerPath, logoPath} = getMameLocations(getMameHomePath());
+        const dirs: {[kind: string]: string | null} = {marquee: marqueePath, flyer: flyerPath, logo: logoPath};
+        const dir = dirs[req.params.kind];
+        // Same rom name character set as the favorites routes: no path separators, no dot dirs.
+        if (!dir || !/^[a-z0-9_]+\.png$/.test(req.params.file)) {
+            res.status(404).end();
+            return;
+        }
+        // no-cache: revalidated (ETag) on every hover, so artwork re-downloaded from ScreenScraper
+        // shows up without a stale copy. Served with a root for the same reason as /avatars below.
+        res.sendFile(req.params.file, {root: dir, headers: {'Cache-Control': 'no-cache'}}, (error) => {
+            if (error && !res.headersSent) {
+                res.status(404).end();
+            }
+        });
     });
 
     app.get('/avatars/:filename', (req, res) => {
