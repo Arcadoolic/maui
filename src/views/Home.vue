@@ -441,6 +441,7 @@ onMounted(() => {
         text-align: center;
         color: #ffffff;
         font-size: 1.4vw;
+        line-height: 1.6;
         text-shadow: 0 2px 8px rgba(0, 0, 0, 1);
     }
     .no-games h1 {
