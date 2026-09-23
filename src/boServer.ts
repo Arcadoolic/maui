@@ -959,17 +959,28 @@ function streamFavoritesRefresh(
             ${PROGRESS_LOG_OPEN}
     `);
 
+    const result = resolveFavorites(context, row => {
+        res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+    });
+    res.write('</ul></section>');
+    return result;
+}
+
+/**
+ * Resolves every favorite (see resolveFavoriteRow()) and rewrites the favorites cache with them,
+ * calling `onRow` after each one so the caller can report progress as it goes.
+ */
+function resolveFavorites(
+    context: FavoritesContext, onRow: (row: FavoriteRow, index: number) => void,
+): {rows: FavoriteRow[]; cache: FavoritesCache} {
     const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
-    const rows: FavoriteRow[] = context.romNames.map((romName) => {
+    const rows: FavoriteRow[] = context.romNames.map((romName, index) => {
         const row = resolveFavoriteRow(context, romName);
         cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
-        res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+        onRow(row, index);
         return row;
     });
-    const cache = writeFavoritesCache(cacheEntries);
-
-    res.write('</ul></section>');
-    return {rows, cache};
+    return {rows, cache: writeFavoritesCache(cacheEntries)};
 }
 
 function hasScreenScraperCredentials(config: Config): boolean {
@@ -2178,6 +2189,45 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .disk-legend .pack-swatch {
             margin-top: 0;
             vertical-align: -1px;
+        }
+        dialog.modal {
+            width: min(560px, 92vw);
+            padding: 16px 20px 20px;
+            color: var(--text);
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        }
+        dialog.modal::backdrop {
+            background-color: rgba(0, 0, 0, 0.6);
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .modal-header h3 {
+            margin: 0;
+        }
+        button.modal-close {
+            padding: 0 10px;
+            font-size: 1.5em;
+            line-height: 1.4;
+            color: var(--text);
+            background-color: transparent;
+        }
+        button.modal-close:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        dialog.modal progress {
+            width: 100%;
+            margin-top: 16px;
+        }
+        p.modal-done {
+            color: var(--success);
+            font-weight: bold;
         }
         .progress-log {
             list-style: none;
@@ -4652,6 +4702,102 @@ function getFavoriteSearchText(row: FavoriteRow): string {
     return [row.romName, row.fullname, ...(row.biosName ? [row.biosName] : []), ...row.deviceRoms].join(' ');
 }
 
+/**
+ * "Update favorites" modal: takes over the form's submit (preventDefault, so neither the page
+ * tail's AJAX handler nor a navigation runs), POSTs with Accept: application/x-ndjson and reads
+ * the response as a stream (see POST /favorites/refresh), logging each favorite as it is
+ * resolved. Closable only once finished, with an explicit end message; closing reloads the page
+ * so the list shows the updated names.
+ */
+const FAVORITES_REFRESH_MODAL = `
+            <dialog class="modal" id="favoritesRefreshModal" aria-labelledby="favoritesRefreshTitle">
+                <div class="modal-header">
+                    <h3 id="favoritesRefreshTitle">Updating favorites</h3>
+                    <button type="button" class="modal-close" id="favoritesRefreshClose" aria-label="Close" disabled>×</button>
+                </div>
+                <progress id="favoritesRefreshProgress" max="1" value="0"></progress>
+                <p class="info" id="favoritesRefreshStatus" aria-live="polite">Starting…</p>
+                <ul class="progress-log" id="favoritesRefreshLog"></ul>
+            </dialog>
+            <script>(function () {
+                var form = document.getElementById('favoritesRefreshForm');
+                var modal = document.getElementById('favoritesRefreshModal');
+                var close = document.getElementById('favoritesRefreshClose');
+                var progress = document.getElementById('favoritesRefreshProgress');
+                var status = document.getElementById('favoritesRefreshStatus');
+                var log = document.getElementById('favoritesRefreshLog');
+                var running = false;
+                var total = 0;
+
+                function finish(message, failed) {
+                    running = false;
+                    status.textContent = message;
+                    status.className = failed ? 'error' : 'info modal-done';
+                    close.disabled = false;
+                    close.focus();
+                }
+                function handle(event) {
+                    if (event.type === 'start') {
+                        total = event.total;
+                        progress.max = Math.max(1, total);
+                        status.textContent = '0 / ' + total;
+                    } else if (event.type === 'row') {
+                        var item = document.createElement('li');
+                        item.textContent = event.romName + ' : ' + event.fullname;
+                        log.appendChild(item);
+                        log.scrollTop = log.scrollHeight;
+                        progress.value = event.index;
+                        status.textContent = event.index + ' / ' + total;
+                    } else if (event.type === 'done') {
+                        progress.value = progress.max;
+                        finish('✓ Update complete: ' + event.total + ' favorite(s) updated. You can close this window.', false);
+                    } else if (event.type === 'error') {
+                        finish(event.message, true);
+                    }
+                }
+
+                form.addEventListener('submit', function (event) {
+                    event.preventDefault();
+                    if (running) { return; }
+                    running = true;
+                    log.textContent = '';
+                    progress.value = 0;
+                    status.className = 'info';
+                    status.textContent = 'Starting…';
+                    close.disabled = true;
+                    modal.showModal();
+                    fetch(form.action, {method: 'POST', headers: {'Accept': 'application/x-ndjson'}})
+                        .then(function (response) {
+                            var reader = response.body.getReader();
+                            var decoder = new TextDecoder();
+                            var buffer = '';
+                            function read() {
+                                return reader.read().then(function (chunk) {
+                                    buffer += decoder.decode(chunk.value || new Uint8Array(), {stream: !chunk.done});
+                                    var lines = buffer.split('\\n');
+                                    buffer = lines.pop();
+                                    lines.filter(Boolean).forEach(function (line) { handle(JSON.parse(line)); });
+                                    if (chunk.done) {
+                                        if (running) { finish('The update ended without confirmation - check the list.', true); }
+                                        return;
+                                    }
+                                    return read();
+                                });
+                            }
+                            return read();
+                        })
+                        .catch(function () {
+                            finish('Connection lost during the update - it may still have completed, reload to check.', true);
+                        });
+                });
+                // Esc would close the dialog mid-update: only allowed once it is finished.
+                modal.addEventListener('cancel', function (event) {
+                    if (running) { event.preventDefault(); }
+                });
+                modal.addEventListener('close', function () { location.reload(); });
+                close.addEventListener('click', function () { modal.close(); });
+            })();</script>`;
+
 const FAVORITES_PAGE_SIZES = [10, 30, 50, 100];
 const FAVORITES_DEFAULT_PAGE_SIZE = 30;
 
@@ -4800,10 +4946,11 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 <span>${cacheStatus}${unresolvedCount
                     ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
                     : ''}</span>
-                <form method="post" action="/favorites/refresh" data-stream>
+                <form method="post" action="/favorites/refresh" data-stream id="favoritesRefreshForm">
                     <button type="submit">Update favorites</button>
                 </form>
             </div>
+            ${FAVORITES_REFRESH_MODAL}
             <div class="table-search">
                 <div class="table-search-controls">
                     <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
@@ -6143,6 +6290,31 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
+
+        // The favorites list's update modal (see FAVORITES_REFRESH_MODAL) asks for its progress as
+        // newline-delimited JSON events instead of a page: start (total), row (each favorite as it
+        // is resolved), then done or error. The HTML stream below is the no-JS fallback.
+        if (req.get('Accept') === 'application/x-ndjson') {
+            res.writeHead(200, {'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache'});
+            res.socket?.setNoDelay(true);
+            const send = (event: object) => res.write(JSON.stringify(event) + '\n');
+            if ('error' in context) {
+                send({type: 'error', message: context.error});
+                res.end();
+                return;
+            }
+            send({type: 'start', total: context.romNames.length});
+            try {
+                const {rows} = resolveFavorites(context, (row, index) => {
+                    send({type: 'row', index: index + 1, romName: row.romName, fullname: row.fullname});
+                });
+                send({type: 'done', total: rows.length});
+            } catch (error) {
+                send({type: 'error', message: `Update interrupted: ${error instanceof Error ? error.message : String(error)}`});
+            }
+            res.end();
+            return;
+        }
 
         if ('error' in context) {
             res.send(renderFavoritesPage({rows: [], error: context.error}));
