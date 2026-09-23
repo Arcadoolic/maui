@@ -1936,7 +1936,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .shortname-cell {
+        .romname-cell {
             display: inline-flex;
             align-items: center;
             gap: 6px;
@@ -4515,25 +4515,25 @@ function renderDownloadSummary(summary: DownloadSummary): string {
 }
 
 /**
- * Shortname cell content: the romName, followed - same as the name's region/revision info - by an
+ * RomName cell content: the romName, followed - same as the name's region/revision info - by an
  * (i) whose tooltip lists its dependencies, instead of a whole column for them. The parent romset
  * (biosName, e.g. "pacman" for a puckman clone) and any device romsets (deviceRoms, e.g. "ym2413")
  * are distinct dependencies a favorite can be missing independently of each other, so both are
  * listed, each on its own line.
  */
-function renderShortnameCell(row: FavoriteRow): string {
+function renderRomNameCell(row: FavoriteRow): string {
     const lines = [
         ...(row.cached && row.biosName ? [`Bios: ${row.biosName}`] : []),
         ...(row.cached && row.deviceRoms.length ? [`Devices: ${row.deviceRoms.join(', ')}`] : []),
     ];
-    return `<span class="shortname-cell">${escapeHtml(row.romName)}${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
+    return `<span class="romname-cell">${escapeHtml(row.romName)}${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
 }
 
 /**
- * What the favorites search matches a row against: the three searchable columns - shortname
+ * What the favorites search matches a row against: the three searchable columns - rom name
  * (romName), name (the full description, including the parenthesized region/revision info that
- * the table only shows as a tooltip) and bios / devices (biosName and deviceRoms, the shortname's
- * own tooltip, see renderShortnameCell()). Not-yet-resolved favorites (no cache entry) only have their romName.
+ * the table only shows as a tooltip) and bios / devices (biosName and deviceRoms, the rom name's
+ * own tooltip, see renderRomNameCell()). Not-yet-resolved favorites (no cache entry) only have their romName.
  */
 function getFavoriteSearchText(row: FavoriteRow): string {
     if (!row.cached) {
@@ -4571,7 +4571,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             <td>${row.cached
                 ? renderGameName(row.fullname, row.romName, categoryOf(row))
                 : `<em>${escapeHtml(row.romName)}</em>`}</td>
-            <td>${renderShortnameCell(row)}</td>
+            <td>${renderRomNameCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
             <td class="center">
@@ -4625,7 +4625,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             </div>
             <div class="table-search">
                 <div class="table-search-controls">
-                    <input type="search" id="favoritesSearch" placeholder="Search a name, shortname, bios or device…"
+                    <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
                         autocomplete="off" aria-label="Search the favorites">
                     ${categoryFilter}
                 </div>
@@ -4636,7 +4636,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                     <thead>
                         <tr>
                             <th>Name</th>
-                            <th>Shortname</th>
+                            <th>RomName</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center" title="Times the game was launched">Plays</th>
                             <th class="center"></th>
@@ -4646,7 +4646,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 </table>
             </div>
             <script>(function () {
-                // Search: every term must appear (accents and case ignored) in a row's shortname,
+                // Search: every term must appear (accents and case ignored) in a row's rom name,
                 // name or bios / devices (its data-search, see getFavoriteSearchText()), and the row
                 // must be in the chosen category (its data-category; '*' for all). Rows are only
                 // hidden, so the remove buttons keep working on what is shown.
@@ -4738,7 +4738,7 @@ function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFa
                 <table class="favorites-table">
                     <thead>
                         <tr>
-                            <th>Shortname</th>
+                            <th>RomName</th>
                             <th>Name</th>
                             <th>Removed on</th>
                             <th class="center"></th>
@@ -4852,7 +4852,7 @@ function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: Remov
                     <thead>
                         <tr>
                             <th>Name</th>
-                            <th>Shortname</th>
+                            <th>RomName</th>
                             <th class="center">Plays</th>
                             <th>Last played</th>
                             <th>Vote</th>
