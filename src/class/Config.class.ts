@@ -56,9 +56,10 @@ export default class Config {
     public openDevTools: boolean = false;
 
     // Whether Home.vue puts the window in full screen once launched - dev and production alike,
-    // the BO setting is authoritative either way. Defaults to true: a cabinet's own display is
-    // the main use case.
-    public fullscreen: boolean = true;
+    // the BO setting is authoritative either way. Defaults to false (windowed): opted into from
+    // the MAUI tab once the cabinet is set up. A config file saved before this default changed
+    // holds an explicit true (save() always writes the key), so existing cabinets stay fullscreen.
+    public fullscreen: boolean = false;
 
     // Whether the player is asked for a thumbs up / neutral / thumbs down once a game is quit
     // (Home.vue, see GameVote.ts). The vote can always be set from the BO, this only controls the
@@ -102,7 +103,7 @@ export default class Config {
             this.bezelAspect = configFile.bezelAspect === '4:3' ? '4:3' : '16:9';
 
             this.openDevTools = configFile.openDevTools === true;
-            this.fullscreen = configFile.fullscreen !== false;
+            this.fullscreen = configFile.fullscreen === true;
             this.voteEnabled = configFile.voteEnabled !== false;
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
 
