@@ -4331,7 +4331,7 @@ function renderUpdateCard(
     `;
 }
 
-function renderMauiCard(config: Config, info?: string): string {
+function renderMauiCard(config: Config, isAdmin: boolean, info?: string): string {
     return `
         <section class="card">
             <h2>mame-awesome-ui</h2>
@@ -4341,10 +4341,12 @@ function renderMauiCard(config: Config, info?: string): string {
                     <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
                     Show fullscreen (unchecked = windowed)
                 </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
-                    Open DevTools on startup (development mode)
-                </label>
+                ${isAdmin ? `
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
+                        Open DevTools on startup (development mode)
+                    </label>
+                ` : ''}
                 <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
@@ -4471,7 +4473,7 @@ function renderMauiPage(
     updateInfo?: UpdateInfo,
 ): string {
     const sections: Subsection[] = [
-        {id: 'general', label: 'General', html: renderMauiCard(config, messages.mauiInfo)},
+        {id: 'general', label: 'General', html: renderMauiCard(config, isAdmin, messages.mauiInfo)},
         {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
     ];
     if (updateInfo) {
@@ -7014,7 +7016,11 @@ export function startBoServer(
     app.post('/maui/save', async (req, res) => {
         const config = new Config();
         config.load();
-        config.openDevTools = req.body.openDevTools === 'on';
+        // Admin-only option (see renderMauiCard()): a user's form has no such checkbox, which
+        // must not read as "unchecked" and switch it off.
+        if (req.session.boRole === 'admin') {
+            config.openDevTools = req.body.openDevTools === 'on';
+        }
         config.fullscreen = req.body.fullscreen === 'on';
         config.voteEnabled = req.body.voteEnabled === 'on';
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
@@ -7189,7 +7195,7 @@ export function startBoServer(
         await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
 
         const updateInfo = await getUpdateInfo();
-        res.write(renderMauiCard(config));
+        res.write(renderMauiCard(config, isAdmin));
         res.write(renderUpdateCard(updateInfo, isAdmin));
         if (isAdmin) {
             res.write(renderMauiImportExportCard());
