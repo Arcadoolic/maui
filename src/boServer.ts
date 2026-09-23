@@ -1780,6 +1780,31 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             border-bottom: 1px solid var(--border-subtle);
             white-space: nowrap;
         }
+        /* Favorites / removed favorites: every column but the name has a fixed width, pinned to
+           the right whatever the names are; the name gets what's left and is cut with an ellipsis
+           (see .game-name-cell). min-width: below it the table scrolls (.table-wrap) instead of
+           squeezing the name column to nothing. */
+        table.favorites-table.fixed-columns {
+            table-layout: fixed;
+            min-width: 640px;
+        }
+        table.favorites-table.fixed-columns td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        table.favorites-table.fixed-columns .game-name-cell {
+            max-width: none;
+        }
+        table.favorites-table.fixed-columns .romname-cell {
+            display: flex;
+            min-width: 0;
+        }
+        .col-romname { width: 130px; }
+        .col-assets { width: 88px; }
+        .col-date { width: 140px; }
+        .col-plays { width: 64px; }
+        .col-vote { width: 140px; }
+        .col-action { width: 56px; }
         table.favorites-table th.center,
         table.favorites-table td.center {
             text-align: center;
@@ -1963,6 +1988,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             width: 20px;
             height: 20px;
         }
+        .romname-cell .info-icon,
         .game-name-cell .info-icon,
         .game-name-cell .hiscore-icon {
             flex: 0 0 auto;
@@ -4612,7 +4638,7 @@ function renderRomNameCell(row: FavoriteRow): string {
         ...(row.cached && row.biosName ? [`Bios: ${row.biosName}`] : []),
         ...(row.cached && row.deviceRoms.length ? [`Devices: ${row.deviceRoms.join(', ')}`] : []),
     ];
-    return `<span class="romname-cell">${escapeHtml(row.romName)}${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
+    return `<span class="romname-cell"><span class="game-name-text" title="${escapeHtml(row.romName)}">${escapeHtml(row.romName)}</span>${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
 }
 
 /**
@@ -4715,7 +4741,15 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             alphabetical order, exactly as MAME had written it. Same precaution as for removal: not
             while a MAME game is open.</p>
             <div class="table-wrap">
-                <table class="favorites-table">
+                <table class="favorites-table fixed-columns">
+                    <colgroup>
+                        <col>
+                        <col class="col-romname">
+                        <col class="col-date">
+                        <col class="col-plays">
+                        <col class="col-vote">
+                        <col class="col-action">
+                    </colgroup>
                     <thead>
                         <tr>
                             <th>Name</th>
@@ -4781,7 +4815,15 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
             </div>
             <div class="table-wrap">
-                <table class="favorites-table" id="favoritesTable">
+                <table class="favorites-table fixed-columns" id="favoritesTable">
+                    <colgroup>
+                        <col>
+                        <col class="col-romname">
+                        <col class="col-assets">
+                        <col class="col-plays">
+                        <col class="col-vote">
+                        <col class="col-action">
+                    </colgroup>
                     <thead>
                         <tr>
                             <th>Name</th>
