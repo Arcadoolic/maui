@@ -1941,6 +1941,20 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         form.vote-buttons > button.down[aria-pressed="true"] {
             color: var(--danger);
         }
+        .vote-icon {
+            display: inline-flex;
+            vertical-align: middle;
+            cursor: help;
+        }
+        .vote-icon.up {
+            color: var(--success);
+        }
+        .vote-icon.neutral {
+            color: var(--text-muted);
+        }
+        .vote-icon.down {
+            color: var(--danger);
+        }
         .game-name-cell {
             display: flex;
             align-items: center;
@@ -4162,7 +4176,7 @@ function renderMauiCard(config: Config, info?: string): string {
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="thumbsDownRemovesFavorite" ${config.thumbsDownRemovesFavorite ? 'checked' : ''}>
-                    A thumbs down removes the game from the favorites (restorable from the Games tab, "Removed")
+                    A thumbs down removes the game from the favorites (restorable from the Games tab's removed favorites)
                 </label>
                 <button type="submit">Save</button>
             </form>
@@ -4666,6 +4680,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             <td>${renderRomNameCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
+            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
             <td class="center">
                 <form method="post" action="/favorites/delete">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
@@ -4696,6 +4711,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             <td>${renderRomNameCell(row)}</td>
             <td>${escapeHtml(removedOn)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
+            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
             <td class="center">
                 <form method="post" action="/favorites/restore">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
@@ -4719,6 +4735,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th>RomName</th>
                             <th>Removed on</th>
                             <th class="center" title="Times the game was launched">Plays</th>
+                            <th class="center" title="The players' vote, changed from the Votes subtab">Vote</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
@@ -4784,6 +4801,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th>RomName</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center" title="Times the game was launched">Plays</th>
+                            <th class="center" title="The players' vote, changed from the Votes subtab">Vote</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
@@ -4907,13 +4925,34 @@ function formatLastPlayed(lastPlayedAt: Date | null): string {
  * list. Games that left the favorites (a thumbs down with the removal option on, or removed from
  * the BO) stay listed, with a way back.
  */
+const VOTE_ICONS: Record<Vote, {cssClass: string, paths: string}> = {
+    [VOTE_UP]: {cssClass: 'up', paths: THUMB_UP_ICON_PATHS},
+    [VOTE_NEUTRAL]: {cssClass: 'neutral', paths: NEUTRAL_ICON_PATHS},
+    [VOTE_DOWN]: {cssClass: 'down', paths: THUMB_DOWN_ICON_PATHS},
+};
+
+/**
+ * Read-only vote of a game (favorites and removed favorites lists), in the Votes subtab's colors;
+ * '-' for a game the database doesn't know (or no database at all). Changing it stays the Votes
+ * subtab's job.
+ */
+function renderVoteCell(stats: GameStats | undefined): string {
+    if (!stats) {
+        return '<em>-</em>';
+    }
+    const label = VOTE_LABELS[stats.vote];
+    return `<span class="vote-icon ${VOTE_ICONS[stats.vote].cssClass}" title="${label}" role="img" aria-label="${label}">
+        <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[stats.vote].paths}</svg>
+    </span>`;
+}
+
 function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: RemovedFavoritesFlash = {}): string {
     const messages = `
         ${flash.notice ? `<p class="info flash">${escapeHtml(flash.notice)}</p>` : ''}
         ${flash.warning ? `<p class="error flash">${escapeHtml(flash.warning)}</p>` : ''}
     `;
     const thumbsDownEffect = removesFavorite
-        ? 'removes the game from the favorites (it stays here, and in the "Removed" subtab, to be restored)'
+        ? 'removes the game from the favorites (it stays here, and in the removed favorites, to be restored)'
         : 'only lists the game here, it stays in the favorites';
     const explanation = `
         <p class="info">Once a game is quit on the cabinet, the player is asked for a thumbs up,
@@ -4934,15 +4973,10 @@ function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: Remov
 
     const sorted = [...rows].sort((a, b) =>
         (b.lastPlayedAt?.getTime() ?? 0) - (a.lastPlayedAt?.getTime() ?? 0) || a.fullname.localeCompare(b.fullname));
-    const voteIcons: Record<Vote, {cssClass: string, paths: string}> = {
-        [VOTE_UP]: {cssClass: 'up', paths: THUMB_UP_ICON_PATHS},
-        [VOTE_NEUTRAL]: {cssClass: 'neutral', paths: NEUTRAL_ICON_PATHS},
-        [VOTE_DOWN]: {cssClass: 'down', paths: THUMB_DOWN_ICON_PATHS},
-    };
     const buttons = (row: VoteRow) => ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
-        <button type="submit" name="vote" value="${vote}" class="icon-button ${voteIcons[vote].cssClass}"
+        <button type="submit" name="vote" value="${vote}" class="icon-button ${VOTE_ICONS[vote].cssClass}"
             aria-pressed="${row.vote === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
-            <svg ${ICON_SVG_ATTRS}>${voteIcons[vote].paths}</svg>
+            <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[vote].paths}</svg>
         </button>
     `).join('');
     const tableRows = sorted.map(row => `
@@ -6190,7 +6224,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 flash.warning = 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini. '
                     + 'The game stays in the favorites for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
-                flash.notice += ' Removed from the favorites (find it again in the "Removed" subtab).'
+                flash.notice += ' Removed from the favorites (restorable from the removed favorites, below the favorites list).'
                     + ' The change shows up on the cabinet the next time MAUI starts.';
             } else {
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
