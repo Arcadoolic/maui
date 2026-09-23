@@ -5998,7 +5998,13 @@ function describeUserError(error: unknown): string {
     return error instanceof Error ? error.message : 'Unexpected error.';
 }
 
-function renderBrowsePage(target: PathField, currentDir: string, initialValue: string): string {
+/**
+ * `carried`: both Config fields as they were in the form when Browse was clicked, carried along
+ * every link here so that choosing (or cancelling) one of them brings the page back with the other
+ * one still filled in - it may not be saved yet (e.g. a first setup: binary folder picked, then the
+ * plugins folder).
+ */
+function renderBrowsePage(target: PathField, currentDir: string, carried: Record<PathField, string>): string {
     let entries: string[] = [];
     let error: string|undefined;
     try {
@@ -6012,13 +6018,16 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
 
     const parentDir = dirname(currentDir);
     const canGoUp = parentDir !== currentDir;
-    // Only ever carries the one field being browsed - carrying the other one too (even as an
-    // empty default) would blank it out on the page this returns to, since that page treats
-    // a present-but-empty query param differently from an absent one (falls back to the saved
-    // config/mame.ini value only when the param is absent).
-    const carryQuery = `${target}=${encodeURIComponent(initialValue)}`;
-    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}&${carryQuery}`;
-    const selectLink = (dir: string) => `/?${target}=${encodeURIComponent(dir)}`;
+    // Empty fields are left out rather than carried as empty params: the page this returns to
+    // treats a present-but-empty query param differently from an absent one (falls back to the
+    // saved config/mame.ini value only when the param is absent).
+    const query = (values: Record<PathField, string>) => (Object.keys(values) as PathField[])
+        .filter(field => values[field])
+        .map(field => `${field}=${encodeURIComponent(values[field])}`)
+        .join('&');
+    const carryQuery = query(carried);
+    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}`;
+    const selectLink = (dir: string) => `/?${query({...carried, [target]: dir})}`;
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -7196,7 +7205,11 @@ export function startBoServer(
 
     app.get('/browse', (req, res) => {
         const target: PathField = req.query.target === 'pluginsPath' ? 'pluginsPath' : 'mamePath';
-        const initialValue = typeof req.query[target] === 'string' ? req.query[target] as string : '';
+        const carried: Record<PathField, string> = {
+            mamePath: typeof req.query.mamePath === 'string' ? req.query.mamePath : '',
+            pluginsPath: typeof req.query.pluginsPath === 'string' ? req.query.pluginsPath : '',
+        };
+        const initialValue = carried[target];
 
         let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : initialValue;
         if (!currentDir || !existsSync(currentDir)) {
@@ -7214,7 +7227,7 @@ export function startBoServer(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, initialValue));
+        res.send(renderBrowsePage(target, currentDir, carried));
     });
 
     app.post('/save', (req, res) => {
