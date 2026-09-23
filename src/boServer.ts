@@ -967,9 +967,9 @@ function favoriteRowFromCache(context: FavoritesContext, romName: string, cache:
 /**
  * Re-resolves every favorite's name/BIOS (a blocking `mame -lx` per rom, see resolveFavoriteRow())
  * and rewrites the favorites cache, streaming one progress line per favorite to `res` as they
- * resolve. Shared by "Update favorites" (POST /favorites/refresh) and the repository import,
- * which refreshes the favorites by itself once it has added games. The caller has already sent
- * the response head; this writes the open "Updating favorites" card and closes it again.
+ * resolve. Shared by "Update favorites" (POST /favorites/refresh) and both starting pack imports
+ * (see streamFavoritesRefreshAfterImport()). The caller has already sent the response head;
+ * this writes the open "Updating favorites" card and closes it again.
  */
 function streamFavoritesRefresh(
     res: Response, context: FavoritesContext,
@@ -989,6 +989,21 @@ function streamFavoritesRefresh(
     });
     res.write('</ul></section>');
     return result;
+}
+
+/**
+ * After a starting pack import (ZIP upload or repository), which just rewrote favorites.ini:
+ * resolves the new games' names/BIOS now instead of leaving the favorites tab on "not resolved
+ * yet" until "Update favorites" is clicked.
+ */
+function streamFavoritesRefreshAfterImport(res: Response, config: Config): void {
+    const context = getFavoritesContext(config);
+    if ('error' in context) {
+        res.write(`<section class="card"><h2>Updating favorites</h2>
+            <p class="info">Favorites not updated: ${escapeHtml(context.error)}</p></section>`);
+    } else {
+        streamFavoritesRefresh(res, context);
+    }
 }
 
 /**
@@ -6761,6 +6776,8 @@ export function startBoServer(
             return;
         }
 
+        streamFavoritesRefreshAfterImport(res, config);
+
         // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
         // above reflect what the import just installed, instead of a "Retour" link to a
         // separate page.
@@ -6942,15 +6959,7 @@ export function startBoServer(
             res.write('</div></section>');
         }
 
-        // The import just rewrote favorites.ini: resolve the new games' names/BIOS now instead of
-        // leaving the favorites tab on "not resolved yet" until "Update favorites" is clicked.
-        const favoritesContext = getFavoritesContext(config);
-        if ('error' in favoritesContext) {
-            res.write(`<section class="card"><h2>Updating favorites</h2>
-                <p class="info">Favorites not updated: ${escapeHtml(favoritesContext.error)}</p></section>`);
-        } else {
-            streamFavoritesRefresh(res, favoritesContext);
-        }
+        streamFavoritesRefreshAfterImport(res, config);
 
         const refreshedMameInfo = getMameInfo(config);
         res.write(renderConfigCard(values, refreshedMameInfo));
