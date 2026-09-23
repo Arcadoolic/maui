@@ -209,6 +209,31 @@ function getDatabasePath(): string {
 }
 
 /**
+ * Creates the database if it doesn't exist yet and brings it up to date - what the renderer's
+ * Database.install()/update() (Init.vue) does, but run by the main process as soon as the app
+ * starts, before any window opens (see background.ts): on a first launch the BO login page is
+ * reachable right away, and its bo_user table (created and seeded by a migration) must already
+ * be there - Init.vue used to be the only one creating it, racing against the first sign-in.
+ * Same base tables as Database.install()'s sync() (bo_user excluded, see its models comment),
+ * created only when missing: also repairs a file left empty by a connection opened before any
+ * table existed. Never rejects: a failure is logged and Init.vue then tries again itself.
+ */
+async function bootstrapDatabase(sequelize: Sequelize): Promise<void> {
+    try {
+        const tables = await sequelize.getQueryInterface().showAllTables();
+        if (!tables.includes('game')) {
+            // One by one, referenced tables first (game -> category, hiscore -> game/user).
+            for (const model of [Category, Game, User, Hiscore]) {
+                await model.sync();
+            }
+        }
+        await runMigrations(sequelize);
+    } catch (error) {
+        console.error('[boServer] Database bootstrap failed:', error);
+    }
+}
+
+/**
  * Filenames currently sitting in Config's fixed avatarsPath (<home>/.mame-awesome-ui/avatars,
  * created eagerly by Config's constructor). Matches the "<pseudo_3>.png" lookup
  * UserService.class.ts/Champions.vue/Hiscores.vue use in the Electron app itself.
@@ -218,8 +243,8 @@ function getAvatarFilenames(config: Config): string[] {
 }
 
 /**
- * Same sqlite connection Database.class.ts sets up, minus install()/update() (migrations
- * already ran via the app's own startup) - built directly here rather than importing
+ * Same sqlite connection Database.class.ts sets up (bootstrapped by bootstrapDatabase() below
+ * rather than its install()/update()) - built directly here rather than importing
  * Database.class.ts, which pulls in GameService.class -> MameService.class ->
  * Helpers.class.ts's @electron/remote import at module scope.
  */
@@ -6015,7 +6040,13 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
     `);
 }
 
-export function startBoServer(port: number, onConfigured: () => void, onReset: () => void): Server {
+/**
+ * Starts the BO. `databaseReady` resolves once the database exists and is migrated (see
+ * bootstrapDatabase()); requests arriving before wait for it.
+ */
+export function startBoServer(
+    port: number, onConfigured: () => void, onReset: () => void,
+): {server: Server; databaseReady: Promise<void>} {
     const app = express();
     app.use(express.urlencoded({extended: false}));
     // A fresh secret per server start (rather than a persisted one) invalidates every session on
@@ -6054,14 +6085,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
     // this must not be recreated per-request.
     const sequelize = createSequelize();
-    // A database created by an older version of the app: bring it up to date right away instead of
-    // waiting for the renderer's own Database.update() (Init.vue), which may not have run yet
-    // when a page of this server is opened. No file yet = first launch, Init.vue installs it.
-    if (existsSync(getDatabasePath())) {
-        runMigrations(sequelize).catch((error) => {
-            console.error('[boServer] Database migration failed:', error);
-        });
-    }
+    const databaseReady = bootstrapDatabase(sequelize);
+    // Every route below reads the database sooner or later (the login page first): hold requests
+    // until it exists, instead of failing on a missing table for the first second of a first launch.
+    app.use((req, res, next) => {
+        databaseReady.then(() => next());
+    });
 
     app.get('/background.jpg', (req, res) => {
         res.sendFile('img/background.jpg', {root: getStaticPath()});
@@ -6091,10 +6120,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         try {
             boUser = await BoUser.findOne({where: {username}});
         } catch {
-            // Same "not migrated yet" race /users already handles: this early in a fresh
-            // install, the Electron renderer's Init.vue may not have run Database.update() yet.
+            // The database bootstrap failed (see bootstrapDatabase(), logged at startup).
             res.status(503).send(renderLoginPage(
-                'Database not initialized yet - launch the application once before signing in.',
+                'The database could not be initialized - restart the application, then retry.',
             ));
             return;
         }
@@ -7829,7 +7857,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         setTimeout(onReset, 300);
     });
 
-    return app.listen(port, () => {
+    const server = app.listen(port, () => {
         console.log(`BO server listening on http://localhost:${port}`);
     });
+    return {server, databaseReady};
 }
