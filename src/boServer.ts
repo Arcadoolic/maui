@@ -1562,6 +1562,9 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             font-size: 1.4em;
             line-height: 0;
         }
+        .header-home {
+            display: inline-block;
+        }
         .header-logo {
             width: min(360px, 90vw);
             height: auto;
@@ -2471,7 +2474,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     <a class="skip-link" href="#main">Skip to content</a>
     <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
     <header>
-        <h1><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></h1>
+        <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
         ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
