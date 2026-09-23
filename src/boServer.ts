@@ -1778,6 +1778,16 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .badge-no {
             color: var(--danger);
         }
+        .badge-deleted {
+            color: var(--text-muted);
+        }
+        /* Deleted players, listed after the others in the same Players table (admins only). */
+        table.favorites-table tr.row-deleted td {
+            opacity: 0.6;
+        }
+        table.favorites-table tr.row-deleted td:last-child {
+            opacity: 1;
+        }
         .row-actions {
             display: inline-flex;
             gap: 8px;
@@ -1840,9 +1850,17 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .avatar-upload {
             display: inline-block;
+            /* A <label>: the generic label rule's 16px top margin pushed the avatar down its row. */
+            margin-top: 0;
+            vertical-align: middle;
             position: relative;
             cursor: pointer;
             border-radius: 4px;
+        }
+        /* A bare avatar (deleted players, not uploadable): display: block ignores the cell's
+           text-align, so it's centered by margin to line up with the .avatar-upload ones. */
+        td.center > .avatar-thumb {
+            margin: 0 auto;
         }
         .avatar-upload:hover .avatar-thumb {
             opacity: 0.6;
@@ -5610,7 +5628,22 @@ function renderCreateUserCard(error?: string): string {
     `;
 }
 
-function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+interface UsersListExtras {
+    isAdmin: boolean;
+    deleted: DeletedUserRow[];
+}
+
+/**
+ * Every player in one table: the active/inactive ones first, then - for an administrator only,
+ * who alone can restore or purge them - the deleted ones, dimmed, with their restore/purge
+ * actions in place of the usual ones. A deleted player is only soft-deleted: the nickname stays
+ * reserved and their scores stay in the database (hidden from the hiscore views), so restoring
+ * brings all of it back.
+ */
+function renderUsersListCard(
+    users: User[], avatarFilenames: string[], error?: string, info?: string,
+    extras: UsersListExtras = {isAdmin: false, deleted: []},
+): string {
     const avatarsPath = new Config().avatarsPath;
     const rows = users.map(user => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
@@ -5650,72 +5683,20 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
     `;
     }).join('');
 
-    return `
-        <section class="card">
-            <h2>Players (${users.length})</h2>
-            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
-            <div class="table-wrap">
-                <table class="favorites-table">
-                    <thead>
-                        <tr>
-                            <th class="center">Avatar</th>
-                            <th>Nickname</th>
-                            <th>Name</th>
-                            <th class="center">Status</th>
-                            <th class="center"></th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
-                </table>
-            </div>
-        </section>
-    `;
-}
-
-interface UsersPageExtras {
-    isAdmin: boolean;
-    deleted: DeletedUserRow[];
-    deletedInfo?: string;
-    deletedError?: string;
-}
-
-/**
- * Deleted players, restorable by an administrator (POST /users/:id/restore). A deleted player is
- * only soft-deleted: the nickname stays reserved and their scores stay in the database (hidden
- * from the hiscore views), so restoring brings all of it back. Same idea as the favorites
- * "Removed" subtab.
- */
-function renderDeletedUsersCard(
-    deleted: DeletedUserRow[], avatarFilenames: string[], error?: string, info?: string,
-): string {
-    const messages = `
-        ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-        ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
-    `;
-    if (!deleted.length) {
-        return `
-            <section class="card">
-                <h2>Deleted players</h2>
-                ${messages}
-                <p class="info">No deleted players.</p>
-            </section>
-        `;
-    }
-    const avatarsPath = new Config().avatarsPath;
-    const rows = deleted.map(({user, scoreCount}) => {
+    const deleted = extras.isAdmin ? extras.deleted : [];
+    const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
+        const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
+            dateStyle: 'short', timeStyle: 'short',
+        });
         return `
-        <tr>
+        <tr class="row-deleted">
             <td class="center">${avatarFilename !== undefined
                 ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
-            <td>${escapeHtml(new Date(user.deletionDate).toLocaleString('en-GB', {
-                dateStyle: 'short', timeStyle: 'short',
-            }))}</td>
-            <td class="center">${scoreCount}</td>
+            <td class="center"><span class="badge-deleted" title="Deleted on ${escapeHtml(deletedOn)}, ${scoreCount} score(s) kept">🗑 deleted ${escapeHtml(deletedOn)} · ${scoreCount} score(s)</span></td>
             <td class="center">
                 <div class="row-actions">
                     <form method="post" action="/users/${user.id_user}/restore"
@@ -5733,13 +5714,14 @@ function renderDeletedUsersCard(
 
     return `
         <section class="card">
-            <h2>Deleted players (${deleted.length})</h2>
-            ${messages}
-            <p class="info">A deleted player's nickname stays reserved: nobody can register it, so
-            nobody inherits their scores. Restoring brings the player back with their scores and
-            avatar; only restore a player for the person who owns the nickname. Deleting permanently
-            removes the player, their scores and their avatar from the database for good, and frees
-            the nickname.</p>
+            <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
+            ${deleted.length ? `<p class="info">A deleted player's nickname stays reserved: nobody can
+            register it, so nobody inherits their scores. Restoring brings the player back with their
+            scores and avatar; only restore a player for the person who owns the nickname. Deleting
+            permanently removes the player, their scores and their avatar from the database for good,
+            and frees the nickname.</p>` : ''}
             <div class="table-wrap">
                 <table class="favorites-table">
                     <thead>
@@ -5747,12 +5729,11 @@ function renderDeletedUsersCard(
                             <th class="center">Avatar</th>
                             <th>Nickname</th>
                             <th>Name</th>
-                            <th>Deleted on</th>
-                            <th class="center">Scores</th>
+                            <th class="center">Status</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${rows + deletedRows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
                 </table>
             </div>
         </section>
@@ -5761,30 +5742,14 @@ function renderDeletedUsersCard(
 
 function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
-    extras: UsersPageExtras = {isAdmin: false, deleted: []},
+    extras: UsersListExtras = {isAdmin: false, deleted: []},
 ): string {
-    // See renderForm()'s own defaultSubtab for why this is computed from which message was
-    // actually passed for this response, not inferred client-side from scanning for .flash.
-    // createError is kept separate from error/info (both list-card messages, e.g. from
-    // toggle-active/delete/avatar upload) so a duplicate-pseudo error from /users/create lands
-    // back on "Add", next to the form that produced it, instead of "Players".
-    const defaultSubtab = createError !== undefined ? 'add'
-        : (extras.deletedInfo !== undefined || extras.deletedError !== undefined) ? 'deleted'
-            : (error !== undefined || info !== undefined) ? 'players'
-                : undefined;
-    const sections: Subsection[] = [
-        {id: 'add', label: 'Add', html: renderCreateUserCard(createError)},
-        {id: 'players', label: 'Players', html: renderUsersListCard(users, avatarFilenames, error, info)},
-    ];
-    // Restoring a deleted player is the administrator's call (the route rejects anyone else too).
-    if (extras.isAdmin) {
-        sections.push({
-            id: 'deleted',
-            label: `Deleted (${extras.deleted.length})`,
-            html: renderDeletedUsersCard(extras.deleted, avatarFilenames, extras.deletedError, extras.deletedInfo),
-        });
-    }
-    return renderSubtabbedPage('users', sections, true, defaultSubtab);
+    // One page, no subtabs: the add form, then every player (deleted ones included, see
+    // renderUsersListCard()) in a single list.
+    return renderPage(
+        renderCreateUserCard(createError) + renderUsersListCard(users, avatarFilenames, error, info, extras),
+        'users',
+    );
 }
 
 /**
@@ -6208,11 +6173,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
      */
     const usersPage = async (
         req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
-        createError?: string, messages: {deletedInfo?: string; deletedError?: string} = {},
+        createError?: string,
     ): Promise<string> => {
         const isAdmin = req.session.boRole === 'admin';
         const deleted = isAdmin ? await listDeletedUsers().catch(() => []) : [];
-        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted, ...messages});
+        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted});
     };
 
     app.get('/users', async (req, res) => {
@@ -6240,7 +6205,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 res.status(422).send(await usersPage(
                     req, users, getAvatarFilenames(config), undefined, undefined,
                     `The nickname "${pseudo3}" belongs to a deleted player and is reserved. An administrator `
-                    + 'can restore that player from the "Deleted" tab.',
+                    + 'can restore that player from the players list.',
                 ));
                 return;
             }
@@ -6294,7 +6259,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.send(await usersPage(
             req, users, getAvatarFilenames(new Config()), undefined,
             user ? `Player "${user.pseudo_3}" deleted. The nickname stays reserved; an administrator can `
-                + 'restore it from the "Deleted" tab.' : undefined,
+                + 'restore it from the players list.' : undefined,
         ));
     });
 
@@ -6306,10 +6271,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const purged = await purgeDeletedUser(String(req.params.id), new Config().avatarsPath);
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(
-            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
-            purged
-                ? {deletedInfo: `Player "${purged.user.pseudo_3}" permanently deleted, with ${purged.scoreCount} score(s).`}
-                : {deletedError: 'This player is not among the deleted players (already removed?).'},
+            req, users, getAvatarFilenames(new Config()),
+            purged ? undefined : 'This player is not among the deleted players (already removed?).',
+            purged ? `Player "${purged.user.pseudo_3}" permanently deleted, with ${purged.scoreCount} score(s).` : undefined,
         ));
     });
 
@@ -6321,10 +6285,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const restored = await restoreDeletedUser(String(req.params.id));
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(
-            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
-            restored
-                ? {deletedInfo: `Player "${restored.pseudo_3}" restored, with their scores.`}
-                : {deletedError: 'This player is not among the deleted players (already restored?).'},
+            req, users, getAvatarFilenames(new Config()),
+            restored ? undefined : 'This player is not among the deleted players (already restored?).',
+            restored ? `Player "${restored.pseudo_3}" restored, with their scores.` : undefined,
         ));
     });
 
