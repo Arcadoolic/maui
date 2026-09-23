@@ -1679,6 +1679,12 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .path-row input {
             margin-top: 0;
         }
+        .plugins-path-field {
+            transition: opacity 0.15s ease;
+        }
+        .plugins-path-field.is-disabled {
+            opacity: 0.4;
+        }
         .button-row {
             display: flex;
             flex-wrap: wrap;
@@ -2694,7 +2700,16 @@ interface ConfigFormValues {
     mamePath: string;
 }
 
-function renderConfigCard(values: ConfigFormValues, isAdmin: boolean, error?: string, info?: string): string {
+/**
+ * mame binary folder, then the plugins folder (mame.ini's pluginspath, `pluginsPath`: the saved
+ * value, or the one just picked with Browse). The latter stays dimmed and disabled while the
+ * binary folder is empty - mame.ini only exists once the binary is known (see POST /save) - and
+ * is re-enabled as soon as something is typed into it.
+ */
+function renderConfigCard(
+    values: ConfigFormValues, pluginsPath: string | null, isAdmin: boolean, error?: string, info?: string,
+): string {
+    const pluginsDisabled = values.mamePath.trim() ? '' : ' disabled';
     return `
         <section class="card">
             <h2>Configuration</h2>
@@ -2706,6 +2721,23 @@ function renderConfigCard(values: ConfigFormValues, isAdmin: boolean, error?: st
                     <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
                     <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Browse</button>
                 </div>
+                <div class="plugins-path-field${pluginsDisabled ? ' is-disabled' : ''}" id="pluginsPathField">
+                    <label for="pluginsPath">MAME plugins folder (pluginspath)</label>
+                    <div class="path-row">
+                        <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(pluginsPath || '')}"${pluginsDisabled}>
+                        <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get"${pluginsDisabled}>Browse</button>
+                    </div>
+                </div>
+                <script>(function () {
+                    var mamePath = document.getElementById('mamePath');
+                    var field = document.getElementById('pluginsPathField');
+                    function sync() {
+                        var disabled = !mamePath.value.trim();
+                        field.classList.toggle('is-disabled', disabled);
+                        field.querySelectorAll('input, button').forEach(function (control) { control.disabled = disabled; });
+                    }
+                    mamePath.addEventListener('input', sync);
+                })();</script>
                 <div class="button-row">
                     <button type="submit">Save</button>
                     ${isAdmin ? `<button type="submit" formaction="/launch" formmethod="post" class="launch-button">
@@ -2813,11 +2845,6 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                 </div>
             </dl>
             <form method="post" action="/mame-options/save">
-                <label for="pluginsPath">MAME plugins folder (pluginspath)</label>
-                <div class="path-row">
-                    <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(mameInfo.pluginsPath || '')}">
-                    <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get">Browse</button>
-                </div>
                 <label class="checkbox-row">
                     <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
                     Launch MAME in windowed mode (instead of fullscreen) - edits mame.ini
@@ -3822,7 +3849,7 @@ function renderForm(
     config.load();
 
     const sections: Subsection[] = [
-        {id: 'config', label: 'Config', html: renderConfigCard(values, isAdmin, error, info)},
+        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo.pluginsPath, isAdmin, error, info)},
         {id: 'infos', label: 'Infos', html: renderMameInfoCard(mameInfo, mameInfoMessage)},
     ];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
@@ -6105,8 +6132,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
         const mameInfo = getMameInfo(config);
-        // Only set after browsing for it below "Dossier des plugins MAME" - not persisted until
-        // its own form is submitted, same as mamePath above.
+        // Only set after browsing for the plugins folder (Config card) - not persisted until that
+        // form is saved, same as mamePath above.
         if (typeof req.query.pluginsPath === 'string') {
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
@@ -6658,7 +6685,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // above reflect what the import just installed, instead of a "Retour" link to a
         // separate page.
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, req.session.boRole === 'admin'));
+        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath, req.session.boRole === 'admin'));
         res.write(renderMameInfoCard(refreshedMameInfo));
         // Same gating as renderForm(): import only makes sense once the binary's configured and
         // validated (see there for why).
@@ -6846,7 +6873,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, req.session.boRole === 'admin'));
+        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath, req.session.boRole === 'admin'));
         res.write(renderMameInfoCard(refreshedMameInfo));
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
@@ -7138,13 +7165,22 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
+        const pluginsPath: string = (req.body.pluginsPath || '').trim();
         const config = new Config();
         config.load();
         const isAdmin = req.session.boRole === 'admin';
+        // On an error below, the page comes back with what was typed in both fields.
+        const typedMameInfo = () => {
+            const mameInfo = getMameInfo(config);
+            if (pluginsPath) {
+                mameInfo.pluginsPath = pluginsPath;
+            }
+            return mameInfo;
+        };
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath}, getMameInfo(config), isAdmin,
+                {mamePath}, typedMameInfo(), isAdmin,
                 `The folder "${mamePath}" does not exist.`,
             ));
             return;
@@ -7152,7 +7188,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath}, getMameInfo(config), isAdmin,
+                {mamePath}, typedMameInfo(), isAdmin,
                 `No mame binary found in "${mamePath}".`,
             ));
             return;
@@ -7162,12 +7198,15 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath}, getMameInfo(config), isAdmin,
+                {mamePath}, typedMameInfo(), isAdmin,
                 'Failed to initialize mame ("-createconfig"): '
                     + `${error instanceof Error ? error.message : 'unexpected error'}.`,
             ));
             return;
         }
+
+        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
+        const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
 
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
@@ -7176,6 +7215,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.send(renderPage(
             '<section class="card"><h2>Configuration saved</h2><p>'
             + 'The application restarts automatically.</p>'
+            + (plugins?.pluginsAdded ? `<p>${plugins.pluginsAdded} plugin(s) initialized in plugin.ini.</p>` : '')
+            + (plugins && !plugins.saved ? '<p class="error">The plugins folder could not be saved: mame.ini not found.</p>' : '')
             + '<p>Back to the MAME configuration in <span id="redirect-countdown">5</span> '
             + 'second(s)… <a href="/">Go now</a>.</p></section>'
             + '<script>'
@@ -7246,28 +7287,28 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         ));
     });
 
+    /**
+     * Writes pluginspath into mame.ini and, as soon as it points at a folder that actually has
+     * plugins in it, initializes/completes plugin.ini right away instead of making the user click
+     * the separate "Repair plugin.ini" button as a second step. saved: false when mame.ini
+     * doesn't exist.
+     */
+    const savePluginsPath = (pluginsPath: string): {saved: boolean; pluginsAdded: number} => {
+        const iniPath = getMameHomePath();
+        const saved = setMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath', pluginsPath);
+        const availablePlugins = getAvailablePlugins(resolveDirectoryPath(pluginsPath, iniPath));
+        const pluginsAdded = saved && availablePlugins.length
+            ? repairPluginIni(join(iniPath, 'plugin.ini'), availablePlugins)
+            : 0;
+        return {saved, pluginsAdded};
+    };
+
     app.post('/mame-options/save', (req, res) => {
         const config = new Config();
         config.load();
 
-        const iniPath = getMameHomePath();
-        const mameIniPath = join(iniPath, 'mame.ini');
-        const pluginIniPath = join(iniPath, 'plugin.ini');
         const windowed = req.body.windowed === 'on';
-        const pluginsPath: string = (req.body.pluginsPath || '').trim();
-
-        let saved = setMameIniValue(mameIniPath, 'window', windowed ? '1' : '0');
-        let pluginsAdded = 0;
-        if (pluginsPath) {
-            saved = setMameIniValue(mameIniPath, 'pluginspath', pluginsPath) && saved;
-            // As soon as pluginspath points at a folder that actually has plugins in it,
-            // initialize/complete plugin.ini right away instead of making the user click the
-            // separate "Repair plugin.ini" button as a second step.
-            const availablePlugins = getAvailablePlugins(resolveDirectoryPath(pluginsPath, iniPath));
-            if (availablePlugins.length) {
-                pluginsAdded = repairPluginIni(pluginIniPath, availablePlugins);
-            }
-        }
+        const saved = setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
 
         res.send(renderForm(
             {mamePath: config.mamePath},
@@ -7276,7 +7317,6 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             undefined,
             saved
                 ? 'MAME options updated in mame.ini.'
-                    + (pluginsAdded ? ` ${pluginsAdded} plugin(s) initialized in plugin.ini.` : '')
                 : 'mame.ini not found - configure and launch mame at least once before changing these options.',
         ));
     });
