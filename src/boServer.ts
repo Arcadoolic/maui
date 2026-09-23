@@ -1924,6 +1924,11 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        .shortname-cell {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
         .game-name-cell .info-icon,
         .game-name-cell .hiscore-icon {
             flex: 0 0 auto;
@@ -4463,6 +4468,17 @@ const HISCORE_CUP_ICON = `<span class="hiscore-icon" title="Hiscores can be extr
         </svg>
     </span>`;
 
+/** The (i) icon, its text shown as a tooltip on hover. */
+function renderInfoIcon(text: string): string {
+    return `<span class="info-icon" title="${escapeHtml(text)}">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
+            <rect x="7.25" y="7" width="1.5" height="5" fill="currentColor"/>
+        </svg>
+    </span>`;
+}
+
 /**
  * Game name cell content. Pass `romName` to also flag (gold cup) a game whose hiscores can be
  * extracted.
@@ -4472,13 +4488,7 @@ function renderGameName(fullname: string, romName?: string): string {
     // The name is cut with an ellipsis by CSS (see .game-name-cell) when too long for the column;
     // its title carries the full text. The search matches data-search, not this markup.
     const nameHtml = `<span class="game-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
-    const infoIcon = extra ? `<span class="info-icon" title="${escapeHtml(extra)}">
-        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
-            <rect x="7.25" y="7" width="1.5" height="5" fill="currentColor"/>
-        </svg>
-    </span>` : '';
+    const infoIcon = extra ? renderInfoIcon(extra) : '';
     const hiscoreIcon = romName && hasHiscoreExtraction(romName) ? HISCORE_CUP_ICON : '';
     return `<span class="game-name-cell">${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
 }
@@ -4503,23 +4513,25 @@ function renderDownloadSummary(summary: DownloadSummary): string {
 }
 
 /**
- * Bios column content: the parent romset (biosName, e.g. "pacman" for a puckman clone) and any
- * device romsets (deviceRoms, e.g. "ym2413") are distinct dependencies a favorite can be missing
- * independently of each other, so both show up here, comma-separated.
+ * Shortname cell content: the romName, followed - same as the name's region/revision info - by an
+ * (i) whose tooltip lists its dependencies, instead of a whole column for them. The parent romset
+ * (biosName, e.g. "pacman" for a puckman clone) and any device romsets (deviceRoms, e.g. "ym2413")
+ * are distinct dependencies a favorite can be missing independently of each other, so both are
+ * listed, each on its own line.
  */
-function renderBiosCell(row: FavoriteRow): string {
-    if (!row.cached) {
-        return '<em>-</em>';
-    }
-    const parts = [...(row.biosName ? [row.biosName] : []), ...row.deviceRoms];
-    return parts.length ? escapeHtml(parts.join(', ')) : '<em>-</em>';
+function renderShortnameCell(row: FavoriteRow): string {
+    const lines = [
+        ...(row.cached && row.biosName ? [`Bios: ${row.biosName}`] : []),
+        ...(row.cached && row.deviceRoms.length ? [`Devices: ${row.deviceRoms.join(', ')}`] : []),
+    ];
+    return `<span class="shortname-cell">${escapeHtml(row.romName)}${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
 }
 
 /**
  * What the favorites search matches a row against: the three searchable columns - shortname
  * (romName), name (the full description, including the parenthesized region/revision info that
- * the table only shows as a tooltip) and Bios / Devices (biosName and deviceRoms, as in
- * renderBiosCell()). Not-yet-resolved favorites (no cache entry) only have their romName.
+ * the table only shows as a tooltip) and bios / devices (biosName and deviceRoms, the shortname's
+ * own tooltip, see renderShortnameCell()). Not-yet-resolved favorites (no cache entry) only have their romName.
  */
 function getFavoriteSearchText(row: FavoriteRow): string {
     if (!row.cached) {
@@ -4551,8 +4563,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     const rows = sortedRows.map(row => `
         <tr data-search="${escapeHtml(getFavoriteSearchText(row))}">
             <td>${row.cached ? renderGameName(row.fullname, row.romName) : `<em>${escapeHtml(row.romName)}</em>`}</td>
-            <td>${escapeHtml(row.romName)}</td>
-            <td>${renderBiosCell(row)}</td>
+            <td>${renderShortnameCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
             <td class="center">
@@ -4594,7 +4605,6 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                         <tr>
                             <th>Name</th>
                             <th>Shortname</th>
-                            <th>Bios / Devices</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center" title="Times the game was launched">Plays</th>
                             <th class="center"></th>
