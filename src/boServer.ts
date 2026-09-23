@@ -1941,20 +1941,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         form.vote-buttons > button.down[aria-pressed="true"] {
             color: var(--danger);
         }
-        .vote-icon {
-            display: inline-flex;
-            vertical-align: middle;
-            cursor: help;
-        }
-        .vote-icon.up {
-            color: var(--success);
-        }
-        .vote-icon.neutral {
-            color: var(--text-muted);
-        }
-        .vote-icon.down {
-            color: var(--danger);
-        }
+
         .game-name-cell {
             display: flex;
             align-items: center;
@@ -4735,7 +4722,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th>RomName</th>
                             <th>Removed on</th>
                             <th class="center" title="Times the game was launched">Plays</th>
-                            <th class="center" title="The players' vote, changed from the Votes subtab">Vote</th>
+                            <th class="center">Vote</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
@@ -4801,7 +4788,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th>RomName</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center" title="Times the game was launched">Plays</th>
-                            <th class="center" title="The players' vote, changed from the Votes subtab">Vote</th>
+                            <th class="center">Vote</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
@@ -4831,6 +4818,16 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 var next = document.getElementById('favoritesNextPage');
                 var pageInfo = document.getElementById('favoritesPageInfo');
                 var page = 0;
+                // A form posted from the list (vote, remove) re-renders the whole page: its search,
+                // category and page are stashed on submit and put back once, on that re-render only.
+                var VIEW_KEY = 'bo.favorites.view';
+                document.getElementById('favoritesTable').addEventListener('submit', function () {
+                    try {
+                        sessionStorage.setItem(VIEW_KEY, JSON.stringify({
+                            search: search.value, category: category ? category.value : '*', page: page,
+                        }));
+                    } catch (error) { /* storage blocked: the list just starts over */ }
+                });
                 // The chosen page size is kept for this browser only (a convenience, not state).
                 try {
                     var storedSize = localStorage.getItem('bo.favorites.pageSize');
@@ -4876,6 +4873,17 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 });
                 prev.addEventListener('click', function () { page--; render(); });
                 next.addEventListener('click', function () { page++; render(); });
+                try {
+                    var view = JSON.parse(sessionStorage.getItem(VIEW_KEY) || 'null');
+                    sessionStorage.removeItem(VIEW_KEY);
+                    if (view) {
+                        search.value = view.search || '';
+                        if (category && category.querySelector('option[value="' + CSS.escape(view.category) + '"]')) {
+                            category.value = view.category;
+                        }
+                        page = Number(view.page) || 0;
+                    }
+                } catch (error) { /* storage blocked or unreadable: the list just starts over */ }
                 render();
                 search.addEventListener('keydown', function (event) {
                     if (event.key === 'Enter') { event.preventDefault(); }
@@ -4932,18 +4940,31 @@ const VOTE_ICONS: Record<Vote, {cssClass: string, paths: string}> = {
 };
 
 /**
- * Read-only vote of a game (favorites and removed favorites lists), in the Votes subtab's colors;
- * '-' for a game the database doesn't know (or no database at all). Changing it stays the Votes
- * subtab's job.
+ * A game's three vote buttons (thumbs up, neutral, thumbs down), the current one lit up, posting
+ * to /votes/set. `from`: the Games subtab the response re-opens on (the one the form is in).
+ */
+function renderVoteForm(romName: string, current: Vote, from: 'list' | 'votes'): string {
+    const buttons = ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
+        <button type="submit" name="vote" value="${vote}" class="icon-button ${VOTE_ICONS[vote].cssClass}"
+            aria-pressed="${current === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
+            <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[vote].paths}</svg>
+        </button>
+    `).join('');
+    return `
+        <form method="post" action="/votes/set" class="vote-buttons">
+            <input type="hidden" name="romName" value="${escapeHtml(romName)}">
+            <input type="hidden" name="from" value="${from}">
+            ${buttons}
+        </form>
+    `;
+}
+
+/**
+ * Vote cell of the favorites and removed favorites lists: the vote buttons, or '-' for a game the
+ * database doesn't know (or no database at all) - /votes/set would have nothing to update.
  */
 function renderVoteCell(stats: GameStats | undefined): string {
-    if (!stats) {
-        return '<em>-</em>';
-    }
-    const label = VOTE_LABELS[stats.vote];
-    return `<span class="vote-icon ${VOTE_ICONS[stats.vote].cssClass}" title="${label}" role="img" aria-label="${label}">
-        <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[stats.vote].paths}</svg>
-    </span>`;
+    return stats ? renderVoteForm(stats.romName, stats.vote, 'list') : '<em>-</em>';
 }
 
 function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: RemovedFavoritesFlash = {}): string {
@@ -4973,12 +4994,6 @@ function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: Remov
 
     const sorted = [...rows].sort((a, b) =>
         (b.lastPlayedAt?.getTime() ?? 0) - (a.lastPlayedAt?.getTime() ?? 0) || a.fullname.localeCompare(b.fullname));
-    const buttons = (row: VoteRow) => ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
-        <button type="submit" name="vote" value="${vote}" class="icon-button ${VOTE_ICONS[vote].cssClass}"
-            aria-pressed="${row.vote === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
-            <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[vote].paths}</svg>
-        </button>
-    `).join('');
     const tableRows = sorted.map(row => `
         <tr data-vote="${row.vote}" data-in-favorites="${row.inFavorites}">
             <td>${renderGameName(row.fullname, row.romName)}</td>
@@ -4986,10 +5001,7 @@ function renderVotesCard(rows: VoteRow[], removesFavorite: boolean, flash: Remov
             <td class="center">${row.playCount}</td>
             <td>${formatLastPlayed(row.lastPlayedAt)}</td>
             <td>
-                <form method="post" action="/votes/set" class="vote-buttons">
-                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${buttons(row)}
-                </form>
+                ${renderVoteForm(row.romName, row.vote, 'votes')}
             </td>
             <td class="center">${row.inFavorites ? '' : `Not in favorites${row.restorable ? `
                 <form method="post" action="/favorites/restore">
@@ -6194,8 +6206,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/votes/set', async (req, res) => {
         const romName: string = (req.body.romName || '').trim();
         const vote = parseVote(req.body.vote);
+        // The subtab the vote was cast from (favorites list or Votes), re-opened with the message.
+        const section = req.body.from === 'list' ? 'list' : 'votes';
         if (!/^[a-z0-9]+$/.test(romName) || vote === null) {
-            res.status(422).send(await renderFavoritesTab({section: 'votes', warning: 'Invalid vote.'}));
+            res.status(422).send(await renderFavoritesTab({section, warning: 'Invalid vote.'}));
             return;
         }
 
@@ -6210,7 +6224,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
         if (!updated) {
-            res.status(404).send(await renderFavoritesTab({section: 'votes', warning: `Unknown game "${romName}".`}));
+            res.status(404).send(await renderFavoritesTab({section, warning: `Unknown game "${romName}".`}));
             return;
         }
 
@@ -6230,7 +6244,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
         }
-        res.send(await renderFavoritesTab({section: 'votes', ...flash}));
+        res.send(await renderFavoritesTab({section, ...flash}));
     });
 
     app.post('/favorites/refresh', async (req, res) => {
