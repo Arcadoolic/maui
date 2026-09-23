@@ -1,6 +1,6 @@
 <template>
     <div>
-        <p>Configure the app from a browser:</p>
+        <p>Configure the App</p>
         <p class="url"><a href="#" @click.prevent="openConfigUrl">{{configUrl}}</a></p>
     </div>
 </template>
@@ -19,19 +19,28 @@ function openConfigUrl() {
 </script>
 
 <style scoped>
+    /* Shown in Init.vue's small square splash window (346x354): centered in it, with side
+       padding and wrapping so nothing gets cut. */
     div {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
         width: 100%;
-        height: 100%;
+        height: 100vh;
+        padding: 0 16px;
         background-color: #000000;
         text-align: center;
-        padding-top: 100px;
+    }
+    p {
+        margin: 6px 0;
     }
     * {
         color: white
     }
     .url {
         font-weight: bold;
-        font-size: 1.2em;
+        overflow-wrap: anywhere;
     }
 </style>
