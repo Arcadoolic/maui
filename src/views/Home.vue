@@ -23,6 +23,12 @@
             </div>
         </transition>
 
+        <div class="no-games" v-if="gamesLoaded && !games.length">
+            <h1>Aucun jeu installé</h1>
+            <p>Ajoutez des jeux aux favoris depuis le menu de MAME, ou importez un starting pack
+                depuis le back-office : <strong>{{boUrl}}</strong></p>
+        </div>
+
         <transition name="games">
             <Games :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
         </transition>
@@ -58,6 +64,7 @@ import {
 } from '@/types/CarouselCategory';
 import {mergeTtlCategories} from '@/class/CarouselCategories';
 import {join} from 'path';
+import {BO_SERVER_PORT} from '@/boServerPort';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
@@ -101,6 +108,10 @@ const showLoader = ref(false);
 const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
+// Set once the first game list is loaded: an empty list then means no game on the cabinet at all
+// (no favorite yet), shown as a message instead of an empty screen.
+const gamesLoaded = ref(false);
+const boUrl = `http://localhost:${BO_SERVER_PORT}`;
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -364,6 +375,7 @@ if (!getIsInit()) {
     onMounted(async () => {
         await loadCategories();
         games.value = await gameService.loadGames();
+        gamesLoaded.value = true;
         // Start on the game played last, when there is one still in the favorites.
         const lastPlayed = await gameService.loadLastPlayedGame();
         const lastPlayedIndex = lastPlayed ? games.value.findIndex(g => g.romName === lastPlayed.romName) : -1;
@@ -420,6 +432,25 @@ onMounted(() => {
         6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
+    .no-games {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        z-index: 3;
+        width: 70%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        color: #ffffff;
+        font-size: 1.4vw;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 1);
+    }
+    .no-games h1 {
+        color: #fff513;
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 2.5vw;
+        text-shadow: 0 0 30px rgba(237, 106, 10, 0.8), 0 3px 0 rgb(255, 81, 0), 0 12px 16px rgba(0, 0, 0, 1);
+    }
+
     .categoryTitle {
         bottom: 10px;
         background: none;
