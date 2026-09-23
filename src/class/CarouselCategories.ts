@@ -8,7 +8,7 @@ const TTL_PREFIX = /^TTL \* /;
  * "TTL * Shooter" - same icon as the non-TTL category since it's the same kind of game), with
  * every run of separators turned into '_' and lowercased ("Ball & Paddle" -> "ball_paddle"). It
  * is both the CSS class the Home carousel maps to src/assets/categories/<key>.svg and the icon
- * file name the BO Categories tab looks up. The replace() needs /g: without it, only the first
+ * file name the BO favorites list looks up. The replace() needs /g: without it, only the first
  * run of separators became '_' and any later one (e.g. the second space in "Musical Instrument
  * Accessory") stayed literal, breaking the key.
  */
