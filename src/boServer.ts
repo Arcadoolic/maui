@@ -1708,7 +1708,21 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .subtabs-bar .subtabs {
             margin: 0;
         }
+        .subtabs-action {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 16px;
+        }
         .subtabs-action form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .windowed-toggle .checkbox-row {
+            align-items: center;
+            margin-top: 0;
+            cursor: pointer;
+        }
+        .windowed-toggle .checkbox-row input {
             margin-top: 0;
         }
         .launch-button {
@@ -2860,13 +2874,6 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
             </dl>
-            <form method="post" action="/mame-options/save">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
-                    Launch MAME in windowed mode (instead of fullscreen) - edits mame.ini
-                </label>
-                <button type="submit">Save</button>
-            </form>
             ${mameInfo.missingPlugins.length ? `
                 <form method="post" action="/mame-options/repair-plugins">
                     <p class="error flash">plugin.ini is incomplete: ${mameInfo.missingPlugins.length} plugin(s)
@@ -3931,7 +3938,18 @@ function renderForm(
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
-    // Launching mame is the administrator's call (the route rejects anyone else too).
+    // Right of the subtabs: the windowed-mode switch (saved to mame.ini as soon as it's toggled -
+    // only once the binary is validated, mame.ini doesn't exist before) and the launch button
+    // (the administrator's call, the route rejects anyone else too).
+    const windowedToggle = mameInfo.error ? '' : `
+        <form method="post" action="/mame-options/save" class="windowed-toggle">
+            <label class="checkbox-row" title="Launch MAME in a window instead of fullscreen - edits mame.ini">
+                <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}
+                    onchange="this.form.requestSubmit()">
+                Windowed
+            </label>
+        </form>
+    `;
     const launchButton = isAdmin ? `
         <form method="post" action="/launch">
             <button type="submit" class="launch-button">
@@ -3940,7 +3958,7 @@ function renderForm(
             </button>
         </form>
     ` : '';
-    return renderSubtabbedPage('mame', sections, true, defaultSubtab, launchButton);
+    return renderSubtabbedPage('mame', sections, true, defaultSubtab, windowedToggle + launchButton);
 }
 
 const GITHUB_REPO = 'Arcadoolic/maui';
@@ -7340,8 +7358,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             getMameInfo(config), req.session.boRole === 'admin',
             undefined,
             undefined,
+            // Toggled from the subtabs row: its own state is the feedback, only a failure gets a
+            // message (on the Infos subtab).
             saved
-                ? 'MAME options updated in mame.ini.'
+                ? undefined
                 : 'mame.ini not found - configure and launch mame at least once before changing these options.',
         ));
     });
