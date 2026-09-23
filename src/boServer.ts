@@ -2723,7 +2723,8 @@ interface ConfigFormValues {
 
 /**
  * mame binary folder, then the mame.ini options: the plugins folder (pluginspath - the saved
- * value, or the one just picked with Browse) and windowed mode (window). Those stay dimmed and
+ * value, or the one just picked with Browse) and fullscreen (window, inverted - same wording as
+ * the MAUI tab's own fullscreen option). Those stay dimmed and
  * disabled while the binary folder is empty - mame.ini only exists once the binary is known (see
  * POST /save) - and are re-enabled as soon as something is typed into it.
  */
@@ -2750,8 +2751,8 @@ function renderConfigCard(
                         <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get"${pluginsDisabled}>Browse</button>
                     </div>
                     <label class="checkbox-row">
-                        <input type="checkbox" name="windowed" ${windowed ? 'checked' : ''}${pluginsDisabled}>
-                        Launch MAME in windowed mode (instead of fullscreen)
+                        <input type="checkbox" name="fullscreen" ${windowed ? '' : 'checked'}${pluginsDisabled}>
+                        Launch MAME fullscreen (unchecked = windowed)
                     </label>
                 </div>
                 <script>(function () {
@@ -7191,7 +7192,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
         const pluginsPath: string = (req.body.pluginsPath || '').trim();
-        const windowed = req.body.windowed === 'on';
+        // "Launch MAME fullscreen" checkbox: unchecked = windowed (mame.ini's window 1). Only
+        // posted while the binary folder is filled in (disabled otherwise, see renderConfigCard()).
+        const windowed = req.body.fullscreen !== 'on';
         const config = new Config();
         config.load();
         const isAdmin = req.session.boRole === 'admin';
@@ -7201,7 +7204,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             if (pluginsPath) {
                 mameInfo.pluginsPath = pluginsPath;
             }
-            mameInfo.windowed = windowed;
+            if (mamePath) {
+                mameInfo.windowed = windowed;
+            }
             return mameInfo;
         };
 
