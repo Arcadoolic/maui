@@ -1708,23 +1708,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .subtabs-bar .subtabs {
             margin: 0;
         }
-        .subtabs-action {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 16px;
-        }
         .subtabs-action form > button[type="submit"]:last-child {
             margin-top: 0;
         }
-        .windowed-toggle .checkbox-row {
-            align-items: center;
-            margin-top: 0;
-            cursor: pointer;
-        }
-        .windowed-toggle .checkbox-row input {
-            margin-top: 0;
-        }
+
         .launch-button {
             display: inline-flex;
             align-items: center;
@@ -2735,14 +2722,15 @@ interface ConfigFormValues {
 }
 
 /**
- * mame binary folder, then the plugins folder (mame.ini's pluginspath, `pluginsPath`: the saved
- * value, or the one just picked with Browse). The latter stays dimmed and disabled while the
- * binary folder is empty - mame.ini only exists once the binary is known (see POST /save) - and
- * is re-enabled as soon as something is typed into it.
+ * mame binary folder, then the mame.ini options: the plugins folder (pluginspath - the saved
+ * value, or the one just picked with Browse) and windowed mode (window). Those stay dimmed and
+ * disabled while the binary folder is empty - mame.ini only exists once the binary is known (see
+ * POST /save) - and are re-enabled as soon as something is typed into it.
  */
 function renderConfigCard(
-    values: ConfigFormValues, pluginsPath: string | null, error?: string, info?: string,
+    values: ConfigFormValues, mameInfo: Pick<MameInfo, 'pluginsPath' | 'windowed'>, error?: string, info?: string,
 ): string {
+    const {pluginsPath, windowed} = mameInfo;
     const pluginsDisabled = values.mamePath.trim() ? '' : ' disabled';
     return `
         <section class="card">
@@ -2761,6 +2749,10 @@ function renderConfigCard(
                         <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(pluginsPath || '')}"${pluginsDisabled}>
                         <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get"${pluginsDisabled}>Browse</button>
                     </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="windowed" ${windowed ? 'checked' : ''}${pluginsDisabled}>
+                        Launch MAME in windowed mode (instead of fullscreen)
+                    </label>
                 </div>
                 <script>(function () {
                     var mamePath = document.getElementById('mamePath');
@@ -3865,14 +3857,14 @@ function renderForm(
     gameRemapState?: GameRemapState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
-    // see /save, /launch, /mame-options/save, /reset, etc.) purely for the repo card's
+    // see /save, /launch, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
     // credential fields; a sync JSON read is cheap and every route already re-loads Config at
     // least once per request anyway.
     const config = new Config();
     config.load();
 
     const sections: Subsection[] = [
-        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo.pluginsPath, error, info)},
+        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)},
         {id: 'infos', label: 'Infos', html: renderMameInfoCard(mameInfo, mameInfoMessage)},
     ];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
@@ -3938,18 +3930,8 @@ function renderForm(
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
-    // Right of the subtabs: the windowed-mode switch (saved to mame.ini as soon as it's toggled -
-    // only once the binary is validated, mame.ini doesn't exist before) and the launch button
-    // (the administrator's call, the route rejects anyone else too).
-    const windowedToggle = mameInfo.error ? '' : `
-        <form method="post" action="/mame-options/save" class="windowed-toggle">
-            <label class="checkbox-row" title="Launch MAME in a window instead of fullscreen - edits mame.ini">
-                <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}
-                    onchange="this.form.requestSubmit()">
-                Windowed
-            </label>
-        </form>
-    `;
+    // Right of the subtabs: launching mame is the administrator's call (the route rejects anyone
+    // else too).
     const launchButton = isAdmin ? `
         <form method="post" action="/launch">
             <button type="submit" class="launch-button">
@@ -3958,7 +3940,7 @@ function renderForm(
             </button>
         </form>
     ` : '';
-    return renderSubtabbedPage('mame', sections, true, defaultSubtab, windowedToggle + launchButton);
+    return renderSubtabbedPage('mame', sections, true, defaultSubtab, launchButton);
 }
 
 const GITHUB_REPO = 'Arcadoolic/maui';
@@ -6728,7 +6710,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // above reflect what the import just installed, instead of a "Retour" link to a
         // separate page.
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath));
+        res.write(renderConfigCard(values, refreshedMameInfo));
         res.write(renderMameInfoCard(refreshedMameInfo));
         // Same gating as renderForm(): import only makes sense once the binary's configured and
         // validated (see there for why).
@@ -6916,7 +6898,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath));
+        res.write(renderConfigCard(values, refreshedMameInfo));
         res.write(renderMameInfoCard(refreshedMameInfo));
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
@@ -7209,6 +7191,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
         const pluginsPath: string = (req.body.pluginsPath || '').trim();
+        const windowed = req.body.windowed === 'on';
         const config = new Config();
         config.load();
         const isAdmin = req.session.boRole === 'admin';
@@ -7218,6 +7201,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             if (pluginsPath) {
                 mameInfo.pluginsPath = pluginsPath;
             }
+            mameInfo.windowed = windowed;
             return mameInfo;
         };
 
@@ -7250,6 +7234,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
         const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
+        setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
 
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
@@ -7345,26 +7330,6 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             : 0;
         return {saved, pluginsAdded};
     };
-
-    app.post('/mame-options/save', (req, res) => {
-        const config = new Config();
-        config.load();
-
-        const windowed = req.body.windowed === 'on';
-        const saved = setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
-
-        res.send(renderForm(
-            {mamePath: config.mamePath},
-            getMameInfo(config), req.session.boRole === 'admin',
-            undefined,
-            undefined,
-            // Toggled from the subtabs row: its own state is the feedback, only a failure gets a
-            // message (on the Infos subtab).
-            saved
-                ? undefined
-                : 'mame.ini not found - configure and launch mame at least once before changing these options.',
-        ));
-    });
 
     app.post('/mame-options/repair-plugins', (req, res) => {
         const config = new Config();
