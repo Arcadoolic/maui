@@ -32,6 +32,8 @@ export default class UserService {
      * that cache to attribute a saved score - until the next app restart.
      * A newly created user also gets a generated default avatar (see DefaultAvatar.ts). A pseudo
      * held by a deleted player is refused: `created` false and `reserved` true.
+     * A player registered here (from the cabinet itself) is active straight away; an existing
+     * player found by findOrCreate keeps whatever status the BO gave them.
      */
     public async registerUser(pseudo3: string): Promise<{user: User; created: boolean; reserved: boolean}> {
         // A deleted player's pseudo stays reserved (see UserReservation.ts): refused here rather
@@ -41,7 +43,7 @@ export default class UserService {
         if (deleted) {
             return {user: deleted, created: false, reserved: true};
         }
-        const [user, created] = await User.findOrCreate({where: {pseudo_3: pseudo3}, defaults: {active: false}});
+        const [user, created] = await User.findOrCreate({where: {pseudo_3: pseudo3}, defaults: {active: true}});
         this.users3[user.pseudo_3] = user;
         if (created && ensureDefaultAvatar(this.avatarsPath, user.pseudo_3)) {
             // Forget the cached listing so getAvatars() picks the new file up (it also reloads
