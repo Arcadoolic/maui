@@ -23,13 +23,13 @@
             </div>
         </transition>
 
-        <div class="no-games" v-if="gamesLoaded && !games.length">
+        <div class="no-games" v-if="noGames">
             <h1>No games yet</h1>
             <p>Add favorites in MAME, or import a starting pack from <strong>{{boUrl}}</strong></p>
         </div>
 
         <transition name="games">
-            <Games :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
+            <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
         </transition>
 
         <transition name="flyer">
@@ -111,6 +111,8 @@ const voteGame = ref<Game | null>(null);
 // (no favorite yet), shown as a message instead of an empty screen.
 const gamesLoaded = ref(false);
 const boUrl = `http://localhost:${BO_SERVER_PORT}`;
+// No game at all: the message replaces the carousel (and its blue selection band).
+const noGames = computed(() => gamesLoaded.value && !games.value.length);
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -431,18 +433,33 @@ onMounted(() => {
         6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
+    /* Full screen, the message centered over the splash logo, faint like on the first-run screen
+       (Config.vue). */
     .no-games {
         position: absolute;
-        top: 50%;
-        left: 50%;
+        inset: 0;
         z-index: 3;
-        width: 70%;
-        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 0 15%;
         text-align: center;
         color: #ffffff;
         font-size: 1.4vw;
         line-height: 1.6;
         text-shadow: 0 2px 8px rgba(0, 0, 0, 1);
+    }
+    .no-games::before {
+        content: '';
+        position: absolute;
+        inset: 10%;
+        background: url(../assets/splash_screen_arcade.png) center / contain no-repeat;
+        opacity: 0.18;
+        pointer-events: none;
+    }
+    .no-games > * {
+        position: relative;
     }
     .no-games h1 {
         color: #fff513;
