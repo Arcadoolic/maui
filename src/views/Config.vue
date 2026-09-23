@@ -1,7 +1,7 @@
 <template>
     <div>
-        <p>Merci de vous connecter depuis un navigateur sur cette machine pour configurer l'application :</p>
-        <p class="url"><a href="#" @click.prevent="openConfigUrl">Cliquez-ici</a></p>
+        <p>Configure the app from a browser:</p>
+        <p class="url"><a href="#" @click.prevent="openConfigUrl">{{configUrl}}</a></p>
     </div>
 </template>
 

@@ -24,9 +24,8 @@
         </transition>
 
         <div class="no-games" v-if="gamesLoaded && !games.length">
-            <h1>Aucun jeu installé</h1>
-            <p>Ajoutez des jeux aux favoris depuis le menu de MAME, ou importez un starting pack
-                depuis le back-office : <strong>{{boUrl}}</strong></p>
+            <h1>No games yet</h1>
+            <p>Add favorites in MAME, or import a starting pack from <strong>{{boUrl}}</strong></p>
         </div>
 
         <transition name="games">
