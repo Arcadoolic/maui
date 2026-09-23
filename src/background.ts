@@ -69,15 +69,13 @@ app.on('activate', () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.on('ready', async () => {
-    win = createSplashWin();
-
-    boServer = startBoServer(BO_SERVER_PORT, () => {
+    const bo = startBoServer(BO_SERVER_PORT, () => {
         if (win) {
             loadPath(win, 'init');
         }
     }, () => {
-        // Unlike onConfigured() above (a route reload is enough after a normal config save), a
-        // reset needs a real process restart: services.ts only ever builds its
+        // Unlike reloadFront() above (a route reload is enough after a config save or a pack
+        // import), a reset needs a real process restart: services.ts only ever builds its
         // MameService/GameService/... once (see services.ts's initServices()), so those would
         // keep serving stale data - parsed from the mame home files /reset just deleted - even
         // after reloading to /init and going through first-run setup again.
@@ -89,6 +87,11 @@ app.on('ready', async () => {
         // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
     });
+    boServer = bo.server;
+    // The BO creates/migrates the database first (see boServer.ts's bootstrapDatabase()): the
+    // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
+    await bo.databaseReady;
+    win = createSplashWin();
 });
 
 app.on('will-quit', () => {

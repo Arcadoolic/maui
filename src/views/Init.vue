@@ -41,7 +41,7 @@ onMounted(async () => {
         // e.g. Database.install() refusing to run because genre.ini hasn't been installed yet by
         // a starting pack import - stay on this screen with the message instead of silently
         // hanging on a blank splash.
-        error.value = e instanceof Error ? e.message : 'Erreur inattendue au démarrage.';
+        error.value = e instanceof Error ? e.message : 'Unexpected startup error.';
         return;
     }
 
@@ -78,7 +78,7 @@ onMounted(async () => {
 
         router.push({name: 'home'});
     } catch (e) {
-        error.value = e instanceof Error ? e.message : 'Erreur inattendue au démarrage.';
+        error.value = e instanceof Error ? e.message : 'Unexpected startup error.';
     }
 });
 </script>
