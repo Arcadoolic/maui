@@ -1,5 +1,5 @@
 <template>
-    <div>
+    <div class="first-run">
         <p>Configure the App</p>
         <p class="url"><a href="#" @click.prevent="openConfigUrl">{{configUrl}}</a></p>
     </div>
@@ -21,7 +21,8 @@ function openConfigUrl() {
 <style scoped>
     /* Shown in Init.vue's small square splash window (346x354): centered in it, with side
        padding and wrapping so nothing gets cut. */
-    div {
+    .first-run {
+        position: relative;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -33,8 +34,19 @@ function openConfigUrl() {
         background-color: #000000;
         text-align: center;
     }
+    /* The splash logo behind the message: faint, but still recognizable. */
+    .first-run::before {
+        content: '';
+        position: absolute;
+        inset: 16px;
+        background: url(../assets/splash_screen_arcade.png) center / contain no-repeat;
+        opacity: 0.18;
+        pointer-events: none;
+    }
     p {
+        position: relative;
         margin: 6px 0;
+        text-shadow: 0 1px 4px #000000;
     }
     * {
         color: white
