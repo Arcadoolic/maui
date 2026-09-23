@@ -3865,8 +3865,9 @@ function renderForm(
     config.load();
 
     const sections: Subsection[] = [
-        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)},
-        {id: 'infos', label: 'Infos', html: renderMameInfoCard(mameInfo, mameInfoMessage)},
+        // The MAME information (paths resolved from the binary) right under the form that sets it.
+        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)
+            + renderMameInfoCard(mameInfo, mameInfoMessage)},
     ];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
@@ -3928,9 +3929,8 @@ function renderForm(
             : importError !== undefined ? 'import'
                 : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined
                     || gameRemapState !== undefined) ? 'gamepads'
-                    : mameInfoMessage !== undefined ? 'infos'
-                        : (error !== undefined || info !== undefined) ? 'config'
-                            : undefined;
+                    : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
+                        : undefined;
     // Right of the subtabs: launching mame is the administrator's call (the route rejects anyone
     // else too).
     const launchButton = isAdmin ? `
