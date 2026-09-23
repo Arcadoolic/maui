@@ -1134,7 +1134,7 @@ function escapeHtml(value: string): string {
 }
 
 /**
- * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs`, streaming its stdout/stderr
+ * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs -y`, streaming its stdout/stderr
  * line-by-line into an already-`res.writeHead()`'d, already-headed HTML response as a live
  * progress log - shared by /import and /import/from-url, which only differ in the section title,
  * the script args/env, and what they render once the import finishes.
@@ -1168,7 +1168,13 @@ function runImportScript(
     const closeBlock = tab !== null ? '</div>' : '</section>';
 
     return new Promise(resolve => {
-        const child = spawn('python3', [scriptPath, ...scriptArgs], {env: {...env, MAUI_PROGRESS: '1'}});
+        // -y always: nobody can answer the script's confirmation prompt from here. stdin ignored
+        // too, so a prompt that slips through anyway ends on EOF instead of waiting forever on
+        // an open pipe.
+        const child = spawn('python3', [scriptPath, ...scriptArgs, '-y'], {
+            env: {...env, MAUI_PROGRESS: '1'},
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
 
         const updateBar = (call: string): void => {
             res.write(`<script>mauiImportProgress.${call}</script>`);
@@ -6747,7 +6753,9 @@ export function startBoServer(
         // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
         // the actual import both happen inside the script now - it mirrors this same logic and
         // reports failures through its own stdout/stderr lines, same as /import/from-url below.
-        const started = await runImportScript(res, 'Import in progress…', [req.file.path], {...process.env});
+        const started = await runImportScript(
+            res, `Import in progress… (${escapeHtml(req.file.originalname)})`, [req.file.path], {...process.env},
+        );
         rmSync(req.file.path, {force: true});
         if (!started) {
             return;
@@ -6920,7 +6928,7 @@ export function startBoServer(
             const started = await runImportScript(
                 res,
                 `${counter}Import from the repository in progress… (${escapeHtml(packFilename)}, ${romNames.length} game(s))`,
-                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(','), '-y'],
+                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(',')],
                 {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
                 {index, total: selection.size},
                 tabbed,
