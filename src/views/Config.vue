@@ -41,6 +41,11 @@ function openConfigUrl() {
     }
     .url {
         font-weight: bold;
+        font-size: 0.85em;
         overflow-wrap: anywhere;
+    }
+    /* Same yellow as Home's game titles. */
+    .url a {
+        color: #fff513;
     }
 </style>
