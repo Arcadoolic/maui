@@ -1368,6 +1368,9 @@ interface Subsection {
  */
 function renderSubtabbedPage(
     active: Tab, sections: Subsection[], authenticated: boolean = true, defaultSectionId?: string,
+    // Markup shown at the right end of the subtabs row, whichever subtab is open (e.g. the MAME
+    // tab's "Launch mame" button).
+    navAction = '',
 ): string {
     if (sections.length <= 1) {
         return renderPage(sections.map(section => section.html).join(''), active, authenticated);
@@ -1389,11 +1392,12 @@ function renderSubtabbedPage(
             `).join('')}
         </nav>
     `;
+    const bar = navAction ? `<div class="subtabs-bar">${nav}<div class="subtabs-action">${navAction}</div></div>` : nav;
     const panels = sections.map(section => `
         <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}" role="tabpanel"
             id="subtab-panel-${escapeHtml(section.id)}" aria-labelledby="subtab-tab-${escapeHtml(section.id)}">${section.html}</div>
     `).join('');
-    return renderPage(nav + panels, active, authenticated, true);
+    return renderPage(bar + panels, active, authenticated, true);
 }
 
 /**
@@ -1690,6 +1694,22 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             flex-wrap: wrap;
             gap: 8px;
             margin-top: 24px;
+        }
+        /* Subtabs on the left, the page's action (see renderSubtabbedPage()'s navAction) pinned to
+           the right of the same row; wraps under them on a narrow screen. */
+        .subtabs-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px 16px;
+            margin: 4px 0 20px;
+        }
+        .subtabs-bar .subtabs {
+            margin: 0;
+        }
+        .subtabs-action form > button[type="submit"]:last-child {
+            margin-top: 0;
         }
         .launch-button {
             display: inline-flex;
@@ -2707,7 +2727,7 @@ interface ConfigFormValues {
  * is re-enabled as soon as something is typed into it.
  */
 function renderConfigCard(
-    values: ConfigFormValues, pluginsPath: string | null, isAdmin: boolean, error?: string, info?: string,
+    values: ConfigFormValues, pluginsPath: string | null, error?: string, info?: string,
 ): string {
     const pluginsDisabled = values.mamePath.trim() ? '' : ' disabled';
     return `
@@ -2740,10 +2760,6 @@ function renderConfigCard(
                 })();</script>
                 <div class="button-row">
                     <button type="submit">Save</button>
-                    ${isAdmin ? `<button type="submit" formaction="/launch" formmethod="post" class="launch-button">
-                        <img src="/mame-logo.svg" alt="" class="launch-logo">
-                        Launch mame
-                    </button>` : ''}
                 </div>
             </form>
         </section>
@@ -3849,7 +3865,7 @@ function renderForm(
     config.load();
 
     const sections: Subsection[] = [
-        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo.pluginsPath, isAdmin, error, info)},
+        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo.pluginsPath, error, info)},
         {id: 'infos', label: 'Infos', html: renderMameInfoCard(mameInfo, mameInfoMessage)},
     ];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
@@ -3915,7 +3931,16 @@ function renderForm(
                     : mameInfoMessage !== undefined ? 'infos'
                         : (error !== undefined || info !== undefined) ? 'config'
                             : undefined;
-    return renderSubtabbedPage('mame', sections, true, defaultSubtab);
+    // Launching mame is the administrator's call (the route rejects anyone else too).
+    const launchButton = isAdmin ? `
+        <form method="post" action="/launch">
+            <button type="submit" class="launch-button">
+                <img src="/mame-logo.svg" alt="" class="launch-logo">
+                Launch mame
+            </button>
+        </form>
+    ` : '';
+    return renderSubtabbedPage('mame', sections, true, defaultSubtab, launchButton);
 }
 
 const GITHUB_REPO = 'Arcadoolic/maui';
@@ -6685,7 +6710,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // above reflect what the import just installed, instead of a "Retour" link to a
         // separate page.
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath, req.session.boRole === 'admin'));
+        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath));
         res.write(renderMameInfoCard(refreshedMameInfo));
         // Same gating as renderForm(): import only makes sense once the binary's configured and
         // validated (see there for why).
@@ -6873,7 +6898,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath, req.session.boRole === 'admin'));
+        res.write(renderConfigCard(values, refreshedMameInfo.pluginsPath));
         res.write(renderMameInfoCard(refreshedMameInfo));
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
