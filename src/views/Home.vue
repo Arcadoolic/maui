@@ -1,5 +1,5 @@
 <template>
-    <div class="home">
+    <div class="home" :class="{empty: noGames}">
         <modal v-if="showLoader">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -433,6 +433,11 @@ onMounted(() => {
         6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
+    /* No game: plain black, the wallpaper only comes with the games. */
+    .home.empty {
+        background-image: none;
+    }
+
     /* Full screen, the message centered over the splash logo, faint like on the first-run screen
        (Config.vue). */
     .no-games {
