@@ -6080,7 +6080,7 @@ function renderBrowsePage(target: PathField, currentDir: string, carried: Record
  * bootstrapDatabase()); requests arriving before wait for it.
  */
 export function startBoServer(
-    port: number, onConfigured: () => void, onReset: () => void,
+    port: number, reloadFront: () => void, onReset: () => void,
 ): {server: Server; databaseReady: Promise<void>} {
     const app = express();
     app.use(express.urlencoded({extended: false}));
@@ -6792,6 +6792,10 @@ export function startBoServer(
         }
         res.write(renderPageTail());
         res.end();
+
+        // Back through Init.vue, which re-seeds categories and re-syncs games from the new
+        // favorites.ini/genre.ini - the front would otherwise keep showing the pre-import list.
+        reloadFront();
     });
 
     // Same admin gating as renderRepoImportCard()'s visibility in renderForm(): configuring where
@@ -6971,6 +6975,9 @@ export function startBoServer(
         }
         res.write(renderPageTail());
         res.end();
+
+        // Same as /import above.
+        reloadFront();
     });
 
     app.get('/maui', async (req, res) => {
@@ -7330,7 +7337,7 @@ export function startBoServer(
             + '</script>',
         ));
 
-        onConfigured();
+        reloadFront();
     });
 
     app.post('/launch', (req, res) => {

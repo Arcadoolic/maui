@@ -74,8 +74,8 @@ app.on('ready', async () => {
             loadPath(win, 'init');
         }
     }, () => {
-        // Unlike onConfigured() above (a route reload is enough after a normal config save), a
-        // reset needs a real process restart: services.ts only ever builds its
+        // Unlike reloadFront() above (a route reload is enough after a config save or a pack
+        // import), a reset needs a real process restart: services.ts only ever builds its
         // MameService/GameService/... once (see services.ts's initServices()), so those would
         // keep serving stale data - parsed from the mame home files /reset just deleted - even
         // after reloading to /init and going through first-run setup again.
