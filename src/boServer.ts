@@ -1559,6 +1559,12 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: block;
             margin-top: 16px;
         }
+        /* Form controls don't inherit the page font by default: browsers give them their own
+           system font at ~13.3px, so on form-heavy pages (My account, sign-in) the typed values
+           and button labels came out visibly smaller than the labels/paragraphs around them. */
+        input, select, textarea, button {
+            font: inherit;
+        }
         input, select {
             width: 100%;
             box-sizing: border-box;
@@ -2174,15 +2180,12 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             50% { opacity: 0.4; }
         }
         /* Present once a page has subtabs (see renderSubtabbedPage()) - the primary nav steps
-           back (smaller, dimmed except the active tab) so the subtabs row below reads as the
-           primary navigation for the page actually being looked at, without hiding the way
-           back to the other top-level tabs. */
-        .tabs.compact {
-            padding: 3px;
-        }
+           back (dimmed except the active tab) so the subtabs row below reads as the primary
+           navigation for the page actually being looked at, without hiding the way back to the
+           other top-level tabs. Dimmed only, not shrunk: a smaller font/padding here made the
+           whole menu visibly jump in size between pages with subtabs and pages without
+           (My account, single-section tabs). */
         .tabs.compact a {
-            padding: 6px 12px;
-            font-size: 0.85em;
             opacity: 0.55;
         }
         .tabs.compact a.active {
