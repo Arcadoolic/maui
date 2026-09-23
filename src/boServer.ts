@@ -46,7 +46,7 @@ import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
-import {getCategoryIconKey, mergeTtlCategories} from '@/class/CarouselCategories';
+import {getCategoryDisplayName, getCategoryIconKey, mergeTtlCategories} from '@/class/CarouselCategories';
 import {HISCORES_ONLY_CATEGORY, isMergedCategory} from '@/types/CarouselCategory';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
 import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
@@ -815,6 +815,14 @@ interface GameStats {
     playCount: number;
     vote: Vote;
     lastPlayedAt: Date | null;
+    // The game's carousel category (TTL twin merged, as displayed on the cabinet), null when
+    // genre.ini doesn't know it.
+    category: GameCategory | null;
+}
+
+interface GameCategory {
+    name: string;
+    iconKey: string;
 }
 
 /**
@@ -825,15 +833,20 @@ interface GameStats {
 async function loadGameStats(): Promise<Map<string, GameStats> | null> {
     try {
         const games = await Game.findAll({
-            attributes: ['romName', 'fullname', 'play_count', 'vote', 'last_played_at'],
+            attributes: ['romName', 'fullname', 'play_count', 'vote', 'last_played_at', 'id_category'],
             paranoid: false,
         });
+        const categories = new Map((await Category.findAll()).map(category => [category.id_category, {
+            name: getCategoryDisplayName(category.name),
+            iconKey: getCategoryIconKey(category.name),
+        }]));
         return new Map(games.map(game => [game.romName, {
             romName: game.romName,
             fullname: game.fullname || game.romName,
             playCount: game.play_count || 0,
             vote: parseVote(game.vote) ?? VOTE_NEUTRAL,
             lastPlayedAt: game.last_played_at ? new Date(game.last_played_at) : null,
+            category: categories.get(game.id_category) ?? null,
         }]));
     } catch {
         return null;
@@ -1928,6 +1941,11 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: inline-flex;
             align-items: center;
             gap: 6px;
+        }
+        .game-category-icon {
+            flex: 0 0 auto;
+            width: 20px;
+            height: 20px;
         }
         .game-name-cell .info-icon,
         .game-name-cell .hiscore-icon {
@@ -4480,17 +4498,34 @@ function renderInfoIcon(text: string): string {
 }
 
 /**
- * Game name cell content. Pass `romName` to also flag (gold cup) a game whose hiscores can be
- * extracted.
+ * Category icon ahead of a game's name, the category's name as its tooltip. `undefined` (a list
+ * that shows no categories) renders nothing; `null` (a game genre.ini doesn't know) an empty slot
+ * of the same width, so the names of a list stay aligned.
  */
-function renderGameName(fullname: string, romName?: string): string {
+function renderGameCategoryIcon(category: GameCategory | null | undefined): string {
+    if (category === undefined) {
+        return '';
+    }
+    if (!category) {
+        return '<span class="game-category-icon" title="No category"></span>';
+    }
+    const iconKey = category.iconKey in CATEGORY_ICONS ? category.iconKey : '_default';
+    return `<img class="game-category-icon" src="/category-icons/${escapeHtml(iconKey)}.svg"
+        title="${escapeHtml(category.name)}" alt="${escapeHtml(category.name)}">`;
+}
+
+/**
+ * Game name cell content. Pass `romName` to also flag (gold cup) a game whose hiscores can be
+ * extracted, and `category` to lead with its category icon (see renderGameCategoryIcon()).
+ */
+function renderGameName(fullname: string, romName?: string, category?: GameCategory | null): string {
     const {name, extra} = splitGameName(fullname);
     // The name is cut with an ellipsis by CSS (see .game-name-cell) when too long for the column;
     // its title carries the full text. The search matches data-search, not this markup.
     const nameHtml = `<span class="game-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
     const infoIcon = extra ? renderInfoIcon(extra) : '';
     const hiscoreIcon = romName && hasHiscoreExtraction(romName) ? HISCORE_CUP_ICON : '';
-    return `<span class="game-name-cell">${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
+    return `<span class="game-name-cell">${renderGameCategoryIcon(category)}${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
 }
 
 function renderDownloadSummary(summary: DownloadSummary): string {
@@ -4562,7 +4597,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
     const sortedRows = [...favoritesInfo.rows].sort((a, b) => a.fullname.localeCompare(b.fullname));
     const rows = sortedRows.map(row => `
         <tr data-search="${escapeHtml(getFavoriteSearchText(row))}">
-            <td>${row.cached ? renderGameName(row.fullname, row.romName) : `<em>${escapeHtml(row.romName)}</em>`}</td>
+            <td>${row.cached
+                ? renderGameName(row.fullname, row.romName, favoritesInfo.stats ? favoritesInfo.stats.get(row.romName)?.category ?? null : undefined)
+                : `<em>${escapeHtml(row.romName)}</em>`}</td>
             <td>${renderShortnameCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>

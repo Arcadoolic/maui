@@ -16,6 +16,11 @@ export function getCategoryIconKey(categoryName: string): string {
     return categoryName.replace(TTL_PREFIX, '').replace(/[\s\W]+/g, '_').toLowerCase();
 }
 
+/** Name a category is displayed under: mame's "TTL * " prefix dropped (see mergeTtlCategories()). */
+export function getCategoryDisplayName(categoryName: string): string {
+    return categoryName.replace(TTL_PREFIX, '');
+}
+
 /**
  * mame's genre.ini keeps its discrete-logic games (Pong...) in a "TTL * <genre>" category next to
  * the plain "<genre>" one. In the carousel that showed the same name and icon twice, so each pair
@@ -26,7 +31,7 @@ export function getCategoryIconKey(categoryName: string): string {
 export function mergeTtlCategories(categories: Category[]): CarouselCategory[] {
     const groups = new Map<string, Category[]>();
     for (const category of categories) {
-        const displayName = category.name.replace(TTL_PREFIX, '');
+        const displayName = getCategoryDisplayName(category.name);
         groups.set(displayName, [...(groups.get(displayName) ?? []), category]);
     }
 
