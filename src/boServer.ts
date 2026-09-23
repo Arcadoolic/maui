@@ -86,6 +86,9 @@ declare module 'express-session' {
 }
 
 type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui' | 'account';
+// Who a page is rendered for: admin-only tabs are left out of the nav for 'user', and null (signed
+// out - the login page) gets no nav at all.
+type Viewer = 'admin' | 'user' | null;
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -1378,8 +1381,12 @@ function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {in
     `;
 }
 
-function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
-    return renderPageHead(active, authenticated, hasSubtabs) + body + renderPageTail();
+function renderPage(body: string, active: Tab, viewer: Viewer, hasSubtabs: boolean = false): string {
+    return renderPageHead(active, viewer, hasSubtabs) + body + renderPageTail();
+}
+
+function getViewer(req: Request): Viewer {
+    return req.session.boRole === 'admin' ? 'admin' : 'user';
 }
 
 interface Subsection {
@@ -1413,13 +1420,13 @@ interface Subsection {
  * first in `sections` always wins over the section the just-submitted form actually belongs to.
  */
 function renderSubtabbedPage(
-    active: Tab, sections: Subsection[], authenticated: boolean = true, defaultSectionId?: string,
+    active: Tab, sections: Subsection[], viewer: Viewer, defaultSectionId?: string,
     // Markup shown at the right end of the subtabs row, whichever subtab is open (e.g. the MAME
     // tab's "Launch mame" button).
     navAction = '',
 ): string {
     if (sections.length <= 1) {
-        return renderPage(sections.map(section => section.html).join(''), active, authenticated);
+        return renderPage(sections.map(section => section.html).join(''), active, viewer);
     }
     // role="tablist"/"tab"/"tabpanel": unlike the primary nav (real page links), this switches
     // panels client-side within one page - the actual ARIA tabs pattern applies here.
@@ -1443,7 +1450,7 @@ function renderSubtabbedPage(
         <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}" role="tabpanel"
             id="subtab-panel-${escapeHtml(section.id)}" aria-labelledby="subtab-tab-${escapeHtml(section.id)}">${section.html}</div>
     `).join('');
-    return renderPage(bar + panels, active, authenticated, true);
+    return renderPage(bar + panels, active, viewer, true);
 }
 
 /**
@@ -1474,7 +1481,7 @@ function renderNavTabLink(href: string, label: string, isActive: boolean): strin
     return `<a href="${href}" class="${isActive ? 'active' : ''}"${isActive ? ' aria-current="page"' : ''}>${label}</a>`;
 }
 
-function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
+function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2475,11 +2482,11 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
     <header>
         <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
-        ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
+        ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
-            ${renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper')}
+            ${viewer === 'admin' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
             ${renderNavTabLink('/maui', 'MAUI', active === 'maui')}
             ${renderNavTabLink('/account', 'My account', active === 'account')}
         </nav>` : ''}
@@ -2743,7 +2750,7 @@ function renderLoginPage(error?: string): string {
                 <button type="submit">Sign in</button>
             </form>
         </section>
-    `, 'mame', false);
+    `, 'mame', null);
 }
 
 function renderAccountPage(username: string, role: string, error?: string, info?: string): string {
@@ -2768,7 +2775,7 @@ function renderAccountPage(username: string, role: string, error?: string, info?
                 <button type="submit">Sign out</button>
             </form>
         </section>
-    `, 'account');
+    `, 'account', role === 'admin' ? 'admin' : 'user');
 }
 
 interface ConfigFormValues {
@@ -3995,7 +4002,7 @@ function renderForm(
             </button>
         </form>
     ` : '';
-    return renderSubtabbedPage('mame', sections, true, defaultSubtab, launchButton);
+    return renderSubtabbedPage('mame', sections, isAdmin ? 'admin' : 'user', defaultSubtab, launchButton);
 }
 
 const GITHUB_REPO = 'Arcadoolic/maui';
@@ -4491,7 +4498,7 @@ function renderMauiPage(
             : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                 : messages.mauiInfo !== undefined ? 'general'
                     : undefined;
-    return renderSubtabbedPage('maui', sections, true, defaultSubtab);
+    return renderSubtabbedPage('maui', sections, isAdmin ? 'admin' : 'user', defaultSubtab);
 }
 
 /**
@@ -4589,7 +4596,7 @@ function renderScreenScraperPage(
             label: 'Download',
             html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
         },
-    ], true, defaultSubtab);
+    ], 'admin', defaultSubtab);
 }
 
 // 16x16 stroke icons (drawn with currentColor, so the caller's color class tints them). Each
@@ -4912,7 +4919,7 @@ const FAVORITES_DEFAULT_PAGE_SIZE = 30;
  * The favorites list (searchable, filterable by category, paginated client-side), followed by the
  * removed favorites in a card of their own.
  */
-function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
+function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
     const flash = `
         ${favoritesInfo.notice ? `<p class="info flash">${escapeHtml(favoritesInfo.notice)}</p>` : ''}
         ${favoritesInfo.warning ? `<p class="error flash">${escapeHtml(favoritesInfo.warning)}</p>` : ''}
@@ -5190,9 +5197,10 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             closes.</p>
             ${ASSET_PREVIEW_SCRIPT}
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
-            present (hover it to preview the image), red (struck through) when it is missing. To download the missing artwork
-            from ScreenScraper, use the button in the
-            <a href="/screenscraper">ScreenScraper</a> tab.</p>
+            present (hover it to preview the image), red (struck through) when it is missing.${viewer === 'admin'
+                ? ' To download the missing artwork from ScreenScraper, use the button in the '
+                    + '<a href="/screenscraper">ScreenScraper</a> tab.'
+                : ''}</p>
             <p class="info">Vote: the one the players give on the cabinet once a game is quit (thumbs
             up, neutral or thumbs down), changeable here. Whether a thumbs down also removes the
             game from the favorites is set in the <a href="/maui">MAUI</a> tab.</p>
@@ -5255,8 +5263,8 @@ const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
 );
 
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
-function renderFavoritesPage(favoritesInfo: FavoritesInfo): string {
-    return renderPage(renderFavoritesCard(favoritesInfo), 'favorites');
+function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
+    return renderPage(renderFavoritesCard(favoritesInfo, viewer), 'favorites', viewer);
 }
 
 /**
@@ -6010,6 +6018,7 @@ function renderUsersPage(
     return renderPage(
         renderCreateUserCard(createError) + renderUsersListCard(users, avatarFilenames, error, info, extras),
         'users',
+        extras.isAdmin ? 'admin' : 'user',
     );
 }
 
@@ -6033,7 +6042,9 @@ function describeUserError(error: unknown): string {
  * one still filled in - it may not be saved yet (e.g. a first setup: binary folder picked, then the
  * plugins folder).
  */
-function renderBrowsePage(target: PathField, currentDir: string, carried: Record<PathField, string>): string {
+function renderBrowsePage(
+    target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
+): string {
     let entries: string[] = [];
     let error: string|undefined;
     try {
@@ -6075,7 +6086,7 @@ function renderBrowsePage(target: PathField, currentDir: string, carried: Record
             <ul class="browse-list">${rows || '<li><em>No subfolder</em></li>'}</ul>
             <p><a href="/?${carryQuery}">Cancel</a></p>
         </section>
-    `);
+    `, 'mame', viewer);
 }
 
 /**
@@ -6238,7 +6249,13 @@ export function startBoServer(
         ));
     });
 
+    // The whole ScreenScraper tab is admin-only (its link is left out of a user's nav, see
+    // renderPageHead()): the credentials it holds, and the media download it runs.
     app.get('/screenscraper', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.redirect('/');
+            return;
+        }
         const config = new Config();
         config.load();
         res.send(renderScreenScraperPage({
@@ -6256,13 +6273,13 @@ export function startBoServer(
      * re-renders after POST /favorites/delete, /favorites/restore and /votes/set, `flash` being
      * that action's message.
      */
-    const renderFavoritesTab = async (flash: FavoritesFlash = {}): Promise<string> => {
+    const renderFavoritesTab = async (req: Request, flash: FavoritesFlash = {}): Promise<string> => {
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
 
         if ('error' in context) {
-            return renderFavoritesPage({rows: [], error: context.error, ...flash});
+            return renderFavoritesPage({rows: [], error: context.error, ...flash}, getViewer(req));
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
@@ -6274,11 +6291,12 @@ export function startBoServer(
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
             {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...flash},
+            getViewer(req),
         );
     };
 
     app.get('/favorites', async (req, res) => {
-        res.send(await renderFavoritesTab());
+        res.send(await renderFavoritesTab(req));
     });
 
     app.post('/favorites/delete', async (req, res) => {
@@ -6286,11 +6304,11 @@ export function startBoServer(
         // Same character set as parseFavorites()/getFavoriteRomNames(): anything else can't be
         // a favorite this tab lists.
         if (!/^[a-z0-9]+$/.test(romName)) {
-            res.status(422).send(await renderFavoritesTab({warning: 'Invalid rom name.'}));
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid rom name.'}));
             return;
         }
         if (isMameConfigSessionAlive()) {
-            res.status(409).send(await renderFavoritesTab({
+            res.status(409).send(await renderFavoritesTab(req, {
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
@@ -6298,18 +6316,18 @@ export function startBoServer(
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(await renderFavoritesTab({warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: 'No favorites.ini file found.'}));
             return;
         }
 
         if (removeFavoriteFromDisk(favoritesPath, romName) === null) {
-            res.status(422).send(await renderFavoritesTab({
+            res.status(422).send(await renderFavoritesTab(req, {
                 warning: `Unable to remove "${romName}": entry not found or unexpected favorites.ini format.`,
             }));
             return;
         }
 
-        res.send(await renderFavoritesTab({
+        res.send(await renderFavoritesTab(req, {
             notice: `"${romName}" removed from the favorites (it can be restored from the removed favorites below).`,
         }));
     });
@@ -6319,11 +6337,11 @@ export function startBoServer(
         const removed = readRemovedFavorites();
         const item = removed.find(candidate => candidate.romName === romName);
         if (!item) {
-            res.status(404).send(await renderFavoritesTab({warning: `"${romName}" is not in the removed favorites.`}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: `"${romName}" is not in the removed favorites.`}));
             return;
         }
         if (isMameConfigSessionAlive()) {
-            res.status(409).send(await renderFavoritesTab({
+            res.status(409).send(await renderFavoritesTab(req, {
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
@@ -6331,7 +6349,7 @@ export function startBoServer(
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(await renderFavoritesTab({warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: 'No favorites.ini file found.'}));
             return;
         }
 
@@ -6339,7 +6357,7 @@ export function startBoServer(
         // null = already listed (put back by mame's own menu in the meantime) or a corrupt saved
         // entry - tell the two apart so the message is accurate.
         if (updated === null && !getFavoriteRomNames(favoritesPath).includes(romName)) {
-            res.status(422).send(await renderFavoritesTab({
+            res.status(422).send(await renderFavoritesTab(req, {
                 warning: `Unable to restore "${romName}": the saved entry is invalid.`,
             }));
             return;
@@ -6360,7 +6378,7 @@ export function startBoServer(
             }
         }
 
-        res.send(await renderFavoritesTab({
+        res.send(await renderFavoritesTab(req, {
             notice: updated === null
                 ? `"${romName}" was already in the favorites.`
                 : `"${romName}" restored to the favorites.`,
@@ -6371,7 +6389,7 @@ export function startBoServer(
         const romName: string = (req.body.romName || '').trim();
         const vote = parseVote(req.body.vote);
         if (!/^[a-z0-9]+$/.test(romName) || vote === null) {
-            res.status(422).send(await renderFavoritesTab({warning: 'Invalid vote.'}));
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid vote.'}));
             return;
         }
 
@@ -6380,13 +6398,13 @@ export function startBoServer(
             // paranoid: false - a game already out of the favorites keeps its vote editable.
             [updated] = await Game.update({vote}, {where: {romName}, paranoid: false});
         } catch {
-            res.status(503).send(await renderFavoritesTab({
+            res.status(503).send(await renderFavoritesTab(req, {
                 warning: 'Database not ready yet - launch the application once, then retry.',
             }));
             return;
         }
         if (!updated) {
-            res.status(404).send(await renderFavoritesTab({warning: `Unknown game "${romName}".`}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: `Unknown game "${romName}".`}));
             return;
         }
 
@@ -6406,7 +6424,7 @@ export function startBoServer(
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
         }
-        res.send(await renderFavoritesTab(flash));
+        res.send(await renderFavoritesTab(req, flash));
     });
 
     app.post('/favorites/refresh', async (req, res) => {
@@ -6440,17 +6458,17 @@ export function startBoServer(
         }
 
         if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}));
+            res.send(renderFavoritesPage({rows: [], error: context.error}, getViewer(req)));
             return;
         }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('favorites'));
+        res.write(renderPageHead('favorites', getViewer(req)));
         const {rows, cache} = streamFavoritesRefresh(res, context);
         res.write(renderFavoritesCard({
             rows, cacheUpdatedAt: cache.updatedAt, stats: await loadGameStats() ?? undefined,
-        }));
+        }, getViewer(req)));
         res.write(renderPageTail());
         res.end();
     });
@@ -6652,6 +6670,10 @@ export function startBoServer(
     });
 
     app.post('/favorites/download-media', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
         const config = new Config();
         config.load();
         const ssValues: ScreenScraperValues = {
@@ -6697,7 +6719,7 @@ export function startBoServer(
         // Disable Nagle's algorithm so each res.write() below reaches the browser as soon as
         // it's flushed, instead of being buffered and coalesced with the next one.
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('screenscraper'));
+        res.write(renderPageHead('screenscraper', getViewer(req)));
         res.write(`
             <section class="card">
                 <h2>Download in progress…</h2>
@@ -6766,7 +6788,7 @@ export function startBoServer(
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame'));
+        res.write(renderPageHead('mame', getViewer(req)));
 
         // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
         // the actual import both happen inside the script now - it mirrors this same logic and
@@ -6934,7 +6956,7 @@ export function startBoServer(
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame'));
+        res.write(renderPageHead('mame', getViewer(req)));
 
         // Packs are imported one after the other (one script run each, one progress card each):
         // the script rewrites favorites.ini and shared category files, so runs must not overlap.
@@ -7130,7 +7152,7 @@ export function startBoServer(
             + 'in a moment. <strong>Relaunch it manually</strong> to take the imported '
             + 'files into account (<code>just serve</code> in development, or the usual '
             + 'executable in production).</p></section>',
-            'maui',
+            'maui', getViewer(req),
         ));
 
         setTimeout(onReset, 300);
@@ -7163,7 +7185,7 @@ export function startBoServer(
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('maui'));
+        res.write(renderPageHead('maui', getViewer(req)));
         await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
 
         const updateInfo = await getUpdateInfo();
@@ -7206,7 +7228,7 @@ export function startBoServer(
             + 'automatically take you back to the MAUI tab as soon as the server is available again.</p>'
             + renderRestartWaitScript('/maui')
             + '</section>',
-            'maui',
+            'maui', getViewer(req),
         ));
 
         // Delayed so this response finishes flushing before the session - this process included -
@@ -7215,6 +7237,10 @@ export function startBoServer(
     });
 
     app.post('/screenscraper/save', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
         const values: ScreenScraperValues = {
             ssDevId: (req.body.ssDevId || '').trim(),
             ssDevPassword: (req.body.ssDevPassword || '').trim(),
@@ -7263,7 +7289,7 @@ export function startBoServer(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, carried));
+        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req)));
     });
 
     app.post('/save', (req, res) => {
@@ -7338,6 +7364,7 @@ export function startBoServer(
             + '}, 1000);'
             + 'setTimeout(function () { window.location.href = "/"; }, 5000);'
             + '</script>',
+            'mame', getViewer(req),
         ));
 
         reloadFront();
@@ -7898,7 +7925,7 @@ export function startBoServer(
                 + 'server is available again.</p>'
                 + renderRestartWaitScript(backHref)
             + '</section>',
-            zone,
+            zone, getViewer(req),
         ));
 
         // Only closes the app (see onReset in background.ts) - it does NOT relaunch it. Delayed
