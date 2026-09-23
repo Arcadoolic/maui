@@ -35,7 +35,7 @@ import {
 } from '@/class/MameCfg';
 import {addFavorite} from '@/class/MameIniParser';
 import {
-    FavoritesCacheEntry, FavoritesCache, RemovedFavorite, getFavoritesCachePath, readFavoritesCache,
+    FavoritesCacheEntry, FavoritesCache, getFavoritesCachePath, readFavoritesCache,
     writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
 } from '@/class/FavoritesStore';
 import {
@@ -1794,10 +1794,13 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             color: var(--text-muted);
         }
         /* Deleted players, listed after the others in the same Players table (admins only). */
-        table.favorites-table tr.row-deleted td {
+        /* ...and removed favorites, after the others in the favorites table (see "Show removed"). */
+        table.favorites-table tr.row-deleted td,
+        table.favorites-table tr.row-removed td {
             opacity: 0.6;
         }
-        table.favorites-table tr.row-deleted td:last-child {
+        table.favorites-table tr.row-deleted td:last-child,
+        table.favorites-table tr.row-removed td:last-child {
             opacity: 1;
         }
         .row-actions {
@@ -2061,6 +2064,14 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .table-search-controls select {
             width: auto;
             flex: 0 1 auto;
+        }
+        .table-search-controls .table-search-toggle {
+            align-items: center;
+            margin-top: 0;
+            white-space: nowrap;
+        }
+        .table-search-toggle input {
+            margin-top: 0;
         }
         .pack-search-count, .table-search-count {
             margin: 8px 0 0;
@@ -4583,6 +4594,43 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
         </tr>
     `).join('');
 
+    // Favorites removed from this list (removed-favorites.json), listed after the others and hidden
+    // until "Show removed" is ticked. A rom put back by another route (or by mame's own menu)
+    // since it was removed isn't "removed" anymore - don't offer to restore what's already there.
+    const current = new Set(favoritesInfo.rows.map(row => row.romName));
+    const removed = readRemovedFavorites()
+        .filter(item => !current.has(item.romName))
+        .map(item => ({...item, fullname: item.cache?.fullname ?? item.fullname}))
+        .sort((a, b) => a.fullname.localeCompare(b.fullname));
+    const removedRows = removed.map(item => {
+        const row: FavoriteRow = {
+            romName: item.romName, fullname: item.fullname, biosName: item.cache?.biosName ?? null,
+            deviceRoms: item.cache?.deviceRoms ?? [], cached: !!item.cache,
+            hasMarquee: false, hasFlyer: false, hasLogo: false,
+        };
+        const removedOn = new Date(item.removedAt).toLocaleString('en-GB', {dateStyle: 'short', timeStyle: 'short'});
+        return `
+        <tr class="row-removed" data-removed hidden data-search="${escapeHtml(getFavoriteSearchText(row))}"
+            data-category="${escapeHtml(categoryOf(row)?.name ?? '')}">
+            <td>${renderGameName(row.fullname, row.romName, categoryOf(row))}</td>
+            <td>${renderRomNameCell(row)}</td>
+            <td class="center"><span class="badge-deleted">🗑 removed ${escapeHtml(removedOn)}</span></td>
+            <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
+            <td class="center">
+                <form method="post" action="/favorites/restore">
+                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
+                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
+                </form>
+            </td>
+        </tr>`;
+    }).join('');
+    const removedToggle = removed.length ? `
+        <label class="checkbox-row table-search-toggle">
+            <input type="checkbox" id="favoritesShowRemoved">
+            Show removed (${removed.length})
+        </label>
+    ` : '';
+
     // Category filter options: every category a favorite is in, with its favorite count, then the
     // favorites genre.ini doesn't know. Their value is data-category above ('' for none).
     const categoryCounts = new Map<string, number>();
@@ -4628,6 +4676,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                     <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
                         autocomplete="off" aria-label="Search the favorites">
                     ${categoryFilter}
+                    ${removedToggle}
                 </div>
                 <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
             </div>
@@ -4642,16 +4691,18 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${rows}${removedRows}</tbody>
                 </table>
             </div>
             <script>(function () {
                 // Search: every term must appear (accents and case ignored) in a row's rom name,
                 // name or bios / devices (its data-search, see getFavoriteSearchText()), and the row
-                // must be in the chosen category (its data-category; '*' for all). Rows are only
-                // hidden, so the remove buttons keep working on what is shown.
+                // must be in the chosen category (its data-category; '*' for all). Removed favorites
+                // (data-removed) only show with "Show removed" ticked. Rows are only hidden, so the
+                // remove/restore buttons keep working on what is shown.
                 var search = document.getElementById('favoritesSearch');
                 var category = document.getElementById('favoritesCategory');
+                var showRemoved = document.getElementById('favoritesShowRemoved');
                 var count = document.getElementById('favoritesSearchCount');
                 var rows = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable tbody tr'));
                 function fold(text) {
@@ -4660,27 +4711,33 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 function applySearch() {
                     var terms = fold(search.value).split(/\\s+/).filter(Boolean);
                     var chosen = category ? category.value : '*';
+                    var withRemoved = !!(showRemoved && showRemoved.checked);
                     var shown = 0;
+                    var total = 0;
                     rows.forEach(function (row) {
+                        var listed = withRemoved || !row.hasAttribute('data-removed');
                         var haystack = fold(row.dataset.search || '');
-                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; })
+                        var match = listed && terms.every(function (term) { return haystack.indexOf(term) >= 0; })
                             && (chosen === '*' || row.dataset.category === chosen);
                         row.hidden = !match;
+                        if (listed) { total++; }
                         if (match) { shown++; }
                     });
                     count.hidden = terms.length === 0 && chosen === '*';
                     count.textContent = shown
-                        ? shown + ' favorite(s) found out of ' + rows.length + '.'
+                        ? shown + ' favorite(s) found out of ' + total + '.'
                         : 'No favorite matches this search.';
                 }
                 search.addEventListener('input', applySearch);
                 if (category) { category.addEventListener('change', applySearch); }
+                if (showRemoved) { showRemoved.addEventListener('change', applySearch); }
                 search.addEventListener('keydown', function (event) {
                     if (event.key === 'Enter') { event.preventDefault(); }
                 });
             })();</script>
             <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
-            roms and artwork stay on disk). The change shows up on the cabinet the next time MAUI
+            roms and artwork stay on disk); it stays listed, hidden until "Show removed" is ticked,
+            and "Restore" puts it back exactly as MAME had written it. The change shows up on the cabinet the next time MAUI
             starts. Do not do it while a MAME game is open: MAME rewrites this file when it
             closes.</p>
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
@@ -4694,61 +4751,6 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
 interface RemovedFavoritesFlash {
     notice?: string;
     warning?: string;
-}
-
-function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFavoritesFlash = {}): string {
-    const messages = `
-        ${flash.notice ? `<p class="info flash">${escapeHtml(flash.notice)}</p>` : ''}
-        ${flash.warning ? `<p class="error flash">${escapeHtml(flash.warning)}</p>` : ''}
-    `;
-    if (!removed.length) {
-        return `
-            <section class="card">
-                <h2>Removed favorites</h2>
-                ${messages}
-                <p class="info">No removed favorites yet.</p>
-            </section>
-        `;
-    }
-
-    const rows = removed.map(item => `
-        <tr>
-            <td>${escapeHtml(item.romName)}</td>
-            <td>${renderGameName(item.fullname)}</td>
-            <td>${escapeHtml(new Date(item.removedAt).toLocaleString('en-GB', {
-                dateStyle: 'short', timeStyle: 'short',
-            }))}</td>
-            <td class="center">
-                <form method="post" action="/favorites/restore">
-                    <input type="hidden" name="romName" value="${escapeHtml(item.romName)}">
-                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
-                </form>
-            </td>
-        </tr>
-    `).join('');
-
-    return `
-        <section class="card">
-            <h2>Removed favorites (${removed.length})</h2>
-            ${messages}
-            <p class="info">Favorites removed from the Games tab stay here: "Restore" puts them
-            back into <code>favorites.ini</code> in alphabetical order, exactly as MAME had written them.
-            Same precaution as for removal: not while a MAME game is open.</p>
-            <div class="table-wrap">
-                <table class="favorites-table">
-                    <thead>
-                        <tr>
-                            <th>RomName</th>
-                            <th>Name</th>
-                            <th>Removed on</th>
-                            <th class="center"></th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>
-        </section>
-    `;
 }
 
 interface VoteRow extends GameStats {
@@ -4909,29 +4911,16 @@ const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
 );
 
 /**
- * Games tab: current favorites, and the ones removed from it (restorable). Both are always
- * present so a removed favorite stays reachable even when favorites.ini ends up empty (in which
- * case the first card is just the "no favorites" message).
- *
- * removedFlash/defaultSection: which of the two a response is "about" (see renderSubtabbedPage()).
- * A flash on favoritesInfo belongs to the first one, removedFlash to the second.
+ * Games tab: the favorites (removed ones included, hidden by default - see renderFavoritesCard())
+ * and the votes. defaultSection: which of the two a response is "about" (see
+ * renderSubtabbedPage()); a flash on favoritesInfo belongs to the first one.
  */
 function renderFavoritesPage(
-    favoritesInfo: FavoritesInfo, removedFlash?: RemovedFavoritesFlash,
-    defaultSection: 'list' | 'removed' | 'votes' = 'list', votesHtml = '',
+    favoritesInfo: FavoritesInfo, defaultSection: 'list' | 'votes' = 'list', votesHtml = '',
 ): string {
-    // A rom put back by another route (or by mame's own menu) since it was removed isn't
-    // "removed" anymore - don't offer to restore what's already there.
-    const {favoritesPath} = getMameLocations(getMameHomePath());
-    const current = favoritesPath ? getFavoriteRomNames(favoritesPath) : [];
-    const removed = readRemovedFavorites()
-        .filter(item => !current.includes(item.romName))
-        .sort((a, b) => b.removedAt.localeCompare(a.removedAt));
-
     return renderSubtabbedPage('favorites', [
         {id: 'list', label: 'Favorites', html: renderFavoritesCard(favoritesInfo)},
         ...(votesHtml ? [{id: 'votes', label: 'Votes', html: votesHtml}] : []),
-        {id: 'removed', label: `Removed (${removed.length})`, html: renderRemovedFavoritesCard(removed, removedFlash)},
     ], true, defaultSection);
 }
 
@@ -5917,18 +5906,17 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
      * subtab the message belongs to (and the one shown on load).
      */
     const renderFavoritesTab = async (
-        flash?: RemovedFavoritesFlash & {section: 'list' | 'removed' | 'votes'},
+        flash?: RemovedFavoritesFlash & {section: 'list' | 'votes'},
     ): Promise<string> => {
         const votesHtml = await renderVotesTab(flash?.section === 'votes' ? flash : {});
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
         const listFlash = flash?.section === 'list' ? flash : {};
-        const removedFlash = flash?.section === 'removed' ? flash : undefined;
 
         if ('error' in context) {
             return renderFavoritesPage(
-                {rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section, votesHtml,
+                {rows: [], error: context.error, ...listFlash}, flash?.section, votesHtml,
             );
         }
 
@@ -5941,7 +5929,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
             {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...listFlash},
-            removedFlash, flash?.section, votesHtml,
+            flash?.section, votesHtml,
         );
     };
 
@@ -5980,7 +5968,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         res.send(await renderFavoritesTab({
-            section: 'list', notice: `"${romName}" removed from the favorites (find it again in the "Removed" tab).`,
+            section: 'list', notice: `"${romName}" removed from the favorites (tick "Show removed" to find it again).`,
         }));
     });
 
@@ -5989,12 +5977,12 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const removed = readRemovedFavorites();
         const item = removed.find(candidate => candidate.romName === romName);
         if (!item) {
-            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: `"${romName}" is not in the removed favorites.`}));
+            res.status(404).send(await renderFavoritesTab({section: 'list', warning: `"${romName}" is not in the removed favorites.`}));
             return;
         }
         if (isMameConfigSessionAlive()) {
             res.status(409).send(await renderFavoritesTab({
-                section: 'removed',
+                section: 'list',
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
@@ -6002,7 +5990,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab({section: 'list', warning: 'No favorites.ini file found.'}));
             return;
         }
 
@@ -6011,7 +5999,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // entry - tell the two apart so the message is accurate.
         if (updated === null && !getFavoriteRomNames(favoritesPath).includes(romName)) {
             res.status(422).send(await renderFavoritesTab({
-                section: 'removed', warning: `Unable to restore "${romName}": the saved entry is invalid.`,
+                section: 'list', warning: `Unable to restore "${romName}": the saved entry is invalid.`,
             }));
             return;
         }
@@ -6021,7 +6009,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         // Written after favorites.ini for the reverse reason of /favorites/delete: a failure here
         // leaves the favorite restored (and merely still listed as removed until this rom is seen
-        // in favorites.ini - the removed subtab hides it), never a favorite lost.
+        // in favorites.ini - the favorites list hides it), never a favorite lost.
         writeRemovedFavorites(removed.filter(candidate => candidate.romName !== romName));
         if (item.cache) {
             const cache = readFavoritesCache();
@@ -6032,7 +6020,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
 
         res.send(await renderFavoritesTab({
-            section: 'removed',
+            section: 'list',
             notice: updated === null
                 ? `"${romName}" was already in the favorites.`
                 : `"${romName}" restored to the favorites.`,
@@ -6104,7 +6092,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     /**
      * Renders the Players tab. The deleted players (administrators only) are loaded here, on
-     * every render, so each route below keeps showing an up-to-date "Deleted" subtab without
+     * every render, so each route below keeps showing up-to-date deleted players without
      * having to pass it along.
      */
     const usersPage = async (
