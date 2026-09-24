@@ -393,12 +393,6 @@ if (!getIsInit()) {
         flyer.value = generateFlyerPath();
     });
 }
-
-onMounted(() => {
-    if (getConfiguration().fullscreen) {
-        remote.getCurrentWindow().setFullScreen(true);
-    }
-});
 </script>
 
 <style scoped>
