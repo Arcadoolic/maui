@@ -1,12 +1,12 @@
 <template>
-    <div>
+    <div :class="{leaving}">
         <p v-if="error" class="error">{{ error }}</p>
     </div>
 </template>
 
 <script setup lang="ts">
 import * as remote from '@electron/remote';
-import {ref, onMounted} from 'vue';
+import {ref, onMounted, nextTick} from 'vue';
 import router from '@/router';
 import {emitter} from '@/emitter';
 import {
@@ -20,6 +20,16 @@ import {
 } from '@/services';
 
 const error = ref<string | null>(null);
+const leaving = ref(false);
+
+// Home resizes this same window (fullscreen or 1280x720) as soon as its setup runs, before this
+// view's DOM is replaced: the splash, anchored to the window's top-left corner, would visibly
+// slide along with it. Blank it first, and wait for that black frame to be painted.
+async function blankSplash() {
+    leaving.value = true;
+    await nextTick();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
 
 remote.getCurrentWindow().setResizable(true);
 remote.getCurrentWindow().setFullScreen(false);
@@ -76,6 +86,7 @@ onMounted(async () => {
             emitter.emit('hiscores-loaded');
         });
 
+        await blankSplash();
         router.push({name: 'home'});
     } catch (e) {
         error.value = e instanceof Error ? e.message : 'Unexpected startup error.';
@@ -93,6 +104,9 @@ onMounted(async () => {
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
+    }
+    div.leaving {
+        background-image: none;
     }
     .error {
         margin: 0;
