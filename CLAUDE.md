@@ -49,7 +49,6 @@ just serve    # npm install, then electron:serve (dev, hot-reload)
 just build    # npm install, then electron:build (packaged app)
 just lint     # npm run lint:fix (eslint --fix)
 just install  # npm install only
-just starting-pack  # build a starting pack ZIP (favorites + roms + artwork) from the local MAME home
 ```
 
 Only ever run **one** `serve`/`build` at a time — both trigger `npm install`, and concurrent installs race on rebuilding the native `sqlite3` module (corrupts the `node-gyp`/`make` build directory).
@@ -61,7 +60,6 @@ Other useful commands (no `just` recipe):
 npm test                                              # run the Vitest characterization tests
 npx sequelize-cli migration:generate --name=<name>   # new file in migrations/
 electron-rebuild -f -w sqlite3                        # manually rebuild sqlite3 native binding
-just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+artwork ZIP from local MAME home
 ```
 
 ## Architecture
@@ -76,7 +74,7 @@ just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+art
 - `Config.class.ts` — loads/saves `mame-awesome-ui-config.json` (mame path, mame binary filename, avatars path).
 - `MameService.class.ts` — the boundary to the external `mame` binary. Constructor runs `mame -showconfig` and parses it plus `ui.ini` (paths come from MAME's own ini search order); throws if either is unparseable. Reads `favorites.ini` for the ROM list (missing file = empty list, not an error), runs `mame -lx <rom>` for per-game metadata, and launches/stops games via `execFile`.
 - `GameService.class.ts` — syncs the ROM list into the `Game` Sequelize model, and reads `genre.ini`/`Multiplayer.ini` for categories/player counts from `MameService.genreIniPath`/`nplayersIniPath` (resolved from `ui.ini`'s `categorypath`, populated by a starting-pack import; absent until then, not an error).
-- `Database.class.ts` — wraps a `sequelize-typescript` `Sequelize` (SQLite) instance over the `Category`/`Game`/`User`/`Hiscore` models, and runs pending migrations from `./migrations` through `Umzug` on every start (`update()`), or seeds categories on first run (`install()`).
+- `Database.class.ts` — wraps a `sequelize-typescript` `Sequelize` (SQLite) instance over the `Category`/`Game`/`User`/`Hiscore` models, and runs pending migrations from `./migrations` on every start (`update()`), or seeds categories on first run (`install()`). The migration runner itself is `src/class/Migrations.ts` (`runMigrations()`, Umzug), Electron-free so the BO server (`boServer.ts`, its own Sequelize connection) can run it too: at app start, `background.ts` awaits the BO's `bootstrapDatabase()` (creates the base tables if missing, then migrates, seeding the `bo_user` login accounts) before opening any window, so the BO login works on a first launch and `Init.vue`'s `install()`/`update()` finds the database ready. Migrations must be idempotent (`describeTable()` guard): a fresh install's `sync()` already created the columns from the models.
 - `UserService.class.ts` / `HiscoreService.class.ts` — user/avatar and high-score bookkeeping.
 - `ScreenScraperClient.class.ts` — client for the ScreenScraper.fr API (credential-based: `devId`/`devPassword`/`userId`/`userPassword`), fetches game artwork/media (marquee, flyer, logo).
 - `Gamepads.class.ts` + `src/composables/useControllable.ts` — gamepad polling dispatched as `gamepadKeydown`/`gamepadKeyup` window `CustomEvent`s; `useControllable()` is a composable that components call to register combined keyboard and gamepad handlers (`const {onKeydown, onKeyup} = useControllable()`), with cleanup handled automatically in `onUnmounted`.
@@ -105,10 +103,17 @@ just starting-pack [output=./mame-starting-pack.zip]  # build favorites+roms+art
   `just serve` checks this automatically (`_check-sandbox` recipe) and prints
   this fix if misconfigured; `just build` does not run the check.
 - **Electron binary missing after install**: `electron-vite dev` fails with
-  `Error: Electron uninstall` (empty `node_modules/electron/dist/`) when
+  `Error: Electron uninstall` (missing `node_modules/electron/path.txt`) when
   Electron's own postinstall download fails silently during `npm install`
-  (network hiccup, proxy). Fix: `node node_modules/electron/install.js`,
-  then reapply the sandbox chmod above (fresh binary resets it to 755).
+  (network hiccup, proxy) — `electron-vite`'s own `getElectronPath()` throws
+  instead of re-downloading like `electron`'s `index.js` does. `just
+  serve`/`just build` check this automatically (`_check-electron-binary`
+  recipe) and re-run `node node_modules/electron/install.js` if needed. On
+  Linux, reapply the sandbox chmod above afterward (fresh binary resets it
+  to 755) — `_check-sandbox` runs after `_check-electron-binary` in `just
+  serve` and will print the fix if needed, but `just build` doesn't run
+  that check. Running `npm install`/`electron-vite` directly, outside
+  `just`, still needs the manual fix.
 
 ## Git workflow
 

@@ -22,21 +22,39 @@ import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
-import {removeFavorite, addFavorite} from '@/class/MameIniParser';
+import {parseListFull} from '@/class/MameListFull';
+import {
+    compareGameFields,
+    gameFieldId,
+    parseGameFields,
+    portTypePlayer,
+    readGameCfgInputSeqs,
+    removeGameCfgInputSeq,
+    setGameCfgInputSeq,
+    type GameField,
+} from '@/class/MameCfg';
+import {addFavorite} from '@/class/MameIniParser';
+import {
+    FavoritesCacheEntry, FavoritesCache, getFavoritesCachePath, readFavoritesCache,
+    writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
+} from '@/class/FavoritesStore';
 import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     PackOwnership,
 } from '@/class/PackOwnership';
 import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
-import {getCategoryIconKey, mergeTtlCategories} from '@/class/CarouselCategories';
-import {HISCORES_ONLY_CATEGORY, isMergedCategory} from '@/types/CarouselCategory';
+import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
+import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
+import {getCategoryDisplayName, getCategoryIconKey} from '@/class/CarouselCategories';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
 import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
 import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
 } from '@/class/UserReservation';
-import {findAvatarFile} from '@/class/AvatarFiles';
+import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
+import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
+import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
@@ -68,6 +86,9 @@ declare module 'express-session' {
 }
 
 type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui' | 'account';
+// Who a page is rendered for: admin-only tabs are left out of the nav for 'user', and null (signed
+// out - the login page) gets no nav at all.
+type Viewer = 'admin' | 'user' | null;
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -79,9 +100,8 @@ interface ScreenScraperValues {
     bezelAspect: '4:3' | '16:9';
 }
 
-// One entry per pack on repo.maui.afronob.com's index.json (see
-// scripts/generate-repo-manifests.py) - only the fields the picker actually displays are typed
-// here, not the full manifest.
+// One entry per pack on repo.maui.afronob.com's index.json (generated on the repository side) -
+// only the fields the picker actually displays are typed here, not the full manifest.
 interface RepoPack {
     filename: string;
     size: number;
@@ -192,84 +212,28 @@ function getDatabasePath(): string {
 }
 
 /**
- * Same fixed <home>/.mame-awesome-ui path as getDatabasePath(), for the favorites name/BIOS
- * cache (see FavoritesCache below) - resolving a favorite's fullname/BIOS is a blocking `mame
- * -lx` process spawn per rom (see getGameXmlInfo()), so the favorites tab reads this cache
- * instead of re-running it on every page load; only "Update favorites" re-resolves and
- * rewrites it.
+ * Creates the database if it doesn't exist yet and brings it up to date - what the renderer's
+ * Database.install()/update() (Init.vue) does, but run by the main process as soon as the app
+ * starts, before any window opens (see background.ts): on a first launch the BO login page is
+ * reachable right away, and its bo_user table (created and seeded by a migration) must already
+ * be there - Init.vue used to be the only one creating it, racing against the first sign-in.
+ * Same base tables as Database.install()'s sync() (bo_user excluded, see its models comment),
+ * created only when missing: also repairs a file left empty by a connection opened before any
+ * table existed. Never rejects: a failure is logged and Init.vue then tries again itself.
  */
-function getFavoritesCachePath(): string {
-    const appDataPath = join(os.homedir(), '.mame-awesome-ui');
-    if (!existsSync(appDataPath)) {
-        mkdirSync(appDataPath, {recursive: true});
-    }
-    return join(appDataPath, 'favorites-cache.json');
-}
-
-interface FavoritesCacheEntry {
-    fullname: string;
-    biosName: string | null;
-    deviceRoms: string[];
-}
-
-interface FavoritesCache {
-    updatedAt: string;
-    entries: { [romName: string]: FavoritesCacheEntry };
-}
-
-function readFavoritesCache(): FavoritesCache | null {
-    const cachePath = getFavoritesCachePath();
-    if (!existsSync(cachePath)) {
-        return null;
-    }
+async function bootstrapDatabase(sequelize: Sequelize): Promise<void> {
     try {
-        return JSON.parse(readFileSync(cachePath, 'utf8'));
-    } catch {
-        // Corrupt/unreadable cache file - treat as absent rather than failing the whole tab.
-        return null;
+        const tables = await sequelize.getQueryInterface().showAllTables();
+        if (!tables.includes('game')) {
+            // One by one, referenced tables first (game -> category, hiscore -> game/user).
+            for (const model of [Category, Game, User, Hiscore]) {
+                await model.sync();
+            }
+        }
+        await runMigrations(sequelize);
+    } catch (error) {
+        console.error('[boServer] Database bootstrap failed:', error);
     }
-}
-
-function writeFavoritesCache(entries: { [romName: string]: FavoritesCacheEntry }): FavoritesCache {
-    const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
-    writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
-    return cache;
-}
-
-/**
- * A favorite removed from the Games tab: the exact favorites.ini block mame had written for it
- * (see removeFavorite()), plus its cached name/BIOS, so "Restore" can put both back as they were.
- * Stored beside the favorites cache rather than in favorites.ini itself, which is mame's own file
- * (it rewrites it from memory on exit and would drop anything foreign).
- */
-interface RemovedFavorite {
-    romName: string;
-    fullname: string;
-    removedAt: string;
-    entry: string;
-    cache?: FavoritesCacheEntry;
-}
-
-function getRemovedFavoritesPath(): string {
-    return join(dirname(getFavoritesCachePath()), 'removed-favorites.json');
-}
-
-function readRemovedFavorites(): RemovedFavorite[] {
-    const path = getRemovedFavoritesPath();
-    if (!existsSync(path)) {
-        return [];
-    }
-    try {
-        const parsed = JSON.parse(readFileSync(path, 'utf8'));
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        // Corrupt/unreadable file - treat as empty rather than failing the whole tab.
-        return [];
-    }
-}
-
-function writeRemovedFavorites(removed: RemovedFavorite[]): void {
-    writeFileSync(getRemovedFavoritesPath(), JSON.stringify(removed));
 }
 
 /**
@@ -282,8 +246,8 @@ function getAvatarFilenames(config: Config): string[] {
 }
 
 /**
- * Same sqlite connection Database.class.ts sets up, minus install()/update() (migrations
- * already ran via the app's own startup) - built directly here rather than importing
+ * Same sqlite connection Database.class.ts sets up (bootstrapped by bootstrapDatabase() below
+ * rather than its install()/update()) - built directly here rather than importing
  * Database.class.ts, which pulls in GameService.class -> MameService.class ->
  * Helpers.class.ts's @electron/remote import at module scope.
  */
@@ -653,6 +617,131 @@ function listRomNames(romPath: string): string[] {
     }
 }
 
+let romLabelsCache: {key: string; labels: Map<string, string>} | undefined;
+
+/**
+ * Game name (MAME's description, e.g. "Pac-Man (Midway)") by rom name, for the rom selects: one
+ * `mame -listfull <rom>...` for the whole folder (~0.1s for a few hundred roms), remembered until
+ * the rom list or binary changes since renderForm() runs on every request. A rom MAME doesn't
+ * know (or a failing binary) is just absent from the map - callers fall back to the rom name.
+ */
+function getRomLabels(mameBinary: string, iniPath: string, romNames: string[]): Map<string, string> {
+    const key = `${mameBinary}\n${romNames.join(',')}`;
+    if (romLabelsCache?.key === key) {
+        return romLabelsCache.labels;
+    }
+    let stdout = '';
+    if (romNames.length) {
+        try {
+            stdout = execFileSync(
+                mameBinary,
+                ['-listfull', ...romNames, '-inipath', iniPath, '-homepath', iniPath],
+                {encoding: 'utf8', cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 4 * 1024 * 1024},
+            );
+        } catch (error) {
+            // MAME exits non-zero as soon as one name matches nothing (a stray zip) but still
+            // lists the others - keep whatever it printed.
+            const partial = (error as {stdout?: string | Buffer}).stdout;
+            stdout = partial ? partial.toString() : '';
+        }
+    }
+    const labels = parseListFull(stdout);
+    romLabelsCache = {key, labels};
+    return labels;
+}
+
+/**
+ * Roms whose cfg/<rom>.cfg holds a key binding of its own (a standard <newseq>, see
+ * MameCfg.ts) - what the rom pickers flag. Not "has a cfg file" as such: MAME writes one for
+ * nearly every game ever launched (mixer settings alone), so that would mark almost every game.
+ */
+function listRomsWithInputCfg(iniPath: string, romNames: string[]): Set<string> {
+    const withCfg = new Set<string>();
+    for (const romName of romNames) {
+        const cfgPath = getGameCfgPath(iniPath, romName);
+        try {
+            if (existsSync(cfgPath) && readGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')).size) {
+                withCfg.add(romName);
+            }
+        } catch {
+            // Unreadable cfg: just not flagged.
+        }
+    }
+    return withCfg;
+}
+
+const INPUT_CFG_ICON = '\u{1F3AE}';
+const INPUT_CFG_LEGEND = `${INPUT_CFG_ICON} = this game already has its own key configuration (<code>cfg/&lt;rom&gt;.cfg</code>).`;
+
+/**
+ * Searchable rom picker: a text field filtering a plain <select> (works without the script, just
+ * unfiltered) of game names sorted alphabetically, each flagged with an icon when it has its own
+ * input cfg. The script is self-contained (finds its picker through document.currentScript) since
+ * several pickers can share the page. Typing turns the select into a short list box so the
+ * matches are visible without opening it; every term must appear, accents and case ignored, in
+ * the game name or its rom name.
+ */
+function renderRomPicker(
+    selectId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom?: string,
+): string {
+    const options = romNames
+        .map(romName => ({romName, label: romLabels.get(romName) ?? romName}))
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map(({romName, label}) => `
+            <option value="${escapeHtml(romName)}" data-search="${escapeHtml(`${label} ${romName}`)}"
+                ${selectedRom === romName ? 'selected' : ''}>${withCfg.has(romName) ? `${INPUT_CFG_ICON} ` : ''}${escapeHtml(label)}</option>
+        `).join('');
+
+    return `
+        <div class="rom-picker">
+            <label for="${escapeHtml(selectId)}">Game</label>
+            <input type="search" class="rom-search" placeholder="Search a game…" autocomplete="off"
+                aria-label="Search a game">
+            <select id="${escapeHtml(selectId)}" name="romName">${options}</select>
+            <p class="info table-search-count rom-search-count" hidden></p>
+            <p class="info">${INPUT_CFG_LEGEND}</p>
+            <script>(function () {
+                var root = document.currentScript.parentNode;
+                var search = root.querySelector('.rom-search');
+                var select = root.querySelector('select');
+                var count = root.querySelector('.rom-search-count');
+                // Last game really picked: kept across searches with no result, which empty the select.
+                var chosen = select.value;
+                var all = Array.prototype.map.call(select.options, function (option) {
+                    return {option: option, haystack: fold(option.dataset.search || '')};
+                });
+                function fold(text) {
+                    return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+                }
+                function applySearch() {
+                    var terms = fold(search.value).split(/\\s+/).filter(Boolean);
+                    var matches = all.filter(function (entry) {
+                        return terms.every(function (term) { return entry.haystack.indexOf(term) >= 0; });
+                    });
+                    while (select.firstChild) { select.removeChild(select.firstChild); }
+                    matches.forEach(function (entry) { select.appendChild(entry.option); });
+                    if (matches.some(function (entry) { return entry.option.value === chosen; })) {
+                        select.value = chosen;
+                    } else if (matches.length) {
+                        select.selectedIndex = 0;
+                        chosen = select.value;
+                    }
+                    select.size = terms.length && matches.length > 1 ? Math.min(matches.length, 8) : 1;
+                    count.hidden = terms.length === 0;
+                    count.textContent = matches.length
+                        ? matches.length + ' game(s) found out of ' + all.length + '.'
+                        : 'No game matches this search.';
+                }
+                select.addEventListener('change', function () { chosen = select.value; });
+                search.addEventListener('input', applySearch);
+                search.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') { event.preventDefault(); }
+                });
+            })();</script>
+        </div>
+    `;
+}
+
 interface GameXmlInfo {
     description: string | null;
     // The name of the separate BIOS set this game needs (mame -lx's `romof` attribute on
@@ -734,9 +823,59 @@ interface FavoritesInfo {
     // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
     // always live, regardless of cache age - see getFavoriteMediaStatus().
     cacheUpdatedAt?: string | null;
+    // Launch count per rom (see loadGameStats()); a rom absent from it, or no map at all (database
+    // not migrated yet), shows no count.
+    stats?: Map<string, GameStats>;
     // One-shot flash messages after a favorite was removed (POST /favorites/delete).
     notice?: string;
     warning?: string;
+}
+
+/**
+ * What the database knows about a game (Game.play_count/vote and its category), for the
+ * favorites and removed favorites lists. Soft-deleted games included: a game taken out of the
+ * favorites (thumbs down, or removed from the BO) keeps its history.
+ */
+interface GameStats {
+    romName: string;
+    fullname: string;
+    playCount: number;
+    vote: Vote;
+    // The game's carousel category (TTL twin merged, as displayed on the cabinet), null when
+    // genre.ini doesn't know it.
+    category: GameCategory | null;
+}
+
+interface GameCategory {
+    name: string;
+    iconKey: string;
+}
+
+/**
+ * Every game's GameStats by rom name, or null when the database can't be read (no file yet, or
+ * not migrated yet - same race as /login): callers then just leave
+ * these columns out instead of breaking the whole Games tab.
+ */
+async function loadGameStats(): Promise<Map<string, GameStats> | null> {
+    try {
+        const games = await Game.findAll({
+            attributes: ['romName', 'fullname', 'play_count', 'vote', 'id_category'],
+            paranoid: false,
+        });
+        const categories = new Map((await Category.findAll()).map(category => [category.id_category, {
+            name: getCategoryDisplayName(category.name),
+            iconKey: getCategoryIconKey(category.name),
+        }]));
+        return new Map(games.map(game => [game.romName, {
+            romName: game.romName,
+            fullname: game.fullname || game.romName,
+            playCount: game.play_count || 0,
+            vote: parseVote(game.vote) ?? VOTE_NEUTRAL,
+            category: categories.get(game.id_category) ?? null,
+        }]));
+    } catch {
+        return null;
+    }
 }
 
 interface FavoritesContext {
@@ -826,6 +965,65 @@ function favoriteRowFromCache(context: FavoritesContext, romName: string, cache:
         cached: !!entry,
         ...getFavoriteMediaStatus(context, romName),
     };
+}
+
+/**
+ * Re-resolves every favorite's name/BIOS (a blocking `mame -lx` per rom, see resolveFavoriteRow())
+ * and rewrites the favorites cache, streaming one progress line per favorite to `res` as they
+ * resolve. Shared by "Update favorites" (POST /favorites/refresh) and both starting pack imports
+ * (see streamFavoritesRefreshAfterImport()). The caller has already sent the response head;
+ * this writes the open "Updating favorites" card and closes it again.
+ */
+function streamFavoritesRefresh(
+    res: Response, context: FavoritesContext,
+): {rows: FavoriteRow[]; cache: FavoritesCache} {
+    // Stream the page as favorites are resolved instead of blocking on the whole list: each
+    // one is a blocking `mame -lx` process spawn, so with enough favorites the unstreamed
+    // version could take a long time to send anything at all - same fix already applied to
+    // /favorites/download-media.
+    res.write(`
+        <section class="card">
+            <h2>Updating favorites (${context.romNames.length})…</h2>
+            ${PROGRESS_LOG_OPEN}
+    `);
+
+    const result = resolveFavorites(context, row => {
+        res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+    });
+    res.write('</ul></section>');
+    return result;
+}
+
+/**
+ * After a starting pack import (ZIP upload or repository), which just rewrote favorites.ini:
+ * resolves the new games' names/BIOS now instead of leaving the favorites tab on "not resolved
+ * yet" until "Update favorites" is clicked.
+ */
+function streamFavoritesRefreshAfterImport(res: Response, config: Config): void {
+    const context = getFavoritesContext(config);
+    if ('error' in context) {
+        res.write(`<section class="card"><h2>Updating favorites</h2>
+            <p class="info">Favorites not updated: ${escapeHtml(context.error)}</p></section>`);
+    } else {
+        streamFavoritesRefresh(res, context);
+    }
+}
+
+/**
+ * Resolves every favorite (see resolveFavoriteRow()) and rewrites the favorites cache with them,
+ * calling `onRow` after each one so the caller can report progress as it goes.
+ */
+function resolveFavorites(
+    context: FavoritesContext, onRow: (row: FavoriteRow, index: number) => void,
+): {rows: FavoriteRow[]; cache: FavoritesCache} {
+    const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
+    const rows: FavoriteRow[] = context.romNames.map((romName, index) => {
+        const row = resolveFavoriteRow(context, romName);
+        cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
+        onRow(row, index);
+        return row;
+    });
+    return {rows, cache: writeFavoritesCache(cacheEntries)};
 }
 
 function hasScreenScraperCredentials(config: Config): boolean {
@@ -954,7 +1152,7 @@ function escapeHtml(value: string): string {
 }
 
 /**
- * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs`, streaming its stdout/stderr
+ * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs -y`, streaming its stdout/stderr
  * line-by-line into an already-`res.writeHead()`'d, already-headed HTML response as a live
  * progress log - shared by /import and /import/from-url, which only differ in the section title,
  * the script args/env, and what they render once the import finishes.
@@ -967,18 +1165,34 @@ function escapeHtml(value: string): string {
  */
 function runImportScript(
     res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
-    overall?: {index: number; total: number},
+    overall?: {index: number; total: number}, tabbed = false,
 ): Promise<boolean> {
     const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
     const barId = `import-progress-${++importProgressCounter}`;
     // A pack downloaded whole (--url alone) spends its first half downloading; a local file, or a
     // pack read partially (--url with --only), has no such phase.
     const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
-    res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
-        + PROGRESS_LOG_OPEN);
+    // Tabbed: one panel of the tab card opened by renderImportTabsOpen() instead of a card of its
+    // own; `overall.index` is its tab. Panels start hidden, mauiImportTabs.start() shows it.
+    const tab = tabbed && overall ? overall.index : null;
+    if (tab !== null) {
+        res.write(`<div class="import-panel" data-import-panel="${tab}" hidden><h3>${title}</h3>`
+            + `${renderImportProgressBar(barId, hasDownload, overall)}${PROGRESS_LOG_OPEN}`
+            + `<script>mauiImportTabs.start(${tab})</script>`);
+    } else {
+        res.write(`<section class="card"><h2>${title}</h2>${renderImportProgressBar(barId, hasDownload, overall)}`
+            + PROGRESS_LOG_OPEN);
+    }
+    const closeBlock = tab !== null ? '</div>' : '</section>';
 
     return new Promise(resolve => {
-        const child = spawn('python3', [scriptPath, ...scriptArgs], {env: {...env, MAUI_PROGRESS: '1'}});
+        // -y always: nobody can answer the script's confirmation prompt from here. stdin ignored
+        // too, so a prompt that slips through anyway ends on EOF instead of waiting forever on
+        // an open pipe.
+        const child = spawn('python3', [scriptPath, ...scriptArgs, '-y'], {
+            env: {...env, MAUI_PROGRESS: '1'},
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
 
         const updateBar = (call: string): void => {
             res.write(`<script>mauiImportProgress.${call}</script>`);
@@ -1015,7 +1229,7 @@ function runImportScript(
         child.stderr.on('data', stderrSplitter.push);
 
         child.on('error', (error) => {
-            res.write(`</ul><p class="error">${escapeHtml(`Launch failed: ${error.message}`)}</p></section>`);
+            res.write(`</ul><p class="error">${escapeHtml(`Launch failed: ${error.message}`)}</p>${closeBlock}`);
             res.write(renderPageTail());
             res.end();
             resolve(false);
@@ -1025,7 +1239,10 @@ function runImportScript(
             stdoutSplitter.flush();
             stderrSplitter.flush();
             updateBar(`finish(${JSON.stringify(barId)},${code === 0})`);
-            res.write('</ul></section>');
+            res.write(`</ul>${closeBlock}`);
+            if (tab !== null) {
+                res.write(`<script>mauiImportTabs.finish(${tab},${code === 0})</script>`);
+            }
             resolve(true);
         });
     });
@@ -1034,23 +1251,77 @@ function runImportScript(
 let importProgressCounter = 0;
 
 /**
+ * Opens the card that holds a multi-pack import: one tab per pack (all known up front, so the bar
+ * is complete from the start - a pack's tab stays disabled until its import starts) and the
+ * panels runImportScript() then streams into it (`tabbed`). The page follows the pack being
+ * imported until the user picks a tab by hand. The caller closes it with '</div></section>'.
+ */
+function renderImportTabsOpen(packFilenames: string[]): string {
+    // The tab only carries its number (the total is in the "Pack N of M" bar above); the pack's
+    // name is in data-name, shown in that bar (mauiImportProgress) and as the tab's tooltip.
+    const packName = (filename: string): string => escapeHtml(filename.replace(/\.zip$/i, ''));
+    const tabs = packFilenames.map((filename, index) =>
+        `<button type="button" class="import-tab" data-import-tab="${index}" data-name="${packName(filename)}"`
+        + ` title="${packName(filename)}" disabled>${index + 1}</button>`).join('');
+    return `
+        <section class="card">
+            <h2>Import from the repository</h2>
+            <div class="progress-label"><span data-overall-label>Pack 1 of ${packFilenames.length} — ${packName(packFilenames[0])}</span></div>
+            <div class="progress-track progress-track-thin"><div class="progress-fill" data-overall></div></div>
+            <div class="import-tabs" role="tablist">${tabs}</div>
+            <div class="import-panels">
+        <script>
+        window.mauiImportTabs = (function () {
+            var picked = false;
+            function tab(i) { return document.querySelector('[data-import-tab="' + i + '"]'); }
+            function select(i) {
+                Array.prototype.forEach.call(document.querySelectorAll('[data-import-tab]'), function (t) {
+                    t.classList.toggle('active', t.dataset.importTab === String(i));
+                });
+                Array.prototype.forEach.call(document.querySelectorAll('[data-import-panel]'), function (panel) {
+                    panel.hidden = panel.dataset.importPanel !== String(i);
+                    // A hidden log can't scroll: put the newest lines back in view once shown.
+                    Array.prototype.forEach.call(panel.querySelectorAll('.progress-log'), function (log) {
+                        log.scrollTop = log.scrollHeight;
+                    });
+                });
+            }
+            document.addEventListener('click', function (event) {
+                var target = event.target.closest ? event.target.closest('[data-import-tab]') : null;
+                if (!target || target.disabled) { return; }
+                picked = true;
+                select(target.dataset.importTab);
+            });
+            return {
+                start: function (i) {
+                    tab(i).disabled = false;
+                    tab(i).classList.add('running');
+                    if (!picked) { select(i); }
+                },
+                finish: function (i, ok) {
+                    tab(i).classList.remove('running');
+                    tab(i).classList.add(ok ? 'done' : 'failed');
+                }
+            };
+        })();
+        </script>
+    `;
+}
+
+/**
  * Progress bar(s) for one import run, driven by the `<script>mauiImportProgress.update(...)`
  * lines runImportScript() streams as the script reports its `@@PROGRESS` lines. Bar 1 is the
- * current pack (download, then games imported); a second, thinner one shows the whole batch when
- * several packs are imported in a row. The helper is (re)defined with each run: it is
+ * current pack (download, then games imported); the thinner "Pack N of M" bar of the whole batch
+ * lives above the tabs (see renderImportTabsOpen()) and is the page's single [data-overall] element,
+ * which this helper drives. The helper is (re)defined with each run: it is
  * idempotent, and a streamed page has no other single place to put it.
  */
 function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {index: number; total: number}): string {
-    const overallBar = overall && overall.total > 1 ? `
-        <div class="progress-label"><span>Pack ${overall.index + 1} of ${overall.total}</span></div>
-        <div class="progress-track progress-track-thin"><div class="progress-fill" data-overall></div></div>
-    ` : '';
     return `
         <div class="import-progress" id="${id}" data-download="${hasDownload ? '1' : '0'}"
             data-index="${overall ? overall.index : 0}" data-total="${overall ? overall.total : 1}">
             <div class="progress-label"><span data-label>Starting…</span><span data-percent></span></div>
             <div class="progress-track"><div class="progress-fill progress-indeterminate" data-fill></div></div>
-            ${overallBar}
         </div>
         <script>
         window.mauiImportProgress = window.mauiImportProgress || (function () {
@@ -1067,8 +1338,14 @@ function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {in
                 fill.style.width = known ? (fraction * 100).toFixed(1) + '%' : '';
                 root.querySelector('[data-label]').textContent = label;
                 root.querySelector('[data-percent]').textContent = known ? Math.round(fraction * 100) + '%' : '';
-                var overall = root.querySelector('[data-overall]');
+                var overall = document.querySelector('[data-overall]');
                 if (overall && overallFraction !== null) { overall.style.width = (overallFraction * 100).toFixed(1) + '%'; }
+                var overallLabel = document.querySelector('[data-overall-label]');
+                if (overallLabel) {
+                    var packTab = document.querySelector('[data-import-tab="' + root.dataset.index + '"]');
+                    overallLabel.textContent = 'Pack ' + (Number(root.dataset.index) + 1) + ' of ' + root.dataset.total
+                        + (packTab ? ' \u2014 ' + packTab.dataset.name : '');
+                }
             }
             return {
                 update: function (id, phase, done, total) {
@@ -1094,7 +1371,7 @@ function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {in
                     fill.classList.add(ok ? 'progress-done' : 'progress-failed');
                     root.querySelector('[data-label]').textContent = ok ? 'Done' : 'Finished with errors — see the log below';
                     root.querySelector('[data-percent]').textContent = '';
-                    var overall = root.querySelector('[data-overall]');
+                    var overall = document.querySelector('[data-overall]');
                     var index = Number(root.dataset.index), count = Number(root.dataset.total);
                     if (overall) { overall.style.width = ((index + 1) / count * 100).toFixed(1) + '%'; }
                 }
@@ -1104,8 +1381,12 @@ function renderImportProgressBar(id: string, hasDownload: boolean, overall?: {in
     `;
 }
 
-function renderPage(body: string, active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
-    return renderPageHead(active, authenticated, hasSubtabs) + body + renderPageTail();
+function renderPage(body: string, active: Tab, viewer: Viewer, hasSubtabs: boolean = false): string {
+    return renderPageHead(active, viewer, hasSubtabs) + body + renderPageTail();
+}
+
+function getViewer(req: Request): Viewer {
+    return req.session.boRole === 'admin' ? 'admin' : 'user';
 }
 
 interface Subsection {
@@ -1139,24 +1420,37 @@ interface Subsection {
  * first in `sections` always wins over the section the just-submitted form actually belongs to.
  */
 function renderSubtabbedPage(
-    active: Tab, sections: Subsection[], authenticated: boolean = true, defaultSectionId?: string,
+    active: Tab, sections: Subsection[], viewer: Viewer, defaultSectionId?: string,
+    // Markup shown at the right end of the subtabs row, whichever subtab is open (e.g. the MAME
+    // tab's "Launch mame" button).
+    navAction = '',
 ): string {
     if (sections.length <= 1) {
-        return renderPage(sections.map(section => section.html).join(''), active, authenticated);
+        return renderPage(sections.map(section => section.html).join(''), active, viewer);
     }
+    // role="tablist"/"tab"/"tabpanel": unlike the primary nav (real page links), this switches
+    // panels client-side within one page - the actual ARIA tabs pattern applies here.
+    // aria-selected/tabindex are set to their real values by the tail script's activate(), once
+    // it has picked which section to open - every link starts unselected/unreachable-by-Tab here
+    // so a screen reader or keyboard user never sees two "tabs" claim to be selected at once
+    // before that script runs.
     const nav = `
-        <nav class="subtabs" data-default-subtab="${escapeHtml(defaultSectionId || '')}">
+        <nav class="subtabs" role="tablist" data-default-subtab="${escapeHtml(defaultSectionId || '')}">
             ${sections.map(section => `
-                <a href="#${escapeHtml(section.id)}" class="subtab-link" data-subtab="${escapeHtml(section.id)}">
+                <a href="#${escapeHtml(section.id)}" class="subtab-link" data-subtab="${escapeHtml(section.id)}"
+                    role="tab" aria-selected="false" aria-controls="subtab-panel-${escapeHtml(section.id)}"
+                    id="subtab-tab-${escapeHtml(section.id)}" tabindex="-1">
                     ${escapeHtml(section.label)}
                 </a>
             `).join('')}
         </nav>
     `;
+    const bar = navAction ? `<div class="subtabs-bar">${nav}<div class="subtabs-action">${navAction}</div></div>` : nav;
     const panels = sections.map(section => `
-        <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}">${section.html}</div>
+        <div class="subtab-panel" data-subtab-panel="${escapeHtml(section.id)}" role="tabpanel"
+            id="subtab-panel-${escapeHtml(section.id)}" aria-labelledby="subtab-tab-${escapeHtml(section.id)}">${section.html}</div>
     `).join('');
-    return renderPage(nav + panels, active, authenticated, true);
+    return renderPage(bar + panels, active, viewer, true);
 }
 
 /**
@@ -1178,23 +1472,85 @@ const PROGRESS_LOG_OPEN = '<ul class="progress-log"><script>(function () {'
     + 'new MutationObserver(function () { log.scrollTop = log.scrollHeight; }).observe(log, {childList: true});'
     + '})();</script>';
 
-function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, hasSubtabs: boolean = false): string {
+/**
+ * One primary nav link, with `aria-current="page"` alongside the `.active` class it always had -
+ * these are real page-loaded links (not a JS tab widget), so a screen reader should hear "current
+ * page" the same way a sighted user sees the underline, instead of nothing at all.
+ */
+function renderNavTabLink(href: string, label: string, isActive: boolean): string {
+    return `<a href="${href}" class="${isActive ? 'active' : ''}"${isActive ? ' aria-current="page"' : ''}>${label}</a>`;
+}
+
+function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <title>mame-awesome-ui - Configuration</title>
     <style>
+        /* Design tokens (Phase 0 of docs/BO-UX-REVAMP.md): every color/spacing/radius below is
+           defined once here and referenced by var() everywhere else in this block, instead of
+           the hex literals copy-pasted per render*() function that used to drift apart. */
+        :root {
+            --bg: #000000;
+            /* Cards used to sit on rgba(0,0,0,0.55): fine over the darker parts of the tiled
+               background photo, but text contrast could drop under WCAG AA over its brighter
+               areas. Raised opacity is the actual accessibility fix; the two-tier surfaces let a
+               page still show a little of the background through most cards while the login card
+               (the very first thing an unauthenticated/non-technical visitor sees, nothing else
+               on screen to anchor it) gets the more opaque one. */
+            --surface: rgba(0, 0, 0, 0.82);
+            --surface-strong: rgba(0, 0, 0, 0.9);
+            --surface-inset: #111111;
+            --border: #333333;
+            --border-subtle: #222222;
+            --text: #ffffff;
+            --text-muted: #aaaaaa;
+            --accent: #8ab4f8;
+            --success: #6bff8a;
+            --warn: #ffd166;
+            --danger: #ff6b6b;
+            --danger-strong: #c0392b;
+            --radius-sm: 4px;
+            --radius-md: 6px;
+            --radius-lg: 8px;
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 16px;
+            --space-4: 24px;
+            --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+        }
         html {
             min-height: 100%;
-            background-color: #000000;
+            background-color: var(--bg);
             background-image: url('/background.jpg');
             background-size: cover;
             background-repeat: repeat;
             background-position: 0 0;
+            /* "cover" is sized on the page's height by default: while a streamed page (updates,
+               imports, favorites refresh) keeps growing, the image kept zooming in. Fixed sizes it
+               on the viewport instead, so it stays put whatever the page length. */
+            background-attachment: fixed;
+        }
+        /* Visually hidden until focused: a keyboard/screen-reader user tabbing in from the
+           address bar can jump straight past the nav to <main> instead of tabbing through every
+           top-level tab link first. Sighted mouse users never see it. */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 8px;
+            z-index: 100;
+            padding: 8px 16px;
+            background-color: var(--text);
+            color: var(--bg);
+            border-radius: var(--radius-sm);
+            text-decoration: none;
+        }
+        .skip-link:focus {
+            top: 8px;
         }
         body {
-            color: #ffffff;
+            color: var(--text);
             font-family: sans-serif;
             box-sizing: border-box;
             /* Grows with the viewport (tables like Users/Favorites need the room) instead of
@@ -1211,6 +1567,14 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         header h1 {
             margin: 0;
             font-size: 1.4em;
+            line-height: 0;
+        }
+        .header-home {
+            display: inline-block;
+        }
+        .header-logo {
+            width: min(360px, 90vw);
+            height: auto;
         }
         .app-version {
             position: fixed;
@@ -1221,46 +1585,71 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             font-size: 0.8em;
             font-weight: bold;
         }
+        /* Segmented-control look: a capsule holding every tab, the active one its own solid pill
+           instead of an underline - same black/white/accent palette as everywhere else, just
+           more depth (background + shadow) than a flat line ever gave it. */
         .tabs {
-            display: flex;
+            display: inline-flex;
+            flex-wrap: wrap;
             justify-content: center;
-            gap: 4px;
+            gap: 2px;
             margin-top: 16px;
-            border-bottom: 1px solid #333333;
+            padding: 4px;
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            /* An inline-flex box (unlike a block-level flex one) shrinks to its content's width
+               and is centered by header's own text-align: center - the capsule wraps snugly
+               around the tabs instead of stretching edge to edge. max-width keeps a narrow
+               viewport from overflowing before flex-wrap gets a chance to break it into rows. */
+            max-width: 100%;
         }
         .tabs a {
             display: inline-block;
             padding: 8px 16px;
-            color: #aaaaaa;
+            color: var(--text-muted);
             text-decoration: none;
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
+            border-radius: 999px;
+            transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
         }
         .tabs a:hover {
-            color: #ffffff;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
         }
         .tabs a.active {
-            color: #ffffff;
-            border-bottom-color: #8ab4f8;
+            color: var(--bg);
+            background-color: var(--text);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+        }
+        .tabs a.active:hover {
+            /* Already the strongest state on the bar - a hover background would just dim the
+               solid pill for no reason. */
+            background-color: var(--text);
         }
         .card {
-            background-color: rgba(0, 0, 0, 0.55);
-            border-radius: 8px;
+            background-color: var(--surface);
+            border-radius: var(--radius-lg);
             padding: 24px 16px;
             margin-bottom: 24px;
         }
         .card h2 {
             margin-top: 0;
             font-size: 1.1em;
-            border-bottom: 1px solid #333333;
+            border-bottom: 1px solid var(--border);
             padding-bottom: 8px;
         }
         a {
-            color: #8ab4f8;
+            color: var(--accent);
         }
         label {
             display: block;
             margin-top: 16px;
+        }
+        /* Form controls don't inherit the page font by default: browsers give them their own
+           system font at ~13.3px, so on form-heavy pages (My account, sign-in) the typed values
+           and button labels came out visibly smaller than the labels/paragraphs around them. */
+        input, select, textarea, button {
+            font: inherit;
         }
         input, select {
             width: 100%;
@@ -1270,7 +1659,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             transition: outline-color 0.15s ease;
         }
         input:focus, select:focus {
-            outline: 2px solid #8ab4f8;
+            outline: 2px solid var(--accent);
             outline-offset: -1px;
         }
         button {
@@ -1278,7 +1667,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             color: #000000;
             background-color: #ffffff;
             border: none;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             cursor: pointer;
             transition: background-color 0.15s ease, opacity 0.15s ease;
         }
@@ -1289,22 +1678,48 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             opacity: 0.5;
             cursor: not-allowed;
         }
+        /* Every interactive element gets a visible keyboard focus ring, not just input/select
+           above: buttons and links used to have none at all, so tabbing through a page (or
+           through the primary/sub tabs, both plain <a>) gave no indication of where focus was. */
+        a:focus-visible, button:focus-visible, summary:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        /* Irreversible actions (Danger Zone "Delete the selection" buttons): previously the same
+           plain white button as "Save", with nothing to tell them apart at a glance beyond the
+           confirm() dialog that fires on click. Same shape/size as a normal button so it doesn't
+           jump around the layout, distinct color so the destructive intent is visible before
+           that dialog even appears. */
+        button.button-danger {
+            color: var(--text);
+            background-color: var(--danger-strong);
+        }
+        button.button-danger:hover:not(:disabled) {
+            background-color: #d84a3a;
+        }
         form > button[type="submit"]:last-child {
             margin-top: 24px;
         }
         .error, .info {
             padding: 10px 14px;
             margin: 12px 0 0;
-            border-radius: 6px;
+            border-radius: var(--radius-md);
             border-left: 3px solid currentColor;
         }
         .error {
-            color: #ff6b6b;
+            color: var(--danger);
             background-color: rgba(255, 107, 107, 0.12);
         }
         .info {
-            color: #8ab4f8;
+            color: var(--accent);
             background-color: rgba(138, 180, 248, 0.12);
+        }
+        /* Numbered steps in an info box: keeps room for the markers the .info padding would eat. */
+        ol.info {
+            padding-left: 34px;
+        }
+        ol.info li + li {
+            margin-top: 6px;
         }
         /* Info line with an action at its far end (favorites: cache date + "Update favorites").
            The button selector out-ranks the generic "form > button:last-child" 24px top margin. */
@@ -1329,12 +1744,35 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .path-row input {
             margin-top: 0;
         }
+        .plugins-path-field {
+            transition: opacity 0.15s ease;
+        }
+        .plugins-path-field.is-disabled {
+            opacity: 0.4;
+        }
         .button-row {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
             margin-top: 24px;
         }
+        /* Subtabs on the left, the page's action (see renderSubtabbedPage()'s navAction) pinned to
+           the right of the same row; wraps under them on a narrow screen. */
+        .subtabs-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px 16px;
+            margin: 4px 0 20px;
+        }
+        .subtabs-bar .subtabs {
+            margin: 0;
+        }
+        .subtabs-action form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+
         .launch-button {
             display: inline-flex;
             align-items: center;
@@ -1362,16 +1800,25 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             flex: 1 1 auto;
             min-width: 0;
         }
+        .hi-badge {
+            margin-left: 6px;
+            padding: 0 5px;
+            border: 1px solid var(--success);
+            border-radius: 3px;
+            color: var(--success);
+            font-size: 11px;
+            vertical-align: middle;
+        }
         .checkbox-row-detail {
             display: block;
             margin-top: 2px;
-            color: #aaaaaa;
+            color: var(--text-muted);
             font-size: 0.9em;
         }
         .current-path {
             font-family: monospace;
             word-break: break-all;
-            background-color: #111111;
+            background-color: var(--surface-inset);
             padding: 8px;
         }
         .info-field {
@@ -1379,13 +1826,13 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .info-field dt {
             font-size: 0.85em;
-            color: #aaaaaa;
+            color: var(--text-muted);
         }
         .info-field dd {
             margin: 4px 0 0;
             font-family: monospace;
             word-break: break-all;
-            background-color: #111111;
+            background-color: var(--surface-inset);
             padding: 8px;
         }
         .info-field dd ul {
@@ -1413,7 +1860,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .browse-list li {
             padding: 6px 0;
-            border-bottom: 1px solid #222222;
+            border-bottom: 1px solid var(--border-subtle);
         }
         .table-wrap {
             overflow-x: auto;
@@ -1421,23 +1868,59 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         table.favorites-table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 0.85em;
         }
         table.favorites-table th,
         table.favorites-table td {
             text-align: left;
             padding: 6px 8px;
-            border-bottom: 1px solid #222222;
+            border-bottom: 1px solid var(--border-subtle);
             white-space: nowrap;
         }
+        /* Favorites / removed favorites: every column but the name has a fixed width, pinned to
+           the right whatever the names are; the name gets what's left and is cut with an ellipsis
+           (see .game-name-cell). min-width: below it the table scrolls (.table-wrap) instead of
+           squeezing the name column to nothing. */
+        table.favorites-table.fixed-columns {
+            table-layout: fixed;
+            min-width: 640px;
+        }
+        table.favorites-table.fixed-columns td {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        table.favorites-table.fixed-columns .game-name-cell {
+            max-width: none;
+        }
+        table.favorites-table.fixed-columns .romname-cell {
+            display: flex;
+            min-width: 0;
+        }
+        .col-romname { width: 130px; }
+        .col-assets { width: 88px; }
+        .col-date { width: 140px; }
+        .col-plays { width: 64px; }
+        .col-vote { width: 140px; }
+        .col-action { width: 56px; }
         table.favorites-table th.center,
         table.favorites-table td.center {
             text-align: center;
         }
         .badge-yes {
-            color: #6bff8a;
+            color: var(--success);
         }
         .badge-no {
-            color: #ff6b6b;
+            color: var(--danger);
+        }
+        .badge-deleted {
+            color: var(--text-muted);
+        }
+        /* Deleted players, listed after the others in the same Players table (admins only). */
+        table.favorites-table tr.row-deleted td {
+            opacity: 0.6;
+        }
+        table.favorites-table tr.row-deleted td:last-child {
+            opacity: 1;
         }
         .row-actions {
             display: inline-flex;
@@ -1452,23 +1935,50 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: inline-flex;
             cursor: help;
         }
+        .asset-icon[data-preview] {
+            cursor: zoom-in;
+        }
+        .asset-preview {
+            position: fixed;
+            z-index: 50;
+            max-width: 240px;
+            max-height: 180px;
+            object-fit: contain;
+            padding: 4px;
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        }
         /* Icon-only submit button (favorites Remove/Restore): compact, outlined in its own color
            instead of the plain white button. The extra selector parts beat the generic
            "form > button[type=submit]:last-child" 24px top margin above, which would otherwise
            push it out of its table row's alignment. */
         form > button.icon-button[type="submit"]:last-child {
             display: inline-flex;
-            padding: 5px;
+            align-items: center;
+            justify-content: center;
+            /* Was padding: 5px (~26px total with the 16px icon) - under the ~40-44px touch
+               target guideline, and this sits in dense table rows on a BO reachable from any
+               phone/tablet on the LAN. Not raised all the way to 44px here: that would need
+               revisiting row height/density across every table this appears in (Favorites,
+               Players, removed-favorites...), left for the Phase 2 pass in
+               docs/BO-UX-REVAMP.md. min-width/height (not just padding) keep it square even
+               though the icon itself doesn't fill the box uniformly. */
+            min-width: 32px;
+            min-height: 32px;
+            padding: 8px;
             margin-top: 0;
-            color: #ff6b6b;
+            color: var(--danger);
             background-color: transparent;
             border: 1px solid currentColor;
         }
         form > button.icon-button.icon-button-ok[type="submit"]:last-child {
-            color: #6bff8a;
+            color: var(--success);
         }
         form > button.icon-button.icon-button-warn[type="submit"]:last-child {
-            color: #ffd166;
+            color: var(--warn);
         }
         button.icon-button:hover:not(:disabled) {
             background-color: rgba(255, 255, 255, 0.12);
@@ -1484,15 +1994,23 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #222222;
+            background: var(--border-subtle);
             color: #888888;
             font-size: 18px;
         }
         .avatar-upload {
             display: inline-block;
+            /* A <label>: the generic label rule's 16px top margin pushed the avatar down its row. */
+            margin-top: 0;
+            vertical-align: middle;
             position: relative;
             cursor: pointer;
             border-radius: 4px;
+        }
+        /* A bare avatar (deleted players, not uploadable): display: block ignores the cell's
+           text-align, so it's centered by margin to line up with the .avatar-upload ones. */
+        td.center > .avatar-thumb {
+            margin: 0 auto;
         }
         .avatar-upload:hover .avatar-thumb {
             opacity: 0.6;
@@ -1508,7 +2026,73 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .info-icon {
             display: inline-flex;
             vertical-align: middle;
-            color: #8ab4f8;
+            color: var(--accent);
+            cursor: help;
+        }
+        /* Long game names are cut with an ellipsis instead of widening the table; the info icon
+           stays visible after the cut text. */
+        .vote-buttons {
+            display: inline-flex;
+            gap: 6px;
+        }
+        /* The three vote icons of a row: unlike the single Remove/Restore button above (styled as a
+           form's :last-child), each needs the icon-button look. The selected one is lit up in its
+           own color, the others stay grey. */
+        form.vote-buttons > button.icon-button[type="submit"] {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            min-height: 32px;
+            padding: 8px;
+            margin-top: 0;
+            color: #777777;
+            background-color: transparent;
+            border: 1px solid #444444;
+        }
+        form.vote-buttons > button.icon-button[aria-pressed="true"] {
+            border-color: currentColor;
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        form.vote-buttons > button.up[aria-pressed="true"] {
+            color: var(--success);
+        }
+        form.vote-buttons > button.neutral[aria-pressed="true"] {
+            color: var(--warn);
+        }
+        form.vote-buttons > button.down[aria-pressed="true"] {
+            color: var(--danger);
+        }
+
+        .game-name-cell {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 360px;
+        }
+        .game-name-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .romname-cell {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .game-category-icon {
+            flex: 0 0 auto;
+            width: 20px;
+            height: 20px;
+        }
+        .romname-cell .info-icon,
+        .game-name-cell .info-icon,
+        .game-name-cell .hiscore-icon {
+            flex: 0 0 auto;
+        }
+        .hiscore-icon {
+            display: inline-flex;
+            color: #ffd700;
             cursor: help;
         }
         .found-icon {
@@ -1518,23 +2102,23 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             margin-right: 6px;
         }
         .found-yes {
-            color: #6bff8a;
+            color: var(--success);
         }
         .found-no {
-            color: #ff6b6b;
+            color: var(--danger);
         }
         .disk-bar-track {
             display: flex;
             height: 22px;
             margin: 8px 0;
-            background-color: #111111;
-            border: 1px solid #333333;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
             border-radius: 11px;
             overflow: hidden;
         }
         .disk-bar-track.disk-bar-overflow {
-            border-color: #ff6b6b;
-            box-shadow: 0 0 0 1px #ff6b6b;
+            border-color: var(--danger);
+            box-shadow: 0 0 0 1px var(--danger);
         }
         .disk-bar-used {
             background-color: #555555;
@@ -1559,7 +2143,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .disk-zoom-note {
             margin: 0 0 4px;
             font-size: 0.85em;
-            color: #8ab4f8;
+            color: var(--accent);
         }
         .disk-legend {
             display: flex;
@@ -1581,54 +2165,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .pack-details summary {
             cursor: pointer;
-            color: #8ab4f8;
-        }
-        .category-row {
-            border-top: 1px solid #333;
-        }
-        .category-row summary {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 6px 0;
-            cursor: pointer;
-        }
-        .category-icon {
-            width: 40px;
-            height: 40px;
-            flex: none;
-        }
-        .category-name {
-            flex: 1;
-        }
-        .category-count {
-            color: #999;
-            font-size: 0.9em;
-        }
-        .category-games {
-            list-style: none;
-            margin: 0 0 8px 52px;
-            padding: 0;
-            max-height: 320px;
-            overflow-y: auto;
-            font-size: 0.9em;
-        }
-        .category-games li {
-            padding: 2px 0;
-        }
-        /* Name, rom name and year · studio · players on one line (wrapping only when too long);
-           .checkbox-row-detail is display: block by default. */
-        .category-games .checkbox-row-detail {
-            display: inline;
-            margin: 0 0 0 8px;
-        }
-        .category-game-meta {
-            margin-left: 8px;
-            color: #999;
-            font-size: 0.9em;
-        }
-        .category-game-meta::before {
-            content: '— ';
+            color: var(--accent);
         }
         .pack-games {
             list-style: none;
@@ -1647,10 +2184,43 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .pack-game[hidden], .pack-row[hidden] {
             display: none;
         }
-        .pack-search {
+        .pack-search, .table-search {
             margin: 16px 0 0;
         }
-        .pack-search-count {
+        .table-search-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .table-search-controls input {
+            flex: 1 1 240px;
+        }
+        .table-search-controls input, .table-search-controls select {
+            margin-top: 0;
+        }
+        .table-search-controls select {
+            width: auto;
+            flex: 0 1 auto;
+        }
+        .table-pager {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .table-pager label {
+            margin-top: 0;
+        }
+        .table-pager select {
+            width: auto;
+            margin-top: 0;
+        }
+        .table-pager button {
+            padding: 4px 12px;
+        }
+        .pack-search-count, .table-search-count {
             margin: 8px 0 0;
         }
         .pack-game-label {
@@ -1668,10 +2238,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .pack-game-mark {
             flex: 0 0 14px;
             text-align: center;
-            color: #aaaaaa;
+            color: var(--text-muted);
         }
         .pack-game-installed .pack-game-mark {
-            color: #6bff8a;
+            color: var(--success);
         }
         .pack-game-highlight {
             color: #f8eb48;
@@ -1683,10 +2253,10 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             display: block;
             margin-top: 2px;
             font-size: 0.85em;
-            color: #aaaaaa;
+            color: var(--text-muted);
         }
         .pack-status-owned {
-            color: #6bff8a;
+            color: var(--success);
         }
         .pack-status-update {
             color: #f8eb48;
@@ -1707,6 +2277,45 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .disk-legend .pack-swatch {
             margin-top: 0;
             vertical-align: -1px;
+        }
+        dialog.modal {
+            width: min(560px, 92vw);
+            padding: 16px 20px 20px;
+            color: var(--text);
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        }
+        dialog.modal::backdrop {
+            background-color: rgba(0, 0, 0, 0.6);
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .modal-header h3 {
+            margin: 0;
+        }
+        button.modal-close {
+            padding: 0 10px;
+            font-size: 1.5em;
+            line-height: 1.4;
+            color: var(--text);
+            background-color: transparent;
+        }
+        button.modal-close:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        dialog.modal progress {
+            width: 100%;
+            margin-top: 16px;
+        }
+        p.modal-done {
+            color: var(--success);
+            font-weight: bold;
         }
         .progress-log {
             list-style: none;
@@ -1730,8 +2339,8 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .progress-track {
             height: 18px;
-            background-color: #111111;
-            border: 1px solid #333333;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
             border-radius: 9px;
             overflow: hidden;
         }
@@ -1742,14 +2351,14 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         .progress-fill {
             height: 100%;
             width: 0;
-            background-color: #8ab4f8;
+            background-color: var(--accent);
             transition: width 0.25s ease-out;
         }
         .progress-fill.progress-done {
-            background-color: #6bff8a;
+            background-color: var(--success);
         }
         .progress-fill.progress-failed {
-            background-color: #ff6b6b;
+            background-color: var(--danger);
         }
         /* Total unknown (server sent no Content-Length): a sliding stripe instead of a bar that
            would sit at 0% and look frozen. */
@@ -1766,7 +2375,7 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .progress-log li {
             padding: 4px 0;
-            border-bottom: 1px solid #222222;
+            border-bottom: 1px solid var(--border-subtle);
         }
         .progress-log li:last-child {
             animation: pulse 1s ease-in-out infinite;
@@ -1776,23 +2385,64 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
             50% { opacity: 0.4; }
         }
         /* Present once a page has subtabs (see renderSubtabbedPage()) - the primary nav steps
-           back (smaller, dimmed except the active tab) so the subtabs row below reads as the
-           primary navigation for the page actually being looked at, without hiding the way
-           back to the other top-level tabs. */
+           back (dimmed except the active tab) so the subtabs row below reads as the primary
+           navigation for the page actually being looked at, without hiding the way back to the
+           other top-level tabs. Dimmed only, not shrunk: a smaller font/padding here made the
+           whole menu visibly jump in size between pages with subtabs and pages without
+           (My account, single-section tabs). */
         .tabs.compact a {
-            padding: 6px 12px;
-            font-size: 0.85em;
             opacity: 0.55;
         }
         .tabs.compact a.active {
             opacity: 1;
         }
-        .subtabs {
+        /* Multi-pack import (see renderImportTabsOpen()): one tab per pack, the pack's own
+           progress in the panel below. Buttons, unlike the .tabs links, so the generic white
+           button style is reset here. */
+        .import-tabs {
             display: flex;
             flex-wrap: wrap;
             gap: 4px;
+            margin: 4px 0 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .import-tab {
+            padding: 6px 12px;
+            color: var(--text-muted);
+            background-color: transparent;
+            border-radius: 0;
+            border-bottom: 2px solid transparent;
+            font-size: 0.85em;
+        }
+        .import-tab:hover:not(:disabled) {
+            color: #ffffff;
+            background-color: transparent;
+        }
+        .import-tab.active {
+            color: #ffffff;
+            border-bottom-color: var(--accent);
+        }
+        .import-tab.running::before { content: '\\25CF '; color: var(--accent); }
+        .import-tab.done::before { content: '\\2713 '; color: var(--success); }
+        .import-tab.failed::before { content: '\\2717 '; color: var(--danger); }
+        .import-panel h3 {
+            margin: 0 0 8px;
+            font-size: 1em;
+        }
+        /* Same segmented-control family as .tabs above, one size down and left-aligned (it's a
+           page's own secondary nav, not the site-wide one) - and its active pill is the accent
+           color rather than plain white, so the two levels stay visually distinct: white pill =
+           which top-level tab, blue pill = which subtab within it. Accent was already this row's
+           "you are here" color before (the old underline), just applied to a filled pill now. */
+        .subtabs {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 2px;
             margin: 4px 0 20px;
-            border-bottom: 1px solid #333333;
+            padding: 3px;
+            background-color: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-subtle);
+            border-radius: 999px;
             animation: subtabs-slide-in 0.2s ease-out;
         }
         @keyframes subtabs-slide-in {
@@ -1801,18 +2451,23 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
         }
         .subtabs a {
             display: inline-block;
-            padding: 8px 16px;
-            color: #aaaaaa;
+            padding: 6px 14px;
+            color: var(--text-muted);
             text-decoration: none;
-            border-bottom: 2px solid transparent;
-            transition: color 0.15s ease, border-color 0.15s ease;
+            border-radius: 999px;
+            font-size: 0.9em;
+            transition: color 0.15s ease, background-color 0.15s ease;
         }
         .subtabs a:hover {
-            color: #ffffff;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
         }
         .subtabs a.active {
-            color: #8ab4f8;
-            border-bottom-color: #8ab4f8;
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .subtabs a.active:hover {
+            background-color: var(--accent);
         }
         .subtab-panel {
             display: none;
@@ -1823,57 +2478,165 @@ function renderPageHead(active: Tab = 'mame', authenticated: boolean = true, has
     </style>
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to content</a>
     <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
     <header>
-        <h1>mame-awesome-ui</h1>
-        ${authenticated ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}">
-            <a href="/" class="${active === 'mame' ? 'active' : ''}">MAME</a>
-            <a href="/favorites" class="${active === 'favorites' ? 'active' : ''}">Games</a>
-            <a href="/users" class="${active === 'users' ? 'active' : ''}">Players</a>
-            <a href="/screenscraper" class="${active === 'screenscraper' ? 'active' : ''}">ScreenScraper</a>
-            <a href="/maui" class="${active === 'maui' ? 'active' : ''}">MAUI</a>
-            <a href="/account" class="${active === 'account' ? 'active' : ''}">My account</a>
+        <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
+        ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
+            ${renderNavTabLink('/', 'MAME', active === 'mame')}
+            ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
+            ${renderNavTabLink('/users', 'Players', active === 'users')}
+            ${viewer === 'admin' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
+            ${renderNavTabLink('/maui', 'MAUI', active === 'maui')}
+            ${renderNavTabLink('/account', 'My account', active === 'account')}
         </nav>` : ''}
     </header>
+    <main id="main">
     `;
 }
 
 function renderPageTail(): string {
     return `
+    </main>
     <script>
-        // Every action here is a plain form POST/GET (full page navigation, no AJAX) - the only
-        // feedback the browser gives on its own during that navigation is the tab's spinner,
-        // easy to miss. Disable + relabel whichever button actually triggered the submission
-        // (event.submitter, not just "the first submit button in the form" - several forms have
-        // more than one, e.g. formaction-overriding browse buttons) so a click always visibly
-        // registers, even before the new page has finished loading. No need to re-enable it: the
-        // navigation this triggers replaces the whole DOM (or, for a confirm() dialog the user
-        // cancels, defaultPrevented is set below and this is skipped entirely).
+        // Most forms here are POSTs whose response is the exact same full-page HTML a GET would
+        // render (see e.g. renderFavoritesTab()) - the server has no separate "fragment" vs
+        // "whole page" response shape. That let every one of them respond in place instead of
+        // navigating: intercept the submit, POST via fetch(), then replace the document with
+        // whatever HTML comes back. The address bar never leaves the GET page it started on, so
+        // refreshing afterward re-runs that GET, not the action - previously every action left
+        // the browser sitting on its own POST URL, and a refresh there replayed it (a delete, a
+        // vote, a save... whatever the last click was), because the server had no
+        // Post/Redirect/Get in place. This fixes that for free, without touching any of those
+        // handlers, since the response they already send is exactly what gets displayed either
+        // way.
         //
-        // The mutation itself is deferred one tick (setTimeout(fn, 0)) instead of applied
-        // synchronously in this handler: Chrome submits a form on Enter by internally
-        // simulating a click on its default button, and disabling that same button
-        // synchronously from within the 'submit' event it's still in the middle of dispatching
-        // aborts that in-flight click - the submission silently never happens. A real pointer
-        // click isn't affected (its own default action already committed before 'submit'
-        // fires), so this broke keyboard-only ("press Enter") submission specifically, while
-        // clicking the button kept working - reported against exactly this symptom on the
-        // login page. Deferring lets the browser finish submitting first either way.
+        // Left alone (see the data-stream check below): forms whose POST response is a
+        // multi-chunk res.write() stream the browser paints incrementally as it arrives (long
+        // imports, favorites refresh, media download, self-update) - swapping those in only once
+        // the whole fetch() resolves would throw away the "watch it happen live" log entirely.
+        // Those still fully navigate, so they keep the older replay-on-refresh gap for now (see
+        // docs/BO-UX-REVAMP.md) until they're worth teaching this same script to read
+        // fetch()'s response body as a stream instead of a single text() blob.
         document.addEventListener('submit', function (event) {
             if (event.defaultPrevented) {
                 return;
             }
-            var button = event.submitter;
-            if (button && button.tagName === 'BUTTON' && !button.disabled) {
-                setTimeout(function () {
-                    // An icon-only button has no text to relabel (assigning textContent would
-                    // replace its <svg> with a bare "…") - just disabling it is feedback enough.
-                    if (!button.classList.contains('icon-button')) {
-                        button.textContent = button.textContent + '…';
-                    }
-                    button.disabled = true;
-                }, 0);
+            var form = event.target;
+            var button = event.submitter; // null for a plain requestSubmit() with no argument.
+            // A submitter's formmethod/formaction override the form's own - same resolution a
+            // real submission would use (the Browse buttons rely on exactly this to GET /browse
+            // instead of POSTing the form they sit in).
+            var method = ((button && button.getAttribute('formmethod')) || form.getAttribute('method') || 'get')
+                .toLowerCase();
+            if (method !== 'post') {
+                return; // A GET is always safe to reload - no need to intercept it.
             }
+            var eligible = button && button.tagName === 'BUTTON' && !button.disabled;
+            // An icon-only button has no text to relabel (assigning textContent would replace
+            // its <svg> with a bare "…") - just disabling it is feedback enough.
+            var relabel = eligible && !button.classList.contains('icon-button');
+            var originalText = eligible ? button.textContent : null;
+
+            if (form.hasAttribute('data-stream')) {
+                // Real navigation is still happening (see the comment above the listener). The
+                // mutation itself is deferred one tick instead of applied synchronously here:
+                // Chrome submits a form on Enter by internally simulating a click on its default
+                // button, and disabling that same button synchronously from within the 'submit'
+                // event it's still in the middle of dispatching aborts that in-flight click, so
+                // the submission silently never happens (keyboard-only "press Enter" submission
+                // broke this way, reported against exactly this symptom on the login page - a
+                // real pointer click isn't affected, its own default action already committed
+                // before 'submit' fires). Deferring lets the browser finish submitting first
+                // either way. No need to re-enable it afterward: the navigation this triggers
+                // replaces the whole DOM.
+                if (eligible) {
+                    setTimeout(function () {
+                        if (relabel) {
+                            button.textContent = originalText + '…';
+                        }
+                        button.disabled = true;
+                    }, 0);
+                }
+                return;
+            }
+
+            event.preventDefault();
+            if (eligible) {
+                if (relabel) {
+                    button.textContent = originalText + '…';
+                }
+                button.disabled = true;
+            }
+            var action = (button && button.getAttribute('formaction')) || form.getAttribute('action') || location.href;
+            // A <form> with no enctype (nearly all of them: login, favorites, users, saves...)
+            // submits as application/x-www-form-urlencoded, which express.urlencoded() (the only
+            // body parser mounted for those routes) expects - passing a FormData body to fetch()
+            // always sends multipart/form-data instead, regardless of the form's own enctype,
+            // which left req.body undefined on every route without its own multer instance (only
+            // the handful of file-upload routes have one). URLSearchParams as the body keeps the
+            // encoding those routes actually expect; only the enctype="multipart/form-data" forms
+            // (the file uploads) still need a real FormData.
+            var enctype = (button && button.getAttribute('formenctype')) || form.getAttribute('enctype') || '';
+            var body;
+            if (enctype === 'multipart/form-data') {
+                body = new FormData(form);
+                if (button && button.name) {
+                    // Native submission includes the clicked submit button's own name/value
+                    // (several forms tell apart which of theirs was pressed this way, e.g. the
+                    // Browse buttons' "target" field) - FormData(form)/URLSearchParams alone
+                    // don't add it.
+                    body.append(button.name, button.value);
+                }
+            } else {
+                body = new URLSearchParams();
+                new FormData(form).forEach(function (value, key) {
+                    if (typeof value === 'string') {
+                        body.append(key, value);
+                    }
+                });
+                if (button && button.name) {
+                    body.append(button.name, button.value);
+                }
+            }
+            var scrollY = window.scrollY;
+            fetch(action, {method: 'POST', body: body})
+                .then(function (response) {
+                    // A handful of these (login, logout, /repo/save) res.redirect() elsewhere on
+                    // success instead of responding in place - fetch() follows that transparently,
+                    // so response.redirected/response.url say where it actually ended up. Those
+                    // belong on the address bar for real (e.g. landing on "/" after signing in),
+                    // unlike every in-place response above: a real navigation there also sidesteps
+                    // the GET /login page's own gap (it doesn't redirect an already-authenticated
+                    // visitor away by itself), and refreshing a real URL is always safe anyway.
+                    if (response.redirected) {
+                        location.href = response.url;
+                        return null;
+                    }
+                    return response.text();
+                })
+                .then(function (html) {
+                    if (html === null) {
+                        return;
+                    }
+                    // Full-document replacement, not innerHTML: the response is a complete
+                    // <!DOCTYPE html>...</html> page (styles, nav, every inline <script> below
+                    // included), same as a real navigation would have rendered - this makes the
+                    // browser parse it as one, scripts included, without ever changing the URL.
+                    document.open();
+                    document.write(html);
+                    document.close();
+                    window.scrollTo(0, scrollY);
+                })
+                .catch(function () {
+                    if (eligible) {
+                        button.disabled = false;
+                        if (relabel) {
+                            button.textContent = originalText;
+                        }
+                    }
+                    alert('Could not reach the application - check your connection and try again.');
+                });
         });
 
         // Subtabs (see renderSubtabbedPage()): every panel is already in the DOM, server-
@@ -1897,7 +2660,13 @@ function renderPageTail(): string {
                     panel.classList.toggle('active', panel.dataset.subtabPanel === id);
                 });
                 links.forEach(function (link) {
-                    link.classList.toggle('active', link.dataset.subtab === id);
+                    var selected = link.dataset.subtab === id;
+                    link.classList.toggle('active', selected);
+                    // Keeps the ARIA tab state (and Tab-key stops) in sync with which panel is
+                    // actually visible - see renderSubtabbedPage()'s nav markup, which starts
+                    // every link at aria-selected="false"/tabindex="-1" until this runs.
+                    link.setAttribute('aria-selected', selected ? 'true' : 'false');
+                    link.tabIndex = selected ? 0 : -1;
                 });
             }
             links.forEach(function (link) {
@@ -1925,6 +2694,37 @@ function renderPageTail(): string {
             }
             activate(initial || panels[0].dataset.subtabPanel);
         })();
+
+        // A form POST replaces the whole page, and a browser opens the result at the top - however
+        // far down the button that was just clicked sat. Remember the scroll position when a form
+        // is submitted and put it back on the page that comes back, provided it is the same page
+        // and subtab (a different one - a login redirect, an error landing elsewhere - makes the
+        // old position meaningless). Read after the subtab script above: a hidden panel has no
+        // height to scroll into. Kept for a couple of minutes at most (a capture waits up to 30s,
+        // a MAME launch a few more), and consumed once.
+        (function () {
+            var KEY = 'boScrollRestore';
+            function where() {
+                var tab = document.querySelector('nav.tabs a.active');
+                var subtab = document.querySelector('.subtabs a.active');
+                return (tab ? tab.textContent : '') + '/' + (subtab ? subtab.dataset.subtab : '');
+            }
+            document.addEventListener('submit', function (event) {
+                if (event.defaultPrevented) {
+                    return;
+                }
+                try {
+                    sessionStorage.setItem(KEY, JSON.stringify({y: window.scrollY, where: where(), at: Date.now()}));
+                } catch (error) { /* storage blocked: the page just opens at the top */ }
+            });
+            try {
+                var saved = JSON.parse(sessionStorage.getItem(KEY) || 'null');
+                sessionStorage.removeItem(KEY);
+                if (saved && Date.now() - saved.at < 120000 && saved.where === where()) {
+                    window.scrollTo(0, saved.y);
+                }
+            } catch (error) { /* nothing to restore */ }
+        })();
     </script>
 </body>
 </html>`;
@@ -1950,7 +2750,7 @@ function renderLoginPage(error?: string): string {
                 <button type="submit">Sign in</button>
             </form>
         </section>
-    `, 'mame', false);
+    `, 'mame', null);
 }
 
 function renderAccountPage(username: string, role: string, error?: string, info?: string): string {
@@ -1975,14 +2775,25 @@ function renderAccountPage(username: string, role: string, error?: string, info?
                 <button type="submit">Sign out</button>
             </form>
         </section>
-    `, 'account');
+    `, 'account', role === 'admin' ? 'admin' : 'user');
 }
 
 interface ConfigFormValues {
     mamePath: string;
 }
 
-function renderConfigCard(values: ConfigFormValues, isAdmin: boolean, error?: string, info?: string): string {
+/**
+ * mame binary folder, then the mame.ini options: the plugins folder (pluginspath - the saved
+ * value, or the one just picked with Browse) and fullscreen (window, inverted - same wording as
+ * the MAUI tab's own fullscreen option). Those stay dimmed and
+ * disabled while the binary folder is empty - mame.ini only exists once the binary is known (see
+ * POST /save) - and are re-enabled as soon as something is typed into it.
+ */
+function renderConfigCard(
+    values: ConfigFormValues, mameInfo: Pick<MameInfo, 'pluginsPath' | 'windowed'>, error?: string, info?: string,
+): string {
+    const {pluginsPath, windowed} = mameInfo;
+    const pluginsDisabled = values.mamePath.trim() ? '' : ' disabled';
     return `
         <section class="card">
             <h2>Configuration</h2>
@@ -1994,12 +2805,29 @@ function renderConfigCard(values: ConfigFormValues, isAdmin: boolean, error?: st
                     <input type="text" id="mamePath" name="mamePath" value="${escapeHtml(values.mamePath)}">
                     <button type="submit" name="target" value="mamePath" formaction="/browse" formmethod="get">Browse</button>
                 </div>
+                <div class="plugins-path-field${pluginsDisabled ? ' is-disabled' : ''}" id="pluginsPathField">
+                    <label for="pluginsPath">MAME plugins folder (pluginspath)</label>
+                    <div class="path-row">
+                        <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(pluginsPath || '')}"${pluginsDisabled}>
+                        <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get"${pluginsDisabled}>Browse</button>
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="fullscreen" ${windowed ? '' : 'checked'}${pluginsDisabled}>
+                        Launch MAME fullscreen (unchecked = windowed)
+                    </label>
+                </div>
+                <script>(function () {
+                    var mamePath = document.getElementById('mamePath');
+                    var field = document.getElementById('pluginsPathField');
+                    function sync() {
+                        var disabled = !mamePath.value.trim();
+                        field.classList.toggle('is-disabled', disabled);
+                        field.querySelectorAll('input, button').forEach(function (control) { control.disabled = disabled; });
+                    }
+                    mamePath.addEventListener('input', sync);
+                })();</script>
                 <div class="button-row">
                     <button type="submit">Save</button>
-                    ${isAdmin ? `<button type="submit" formaction="/launch" formmethod="post" class="launch-button">
-                        <img src="/mame-logo.svg" alt="" class="launch-logo">
-                        Launch mame
-                    </button>` : ''}
                 </div>
             </form>
         </section>
@@ -2100,18 +2928,6 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
             </dl>
-            <form method="post" action="/mame-options/save">
-                <label for="pluginsPath">MAME plugins folder (pluginspath)</label>
-                <div class="path-row">
-                    <input type="text" id="pluginsPath" name="pluginsPath" value="${escapeHtml(mameInfo.pluginsPath || '')}">
-                    <button type="submit" name="target" value="pluginsPath" formaction="/browse" formmethod="get">Browse</button>
-                </div>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="windowed" ${mameInfo.windowed ? 'checked' : ''}>
-                    Launch MAME in windowed mode (instead of fullscreen) - edits mame.ini
-                </label>
-                <button type="submit">Save</button>
-            </form>
             ${mameInfo.missingPlugins.length ? `
                 <form method="post" action="/mame-options/repair-plugins">
                     <p class="error flash">plugin.ini is incomplete: ${mameInfo.missingPlugins.length} plugin(s)
@@ -2125,10 +2941,9 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
 }
 
 /**
- * Directory mame's hiscore plugin writes .hi files into (see HiscoreService.class.ts, which
- * symlinks iniPath/hi -> iniPath/hiscore since mame-hi-extractor hardcodes reading from "hi").
- * Duplicated here rather than imported for the same @electron/remote reason as the rest of this
- * file's helpers.
+ * Directory mame's hiscore plugin writes .hi files into (the one @arcadoolic/mhiex reads from,
+ * see HiscoreService.class.ts). Duplicated here rather than imported for the same
+ * @electron/remote reason as the rest of this file's helpers.
  */
 function getHiscorePath(iniPath: string): string {
     return join(iniPath, 'hiscore');
@@ -2194,7 +3009,7 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                             will recreate it on its next launch.</span>
                         </span>
                 </label>
-                <button type="submit">Delete the selection</button>
+                <button type="submit" class="button-danger">Delete the selection</button>
             </form>
         </section>
     `;
@@ -2385,6 +3200,9 @@ interface MameConfigSession {
     child: ChildProcess;
     dir: string;
     nonceCounter: number;
+    // The rom MAME was launched with - the per-game remap card is only valid for that one game
+    // (its fields dump, game-fields.txt, describes it and nothing else).
+    romName: string;
 }
 
 // Module-scope: at most one config session at a time, explicitly started/stopped by an admin from
@@ -2408,9 +3226,20 @@ function isMameConfigSessionAlive(): boolean {
  * seconds apart, could resolve to different indices. One long-lived session fixes that: every
  * capture during it shares the same, single device enumeration.
  */
-function startMameConfigSession(mameBinary: string, iniPath: string, romName: string): void {
+function startMameConfigSession(
+    mameBinary: string,
+    iniPath: string,
+    romName: string,
+    // The global remap card doesn't care which game the session runs (default.cfg is global), so
+    // it keeps whatever is already running; the per-game card needs that very game, and restarts
+    // the session on it if another one is running.
+    switchRom = false,
+): void {
     if (isMameConfigSessionAlive()) {
-        return;
+        if (!switchRom || mameConfigSession?.romName === romName) {
+            return;
+        }
+        stopMameConfigSession();
     }
 
     const dir = mkdtempSync(join(os.tmpdir(), 'maui-capture-'));
@@ -2425,6 +3254,11 @@ function startMameConfigSession(mameBinary: string, iniPath: string, romName: st
             '-skip_gameinfo',
             '-autoboot_delay', '0',
             '-autoboot_script', scriptPath,
+            // Without it MAME ignores the gamepad while its window isn't the focused one - which is
+            // always the case when the BO is driven from a browser on the very same machine (the
+            // click on "Capture a press" gives the focus to the browser). Checked with a virtual
+            // uinput pad against 0.289: no press seen unfocused without it, captured with it.
+            '-background_input',
             '-inipath', iniPath,
             '-homepath', iniPath,
         ],
@@ -2440,7 +3274,7 @@ function startMameConfigSession(mameBinary: string, iniPath: string, romName: st
         rmSync(dir, {recursive: true, force: true});
     });
 
-    mameConfigSession = {child, dir, nonceCounter: 0};
+    mameConfigSession = {child, dir, nonceCounter: 0, romName};
 }
 
 function stopMameConfigSession(): void {
@@ -2455,9 +3289,9 @@ function stopMameConfigSession(): void {
 /**
  * Arms the running config session for one press and blocks - poll/sleep, same spirit as the
  * execFileSync-based probes elsewhere in this file, just spread across a loop instead of one
- * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the admin needs time
- * to click back into MAME's window and press the right button - see capture-daemon.lua's comment
- * on focus). Returns the exact token MAME resolved the press to (e.g. "JOYCODE_1_BUTTON5"), null
+ * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the admin may need
+ * to walk over to the cabinet's pad; the session runs with -background_input, see
+ * startMameConfigSession(), so MAME doesn't need the focus). Returns the exact token MAME resolved the press to (e.g. "JOYCODE_1_BUTTON5"), null
  * if no session is running or nothing was captured in time.
  */
 function captureOnePress(): string | null {
@@ -2644,10 +3478,9 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             Launch MAME below (a real window, not in the background) and leave it open
             for the whole configuration - all captures then share the same startup, so the
             same gamepad indexes from start to finish.
-            <strong>2.</strong> Click "Capture a press" for the wanted command, then
-            <strong>give the MAME window focus</strong> (click inside it) and press the
-            button within 30 seconds - MAME only receives gamepad input while it is in the
-            foreground. <strong>3.</strong> Close MAME when done. The result is written
+            <strong>2.</strong> Click "Capture a press" for the wanted command, then press the
+            button on the gamepad within 30 seconds (MAME picks it up even when its window is
+            not the one in front). <strong>3.</strong> Close MAME when done. The result is written
             directly to <code>default.cfg</code> (valid for all games, unless a specific game
             has its own override). <strong>Currently</strong> reflects what is really saved
             in the file, not just the last capture.</p>
@@ -2666,6 +3499,184 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
                     </table>
                 </div>
             `).join('')}
+        </section>
+    `;
+}
+
+interface GameRemapState {
+    // Which game/field this state is about - like RemapState, only that field's row shows the
+    // flash message rather than every row at once.
+    romName: string;
+    fieldId?: string;
+    error?: string;
+    capturedToken?: string;
+    releasedFrom?: string[];
+}
+
+function getGameCfgPath(iniPath: string, romName: string): string {
+    return join(iniPath, 'cfg', `${romName}.cfg`);
+}
+
+/**
+ * The remappable fields of the game the config session is running, as dumped by
+ * capture-daemon.lua at startup. undefined while there's no session, or while MAME is still
+ * booting and hasn't written the dump yet.
+ */
+function readSessionGameFields(): GameField[] | undefined {
+    if (!isMameConfigSessionAlive() || !mameConfigSession) {
+        return undefined;
+    }
+    const fieldsPath = join(mameConfigSession.dir, 'game-fields.txt');
+    return existsSync(fieldsPath)
+        ? parseGameFields(readFileSync(fieldsPath, 'utf8')).sort(compareGameFields)
+        : undefined;
+}
+
+/**
+ * Blocks (same poll/sleep spirit as captureOnePress()) until the freshly launched session has
+ * dumped its game's fields, so the per-game card lists the commands right away instead of asking
+ * the admin to reload it. Gives up silently after `timeoutMs`: the card then says MAME is still
+ * starting.
+ */
+function waitForSessionGameFields(timeoutMs: number): void {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && isMameConfigSessionAlive() && !readSessionGameFields()) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+    }
+}
+
+function readGameCfgOverrides(cfgPath: string): Map<string, string> {
+    return existsSync(cfgPath) ? readGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')) : new Map<string, string>();
+}
+
+function setGameCfgOverride(cfgPath: string, romName: string, field: GameField, token: string): void {
+    const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : undefined;
+    mkdirSync(dirname(cfgPath), {recursive: true});
+    writeFileSync(cfgPath, setGameCfgInputSeq(existing, romName, field, token), 'utf8');
+}
+
+function removeGameCfgOverride(cfgPath: string, field: GameField): void {
+    if (!existsSync(cfgPath)) {
+        return;
+    }
+    const existing = readFileSync(cfgPath, 'utf8');
+    const updated = removeGameCfgInputSeq(existing, field);
+    if (updated !== existing) {
+        writeFileSync(cfgPath, updated, 'utf8');
+    }
+}
+
+/**
+ * Per-game input remap - same flow as the global card above (shared MAME config session,
+ * "Capture a press" per command), but written to cfg/<rom>.cfg instead of default.cfg, so it only
+ * applies to that game and wins over the global bindings. The commands listed are the ones the
+ * game really has (from the running MAME itself, see capture-daemon.lua's game-fields.txt), not a
+ * fixed list: a 2-button game shows 2 buttons.
+ */
+function renderGameRemapCard(
+    romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, iniPath: string, state?: GameRemapState,
+): string {
+    if (!romNames.length) {
+        return '';
+    }
+    const sessionRunning = isMameConfigSessionAlive();
+    const sessionRom = sessionRunning ? mameConfigSession?.romName : undefined;
+    const selectedRom = state?.romName ?? sessionRom
+        ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
+    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
+
+    const renderTable = (romName: string): string => {
+        const fields = readSessionGameFields();
+        if (!fields) {
+            return `<p class="info flash">MAME is still starting <strong>${escapeHtml(romLabels.get(romName) ?? romName)}</strong> -
+            click the button above again in a few seconds to show its commands.</p>`;
+        }
+        if (!fields.length) {
+            return '<p class="info flash">This game exposes no remappable command (directions, buttons, coin, start).</p>';
+        }
+        const overrides = readGameCfgOverrides(getGameCfgPath(iniPath, romName));
+        const players = Array.from(new Set(fields.map(field => portTypePlayer(field.portType))));
+
+        const renderRows = (playerFields: GameField[]): string => playerFields.map(field => {
+            const id = gameFieldId(field);
+            const rowState = state?.fieldId === id ? state : undefined;
+            const override = rowState?.capturedToken ?? overrides.get(id);
+            return `
+                <tr>
+                    <td>${escapeHtml(field.name || field.portType)}</td>
+                    <td><code>${escapeHtml(field.defaultSeq)}</code></td>
+                    <td>${override ? `<code>${escapeHtml(override)}</code>` : '<em>global</em>'}</td>
+                    <td class="center">
+                        <form method="post" action="/input-probe/game/remap">
+                            <input type="hidden" name="romName" value="${escapeHtml(romName)}">
+                            <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
+                            <button type="submit" name="action" value="capture">Capture a press</button>
+                            ${overrides.has(id) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
+                        </form>
+                    </td>
+                </tr>
+                ${rowState?.error ? `
+                    <tr><td colspan="4"><p class="error flash">${escapeHtml(rowState.error)}</p></td></tr>
+                ` : ''}
+                ${rowState?.releasedFrom?.length ? `
+                    <tr><td colspan="4"><p class="info flash">This button was also bound by default to
+                    ${escapeHtml(rowState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                    MAME - it was removed from there (globally) to avoid a double trigger.</p></td></tr>
+                ` : ''}
+            `;
+        }).join('');
+
+        return players.map(player => `
+            <h3>${player ? `Player ${player}` : 'Other'}</h3>
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr><th>Command</th><th>MAME default</th><th>This game</th><th class="center"></th></tr>
+                    </thead>
+                    <tbody>${renderRows(fields.filter(field => portTypePlayer(field.portType) === player))}</tbody>
+                </table>
+            </div>
+        `).join('');
+    };
+
+    return `
+        <section class="card">
+            <h2>Per-game input configuration</h2>
+            <p class="info">Changes which gamepad button does what in <strong>one game only</strong>
+            (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
+            configuration above.</p>
+            ${sessionRom && sessionRom === selectedRom ? `
+                <ol class="info">
+                    <li>Below, each row is a command of this game. <strong>This game</strong> reads
+                    <em>global</em> as long as you haven't changed it.</li>
+                    <li>Click <strong>Capture a press</strong> on the command to change: the page then
+                    waits up to 30 seconds.</li>
+                    <li><strong>Press the button</strong> (or push the direction) wanted on the gamepad -
+                    MAME picks it up even when its window is not the one in front. The result shows
+                    here and is saved at once.</li>
+                    <li><strong>Reset</strong> gives a command back its global binding. When you are
+                    done, use <strong>Close MAME</strong> (not the window's own close button, which
+                    would discard the changes).</li>
+                </ol>
+            ` : `
+                <ol class="info">
+                    <li>Search and pick the game below, then click <strong>Launch MAME with this
+                    game</strong>: the game opens in a MAME window.</li>
+                    <li>Its list of commands appears here, ready to be changed.</li>
+                </ol>
+            `}
+            <form method="post" action="/input-probe/game/start">
+                ${picker}
+                <button type="submit">${sessionRom === selectedRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
+            </form>
+            ${sessionRunning ? `
+                <p><strong>MAME:</strong> running (${escapeHtml(sessionRom ? (romLabels.get(sessionRom) ?? sessionRom) : '')})</p>
+                <form method="post" action="/input-probe/mame/stop">
+                    <button type="submit">Close MAME</button>
+                </form>
+            ` : ''}
+            ${state?.error && !state.fieldId ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${sessionRom && sessionRom === selectedRom ? renderTable(sessionRom) : ''}
         </section>
     `;
 }
@@ -2764,7 +3775,9 @@ function runInputProbe(mameBinary: string, iniPath: string, romName: string): In
  * <romname>.cfg overrides too, because that's exactly what MAME itself just resolved while
  * booting that rom - see input-probe.lua and runInputProbe() above.
  */
-function renderInputProbeCard(romNames: string[], state?: InputProbeState): string {
+function renderInputProbeCard(
+    romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, state?: InputProbeState,
+): string {
     if (!romNames.length) {
         return `
             <section class="card">
@@ -2776,11 +3789,7 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
         `;
     }
 
-    const options = romNames.map(romName => `
-        <option value="${escapeHtml(romName)}" ${state?.selectedRom === romName ? 'selected' : ''}>
-            ${escapeHtml(romName)}
-        </option>
-    `).join('');
+    const picker = renderRomPicker('probeRomName', romNames, romLabels, withCfg, state?.selectedRom);
 
     const renderPlayerTable = (player: 1 | 2): string => {
         const directionOrder = ['Up', 'Down', 'Left', 'Right'];
@@ -2847,8 +3856,7 @@ function renderInputProbeCard(romNames: string[], state?: InputProbeState): stri
             no. n; several bindings can be combined with OR/AND/NOT.</p>
             ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
             <form method="post" action="/input-probe">
-                <label for="probeRomName">Rom</label>
-                <select id="probeRomName" name="romName">${options}</select>
+                ${picker}
                 <button type="submit">Probe</button>
             </form>
             ${state?.result ? `${renderPlayerTable(1)}${renderPlayerTable(2)}` : ''}
@@ -2887,7 +3895,7 @@ function renderMauiDangerZoneCard(info?: string): string {
                     <input type="checkbox" name="deleteDatabase">
                     Delete the database (games, players, scores)
                 </label>
-                <button type="submit">Delete the selection</button>
+                <button type="submit" class="button-danger">Delete the selection</button>
             </form>
         </section>
     `;
@@ -2908,17 +3916,19 @@ function renderForm(
     repoInfo?: string,
     deviceProbeState?: DeviceProbeState,
     remapState?: RemapState,
+    gameRemapState?: GameRemapState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
-    // see /save, /launch, /mame-options/save, /reset, etc.) purely for the repo card's
+    // see /save, /launch, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
     // credential fields; a sync JSON read is cheap and every route already re-loads Config at
     // least once per request anyway.
     const config = new Config();
     config.load();
 
     const sections: Subsection[] = [
-        {id: 'config', label: 'Config', html: renderConfigCard(values, isAdmin, error, info)},
-        {id: 'infos', label: 'Infos', html: renderMameInfoCard(mameInfo, mameInfoMessage)},
+        // The MAME information (paths resolved from the binary) right under the form that sets it.
+        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)
+            + renderMameInfoCard(mameInfo, mameInfoMessage)},
     ];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
@@ -2931,16 +3941,22 @@ function renderForm(
         // Admin-only: every action on this tab spawns MAME on the machine hosting the BO (and the
         // remap card rewrites default.cfg) - their routes reject non-admins server-side too.
         if (isAdmin) {
+            const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+            const romLabels = config.mamePath && config.mameBinaryName
+                ? getRomLabels(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romNames)
+                : new Map<string, string>();
+            const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
             sections.push({
                 id: 'gamepads',
                 label: 'Gamepads',
-                html: renderInputProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], inputProbeState)
+                html: renderInputProbeCard(romNames, romLabels, withCfg, inputProbeState)
                     + renderRemapCard(
-                        mameInfo.romPath ? listRomNames(mameInfo.romPath) : [],
+                        romNames,
                         readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
                         remapState,
                     )
-                    + renderDeviceProbeCard(mameInfo.romPath ? listRomNames(mameInfo.romPath) : [], deviceProbeState),
+                    + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
+                    + renderDeviceProbeCard(romNames, deviceProbeState),
             });
         }
         sections.push({
@@ -2972,11 +3988,21 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'repository'
             : importError !== undefined ? 'import'
-                : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined) ? 'gamepads'
-                    : mameInfoMessage !== undefined ? 'infos'
-                        : (error !== undefined || info !== undefined) ? 'config'
-                            : undefined;
-    return renderSubtabbedPage('mame', sections, true, defaultSubtab);
+                : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined
+                    || gameRemapState !== undefined) ? 'gamepads'
+                    : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
+                        : undefined;
+    // Right of the subtabs: launching mame is the administrator's call (the route rejects anyone
+    // else too).
+    const launchButton = isAdmin ? `
+        <form method="post" action="/launch">
+            <button type="submit" class="launch-button">
+                <img src="/mame-logo.svg" alt="" class="launch-logo">
+                Launch mame
+            </button>
+        </form>
+    ` : '';
+    return renderSubtabbedPage('mame', sections, isAdmin ? 'admin' : 'user', defaultSubtab, launchButton);
 }
 
 const GITHUB_REPO = 'Arcadoolic/maui';
@@ -3193,7 +4219,7 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
         }
 
         writeLine(
-            'Update installed. Restart the Pi (or "sudo systemctl restart getty@tty1") '
+            'Update installed. Use "Restart the application" below (or restart the Pi) '
             + 'to apply the new version. The previous version stays available in '
             + '~/squashfs-root.old while the new one is being validated.',
         );
@@ -3207,6 +4233,29 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
     res.write('</ul></section>');
 }
 
+/**
+ * `<script>` for a page shown while the process serving it is about to go down and come back
+ * (a reset that closes the app, a kiosk session restart): it polls this same BO server until it
+ * answers again, then goes to `backHref` - rather than relying on the user to come back on their
+ * own once it is up.
+ */
+function renderRestartWaitScript(backHref: string): string {
+    // Only trusts a successful response *after* one has already failed: right after the page
+    // loads the old process may still be up for a moment (the exit/restart is delayed so this
+    // response can finish flushing), and an immediate success there would just bounce straight
+    // back with nothing actually restarted yet.
+    return `<script>${
+        'var backHref = ' + JSON.stringify(backHref) + ';'
+        + 'var sawDown = false;'
+        + 'var poll = function () {'
+        + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
+        + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
+        + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
+        + '};'
+        + 'setTimeout(poll, 1000);'
+    }</script>`;
+}
+
 function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, confirmLabel: string): string {
     return `
         <tr>
@@ -3214,7 +4263,7 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
             <td class="center">
                 ${release.assetUrl && !release.isCurrent ? `
-                    <form method="post" action="/maui/update/install"
+                    <form method="post" action="/maui/update/install" data-stream
                         onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
                         <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
                         <input type="hidden" name="assetUrl" value="${escapeHtml(release.assetUrl)}">
@@ -3244,6 +4293,14 @@ function renderUpdateCard(
         <section class="card">
             <h2>Update</h2>
             <p class="info">Currently installed version: <strong>${escapeHtml(updateInfo.currentVersion)}</strong></p>
+            ${updateInfo.capable ? `
+                <form method="post" action="/maui/update/restart"
+                    onsubmit="return confirm('Restart the application now? The screen goes blank for a moment, then it reopens on the version installed in ~/squashfs-root.')">
+                    <button type="submit">Restart the application</button>
+                </form>
+                <p class="info">Relaunches the cabinet session (needed after an installation to run the
+                new version). Any game in progress is closed.</p>
+            ` : ''}
             ${!updateInfo.capable ? `
                 <p class="error">Automatic installation is unavailable on this machine (expected:
                 Linux, not in development, AppImage extracted in ~/squashfs-root - see
@@ -3274,7 +4331,7 @@ function renderUpdateCard(
     `;
 }
 
-function renderMauiCard(config: Config, info?: string): string {
+function renderMauiCard(config: Config, isAdmin: boolean, info?: string): string {
     return `
         <section class="card">
             <h2>mame-awesome-ui</h2>
@@ -3284,9 +4341,19 @@ function renderMauiCard(config: Config, info?: string): string {
                     <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
                     Show fullscreen (unchecked = windowed)
                 </label>
+                ${isAdmin ? `
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
+                        Open DevTools on startup (development mode)
+                    </label>
+                ` : ''}
                 <label class="checkbox-row">
-                    <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
-                    Open DevTools on startup (development mode)
+                    <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
+                    Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="thumbsDownRemovesFavorite" ${config.thumbsDownRemovesFavorite ? 'checked' : ''}>
+                    A thumbs down removes the game from the favorites (restorable from the Games tab's removed favorites)
                 </label>
                 <button type="submit">Save</button>
             </form>
@@ -3406,7 +4473,7 @@ function renderMauiPage(
     updateInfo?: UpdateInfo,
 ): string {
     const sections: Subsection[] = [
-        {id: 'general', label: 'General', html: renderMauiCard(config, messages.mauiInfo)},
+        {id: 'general', label: 'General', html: renderMauiCard(config, isAdmin, messages.mauiInfo)},
         {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
     ];
     if (updateInfo) {
@@ -3433,7 +4500,7 @@ function renderMauiPage(
             : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                 : messages.mauiInfo !== undefined ? 'general'
                     : undefined;
-    return renderSubtabbedPage('maui', sections, true, defaultSubtab);
+    return renderSubtabbedPage('maui', sections, isAdmin ? 'admin' : 'user', defaultSubtab);
 }
 
 /**
@@ -3501,7 +4568,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
             <h2>Media download</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${summary ? renderDownloadSummary(summary) : ''}
-            <form method="post" action="/favorites/download-media">
+            <form method="post" action="/favorites/download-media" data-stream>
                 <p class="info">Downloads the missing marquees/flyers/logos from ScreenScraper for all
                 the favorites. Synchronous processing, may take several minutes depending on the number of favorites
                 (a delay is enforced between calls) - do not close this page during the download.</p>
@@ -3531,7 +4598,7 @@ function renderScreenScraperPage(
             label: 'Download',
             html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
         },
-    ], true, defaultSubtab);
+    ], 'admin', defaultSubtab);
 }
 
 // 16x16 stroke icons (drawn with currentColor, so the caller's color class tints them). Each
@@ -3548,19 +4615,70 @@ const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 16 16" fill="none" s
 
 /**
  * One asset (marquee/flyer/logo) presence icon: green when the file exists, red when it doesn't.
- * A missing one is also struck through, so the state doesn't rest on red vs. green alone.
+ * A missing one is also struck through, so the state doesn't rest on red vs. green alone. A
+ * present one carries its image URL (data-preview, served by GET /media/...), shown as a
+ * thumbnail following the mouse while hovered (see ASSET_PREVIEW_SCRIPT) - instead of the
+ * tooltip, which would cover it.
  */
-function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean): string {
+function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean, romName: string): string {
     const label = `${kind}: ${found ? 'present' : 'missing'}`;
-    return `<span class="asset-icon ${found ? 'badge-yes' : 'badge-no'}" title="${label}" role="img" aria-label="${label}">
+    const hover = found
+        ? `data-preview="/media/${kind.toLowerCase()}/${encodeURIComponent(romName)}.png"`
+        : `title="${label}"`;
+    return `<span class="asset-icon ${found ? 'badge-yes' : 'badge-no'}" ${hover} role="img" aria-label="${label}">
         <svg ${ICON_SVG_ATTRS}>${ASSET_ICON_PATHS[kind]}${found ? '' : '<path d="M2 14L14 2"/>'}</svg>
     </span>`;
 }
 
-function renderAssetIcons(row: FavoriteMediaStatus): string {
-    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee)}${
-        renderAssetIcon('Flyer', row.hasFlyer)}${renderAssetIcon('Logo', row.hasLogo)}</span>`;
+function renderAssetIcons(row: FavoriteMediaStatus & {romName: string}): string {
+    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee, row.romName)}${
+        renderAssetIcon('Flyer', row.hasFlyer, row.romName)}${renderAssetIcon('Logo', row.hasLogo, row.romName)}</span>`;
 }
+
+/**
+ * Asset thumbnail that follows the mouse over any [data-preview] icon (see renderAssetIcon()):
+ * one shared <img>, fixed-positioned next to the cursor and flipped to the other side of it near
+ * the viewport's right/bottom edges. pointer-events: none, so it never steals the hover itself.
+ */
+const ASSET_PREVIEW_SCRIPT = `<img class="asset-preview" id="assetPreview" alt="" hidden>
+            <script>(function () {
+                var preview = document.getElementById('assetPreview');
+                var OFFSET = 16;
+                var last = null;
+                function place(event) {
+                    last = event;
+                    var width = preview.offsetWidth;
+                    var height = preview.offsetHeight;
+                    var x = event.clientX + OFFSET;
+                    var y = event.clientY + OFFSET;
+                    if (x + width > window.innerWidth) { x = event.clientX - OFFSET - width; }
+                    if (y + height > window.innerHeight) { y = event.clientY - OFFSET - height; }
+                    preview.style.left = Math.max(0, x) + 'px';
+                    preview.style.top = Math.max(0, y) + 'px';
+                }
+                document.addEventListener('mouseover', function (event) {
+                    var icon = event.target.closest && event.target.closest('[data-preview]');
+                    if (!icon) { return; }
+                    preview.src = icon.dataset.preview;
+                    preview.hidden = false;
+                    place(event);
+                });
+                document.addEventListener('mousemove', function (event) {
+                    if (!preview.hidden) { place(event); }
+                });
+                document.addEventListener('mouseout', function (event) {
+                    var icon = event.target.closest && event.target.closest('[data-preview]');
+                    if (icon && !icon.contains(event.relatedTarget)) {
+                        preview.hidden = true;
+                        preview.removeAttribute('src');
+                    }
+                });
+                // The image is only sized once loaded: re-place it then, or it would overflow the
+                // edge it was meant to flip away from.
+                preview.addEventListener('load', function () {
+                    if (last && !preview.hidden) { place(last); }
+                });
+            })();</script>`;
 
 /** Icon-only submit button; `label` is its tooltip and accessible name. */
 function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' = 'danger'): string {
@@ -3573,6 +4691,11 @@ function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok'
 }
 
 const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
+const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
+    + '<path d="M5 7l2.6-4.5c1.2 0 1.9 1 1.6 2.1L8.8 6.5h3.4c1 0 1.7.9 1.5 1.9l-.9 4c-.2.7-.8 1.1-1.5 1.1H5"/>';
+const THUMB_DOWN_ICON_PATHS = `<g transform="rotate(180 8 8)">${THUMB_UP_ICON_PATHS}</g>`;
+// Eyes are zero-length round-capped lines: dots that keep the stroke-only look of the other icons.
+const NEUTRAL_ICON_PATHS = '<circle cx="8" cy="8" r="6"/><path d="M5.5 10h5"/><path d="M6 6.5v.01M10 6.5v.01"/>';
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
 const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
 const PAUSE_ICON_PATHS = '<path d="M5.5 3v10M10.5 3v10"/>';
@@ -3593,18 +4716,59 @@ function splitGameName(fullname: string): { name: string; extra: string | null }
     return {name, extra: groups.join(' ')};
 }
 
-function renderGameName(fullname: string): string {
-    const {name, extra} = splitGameName(fullname);
-    if (!extra) {
-        return escapeHtml(name);
-    }
-    return `${escapeHtml(name)} <span class="info-icon" title="${escapeHtml(extra)}">
+/**
+ * Gold cup shown next to a game's name when mhiex can extract its hiscores (the "Hiscores Only"
+ * carousel category, see hasHiscoreExtraction()).
+ */
+const HISCORE_CUP_ICON = `<span class="hiscore-icon" title="Hiscores can be extracted for this game (mhiex)">
+        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 2h8v4a4 4 0 0 1-8 0z" fill="currentColor"/>
+            <path d="M4 3.5H2.25v1A2.5 2.5 0 0 0 4.5 7M12 3.5h1.75v1A2.5 2.5 0 0 1 11.5 7" fill="none"
+                stroke="currentColor" stroke-width="1.25"/>
+            <path d="M8 10v2.5M5.5 14h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+    </span>`;
+
+/** The (i) icon, its text shown as a tooltip on hover. */
+function renderInfoIcon(text: string): string {
+    return `<span class="info-icon" title="${escapeHtml(text)}">
         <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
             <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>
             <circle cx="8" cy="4.5" r="1" fill="currentColor"/>
             <rect x="7.25" y="7" width="1.5" height="5" fill="currentColor"/>
         </svg>
     </span>`;
+}
+
+/**
+ * Category icon ahead of a game's name, the category's name as its tooltip. `undefined` (a list
+ * that shows no categories) renders nothing; `null` (a game genre.ini doesn't know) an empty slot
+ * of the same width, so the names of a list stay aligned.
+ */
+function renderGameCategoryIcon(category: GameCategory | null | undefined): string {
+    if (category === undefined) {
+        return '';
+    }
+    if (!category) {
+        return '<span class="game-category-icon" title="No category"></span>';
+    }
+    const iconKey = category.iconKey in CATEGORY_ICONS ? category.iconKey : '_default';
+    return `<img class="game-category-icon" src="/category-icons/${escapeHtml(iconKey)}.svg"
+        title="${escapeHtml(category.name)}" alt="${escapeHtml(category.name)}">`;
+}
+
+/**
+ * Game name cell content. Pass `romName` to also flag (gold cup) a game whose hiscores can be
+ * extracted, and `category` to lead with its category icon (see renderGameCategoryIcon()).
+ */
+function renderGameName(fullname: string, romName?: string, category?: GameCategory | null): string {
+    const {name, extra} = splitGameName(fullname);
+    // The name is cut with an ellipsis by CSS (see .game-name-cell) when too long for the column;
+    // its title carries the full text. The search matches data-search, not this markup.
+    const nameHtml = `<span class="game-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+    const infoIcon = extra ? renderInfoIcon(extra) : '';
+    const hiscoreIcon = romName && hasHiscoreExtraction(romName) ? HISCORE_CUP_ICON : '';
+    return `<span class="game-name-cell">${renderGameCategoryIcon(category)}${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
 }
 
 function renderDownloadSummary(summary: DownloadSummary): string {
@@ -3627,19 +4791,137 @@ function renderDownloadSummary(summary: DownloadSummary): string {
 }
 
 /**
- * Bios column content: the parent romset (biosName, e.g. "pacman" for a puckman clone) and any
- * device romsets (deviceRoms, e.g. "ym2413") are distinct dependencies a favorite can be missing
- * independently of each other, so both show up here, comma-separated.
+ * RomName cell content: the romName, followed - same as the name's region/revision info - by an
+ * (i) whose tooltip lists its dependencies, instead of a whole column for them. The parent romset
+ * (biosName, e.g. "pacman" for a puckman clone) and any device romsets (deviceRoms, e.g. "ym2413")
+ * are distinct dependencies a favorite can be missing independently of each other, so both are
+ * listed, each on its own line.
  */
-function renderBiosCell(row: FavoriteRow): string {
-    if (!row.cached) {
-        return '<em>-</em>';
-    }
-    const parts = [...(row.biosName ? [row.biosName] : []), ...row.deviceRoms];
-    return parts.length ? escapeHtml(parts.join(', ')) : '<em>-</em>';
+function renderRomNameCell(row: FavoriteRow): string {
+    const lines = [
+        ...(row.cached && row.biosName ? [`Bios: ${row.biosName}`] : []),
+        ...(row.cached && row.deviceRoms.length ? [`Devices: ${row.deviceRoms.join(', ')}`] : []),
+    ];
+    return `<span class="romname-cell"><span class="game-name-text" title="${escapeHtml(row.romName)}">${escapeHtml(row.romName)}</span>${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
 }
 
-function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
+/**
+ * What the favorites search matches a row against: the three searchable columns - rom name
+ * (romName), name (the full description, including the parenthesized region/revision info that
+ * the table only shows as a tooltip) and bios / devices (biosName and deviceRoms, the rom name's
+ * own tooltip, see renderRomNameCell()). Not-yet-resolved favorites (no cache entry) only have their romName.
+ */
+function getFavoriteSearchText(row: FavoriteRow): string {
+    if (!row.cached) {
+        return row.romName;
+    }
+    return [row.romName, row.fullname, ...(row.biosName ? [row.biosName] : []), ...row.deviceRoms].join(' ');
+}
+
+/**
+ * "Update favorites" modal: takes over the form's submit (preventDefault, so neither the page
+ * tail's AJAX handler nor a navigation runs), POSTs with Accept: application/x-ndjson and reads
+ * the response as a stream (see POST /favorites/refresh), logging each favorite as it is
+ * resolved. Closable only once finished, with an explicit end message; closing reloads the page
+ * so the list shows the updated names.
+ */
+const FAVORITES_REFRESH_MODAL = `
+            <dialog class="modal" id="favoritesRefreshModal" aria-labelledby="favoritesRefreshTitle">
+                <div class="modal-header">
+                    <h3 id="favoritesRefreshTitle">Updating favorites</h3>
+                    <button type="button" class="modal-close" id="favoritesRefreshClose" aria-label="Close" disabled>×</button>
+                </div>
+                <progress id="favoritesRefreshProgress" max="1" value="0"></progress>
+                <p class="info" id="favoritesRefreshStatus" aria-live="polite">Starting…</p>
+                <ul class="progress-log" id="favoritesRefreshLog"></ul>
+            </dialog>
+            <script>(function () {
+                var form = document.getElementById('favoritesRefreshForm');
+                var modal = document.getElementById('favoritesRefreshModal');
+                var close = document.getElementById('favoritesRefreshClose');
+                var progress = document.getElementById('favoritesRefreshProgress');
+                var status = document.getElementById('favoritesRefreshStatus');
+                var log = document.getElementById('favoritesRefreshLog');
+                var running = false;
+                var total = 0;
+
+                function finish(message, failed) {
+                    running = false;
+                    status.textContent = message;
+                    status.className = failed ? 'error' : 'info modal-done';
+                    close.disabled = false;
+                    close.focus();
+                }
+                function handle(event) {
+                    if (event.type === 'start') {
+                        total = event.total;
+                        progress.max = Math.max(1, total);
+                        status.textContent = '0 / ' + total;
+                    } else if (event.type === 'row') {
+                        var item = document.createElement('li');
+                        item.textContent = event.romName + ' : ' + event.fullname;
+                        log.appendChild(item);
+                        log.scrollTop = log.scrollHeight;
+                        progress.value = event.index;
+                        status.textContent = event.index + ' / ' + total;
+                    } else if (event.type === 'done') {
+                        progress.value = progress.max;
+                        finish('✓ Update complete: ' + event.total + ' favorite(s) updated. You can close this window.', false);
+                    } else if (event.type === 'error') {
+                        finish(event.message, true);
+                    }
+                }
+
+                form.addEventListener('submit', function (event) {
+                    event.preventDefault();
+                    if (running) { return; }
+                    running = true;
+                    log.textContent = '';
+                    progress.value = 0;
+                    status.className = 'info';
+                    status.textContent = 'Starting…';
+                    close.disabled = true;
+                    modal.showModal();
+                    fetch(form.action, {method: 'POST', headers: {'Accept': 'application/x-ndjson'}})
+                        .then(function (response) {
+                            var reader = response.body.getReader();
+                            var decoder = new TextDecoder();
+                            var buffer = '';
+                            function read() {
+                                return reader.read().then(function (chunk) {
+                                    buffer += decoder.decode(chunk.value || new Uint8Array(), {stream: !chunk.done});
+                                    var lines = buffer.split('\\n');
+                                    buffer = lines.pop();
+                                    lines.filter(Boolean).forEach(function (line) { handle(JSON.parse(line)); });
+                                    if (chunk.done) {
+                                        if (running) { finish('The update ended without confirmation - check the list.', true); }
+                                        return;
+                                    }
+                                    return read();
+                                });
+                            }
+                            return read();
+                        })
+                        .catch(function () {
+                            finish('Connection lost during the update - it may still have completed, reload to check.', true);
+                        });
+                });
+                // Esc would close the dialog mid-update: only allowed once it is finished.
+                modal.addEventListener('cancel', function (event) {
+                    if (running) { event.preventDefault(); }
+                });
+                modal.addEventListener('close', function () { location.reload(); });
+                close.addEventListener('click', function () { modal.close(); });
+            })();</script>`;
+
+const FAVORITES_PAGE_SIZES = [10, 30, 50, 100];
+const FAVORITES_DEFAULT_PAGE_SIZE = 30;
+
+/**
+ * The favorites list (searchable, filterable by category, paginated client-side), followed by the
+ * removed favorites in a card of their own.
+ */
+function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
     const flash = `
         ${favoritesInfo.notice ? `<p class="info flash">${escapeHtml(favoritesInfo.notice)}</p>` : ''}
         ${favoritesInfo.warning ? `<p class="error flash">${escapeHtml(favoritesInfo.warning)}</p>` : ''}
@@ -3655,12 +4937,23 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
         `;
     }
 
-    const rows = favoritesInfo.rows.map(row => `
-        <tr>
-            <td>${escapeHtml(row.romName)}</td>
-            <td>${row.cached ? renderGameName(row.fullname) : `<em>${escapeHtml(row.romName)}</em>`}</td>
-            <td>${renderBiosCell(row)}</td>
+    // favorites.ini keeps mame's own order (new favorites are appended at the end), so the list is
+    // sorted here, by name, for both the tab and the "Update favorites" result. A favorite not
+    // resolved yet has no name, its romName stands in until the next update.
+    const sortedRows = [...favoritesInfo.rows].sort((a, b) => a.fullname.localeCompare(b.fullname));
+    // undefined: no category known at all (database unreadable) - no icons, no category filter.
+    const categoryOf = (row: FavoriteRow): GameCategory | null | undefined => favoritesInfo.stats
+        ? favoritesInfo.stats.get(row.romName)?.category ?? null
+        : undefined;
+    const rows = sortedRows.map(row => `
+        <tr data-search="${escapeHtml(getFavoriteSearchText(row))}" data-category="${escapeHtml(categoryOf(row)?.name ?? '')}">
+            <td>${row.cached
+                ? renderGameName(row.fullname, row.romName, categoryOf(row))
+                : `<em>${escapeHtml(row.romName)}</em>`}</td>
+            <td>${renderRomNameCell(row)}</td>
             <td class="center">${renderAssetIcons(row)}</td>
+            <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
+            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
             <td class="center">
                 <form method="post" action="/favorites/delete">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
@@ -3669,6 +4962,90 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
             </td>
         </tr>
     `).join('');
+
+    // Favorites removed from this list (removed-favorites.json), in their own table right after
+    // it, newest first. A rom put back by another route (or by mame's own menu) since it was
+    // removed isn't "removed" anymore - don't offer to restore what's already there.
+    const current = new Set(favoritesInfo.rows.map(row => row.romName));
+    const removed = readRemovedFavorites()
+        .filter(item => !current.has(item.romName))
+        .map(item => ({...item, fullname: item.cache?.fullname ?? item.fullname}))
+        .sort((a, b) => b.removedAt.localeCompare(a.removedAt));
+    const removedRows = removed.map(item => {
+        const row: FavoriteRow = {
+            romName: item.romName, fullname: item.fullname, biosName: item.cache?.biosName ?? null,
+            deviceRoms: item.cache?.deviceRoms ?? [], cached: !!item.cache,
+            hasMarquee: false, hasFlyer: false, hasLogo: false,
+        };
+        const removedOn = new Date(item.removedAt).toLocaleString('en-GB', {dateStyle: 'short', timeStyle: 'short'});
+        return `
+        <tr>
+            <td>${renderGameName(row.fullname, row.romName, categoryOf(row))}</td>
+            <td>${renderRomNameCell(row)}</td>
+            <td>${escapeHtml(removedOn)}</td>
+            <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
+            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
+            <td class="center">
+                <form method="post" action="/favorites/restore">
+                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
+                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
+                </form>
+            </td>
+        </tr>`;
+    }).join('');
+    const removedCard = `
+        <section class="card">
+            <h2>Removed favorites (${removed.length})</h2>
+            ${removed.length ? `
+            <p class="info">"Restore" puts a removed favorite back into <code>favorites.ini</code> in
+            alphabetical order, exactly as MAME had written it. Same precaution as for removal: not
+            while a MAME game is open.</p>
+            <div class="table-wrap">
+                <table class="favorites-table fixed-columns">
+                    <colgroup>
+                        <col>
+                        <col class="col-romname">
+                        <col class="col-date">
+                        <col class="col-plays">
+                        <col class="col-vote">
+                        <col class="col-action">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>RomName</th>
+                            <th>Removed on</th>
+                            <th class="center" title="Times the game was launched">Plays</th>
+                            <th class="center">Vote</th>
+                            <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${removedRows}</tbody>
+                </table>
+            </div>` : '<p class="info">No removed favorites.</p>'}
+        </section>
+    `;
+
+    // Category filter options: every category a favorite is in, with its favorite count, then the
+    // favorites genre.ini doesn't know. Their value is data-category above ('' for none).
+    const categoryCounts = new Map<string, number>();
+    let uncategorizedCount = 0;
+    for (const row of sortedRows) {
+        const name = categoryOf(row)?.name;
+        if (name) {
+            categoryCounts.set(name, (categoryCounts.get(name) ?? 0) + 1);
+        } else {
+            uncategorizedCount++;
+        }
+    }
+    const categoryFilter = favoritesInfo.stats ? `
+        <select id="favoritesCategory" aria-label="Filter the favorites by category">
+            <option value="*">All categories (${sortedRows.length})</option>
+            ${[...categoryCounts].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) =>
+                `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${count})</option>`).join('')}
+            ${uncategorizedCount ? `<option value="">No category (${uncategorizedCount})</option>` : ''}
+        </select>
+    ` : '';
 
     const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
     const cacheStatus = favoritesInfo.cacheUpdatedAt
@@ -3685,94 +5062,197 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo): string {
                 <span>${cacheStatus}${unresolvedCount
                     ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
                     : ''}</span>
-                <form method="post" action="/favorites/refresh">
+                <form method="post" action="/favorites/refresh" data-stream id="favoritesRefreshForm">
                     <button type="submit">Update favorites</button>
                 </form>
             </div>
+            ${FAVORITES_REFRESH_MODAL}
+            <div class="table-search">
+                <div class="table-search-controls">
+                    <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
+                        autocomplete="off" aria-label="Search the favorites">
+                    ${categoryFilter}
+                </div>
+                <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
+            </div>
             <div class="table-wrap">
-                <table class="favorites-table">
+                <table class="favorites-table fixed-columns" id="favoritesTable">
+                    <colgroup>
+                        <col>
+                        <col class="col-romname">
+                        <col class="col-assets">
+                        <col class="col-plays">
+                        <col class="col-vote">
+                        <col class="col-action">
+                    </colgroup>
                     <thead>
                         <tr>
-                            <th>Shortname</th>
                             <th>Name</th>
-                            <th>Bios / Devices</th>
+                            <th>RomName</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
+                            <th class="center" title="Times the game was launched">Plays</th>
+                            <th class="center">Vote</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
                     <tbody>${rows}</tbody>
                 </table>
             </div>
+            <div class="table-pager" id="favoritesPager">
+                <label for="favoritesPageSize">Per page</label>
+                <select id="favoritesPageSize">
+                    ${FAVORITES_PAGE_SIZES.map(size => `<option value="${size}"${size === FAVORITES_DEFAULT_PAGE_SIZE ? ' selected' : ''}>${size}</option>`).join('')}
+                </select>
+                <button type="button" id="favoritesPrevPage" aria-label="Previous page">‹</button>
+                <span id="favoritesPageInfo" aria-live="polite"></span>
+                <button type="button" id="favoritesNextPage" aria-label="Next page">›</button>
+            </div>
+            <script>(function () {
+                // Search: every term must appear (accents and case ignored) in a row's rom name,
+                // name or bios / devices (its data-search, see getFavoriteSearchText()), and the row
+                // must be in the chosen category (its data-category; '*' for all). The matches are
+                // then paginated. Rows are only hidden, so the remove buttons keep working on what
+                // is shown.
+                var search = document.getElementById('favoritesSearch');
+                var category = document.getElementById('favoritesCategory');
+                var count = document.getElementById('favoritesSearchCount');
+                var pageSize = document.getElementById('favoritesPageSize');
+                var prev = document.getElementById('favoritesPrevPage');
+                var next = document.getElementById('favoritesNextPage');
+                var pageInfo = document.getElementById('favoritesPageInfo');
+                var page = 0;
+                // A form posted from the list (vote, remove) re-renders the whole page: its search,
+                // category and page are stashed on submit and put back once, on that re-render only.
+                var VIEW_KEY = 'bo.favorites.view';
+                document.getElementById('favoritesTable').addEventListener('submit', function () {
+                    try {
+                        sessionStorage.setItem(VIEW_KEY, JSON.stringify({
+                            search: search.value, category: category ? category.value : '*', page: page,
+                        }));
+                    } catch (error) { /* storage blocked: the list just starts over */ }
+                });
+                // The chosen page size is kept for this browser only (a convenience, not state).
+                try {
+                    var storedSize = localStorage.getItem('bo.favorites.pageSize');
+                    if (storedSize && pageSize.querySelector('option[value="' + storedSize + '"]')) {
+                        pageSize.value = storedSize;
+                    }
+                } catch (error) { /* storage blocked: default page size */ }
+                var rows = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable tbody tr'));
+                function fold(text) {
+                    return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+                }
+                function render() {
+                    var terms = fold(search.value).split(/\\s+/).filter(Boolean);
+                    var chosen = category ? category.value : '*';
+                    var matches = rows.filter(function (row) {
+                        var haystack = fold(row.dataset.search || '');
+                        return terms.every(function (term) { return haystack.indexOf(term) >= 0; })
+                            && (chosen === '*' || row.dataset.category === chosen);
+                    });
+                    var size = Number(pageSize.value);
+                    var pages = Math.max(1, Math.ceil(matches.length / size));
+                    page = Math.min(page, pages - 1);
+                    rows.forEach(function (row) { row.hidden = true; });
+                    matches.slice(page * size, (page + 1) * size).forEach(function (row) { row.hidden = false; });
+                    pageInfo.textContent = 'Page ' + (page + 1) + ' / ' + pages;
+                    prev.disabled = page === 0;
+                    next.disabled = page >= pages - 1;
+                    count.hidden = terms.length === 0 && chosen === '*';
+                    count.textContent = matches.length
+                        ? matches.length + ' favorite(s) found out of ' + rows.length + '.'
+                        : 'No favorite matches this search.';
+                }
+                // A new search, category or page size starts over from the first page.
+                function applySearch() {
+                    page = 0;
+                    render();
+                }
+                search.addEventListener('input', applySearch);
+                if (category) { category.addEventListener('change', applySearch); }
+                pageSize.addEventListener('change', function () {
+                    try { localStorage.setItem('bo.favorites.pageSize', pageSize.value); } catch (error) { /* blocked */ }
+                    applySearch();
+                });
+                prev.addEventListener('click', function () { page--; render(); });
+                next.addEventListener('click', function () { page++; render(); });
+                try {
+                    var view = JSON.parse(sessionStorage.getItem(VIEW_KEY) || 'null');
+                    sessionStorage.removeItem(VIEW_KEY);
+                    if (view) {
+                        search.value = view.search || '';
+                        if (category && category.querySelector('option[value="' + CSS.escape(view.category) + '"]')) {
+                            category.value = view.category;
+                        }
+                        page = Number(view.page) || 0;
+                    }
+                } catch (error) { /* storage blocked or unreadable: the list just starts over */ }
+                render();
+                search.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') { event.preventDefault(); }
+                });
+            })();</script>
             <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
-            roms and artwork stay on disk). The change shows up on the cabinet the next time MAUI
+            roms and artwork stay on disk); it moves to the removed favorites below, from which it
+            can be restored. The change shows up on the cabinet the next time MAUI
             starts. Do not do it while a MAME game is open: MAME rewrites this file when it
             closes.</p>
+            ${ASSET_PREVIEW_SCRIPT}
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
-            present, red (struck through) when it is missing. To download the missing artwork
-            from ScreenScraper, use the button in the
-            <a href="/screenscraper">ScreenScraper</a> tab.</p>
+            present (hover it to preview the image), red (struck through) when it is missing.${viewer === 'admin'
+                ? ' To download the missing artwork from ScreenScraper, use the button in the '
+                    + '<a href="/screenscraper">ScreenScraper</a> tab.'
+                : ''}</p>
+            <p class="info">Vote: the one the players give on the cabinet once a game is quit (thumbs
+            up, neutral or thumbs down), changeable here. Whether a thumbs down also removes the
+            game from the favorites is set in the <a href="/maui">MAUI</a> tab.</p>
         </section>
+        ${removedCard}
     `;
 }
 
-interface RemovedFavoritesFlash {
+interface FavoritesFlash {
     notice?: string;
     warning?: string;
 }
 
-function renderRemovedFavoritesCard(removed: RemovedFavorite[], flash: RemovedFavoritesFlash = {}): string {
-    const messages = `
-        ${flash.notice ? `<p class="info flash">${escapeHtml(flash.notice)}</p>` : ''}
-        ${flash.warning ? `<p class="error flash">${escapeHtml(flash.warning)}</p>` : ''}
-    `;
-    if (!removed.length) {
-        return `
-            <section class="card">
-                <h2>Removed favorites</h2>
-                ${messages}
-                <p class="info">No removed favorites yet.</p>
-            </section>
-        `;
-    }
+const VOTE_LABELS: Record<Vote, string> = {
+    [VOTE_UP]: 'Thumbs up',
+    [VOTE_NEUTRAL]: 'Neutral',
+    [VOTE_DOWN]: 'Thumbs down',
+};
 
-    const rows = removed.map(item => `
-        <tr>
-            <td>${escapeHtml(item.romName)}</td>
-            <td>${renderGameName(item.fullname)}</td>
-            <td>${escapeHtml(new Date(item.removedAt).toLocaleString('en-GB', {
-                dateStyle: 'short', timeStyle: 'short',
-            }))}</td>
-            <td class="center">
-                <form method="post" action="/favorites/restore">
-                    <input type="hidden" name="romName" value="${escapeHtml(item.romName)}">
-                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
-                </form>
-            </td>
-        </tr>
+const VOTE_ICONS: Record<Vote, {cssClass: string, paths: string}> = {
+    [VOTE_UP]: {cssClass: 'up', paths: THUMB_UP_ICON_PATHS},
+    [VOTE_NEUTRAL]: {cssClass: 'neutral', paths: NEUTRAL_ICON_PATHS},
+    [VOTE_DOWN]: {cssClass: 'down', paths: THUMB_DOWN_ICON_PATHS},
+};
+
+/**
+ * A game's three vote buttons (thumbs up, neutral, thumbs down), the current one lit up, posting
+ * to /votes/set.
+ */
+function renderVoteForm(romName: string, current: Vote): string {
+    const buttons = ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
+        <button type="submit" name="vote" value="${vote}" class="icon-button ${VOTE_ICONS[vote].cssClass}"
+            aria-pressed="${current === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
+            <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[vote].paths}</svg>
+        </button>
     `).join('');
-
     return `
-        <section class="card">
-            <h2>Removed favorites (${removed.length})</h2>
-            ${messages}
-            <p class="info">Favorites removed from the Games tab stay here: "Restore" puts them
-            back into <code>favorites.ini</code> in alphabetical order, exactly as MAME had written them.
-            Same precaution as for removal: not while a MAME game is open.</p>
-            <div class="table-wrap">
-                <table class="favorites-table">
-                    <thead>
-                        <tr>
-                            <th>Shortname</th>
-                            <th>Name</th>
-                            <th>Removed on</th>
-                            <th class="center"></th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>
-        </section>
+        <form method="post" action="/votes/set" class="vote-buttons">
+            <input type="hidden" name="romName" value="${escapeHtml(romName)}">
+            ${buttons}
+        </form>
     `;
+}
+
+/**
+ * Vote cell of the favorites and removed favorites lists: the vote buttons, or '-' for a game the
+ * database doesn't know (or no database at all) - /votes/set would have nothing to update.
+ */
+function renderVoteCell(stats: GameStats | undefined): string {
+    return stats ? renderVoteForm(stats.romName, stats.vote) : '<em>-</em>';
 }
 
 // The Home carousel's category icons, embedded as text in this bundle (the BO has no access to
@@ -3784,140 +5264,9 @@ const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
         .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
 );
 
-interface BoCategoryGame {
-    romName: string;
-    fullname: string;
-    year: number | null;
-    studio: string;
-    // Game.players: from Multiplayer.ini (via player_alt/player_sim), "1 player" when it says nothing.
-    players: string;
-}
-
-interface BoCategory {
-    name: string;
-    iconKey: string;
-    games: BoCategoryGame[];
-}
-
-/**
- * The categories the Home carousel shows (TTL twins merged, same as mergeTtlCategories(); the
- * dynamic "Hiscores Only" first when some game supports hiscores, like Home.vue), each with its
- * games, plus a last "No category" entry for the games genre.ini doesn't know. Read from the
- * database like the carousel does, so it is what the cabinet displays, not what genre.ini says.
- */
-async function loadBoCategories(): Promise<BoCategory[]> {
-    const categories = await Category.findAll({order: ['name'], include: [{model: Game, required: true}]});
-    const toGame = (game: Game): BoCategoryGame => ({
-        romName: game.romName,
-        fullname: game.fullname || game.romName,
-        year: game.year || null,
-        studio: game.studio,
-        players: game.players,
-    });
-    const byName = (a: {fullname: string}, b: {fullname: string}) => a.fullname.localeCompare(b.fullname);
-
-    const result: BoCategory[] = mergeTtlCategories(categories).map(entry => {
-        const ids = isMergedCategory(entry) ? entry.categoryIds : [entry.id_category];
-        const games = categories.filter(category => ids.includes(category.id_category))
-            .flatMap(category => category.games.map(toGame)).sort(byName);
-        return {name: entry.name, iconKey: getCategoryIconKey(entry.name), games};
-    });
-
-    const hiscoreGames = await Game.findAll({where: {hi: true}});
-    if (hiscoreGames.length) {
-        result.unshift({
-            name: HISCORES_ONLY_CATEGORY.name,
-            iconKey: getCategoryIconKey(HISCORES_ONLY_CATEGORY.name),
-            games: hiscoreGames.map(toGame).sort(byName),
-        });
-    }
-
-    const uncategorized = (await Game.findAll()).filter(game => game.id_category == null);
-    if (uncategorized.length) {
-        result.push({name: 'No category', iconKey: '_default', games: uncategorized.map(toGame).sort(byName)});
-    }
-    return result;
-}
-
-/**
- * "Categories" subtab of the Games tab: one row per carousel category with its icon and game
- * count, unfolding into the list of its games. '' when the database can't be read (not migrated
- * yet - same race as /login), which hides the subtab rather than breaking the whole Games tab.
- */
-async function renderCategoriesCard(): Promise<string> {
-    let categories: BoCategory[];
-    try {
-        categories = await loadBoCategories();
-    } catch {
-        return '';
-    }
-    if (!categories.length) {
-        return `
-            <section class="card">
-                <h2>Categories</h2>
-                <p class="info">No game in the database yet.</p>
-            </section>
-        `;
-    }
-    const rows = categories.map(category => {
-        const iconKey = category.iconKey in CATEGORY_ICONS ? category.iconKey : '_default';
-        const games = category.games.map(game => {
-            const meta = [game.year, game.studio, game.players].filter(Boolean).map(part => escapeHtml(String(part)));
-            return `
-            <li>${escapeHtml(decodeXmlEntities(game.fullname))}
-                <span class="checkbox-row-detail">${escapeHtml(game.romName)}</span>
-                <span class="category-game-meta">${meta.join(' · ')}</span></li>
-        `;
-        }).join('');
-        return `
-            <details class="category-row">
-                <summary>
-                    <img class="category-icon" src="/category-icons/${escapeHtml(iconKey)}.svg" alt="">
-                    <span class="category-name">${escapeHtml(category.name)}</span>
-                    <span class="category-count">${category.games.length} game${category.games.length === 1 ? '' : 's'}</span>
-                </summary>
-                <ul class="category-games">${games}</ul>
-            </details>
-        `;
-    }).join('');
-    return `
-        <section class="card">
-            <h2>Categories (${categories.length})</h2>
-            <p class="info">Grouped like the cabinet's carousel: mame's "TTL *" twins are merged into
-            their plain category, and "Hiscores Only" lists the games whose scores can be extracted
-            (they also belong to their own category). Each game shows its year, studio and player
-            count (from Multiplayer.ini).</p>
-            ${rows}
-        </section>
-    `;
-}
-
-/**
- * Games tab: current favorites, and the ones removed from it (restorable). Both are always
- * present so a removed favorite stays reachable even when favorites.ini ends up empty (in which
- * case the first card is just the "no favorites" message).
- *
- * removedFlash/defaultSection: which of the two a response is "about" (see renderSubtabbedPage()).
- * A flash on favoritesInfo belongs to the first one, removedFlash to the second. categoriesHtml
- * (see renderCategoriesCard()) is the "Categories" subtab, absent when empty.
- */
-function renderFavoritesPage(
-    favoritesInfo: FavoritesInfo, removedFlash?: RemovedFavoritesFlash,
-    defaultSection: 'list' | 'removed' = 'list', categoriesHtml = '',
-): string {
-    // A rom put back by another route (or by mame's own menu) since it was removed isn't
-    // "removed" anymore - don't offer to restore what's already there.
-    const {favoritesPath} = getMameLocations(getMameHomePath());
-    const current = favoritesPath ? getFavoriteRomNames(favoritesPath) : [];
-    const removed = readRemovedFavorites()
-        .filter(item => !current.includes(item.romName))
-        .sort((a, b) => b.removedAt.localeCompare(a.removedAt));
-
-    return renderSubtabbedPage('favorites', [
-        {id: 'list', label: 'Favorites', html: renderFavoritesCard(favoritesInfo)},
-        ...(categoriesHtml ? [{id: 'categories', label: 'Categories', html: categoriesHtml}] : []),
-        {id: 'removed', label: `Removed (${removed.length})`, html: renderRemovedFavoritesCard(removed, removedFlash)},
-    ], true, defaultSection);
+/** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
+function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
+    return renderPage(renderFavoritesCard(favoritesInfo, viewer), 'favorites', viewer);
 }
 
 /**
@@ -3959,7 +5308,7 @@ function renderImportCard(error?: string): string {
                 .map(d => escapeHtml(d.zipFolder)).join(', ')} folders (copied as-is into the
             current mame configuration) - in that case, no manifest.json is needed.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <form method="post" action="/import" enctype="multipart/form-data">
+            <form method="post" action="/import" enctype="multipart/form-data" data-stream>
                 <label for="pack">ZIP file</label>
                 <input type="file" id="pack" name="pack" accept=".zip" required>
                 <button type="submit">Import</button>
@@ -4135,7 +5484,7 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
 }
 
 /**
- * `<pack>.manifest.json` next to a pack's zip on the repository (see docs/STARTER-PACK-REPO.md):
+ * `<pack>.manifest.json` next to a pack's zip on the repository:
  * the list of its games, which is all that is needed to tell what is already installed without
  * downloading the pack. null on any failure (missing file, timeout, invalid JSON): the pack is
  * then simply listed without that comparison instead of failing the whole browse.
@@ -4201,7 +5550,9 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
         const {mark, title} = PACK_GAME_MARKS[game.status];
         const meta = [game.year, game.manufacturer && decodeXmlEntities(game.manufacturer), game.categoryName]
             .filter((part): part is string => !!part).map(escapeHtml).join(' · ');
-        const label = `${escapeHtml(decodeXmlEntities(game.fullname))}
+        const hasHi = hasHiscoreExtraction(game.romName);
+        const label = `${escapeHtml(decodeXmlEntities(game.fullname))}${hasHi
+            ? ' <span class="hi-badge" title="Hiscores can be extracted for this game (mhiex)">HI</span>' : ''}
             ${meta ? `<span class="checkbox-row-detail">${meta}</span>` : ''}`;
         const classes = `pack-game pack-game-${game.status}${game.status === 'new' && isUpdate ? ' pack-game-highlight' : ''}`;
         // What the search box looks in (folded and matched in the page, see renderRepoPackPicker()).
@@ -4211,14 +5562,14 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
         ].filter(Boolean).join(' '));
         if (game.status === 'installed' || fullyOwned) {
             return `
-                <li class="${classes}" data-search="${search}">
+                <li class="${classes}" data-search="${search}" data-hi="${hasHi ? '1' : '0'}">
                     <span class="pack-game-mark" title="${title}">${mark}</span>
                     <span>${label}</span>
                 </li>
             `;
         }
         return `
-            <li class="${classes}" data-search="${search}">
+            <li class="${classes}" data-search="${search}" data-hi="${hasHi ? '1' : '0'}">
                 <label class="pack-game-label">
                     <input type="checkbox" class="game-checkbox" name="game"
                         value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
@@ -4274,13 +5625,17 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
         <div class="pack-search">
             <input type="search" id="packSearch" placeholder="Search a game, studio or category…"
                 autocomplete="off" aria-label="Search the games of the packs">
+            <label class="checkbox-row">
+                <input type="checkbox" id="packHiOnly">
+                <span>Only games with hiscores extraction (<span class="hi-badge">HI</span>)</span>
+            </label>
             <p class="info pack-search-count" id="packSearchCount" hidden></p>
         </div>
-        <form method="post" action="/import/from-url"
+        <form method="post" action="/import/from-url" data-stream
             onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
-            A game listed by several packs is fetched once. While a search is active, the pack boxes and
-            "Select all" only act on the games shown; ticked games stay ticked when they are hidden.</p>
+            A game listed by several packs is fetched once. While a search or the hiscores filter is active,
+            the pack boxes and "Select all" only act on the games shown; ticked games stay ticked when they are hidden.</p>
             ${rows}
             <label class="checkbox-row">
                 <input type="checkbox" id="packSelectAll">
@@ -4299,6 +5654,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             var zoomNote = disk && disk.querySelector('.disk-zoom-note');
             var search = document.getElementById('packSearch');
             var searchCount = document.getElementById('packSearchCount');
+            var hiOnly = document.getElementById('packHiOnly');
             // Below this share of the disk, the selection is a sliver of the full bar (700 MB on
             // a 1 TB disk): the bar then shows only the free space instead of the whole disk.
             var ZOOM_BELOW = 0.02;
@@ -4425,15 +5781,16 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             });
 
             // Search: every term must appear (accents and case ignored) in the game's name, rom
-            // name, studio, category or year, or in its pack's name. A pack with no match is hidden,
-            // one with matches opens on them; clearing the search puts the packs back as they were.
+            // name, studio, category or year, or in its pack's name; with the hiscores box ticked
+            // the game must also have an extractor (data-hi). A pack with no match is hidden,
+            // one with matches opens on them; clearing both puts the packs back as they were.
             function fold(text) {
                 return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
             }
             var openBeforeSearch = null;
             function applySearch() {
                 var terms = fold(search.value).split(/\\s+/).filter(Boolean);
-                var searching = terms.length > 0;
+                var searching = terms.length > 0 || hiOnly.checked;
                 if (searching && openBeforeSearch === null) {
                     openBeforeSearch = rows.map(function (row) {
                         var details = row.querySelector('.pack-details');
@@ -4447,7 +5804,8 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                     var shown = 0;
                     Array.prototype.forEach.call(row.querySelectorAll('.pack-game'), function (item) {
                         var haystack = packName + ' ' + fold(item.dataset.search || '');
-                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; });
+                        var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; })
+                            && (!hiOnly.checked || item.dataset.hi === '1');
                         item.hidden = !match;
                         if (match) { shown++; }
                     });
@@ -4463,10 +5821,11 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 searchCount.hidden = !searching;
                 searchCount.textContent = games
                     ? games + ' game(s) found in ' + packs + ' pack(s).'
-                    : 'No game matches this search.';
+                    : 'No game matches.';
                 refresh();
             }
             search.addEventListener('input', applySearch);
+            hiOnly.addEventListener('change', applySearch);
             search.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') { event.preventDefault(); }
             });
@@ -4489,7 +5848,7 @@ function renderRepoImportCard(
         <section class="card">
             <h2>Starting pack repository</h2>
             <p class="info">Browses and imports a starting pack directly from a password-protected
-            HTTP repository (see docs/STARTER-PACK-REPO.md), without going through the upload
+            HTTP repository, without going through the upload
             (Import tab) - useful for a pack too large for a browser form.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
@@ -4540,7 +5899,23 @@ function renderCreateUserCard(error?: string): string {
     `;
 }
 
-function renderUsersListCard(users: User[], avatarFilenames: string[], error?: string, info?: string): string {
+interface UsersListExtras {
+    isAdmin: boolean;
+    deleted: DeletedUserRow[];
+}
+
+/**
+ * Every player in one table: the active/inactive ones first, then - for an administrator only,
+ * who alone can restore or purge them - the deleted ones, dimmed, with their restore/purge
+ * actions in place of the usual ones. A deleted player is only soft-deleted: the nickname stays
+ * reserved and their scores stay in the database (hidden from the hiscore views), so restoring
+ * brings all of it back.
+ */
+function renderUsersListCard(
+    users: User[], avatarFilenames: string[], error?: string, info?: string,
+    extras: UsersListExtras = {isAdmin: false, deleted: []},
+): string {
+    const avatarsPath = new Config().avatarsPath;
     const rows = users.map(user => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const hasAvatar = avatarFilename !== undefined;
@@ -4550,9 +5925,12 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
                 <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
                     <label class="avatar-upload" title="Change the avatar (PNG)">
                         ${hasAvatar
-                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}" alt="">`
+                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
                             : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
-                        <input type="file" name="avatar" accept="image/png" onchange="this.form.submit()">
+                        <!-- requestSubmit(), not submit(): the latter bypasses the 'submit' event
+                        entirely (a DOM quirk), which would skip the AJAX interception below and
+                        leave the browser stuck on this POST's own URL (see renderPageTail()). -->
+                        <input type="file" name="avatar" accept="image/png" onchange="this.form.requestSubmit()">
                     </label>
                 </form>
             </td>
@@ -4576,71 +5954,20 @@ function renderUsersListCard(users: User[], avatarFilenames: string[], error?: s
     `;
     }).join('');
 
-    return `
-        <section class="card">
-            <h2>Players (${users.length})</h2>
-            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
-            <div class="table-wrap">
-                <table class="favorites-table">
-                    <thead>
-                        <tr>
-                            <th class="center">Avatar</th>
-                            <th>Nickname</th>
-                            <th>Name</th>
-                            <th class="center">Status</th>
-                            <th class="center"></th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
-                </table>
-            </div>
-        </section>
-    `;
-}
-
-interface UsersPageExtras {
-    isAdmin: boolean;
-    deleted: DeletedUserRow[];
-    deletedInfo?: string;
-    deletedError?: string;
-}
-
-/**
- * Deleted players, restorable by an administrator (POST /users/:id/restore). A deleted player is
- * only soft-deleted: the nickname stays reserved and their scores stay in the database (hidden
- * from the hiscore views), so restoring brings all of it back. Same idea as the favorites
- * "Removed" subtab.
- */
-function renderDeletedUsersCard(
-    deleted: DeletedUserRow[], avatarFilenames: string[], error?: string, info?: string,
-): string {
-    const messages = `
-        ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-        ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
-    `;
-    if (!deleted.length) {
-        return `
-            <section class="card">
-                <h2>Deleted players</h2>
-                ${messages}
-                <p class="info">No deleted players.</p>
-            </section>
-        `;
-    }
-    const rows = deleted.map(({user, scoreCount}) => {
+    const deleted = extras.isAdmin ? extras.deleted : [];
+    const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
+        const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
+            dateStyle: 'short', timeStyle: 'short',
+        });
         return `
-        <tr>
+        <tr class="row-deleted">
             <td class="center">${avatarFilename !== undefined
-                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}" alt="">`
+                ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
-            <td>${escapeHtml(new Date(user.deletionDate).toLocaleString('en-GB', {
-                dateStyle: 'short', timeStyle: 'short',
-            }))}</td>
-            <td class="center">${scoreCount}</td>
+            <td class="center"><span class="badge-deleted" title="Deleted on ${escapeHtml(deletedOn)}, ${scoreCount} score(s) kept">🗑 deleted ${escapeHtml(deletedOn)} · ${scoreCount} score(s)</span></td>
             <td class="center">
                 <div class="row-actions">
                     <form method="post" action="/users/${user.id_user}/restore"
@@ -4658,13 +5985,14 @@ function renderDeletedUsersCard(
 
     return `
         <section class="card">
-            <h2>Deleted players (${deleted.length})</h2>
-            ${messages}
-            <p class="info">A deleted player's nickname stays reserved: nobody can register it, so
-            nobody inherits their scores. Restoring brings the player back with their scores and
-            avatar; only restore a player for the person who owns the nickname. Deleting permanently
-            removes the player, their scores and their avatar from the database for good, and frees
-            the nickname.</p>
+            <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
+            ${deleted.length ? `<p class="info">A deleted player's nickname stays reserved: nobody can
+            register it, so nobody inherits their scores. Restoring brings the player back with their
+            scores and avatar; only restore a player for the person who owns the nickname. Deleting
+            permanently removes the player, their scores and their avatar from the database for good,
+            and frees the nickname.</p>` : ''}
             <div class="table-wrap">
                 <table class="favorites-table">
                     <thead>
@@ -4672,12 +6000,11 @@ function renderDeletedUsersCard(
                             <th class="center">Avatar</th>
                             <th>Nickname</th>
                             <th>Name</th>
-                            <th>Deleted on</th>
-                            <th class="center">Scores</th>
+                            <th class="center">Status</th>
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${rows + deletedRows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
                 </table>
             </div>
         </section>
@@ -4686,30 +6013,15 @@ function renderDeletedUsersCard(
 
 function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
-    extras: UsersPageExtras = {isAdmin: false, deleted: []},
+    extras: UsersListExtras = {isAdmin: false, deleted: []},
 ): string {
-    // See renderForm()'s own defaultSubtab for why this is computed from which message was
-    // actually passed for this response, not inferred client-side from scanning for .flash.
-    // createError is kept separate from error/info (both list-card messages, e.g. from
-    // toggle-active/delete/avatar upload) so a duplicate-pseudo error from /users/create lands
-    // back on "Add", next to the form that produced it, instead of "Players".
-    const defaultSubtab = createError !== undefined ? 'add'
-        : (extras.deletedInfo !== undefined || extras.deletedError !== undefined) ? 'deleted'
-            : (error !== undefined || info !== undefined) ? 'players'
-                : undefined;
-    const sections: Subsection[] = [
-        {id: 'add', label: 'Add', html: renderCreateUserCard(createError)},
-        {id: 'players', label: 'Players', html: renderUsersListCard(users, avatarFilenames, error, info)},
-    ];
-    // Restoring a deleted player is the administrator's call (the route rejects anyone else too).
-    if (extras.isAdmin) {
-        sections.push({
-            id: 'deleted',
-            label: `Deleted (${extras.deleted.length})`,
-            html: renderDeletedUsersCard(extras.deleted, avatarFilenames, extras.deletedError, extras.deletedInfo),
-        });
-    }
-    return renderSubtabbedPage('users', sections, true, defaultSubtab);
+    // One page, no subtabs: the add form, then every player (deleted ones included, see
+    // renderUsersListCard()) in a single list.
+    return renderPage(
+        renderCreateUserCard(createError) + renderUsersListCard(users, avatarFilenames, error, info, extras),
+        'users',
+        extras.isAdmin ? 'admin' : 'user',
+    );
 }
 
 /**
@@ -4726,7 +6038,15 @@ function describeUserError(error: unknown): string {
     return error instanceof Error ? error.message : 'Unexpected error.';
 }
 
-function renderBrowsePage(target: PathField, currentDir: string, initialValue: string): string {
+/**
+ * `carried`: both Config fields as they were in the form when Browse was clicked, carried along
+ * every link here so that choosing (or cancelling) one of them brings the page back with the other
+ * one still filled in - it may not be saved yet (e.g. a first setup: binary folder picked, then the
+ * plugins folder).
+ */
+function renderBrowsePage(
+    target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
+): string {
     let entries: string[] = [];
     let error: string|undefined;
     try {
@@ -4740,13 +6060,16 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
 
     const parentDir = dirname(currentDir);
     const canGoUp = parentDir !== currentDir;
-    // Only ever carries the one field being browsed - carrying the other one too (even as an
-    // empty default) would blank it out on the page this returns to, since that page treats
-    // a present-but-empty query param differently from an absent one (falls back to the saved
-    // config/mame.ini value only when the param is absent).
-    const carryQuery = `${target}=${encodeURIComponent(initialValue)}`;
-    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}&${carryQuery}`;
-    const selectLink = (dir: string) => `/?${target}=${encodeURIComponent(dir)}`;
+    // Empty fields are left out rather than carried as empty params: the page this returns to
+    // treats a present-but-empty query param differently from an absent one (falls back to the
+    // saved config/mame.ini value only when the param is absent).
+    const query = (values: Record<PathField, string>) => (Object.keys(values) as PathField[])
+        .filter(field => values[field])
+        .map(field => `${field}=${encodeURIComponent(values[field])}`)
+        .join('&');
+    const carryQuery = query(carried);
+    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}`;
+    const selectLink = (dir: string) => `/?${query({...carried, [target]: dir})}`;
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -4765,10 +6088,16 @@ function renderBrowsePage(target: PathField, currentDir: string, initialValue: s
             <ul class="browse-list">${rows || '<li><em>No subfolder</em></li>'}</ul>
             <p><a href="/?${carryQuery}">Cancel</a></p>
         </section>
-    `);
+    `, 'mame', viewer);
 }
 
-export function startBoServer(port: number, onConfigured: () => void, onReset: () => void): Server {
+/**
+ * Starts the BO. `databaseReady` resolves once the database exists and is migrated (see
+ * bootstrapDatabase()); requests arriving before wait for it.
+ */
+export function startBoServer(
+    port: number, reloadFront: () => void, onReset: () => void,
+): {server: Server; databaseReady: Promise<void>} {
     const app = express();
     app.use(express.urlencoded({extended: false}));
     // A fresh secret per server start (rather than a persisted one) invalidates every session on
@@ -4783,7 +6112,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // The BO is reachable from the whole LAN (app.listen() has no host argument), so every route
     // below this guard requires a logged-in session except the login page itself and the static
     // assets it needs (background/logo) to render.
-    const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg']);
+    const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg', '/maui-logo.png']);
     app.use((req, res, next) => {
         if (PUBLIC_PATHS.has(req.path) || req.session.boUserId) {
             next();
@@ -4806,7 +6135,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
     // this must not be recreated per-request.
-    createSequelize();
+    const sequelize = createSequelize();
+    const databaseReady = bootstrapDatabase(sequelize);
+    // Every route below reads the database sooner or later (the login page first): hold requests
+    // until it exists, instead of failing on a missing table for the first second of a first launch.
+    app.use((req, res, next) => {
+        databaseReady.then(() => next());
+    });
 
     app.get('/background.jpg', (req, res) => {
         res.sendFile('img/background.jpg', {root: getStaticPath()});
@@ -4819,6 +6154,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             return;
         }
         res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+    });
+
+    app.get('/maui-logo.png', (req, res) => {
+        res.sendFile('img/maui-logo.png', {root: getStaticPath()});
     });
 
     app.get('/mame-logo.svg', (req, res) => {
@@ -4836,10 +6175,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         try {
             boUser = await BoUser.findOne({where: {username}});
         } catch {
-            // Same "not migrated yet" race /users already handles: this early in a fresh
-            // install, the Electron renderer's Init.vue may not have run Database.update() yet.
+            // The database bootstrap failed (see bootstrapDatabase(), logged at startup).
             res.status(503).send(renderLoginPage(
-                'Database not initialized yet - launch the application once before signing in.',
+                'The database could not be initialized - restart the application, then retry.',
             ));
             return;
         }
@@ -4903,8 +6241,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
         const mameInfo = getMameInfo(config);
-        // Only set after browsing for it below "Dossier des plugins MAME" - not persisted until
-        // its own form is submitted, same as mamePath above.
+        // Only set after browsing for the plugins folder (Config card) - not persisted until that
+        // form is saved, same as mamePath above.
         if (typeof req.query.pluginsPath === 'string') {
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
@@ -4913,7 +6251,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         ));
     });
 
+    // The whole ScreenScraper tab is admin-only (its link is left out of a user's nav, see
+    // renderPageHead()): the credentials it holds, and the media download it runs.
     app.get('/screenscraper', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.redirect('/');
+            return;
+        }
         const config = new Config();
         config.load();
         res.send(renderScreenScraperPage({
@@ -4928,21 +6272,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     /**
      * Cache-backed favorites tab (see the comment inside), shared by GET /favorites and the
-     * re-renders after POST /favorites/delete and /favorites/restore. `flash.section` is the
-     * subtab the message belongs to (and the one shown on load).
+     * re-renders after POST /favorites/delete, /favorites/restore and /votes/set, `flash` being
+     * that action's message.
      */
-    const renderFavoritesTab = async (flash?: RemovedFavoritesFlash & {section: 'list' | 'removed'}): Promise<string> => {
-        const categoriesHtml = await renderCategoriesCard();
+    const renderFavoritesTab = async (req: Request, flash: FavoritesFlash = {}): Promise<string> => {
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
-        const listFlash = flash?.section === 'list' ? flash : {};
-        const removedFlash = flash?.section === 'removed' ? flash : undefined;
 
         if ('error' in context) {
-            return renderFavoritesPage(
-                {rows: [], error: context.error, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
-            );
+            return renderFavoritesPage({rows: [], error: context.error, ...flash}, getViewer(req));
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
@@ -4953,12 +6292,13 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const cache = readFavoritesCache();
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
-            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, ...listFlash}, removedFlash, flash?.section, categoriesHtml,
+            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...flash},
+            getViewer(req),
         );
     };
 
     app.get('/favorites', async (req, res) => {
-        res.send(await renderFavoritesTab());
+        res.send(await renderFavoritesTab(req));
     });
 
     app.post('/favorites/delete', async (req, res) => {
@@ -4966,12 +6306,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Same character set as parseFavorites()/getFavoriteRomNames(): anything else can't be
         // a favorite this tab lists.
         if (!/^[a-z0-9]+$/.test(romName)) {
-            res.status(422).send(await renderFavoritesTab({section: 'list', warning: 'Invalid rom name.'}));
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid rom name.'}));
             return;
         }
         if (isMameConfigSessionAlive()) {
-            res.status(409).send(await renderFavoritesTab({
-                section: 'list',
+            res.status(409).send(await renderFavoritesTab(req, {
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
@@ -4979,44 +6318,19 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(await renderFavoritesTab({section: 'list', warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: 'No favorites.ini file found.'}));
             return;
         }
 
-        const removal = removeFavorite(readFileSync(favoritesPath, 'utf8'), romName);
-        if (removal === null) {
-            res.status(422).send(await renderFavoritesTab({
-                section: 'list',
+        if (removeFavoriteFromDisk(favoritesPath, romName) === null) {
+            res.status(422).send(await renderFavoritesTab(req, {
                 warning: `Unable to remove "${romName}": entry not found or unexpected favorites.ini format.`,
             }));
             return;
         }
 
-        // Saved before favorites.ini is rewritten: if this write fails the favorite is still
-        // listed (worst case, a stale "removed" record the removed subtab hides), whereas the
-        // other order could lose the entry for good.
-        const cache = readFavoritesCache();
-        writeRemovedFavorites([
-            ...readRemovedFavorites().filter(item => item.romName !== romName),
-            {
-                romName,
-                fullname: removal.entry.split('\n')[1]?.trim() || cache?.entries[romName]?.fullname || romName,
-                removedAt: new Date().toISOString(),
-                entry: removal.entry,
-                cache: cache?.entries[romName],
-            },
-        ]);
-        writeFileSync(favoritesPath, removal.content, 'utf8');
-
-        // Drop the rom's cached name/BIOS too, keeping the rest of the cache (and its updatedAt)
-        // as it was - restored later, it gets its cache entry back from the removed record.
-        if (cache?.entries[romName]) {
-            delete cache.entries[romName];
-            writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
-        }
-
-        res.send(await renderFavoritesTab({
-            section: 'list', notice: `"${romName}" removed from the favorites (find it again in the "Removed" tab).`,
+        res.send(await renderFavoritesTab(req, {
+            notice: `"${romName}" removed from the favorites (it can be restored from the removed favorites below).`,
         }));
     });
 
@@ -5025,12 +6339,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const removed = readRemovedFavorites();
         const item = removed.find(candidate => candidate.romName === romName);
         if (!item) {
-            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: `"${romName}" is not in the removed favorites.`}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: `"${romName}" is not in the removed favorites.`}));
             return;
         }
         if (isMameConfigSessionAlive()) {
-            res.status(409).send(await renderFavoritesTab({
-                section: 'removed',
+            res.status(409).send(await renderFavoritesTab(req, {
                 warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
@@ -5038,7 +6351,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         const {favoritesPath} = getMameLocations(getMameHomePath());
         if (!favoritesPath) {
-            res.status(404).send(await renderFavoritesTab({section: 'removed', warning: 'No favorites.ini file found.'}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: 'No favorites.ini file found.'}));
             return;
         }
 
@@ -5046,8 +6359,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // null = already listed (put back by mame's own menu in the meantime) or a corrupt saved
         // entry - tell the two apart so the message is accurate.
         if (updated === null && !getFavoriteRomNames(favoritesPath).includes(romName)) {
-            res.status(422).send(await renderFavoritesTab({
-                section: 'removed', warning: `Unable to restore "${romName}": the saved entry is invalid.`,
+            res.status(422).send(await renderFavoritesTab(req, {
+                warning: `Unable to restore "${romName}": the saved entry is invalid.`,
             }));
             return;
         }
@@ -5057,7 +6370,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         // Written after favorites.ini for the reverse reason of /favorites/delete: a failure here
         // leaves the favorite restored (and merely still listed as removed until this rom is seen
-        // in favorites.ini - the removed subtab hides it), never a favorite lost.
+        // in favorites.ini - the favorites list hides it), never a favorite lost.
         writeRemovedFavorites(removed.filter(candidate => candidate.romName !== romName));
         if (item.cache) {
             const cache = readFavoritesCache();
@@ -5067,64 +6380,113 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             }
         }
 
-        res.send(await renderFavoritesTab({
-            section: 'removed',
+        res.send(await renderFavoritesTab(req, {
             notice: updated === null
                 ? `"${romName}" was already in the favorites.`
                 : `"${romName}" restored to the favorites.`,
         }));
     });
 
-    app.post('/favorites/refresh', (req, res) => {
+    app.post('/votes/set', async (req, res) => {
+        const romName: string = (req.body.romName || '').trim();
+        const vote = parseVote(req.body.vote);
+        if (!/^[a-z0-9]+$/.test(romName) || vote === null) {
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid vote.'}));
+            return;
+        }
+
+        let updated: number;
+        try {
+            // paranoid: false - a game already out of the favorites keeps its vote editable.
+            [updated] = await Game.update({vote}, {where: {romName}, paranoid: false});
+        } catch {
+            res.status(503).send(await renderFavoritesTab(req, {
+                warning: 'Database not ready yet - launch the application once, then retry.',
+            }));
+            return;
+        }
+        if (!updated) {
+            res.status(404).send(await renderFavoritesTab(req, {warning: `Unknown game "${romName}".`}));
+            return;
+        }
+
+        const flash: FavoritesFlash = {notice: `Vote saved for "${romName}": ${VOTE_LABELS[vote].toLowerCase()}.`};
+        const config = new Config();
+        config.load();
+        const {favoritesPath} = getMameLocations(getMameHomePath());
+        if (vote === VOTE_DOWN && config.thumbsDownRemovesFavorite && favoritesPath
+            && getFavoriteRomNames(favoritesPath).includes(romName)) {
+            if (isMameConfigSessionAlive()) {
+                flash.warning = 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini. '
+                    + 'The game stays in the favorites for now.';
+            } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
+                flash.notice += ' Removed from the favorites (restorable from the removed favorites, below the favorites list).'
+                    + ' The change shows up on the cabinet the next time MAUI starts.';
+            } else {
+                flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
+            }
+        }
+        res.send(await renderFavoritesTab(req, flash));
+    });
+
+    app.post('/favorites/refresh', async (req, res) => {
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
 
-        if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}));
+        // The favorites list's update modal (see FAVORITES_REFRESH_MODAL) asks for its progress as
+        // newline-delimited JSON events instead of a page: start (total), row (each favorite as it
+        // is resolved), then done or error. The HTML stream below is the no-JS fallback.
+        if (req.get('Accept') === 'application/x-ndjson') {
+            res.writeHead(200, {'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache'});
+            res.socket?.setNoDelay(true);
+            const send = (event: object) => res.write(JSON.stringify(event) + '\n');
+            if ('error' in context) {
+                send({type: 'error', message: context.error});
+                res.end();
+                return;
+            }
+            send({type: 'start', total: context.romNames.length});
+            try {
+                const {rows} = resolveFavorites(context, (row, index) => {
+                    send({type: 'row', index: index + 1, romName: row.romName, fullname: row.fullname});
+                });
+                send({type: 'done', total: rows.length});
+            } catch (error) {
+                send({type: 'error', message: `Update interrupted: ${error instanceof Error ? error.message : String(error)}`});
+            }
+            res.end();
             return;
         }
 
-        // Stream the page as favorites are resolved instead of blocking on the whole list: each
-        // one is a blocking `mame -lx` process spawn (see resolveFavoriteRow()), so with enough
-        // favorites the unstreamed version could take a long time to send anything at all -
-        // same fix already applied to /favorites/download-media below.
+        if ('error' in context) {
+            res.send(renderFavoritesPage({rows: [], error: context.error}, getViewer(req)));
+            return;
+        }
+
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('favorites'));
-        res.write(`
-            <section class="card">
-                <h2>Updating favorites (${context.romNames.length})…</h2>
-                ${PROGRESS_LOG_OPEN}
-        `);
-
-        const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
-        const rows: FavoriteRow[] = context.romNames.map((romName) => {
-            const row = resolveFavoriteRow(context, romName);
-            cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
-            res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
-            return row;
-        });
-        const cache = writeFavoritesCache(cacheEntries);
-
-        res.write('</ul></section>');
-        res.write(renderFavoritesCard({rows, cacheUpdatedAt: cache.updatedAt}));
+        res.write(renderPageHead('favorites', getViewer(req)));
+        const {rows, cache} = streamFavoritesRefresh(res, context);
+        res.write(renderFavoritesCard({
+            rows, cacheUpdatedAt: cache.updatedAt, stats: await loadGameStats() ?? undefined,
+        }, getViewer(req)));
         res.write(renderPageTail());
         res.end();
     });
 
     /**
      * Renders the Players tab. The deleted players (administrators only) are loaded here, on
-     * every render, so each route below keeps showing an up-to-date "Deleted" subtab without
+     * every render, so each route below keeps showing up-to-date deleted players without
      * having to pass it along.
      */
     const usersPage = async (
         req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
-        createError?: string, messages: {deletedInfo?: string; deletedError?: string} = {},
+        createError?: string,
     ): Promise<string> => {
         const isAdmin = req.session.boRole === 'admin';
         const deleted = isAdmin ? await listDeletedUsers().catch(() => []) : [];
-        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted, ...messages});
+        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted});
     };
 
     app.get('/users', async (req, res) => {
@@ -5152,7 +6514,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 res.status(422).send(await usersPage(
                     req, users, getAvatarFilenames(config), undefined, undefined,
                     `The nickname "${pseudo3}" belongs to a deleted player and is reserved. An administrator `
-                    + 'can restore that player from the "Deleted" tab.',
+                    + 'can restore that player from the players list.',
                 ));
                 return;
             }
@@ -5206,7 +6568,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.send(await usersPage(
             req, users, getAvatarFilenames(new Config()), undefined,
             user ? `Player "${user.pseudo_3}" deleted. The nickname stays reserved; an administrator can `
-                + 'restore it from the "Deleted" tab.' : undefined,
+                + 'restore it from the players list.' : undefined,
         ));
     });
 
@@ -5218,10 +6580,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const purged = await purgeDeletedUser(String(req.params.id), new Config().avatarsPath);
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(
-            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
-            purged
-                ? {deletedInfo: `Player "${purged.user.pseudo_3}" permanently deleted, with ${purged.scoreCount} score(s).`}
-                : {deletedError: 'This player is not among the deleted players (already removed?).'},
+            req, users, getAvatarFilenames(new Config()),
+            purged ? undefined : 'This player is not among the deleted players (already removed?).',
+            purged ? `Player "${purged.user.pseudo_3}" permanently deleted, with ${purged.scoreCount} score(s).` : undefined,
         ));
     });
 
@@ -5233,10 +6594,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const restored = await restoreDeletedUser(String(req.params.id));
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(
-            req, users, getAvatarFilenames(new Config()), undefined, undefined, undefined,
-            restored
-                ? {deletedInfo: `Player "${restored.pseudo_3}" restored, with their scores.`}
-                : {deletedError: 'This player is not among the deleted players (already restored?).'},
+            req, users, getAvatarFilenames(new Config()),
+            restored ? undefined : 'This player is not among the deleted players (already restored?).',
+            restored ? `Player "${restored.pseudo_3}" restored, with their scores.` : undefined,
         ));
     });
 
@@ -5272,6 +6632,26 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         ));
     });
 
+    // A favorite's marquee/flyer/logo, for the favorites list's hover previews (see
+    // renderAssetIcon()). Read from the directories ui.ini points at, like the presence icons.
+    app.get('/media/:kind/:file', (req, res) => {
+        const {marqueePath, flyerPath, logoPath} = getMameLocations(getMameHomePath());
+        const dirs: {[kind: string]: string | null} = {marquee: marqueePath, flyer: flyerPath, logo: logoPath};
+        const dir = dirs[req.params.kind];
+        // Same rom name character set as the favorites routes: no path separators, no dot dirs.
+        if (!dir || !/^[a-z0-9_]+\.png$/.test(req.params.file)) {
+            res.status(404).end();
+            return;
+        }
+        // no-cache: revalidated (ETag) on every hover, so artwork re-downloaded from ScreenScraper
+        // shows up without a stale copy. Served with a root for the same reason as /avatars below.
+        res.sendFile(req.params.file, {root: dir, headers: {'Cache-Control': 'no-cache'}}, (error) => {
+            if (error && !res.headersSent) {
+                res.status(404).end();
+            }
+        });
+    });
+
     app.get('/avatars/:filename', (req, res) => {
         const config = new Config();
         // basename() strips any directory components (e.g. "../../etc/passwd") from the
@@ -5292,6 +6672,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     });
 
     app.post('/favorites/download-media', async (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
         const config = new Config();
         config.load();
         const ssValues: ScreenScraperValues = {
@@ -5337,7 +6721,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         // Disable Nagle's algorithm so each res.write() below reaches the browser as soon as
         // it's flushed, instead of being buffered and coalesced with the next one.
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('screenscraper'));
+        res.write(renderPageHead('screenscraper', getViewer(req)));
         res.write(`
             <section class="card">
                 <h2>Download in progress…</h2>
@@ -5406,22 +6790,26 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame'));
+        res.write(renderPageHead('mame', getViewer(req)));
 
         // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
         // the actual import both happen inside the script now - it mirrors this same logic and
         // reports failures through its own stdout/stderr lines, same as /import/from-url below.
-        const started = await runImportScript(res, 'Import in progress…', [req.file.path], {...process.env});
+        const started = await runImportScript(
+            res, `Import in progress… (${escapeHtml(req.file.originalname)})`, [req.file.path], {...process.env},
+        );
         rmSync(req.file.path, {force: true});
         if (!started) {
             return;
         }
 
+        streamFavoritesRefreshAfterImport(res, config);
+
         // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
         // above reflect what the import just installed, instead of a "Retour" link to a
         // separate page.
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, req.session.boRole === 'admin'));
+        res.write(renderConfigCard(values, refreshedMameInfo));
         res.write(renderMameInfoCard(refreshedMameInfo));
         // Same gating as renderForm(): import only makes sense once the binary's configured and
         // validated (see there for why).
@@ -5431,6 +6819,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
         res.write(renderPageTail());
         res.end();
+
+        // Back through Init.vue, which re-seeds categories and re-syncs games from the new
+        // favorites.ini/genre.ini - the front would otherwise keep showing the pre-import list.
+        reloadFront();
     });
 
     // Same admin gating as renderRepoImportCard()'s visibility in renderForm(): configuring where
@@ -5566,31 +6958,42 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame'));
+        res.write(renderPageHead('mame', getViewer(req)));
 
         // Packs are imported one after the other (one script run each, one progress card each):
         // the script rewrites favorites.ini and shared category files, so runs must not overlap.
         // Credentials go through env, never argv, so they don't leak via `ps`/
         // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
         // trust level as ssDevPassword).
+        // Several packs: one tab per pack instead of one card each (17 packs made a very long page).
+        const tabbed = selection.size > 1;
+        if (tabbed) {
+            res.write(renderImportTabsOpen([...selection.keys()]));
+        }
         for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
             const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
             // --only: just these games are read from the pack (HTTP Range requests, no full download).
             const started = await runImportScript(
                 res,
                 `${counter}Import from the repository in progress… (${escapeHtml(packFilename)}, ${romNames.length} game(s))`,
-                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(','), '-y'],
+                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(',')],
                 {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
                 {index, total: selection.size},
+                tabbed,
             );
             // false = launch failure, runImportScript already closed the response.
             if (!started) {
                 return;
             }
         }
+        if (tabbed) {
+            res.write('</div></section>');
+        }
+
+        streamFavoritesRefreshAfterImport(res, config);
 
         const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, req.session.boRole === 'admin'));
+        res.write(renderConfigCard(values, refreshedMameInfo));
         res.write(renderMameInfoCard(refreshedMameInfo));
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
@@ -5599,6 +7002,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         }
         res.write(renderPageTail());
         res.end();
+
+        // Same as /import above.
+        reloadFront();
     });
 
     app.get('/maui', async (req, res) => {
@@ -5610,8 +7016,14 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
     app.post('/maui/save', async (req, res) => {
         const config = new Config();
         config.load();
-        config.openDevTools = req.body.openDevTools === 'on';
+        // Admin-only option (see renderMauiCard()): a user's form has no such checkbox, which
+        // must not read as "unchecked" and switch it off.
+        if (req.session.boRole === 'admin') {
+            config.openDevTools = req.body.openDevTools === 'on';
+        }
         config.fullscreen = req.body.fullscreen === 'on';
+        config.voteEnabled = req.body.voteEnabled === 'on';
+        config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
         config.save();
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
     });
@@ -5746,7 +7158,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             + 'in a moment. <strong>Relaunch it manually</strong> to take the imported '
             + 'files into account (<code>just serve</code> in development, or the usual '
             + 'executable in production).</p></section>',
-            'maui',
+            'maui', getViewer(req),
         ));
 
         setTimeout(onReset, 300);
@@ -5779,11 +7191,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('maui'));
+        res.write(renderPageHead('maui', getViewer(req)));
         await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
 
         const updateInfo = await getUpdateInfo();
-        res.write(renderMauiCard(config));
+        res.write(renderMauiCard(config, isAdmin));
         res.write(renderUpdateCard(updateInfo, isAdmin));
         if (isAdmin) {
             res.write(renderMauiImportExportCard());
@@ -5793,7 +7205,48 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.end();
     });
 
+    // Same access as the installation just above (any BO account): restarting only relaunches the
+    // app on what ~/squashfs-root already holds, it changes nothing on disk. Refused unless this is
+    // the dedicated Pi layout (isSelfUpdateCapable()) and sudo allows that one command without a
+    // password (docs/RASPBERRY-PI-DEPLOY.md §5.7) - checked up front so a missing rule shows an
+    // explanation instead of a page waiting for a restart that never comes.
+    app.post('/maui/update/restart', async (req, res) => {
+        const config = new Config();
+        config.load();
+
+        if (!isSelfUpdateCapable()) {
+            await sendMauiPage(req, res, config, {updateInfoError: 'Restart unavailable on this machine.'});
+            return;
+        }
+        if (!await canRestartKiosk()) {
+            await sendMauiPage(req, res, config, {
+                updateInfoError: 'The application cannot be restarted from here: the user is not allowed to '
+                    + 'run the restart through sudo without a password (see docs/RASPBERRY-PI-DEPLOY.md §5.7).',
+            });
+            return;
+        }
+
+        res.send(renderPage(
+            '<section class="card"><h2>Restarting the application</h2>'
+            + '<p class="info">The screen goes blank for a moment, then the application reopens on the '
+            + 'version installed in <code>~/squashfs-root</code>.</p>'
+            + '<p id="restart-wait-message" class="info">Waiting for the restart… this page will '
+            + 'automatically take you back to the MAUI tab as soon as the server is available again.</p>'
+            + renderRestartWaitScript('/maui')
+            + '</section>',
+            'maui', getViewer(req),
+        ));
+
+        // Delayed so this response finishes flushing before the session - this process included -
+        // goes down.
+        setTimeout(restartKiosk, 500);
+    });
+
     app.post('/screenscraper/save', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
         const values: ScreenScraperValues = {
             ssDevId: (req.body.ssDevId || '').trim(),
             ssDevPassword: (req.body.ssDevPassword || '').trim(),
@@ -5820,7 +7273,11 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
 
     app.get('/browse', (req, res) => {
         const target: PathField = req.query.target === 'pluginsPath' ? 'pluginsPath' : 'mamePath';
-        const initialValue = typeof req.query[target] === 'string' ? req.query[target] as string : '';
+        const carried: Record<PathField, string> = {
+            mamePath: typeof req.query.mamePath === 'string' ? req.query.mamePath : '',
+            pluginsPath: typeof req.query.pluginsPath === 'string' ? req.query.pluginsPath : '',
+        };
+        const initialValue = carried[target];
 
         let currentDir = typeof req.query.path === 'string' && req.query.path ? req.query.path : initialValue;
         if (!currentDir || !existsSync(currentDir)) {
@@ -5838,18 +7295,33 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, initialValue));
+        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req)));
     });
 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
+        const pluginsPath: string = (req.body.pluginsPath || '').trim();
+        // "Launch MAME fullscreen" checkbox: unchecked = windowed (mame.ini's window 1). Only
+        // posted while the binary folder is filled in (disabled otherwise, see renderConfigCard()).
+        const windowed = req.body.fullscreen !== 'on';
         const config = new Config();
         config.load();
         const isAdmin = req.session.boRole === 'admin';
+        // On an error below, the page comes back with what was typed in both fields.
+        const typedMameInfo = () => {
+            const mameInfo = getMameInfo(config);
+            if (pluginsPath) {
+                mameInfo.pluginsPath = pluginsPath;
+            }
+            if (mamePath) {
+                mameInfo.windowed = windowed;
+            }
+            return mameInfo;
+        };
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath}, getMameInfo(config), isAdmin,
+                {mamePath}, typedMameInfo(), isAdmin,
                 `The folder "${mamePath}" does not exist.`,
             ));
             return;
@@ -5857,7 +7329,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath}, getMameInfo(config), isAdmin,
+                {mamePath}, typedMameInfo(), isAdmin,
                 `No mame binary found in "${mamePath}".`,
             ));
             return;
@@ -5867,12 +7339,16 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath}, getMameInfo(config), isAdmin,
+                {mamePath}, typedMameInfo(), isAdmin,
                 'Failed to initialize mame ("-createconfig"): '
                     + `${error instanceof Error ? error.message : 'unexpected error'}.`,
             ));
             return;
         }
+
+        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
+        const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
+        setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
 
         config.mamePath = mamePath;
         config.mameBinaryName = mameBinaryName;
@@ -5881,6 +7357,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         res.send(renderPage(
             '<section class="card"><h2>Configuration saved</h2><p>'
             + 'The application restarts automatically.</p>'
+            + (plugins?.pluginsAdded ? `<p>${plugins.pluginsAdded} plugin(s) initialized in plugin.ini.</p>` : '')
+            + (plugins && !plugins.saved ? '<p class="error">The plugins folder could not be saved: mame.ini not found.</p>' : '')
             + '<p>Back to the MAME configuration in <span id="redirect-countdown">5</span> '
             + 'second(s)… <a href="/">Go now</a>.</p></section>'
             + '<script>'
@@ -5892,9 +7370,10 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             + '}, 1000);'
             + 'setTimeout(function () { window.location.href = "/"; }, 5000);'
             + '</script>',
+            'mame', getViewer(req),
         ));
 
-        onConfigured();
+        reloadFront();
     });
 
     app.post('/launch', (req, res) => {
@@ -5951,40 +7430,21 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         ));
     });
 
-    app.post('/mame-options/save', (req, res) => {
-        const config = new Config();
-        config.load();
-
+    /**
+     * Writes pluginspath into mame.ini and, as soon as it points at a folder that actually has
+     * plugins in it, initializes/completes plugin.ini right away instead of making the user click
+     * the separate "Repair plugin.ini" button as a second step. saved: false when mame.ini
+     * doesn't exist.
+     */
+    const savePluginsPath = (pluginsPath: string): {saved: boolean; pluginsAdded: number} => {
         const iniPath = getMameHomePath();
-        const mameIniPath = join(iniPath, 'mame.ini');
-        const pluginIniPath = join(iniPath, 'plugin.ini');
-        const windowed = req.body.windowed === 'on';
-        const pluginsPath: string = (req.body.pluginsPath || '').trim();
-
-        let saved = setMameIniValue(mameIniPath, 'window', windowed ? '1' : '0');
-        let pluginsAdded = 0;
-        if (pluginsPath) {
-            saved = setMameIniValue(mameIniPath, 'pluginspath', pluginsPath) && saved;
-            // As soon as pluginspath points at a folder that actually has plugins in it,
-            // initialize/complete plugin.ini right away instead of making the user click the
-            // separate "Repair plugin.ini" button as a second step.
-            const availablePlugins = getAvailablePlugins(resolveDirectoryPath(pluginsPath, iniPath));
-            if (availablePlugins.length) {
-                pluginsAdded = repairPluginIni(pluginIniPath, availablePlugins);
-            }
-        }
-
-        res.send(renderForm(
-            {mamePath: config.mamePath},
-            getMameInfo(config), req.session.boRole === 'admin',
-            undefined,
-            undefined,
-            saved
-                ? 'MAME options updated in mame.ini.'
-                    + (pluginsAdded ? ` ${pluginsAdded} plugin(s) initialized in plugin.ini.` : '')
-                : 'mame.ini not found - configure and launch mame at least once before changing these options.',
-        ));
-    });
+        const saved = setMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath', pluginsPath);
+        const availablePlugins = getAvailablePlugins(resolveDirectoryPath(pluginsPath, iniPath));
+        const pluginsAdded = saved && availablePlugins.length
+            ? repairPluginIni(join(iniPath, 'plugin.ini'), availablePlugins)
+            : 0;
+        return {saved, pluginsAdded};
+    };
 
     app.post('/mame-options/repair-plugins', (req, res) => {
         const config = new Config();
@@ -6175,7 +7635,7 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
             const remapState: RemapState = token
                 ? {portType, capturedToken: token}
                 : {portType, error: 'No press detected within the allotted time (30s) - try again ' +
-                    '(the MAME window must have focus).'};
+                    '(is the gamepad connected, and MAME still open?).'};
             if (token) {
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
                 setDefaultCfgUiInput(cfgPath, portType, token);
@@ -6215,6 +7675,115 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 undefined, // deviceProbeState
                 {portType, error: `Capture failed: ${message}`},
             ));
+        }
+    });
+
+    // Renders the whole page with only the per-game remap state set (renderForm() has a long
+    // positional list - see /input-probe/remap above).
+    const renderGameRemapPage = (config: Config, mameInfo: MameInfo, isAdmin: boolean, gameRemapState: GameRemapState): string =>
+        renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdmin,
+            undefined, // error
+            undefined, // info
+            undefined, // mameInfoMessage
+            undefined, // importError
+            undefined, // dangerZoneInfo
+            undefined, // inputProbeState
+            undefined, // repoPacks
+            undefined, // repoError
+            undefined, // repoInfo
+            undefined, // deviceProbeState
+            undefined, // remapState
+            gameRemapState,
+        );
+
+    app.post('/input-probe/game/start', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdmin = req.session.boRole === 'admin';
+
+        const romName: string = (req.body.romName || '').trim();
+        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+        if (mameInfo.error || !romNames.includes(romName)) {
+            // Same "shouldn't normally be reachable" caveat as /input-probe above - the form only
+            // renders once mameInfo.error is unset, with a select of the roms actually present.
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdmin));
+            return;
+        }
+
+        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName, true);
+        waitForSessionGameFields(10000);
+        res.send(renderGameRemapPage(config, mameInfo, isAdmin, {romName}));
+    });
+
+    app.post('/input-probe/game/remap', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdmin = req.session.boRole === 'admin';
+
+        const romName: string = (req.body.romName || '').trim();
+        const fieldId: string = (req.body.fieldId || '').trim();
+        const action: string = (req.body.action || '').trim();
+        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+        // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
+        // roms actually present - never a client-supplied path fragment.
+        if (mameInfo.error || !romNames.includes(romName) || !['capture', 'reset'].includes(action)) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdmin));
+            return;
+        }
+
+        // The field is looked up in what MAME itself dumped for the running game: its tag/mask/
+        // defvalue are what the cfg entry needs to be applied, and none of it comes from the client.
+        const field = isMameConfigSessionAlive() && mameConfigSession?.romName === romName
+            ? readSessionGameFields()?.find(candidate => gameFieldId(candidate) === fieldId)
+            : undefined;
+        if (!field) {
+            res.send(renderGameRemapPage(config, mameInfo, isAdmin, {
+                romName,
+                error: `MAME is not running with "${romName}" (or doesn't know this command) - launch it again below.`,
+            }));
+            return;
+        }
+
+        try {
+            const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
+            if (action === 'reset') {
+                removeGameCfgOverride(cfgPath, field);
+                res.send(renderGameRemapPage(config, mameInfo, isAdmin, {romName, fieldId}));
+                return;
+            }
+
+            const token = captureOnePress();
+            const gameRemapState: GameRemapState = token
+                ? {romName, fieldId, capturedToken: token}
+                : {romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
+                    '(is the gamepad connected, and MAME still open?).'};
+            if (token) {
+                setGameCfgOverride(cfgPath, romName, field, token);
+                const released = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token);
+                if (released.length) {
+                    gameRemapState.releasedFrom = released;
+                }
+            }
+            res.send(renderGameRemapPage(config, mameInfo, isAdmin, gameRemapState));
+        } catch (error) {
+            console.error(`[boServer] Game remap failed for "${romName}" / "${field.portType}":`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdmin, {
+                romName,
+                fieldId,
+                error: `${action === 'reset' ? 'Reset' : 'Capture'} failed: ${message}`,
+            }));
         }
     });
 
@@ -6360,26 +7929,9 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
                 + '<p id="restart-wait-message" class="info">Waiting for the restart… '
                 + 'this page will automatically take you back to the home page as soon as the '
                 + 'server is available again.</p>'
-                + `<script>${
-                    // Polls the BO server itself (the same process this reset just told to
-                    // exit - see onReset below) until it answers again, then redirects -
-                    // rather than relying on the user to remember to come back once they've
-                    // relaunched it manually. Only trusts a successful response *after* one
-                    // has already failed: right after this page loads the old process may
-                    // still be up for a moment (see the 300ms exit delay below), and an
-                    // immediate success there would just bounce straight back with nothing
-                    // actually restarted yet.
-                    'var backHref = ' + JSON.stringify(backHref) + ';'
-                    + 'var sawDown = false;'
-                    + 'var poll = function () {'
-                    + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
-                    + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
-                    + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
-                    + '};'
-                    + 'setTimeout(poll, 1000);'
-                }</script>`
+                + renderRestartWaitScript(backHref)
             + '</section>',
-            zone,
+            zone, getViewer(req),
         ));
 
         // Only closes the app (see onReset in background.ts) - it does NOT relaunch it. Delayed
@@ -6387,7 +7939,8 @@ export function startBoServer(port: number, onConfigured: () => void, onReset: (
         setTimeout(onReset, 300);
     });
 
-    return app.listen(port, () => {
+    const server = app.listen(port, () => {
         console.log(`BO server listening on http://localhost:${port}`);
     });
+    return {server, databaseReady};
 }

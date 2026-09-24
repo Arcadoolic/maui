@@ -44,6 +44,18 @@ describe('UserService.registerUser', () => {
         expect(service.getUserByPseudo3('ABC')).toBe(newUser);
     });
 
+    it('creates a new player as active', async () => {
+        let options: {defaults?: {active?: boolean}} = {};
+        (User as unknown as {findOrCreate: (opts: typeof options) => Promise<unknown>}).findOrCreate = (opts) => {
+            options = opts;
+            return Promise.resolve([{pseudo_3: 'ACT'}, true]);
+        };
+
+        await service.registerUser('ACT');
+
+        expect(options.defaults?.active).toBe(true);
+    });
+
     it('refuses a pseudo held by a deleted player, without creating or caching anything', async () => {
         const deleted = {pseudo_3: 'DEL', deletionDate: new Date()};
         stubFindOne(deleted);

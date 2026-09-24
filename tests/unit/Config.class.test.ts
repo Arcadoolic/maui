@@ -163,8 +163,8 @@ describe('Config.load', () => {
     });
 
     it('treats openDevTools as true only when the file says exactly true', () => {
-        // Implementation: `configFile.openDevTools === true`, the inverse convention of
-        // fullscreen below. A missing key or any non-true value defaults to false.
+        // Implementation: `configFile.openDevTools === true`, same convention as fullscreen
+        // below. A missing key or any non-true value defaults to false.
         const cases: Array<[unknown, boolean]> = [
             [undefined, false],
             [false, false],
@@ -185,10 +185,10 @@ describe('Config.load', () => {
         }
     });
 
-    it('treats fullscreen as true unless the file says exactly false', () => {
-        // Implementation: `configFile.fullscreen !== false`.
+    it('treats fullscreen as false (windowed) unless the file says exactly true', () => {
+        // Implementation: `configFile.fullscreen === true`.
         const cases: Array<[unknown, boolean]> = [
-            [undefined, true],
+            [undefined, false],
             [true, true],
             [false, false],
         ];
@@ -218,7 +218,7 @@ describe('Config.save', () => {
         written.repoPassword = 'secret';
         written.bezelAspect = '4:3';
         written.openDevTools = true;
-        written.fullscreen = false;
+        written.fullscreen = true;
         written.save();
 
         expect(existsSync(configPath)).toBe(true);
@@ -233,7 +233,7 @@ describe('Config.save', () => {
         expect(read.repoPassword).toBe('secret');
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
-        expect(read.fullscreen).toBe(false);
+        expect(read.fullscreen).toBe(true);
     });
 
     it('writes only the documented keys, and never avatarsPath', () => {
@@ -256,7 +256,31 @@ describe('Config.save', () => {
             'ssSoftName',
             'ssUserId',
             'ssUserPassword',
+            'thumbsDownRemovesFavorite',
+            'voteEnabled',
         ]);
+    });
+
+    it('turns the vote prompt and the thumbs down removal on by default, and reads them back', () => {
+        const config = new Config();
+        config.mamePath = '/opt/mame';
+        expect(config.voteEnabled).toBe(true);
+        expect(config.thumbsDownRemovesFavorite).toBe(true);
+
+        config.voteEnabled = false;
+        config.thumbsDownRemovesFavorite = false;
+        config.save();
+        const read = new Config();
+        read.load();
+        expect(read.voteEnabled).toBe(false);
+        expect(read.thumbsDownRemovesFavorite).toBe(false);
+
+        // A config file written before these settings existed keeps the defaults.
+        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
+        const legacy = new Config();
+        legacy.load();
+        expect(legacy.voteEnabled).toBe(true);
+        expect(legacy.thumbsDownRemovesFavorite).toBe(true);
     });
 });
 

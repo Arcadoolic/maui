@@ -1,7 +1,7 @@
 <template>
-    <div>
-        <p>Merci de vous connecter depuis un navigateur sur cette machine pour configurer l'application :</p>
-        <p class="url"><a href="#" @click.prevent="openConfigUrl">Cliquez-ici</a></p>
+    <div class="first-run">
+        <p>Configure the App</p>
+        <p class="url"><a href="#" @click.prevent="openConfigUrl">{{configUrl}}</a></p>
     </div>
 </template>
 
@@ -19,19 +19,45 @@ function openConfigUrl() {
 </script>
 
 <style scoped>
-    div {
-        display: block;
+    /* Shown in Init.vue's small square splash window (346x354): centered in it, with side
+       padding and wrapping so nothing gets cut. */
+    .first-run {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
         width: 100%;
-        height: 100%;
+        height: 100vh;
+        padding: 0 16px;
         background-color: #000000;
         text-align: center;
-        padding-top: 100px;
+    }
+    /* The splash logo behind the message: faint, but still recognizable. */
+    .first-run::before {
+        content: '';
+        position: absolute;
+        inset: 16px;
+        background: url(../assets/splash_screen_arcade.png) center / contain no-repeat;
+        opacity: 0.18;
+        pointer-events: none;
+    }
+    p {
+        position: relative;
+        margin: 6px 0;
+        text-shadow: 0 1px 4px #000000;
     }
     * {
         color: white
     }
     .url {
         font-weight: bold;
-        font-size: 1.2em;
+        font-size: 0.85em;
+        overflow-wrap: anywhere;
+    }
+    /* Same yellow as Home's game titles. */
+    .url a {
+        color: #fff513;
     }
 </style>

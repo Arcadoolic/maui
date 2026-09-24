@@ -1,5 +1,5 @@
 <template>
-    <div class="home">
+    <div class="home" :class="{empty: noGames}">
         <modal v-if="showLoader">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -7,6 +7,8 @@
 
 
         <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
+
+        <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
 
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
@@ -21,8 +23,13 @@
             </div>
         </transition>
 
+        <div class="no-games" v-if="noGames">
+            <h1>No games yet</h1>
+            <p>Add favorites in MAME, or import a starting pack from <strong>{{boUrl}}</strong></p>
+        </div>
+
         <transition name="games">
-            <Games :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
+            <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
         </transition>
 
         <transition name="flyer">
@@ -56,6 +63,7 @@ import {
 } from '@/types/CarouselCategory';
 import {mergeTtlCategories} from '@/class/CarouselCategories';
 import {join} from 'path';
+import {BO_SERVER_PORT} from '@/boServerPort';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
@@ -64,6 +72,8 @@ import * as Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
+import VoteModal from '@/components/VoteModal.vue';
+import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
 
 let gameService: GameService;
 
@@ -95,6 +105,14 @@ const showTitle = ref(true);
 const showFlyer = ref(true);
 const showLoader = ref(false);
 const showAddUser = ref(false);
+// The game whose vote is being asked, right after it was quit (see askVote()).
+const voteGame = ref<Game | null>(null);
+// Set once the first game list is loaded: an empty list then means no game on the cabinet at all
+// (no favorite yet), shown as a message instead of an empty screen.
+const gamesLoaded = ref(false);
+const boUrl = `http://localhost:${BO_SERVER_PORT}`;
+// No game at all: the message replaces the carousel (and its blue selection band).
+const noGames = computed(() => gamesLoaded.value && !games.value.length);
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -193,9 +211,17 @@ function startGame() {
     }
     mameService.startGame(game.romName).then(
         (gameProcess) => {
+            getGameService().recordLaunch(game.romName).catch((err) => {
+                Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
+                Log.error(err);
+            });
             gameProcess.on('close', () => {
                 hiService.saveHiscores(game).then(() => {
                     emitter.emit('game-quit');
+                    return askVote(game);
+                }).catch((err) => {
+                    Log.error('[Home] Error after game ' + game.id_game + ' quit.');
+                    Log.error(err);
                 });
             });
         },
@@ -204,6 +230,67 @@ function startGame() {
             Log.error(err);
         },
     );
+}
+
+/**
+ * Once a game is quit: ask the vote, unless it was already given (a thumbs up / down is final)
+ * or the BO turned the prompt off.
+ */
+async function askVote(game: Game) {
+    // Both the setting and the vote itself can have been changed from the BO since this game was
+    // loaded: read them again.
+    const config = getConfiguration();
+    config.load();
+    await game.reload();
+    if (shouldAskVote(game, config.voteEnabled)) {
+        voteGame.value = game;
+    }
+}
+
+async function onVote(vote: Vote) {
+    const game = voteGame.value;
+    voteGame.value = null;
+    if (!game || vote === VOTE_NEUTRAL) {
+        // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again.
+        return;
+    }
+    try {
+        const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite);
+        if (removed) {
+            await reloadAfterRemoval();
+        }
+    } catch (err) {
+        Log.error('[Home] Error on game ' + game.id_game + ' vote.');
+        Log.error(err);
+    }
+}
+
+/**
+ * A game left the favorites: refresh the carousel, which may have lost its category, and keep the
+ * selection where it was.
+ */
+async function reloadAfterRemoval() {
+    await loadCategories();
+    let loadedGames = selectedCategoryIndex.value <= categories.value.length
+        ? await loadCategoryGames(selectedCategoryIndex.value)
+        : [];
+    if (!loadedGames.length && selectedCategoryIndex.value) {
+        // The category the game was in had no other game: back to "All Games".
+        selectedCategoryIndex.value = 0;
+        displayedCategoryIndex.value = 0;
+        loadedGames = await loadCategoryGames(0);
+    }
+    games.value = loadedGames;
+    selectedGameIndex.value = Math.min(selectedGameIndex.value, Math.max(loadedGames.length - 1, 0));
+    flyer.value = generateFlyerPath();
+}
+
+async function loadCategories() {
+    const storedCategories = mergeTtlCategories(await gameService.loadCategories());
+    // Right after "All Games". Only offered once at least one game has extractable
+    // hiscores: an empty category would be a dead end in the carousel.
+    const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
+    categories.value = hasHiscoreGames ? [HISCORES_ONLY_CATEGORY, ...storedCategories] : storedCategories;
 }
 
 function addPlayer() {
@@ -220,7 +307,7 @@ const {onKeydown, onKeyup} = useControllable();
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        if (showAddUser.value) {
+        if (showAddUser.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -255,7 +342,7 @@ function registerKeyMapping() {
     });
 
     onKeyup((e, isGamepad) => {
-        if (showAddUser.value) {
+        if (showAddUser.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -287,12 +374,15 @@ if (!getIsInit()) {
     gameService = getGameService();
 
     onMounted(async () => {
-        const storedCategories = mergeTtlCategories(await gameService.loadCategories());
-        // Right after "All Games". Only offered once at least one game has extractable
-        // hiscores: an empty category would be a dead end in the carousel.
-        const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
-        categories.value = hasHiscoreGames ? [HISCORES_ONLY_CATEGORY, ...storedCategories] : storedCategories;
+        await loadCategories();
         games.value = await gameService.loadGames();
+        gamesLoaded.value = true;
+        // Start on the game played last, when there is one still in the favorites.
+        const lastPlayed = await gameService.loadLastPlayedGame();
+        const lastPlayedIndex = lastPlayed ? games.value.findIndex(g => g.romName === lastPlayed.romName) : -1;
+        if (lastPlayedIndex >= 0) {
+            selectedGameIndex.value = lastPlayedIndex;
+        }
         hasPlayerInfo.value = !!mameService.nplayersIniPath;
 
         Gamepads.init();
@@ -303,12 +393,6 @@ if (!getIsInit()) {
         flyer.value = generateFlyerPath();
     });
 }
-
-onMounted(() => {
-    if (getConfiguration().fullscreen) {
-        remote.getCurrentWindow().setFullScreen(true);
-    }
-});
 </script>
 
 <style scoped>
@@ -343,6 +427,46 @@ onMounted(() => {
         6px 12px 9px rgba(0, 0, 0, 1);
         filter: saturate(1.3);
     }
+    /* No game: plain black, the wallpaper only comes with the games. */
+    .home.empty {
+        background-image: none;
+    }
+
+    /* Full screen, the message centered over the splash logo, faint like on the first-run screen
+       (Config.vue). */
+    .no-games {
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 0 15%;
+        text-align: center;
+        color: #ffffff;
+        font-size: 1.4vw;
+        line-height: 1.6;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 1);
+    }
+    .no-games::before {
+        content: '';
+        position: absolute;
+        inset: 10%;
+        background: url(../assets/splash_screen_arcade.png) center / contain no-repeat;
+        opacity: 0.18;
+        pointer-events: none;
+    }
+    .no-games > * {
+        position: relative;
+    }
+    .no-games h1 {
+        color: #fff513;
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 2.5vw;
+        text-shadow: 0 0 30px rgba(237, 106, 10, 0.8), 0 3px 0 rgb(255, 81, 0), 0 12px 16px rgba(0, 0, 0, 1);
+    }
+
     .categoryTitle {
         bottom: 10px;
         background: none;

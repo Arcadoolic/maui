@@ -14,7 +14,6 @@
         "test:watch": "vitest",
         "electron:build": "electron-vite build && electron-builder --config electron-builder.yml",
         "electron:serve": "electron-vite dev --watch",
-        "starting-pack": "ts-node -P scripts/tsconfig.json scripts/build-starting-pack.ts",
         "postinstall": "electron-builder install-app-deps",
         "postuninstall": "electron-builder install-app-deps",
         "rebuild": "electron-rebuild -f -w sqlite3",
@@ -46,6 +45,7 @@
         "vue-router": "^5.3.1"
     },
     "devDependencies": {
+        "@arcadoolic/mhiex": "github:Arcadoolic/mhiex#2.0.0",
         "@electron/rebuild": "^4.2.0",
         "@eslint/js": "^10.0.1",
         "@semantic-release/changelog": "^7.0.0",
@@ -75,7 +75,6 @@
         "eslint": "^10.10.0",
         "eslint-plugin-vue": "^10.11.0",
         "globals": "^17.12.0",
-        "mame-hi-extractor": "^1.2.1",
         "semantic-release": "^25.0.9",
         "sequelize-cli": "^6.6.5",
         "ts-node": "^10.9.2",
