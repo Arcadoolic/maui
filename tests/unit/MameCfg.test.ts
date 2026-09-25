@@ -2,6 +2,7 @@ import {describe, it, expect} from 'vitest';
 import {
     compareGameFields,
     gameFieldId,
+    inputIconKey,
     isRemappablePortType,
     parseGameFields,
     readGameCfgInputSeqs,
@@ -164,5 +165,22 @@ describe('removeGameCfgInputSeq', () => {
 
     it('returns the xml unchanged when there is nothing to remove', () => {
         expect(removeGameCfgInputSeq(cfgWithMixer, button1)).toBe(cfgWithMixer);
+    });
+});
+
+describe('inputIconKey', () => {
+    it('maps every remappable port type to its icon', () => {
+        expect(inputIconKey('UI_CANCEL')).toBe('quit');
+        expect(inputIconKey('COIN2')).toBe('coin');
+        expect(inputIconKey('START1')).toBe('start');
+        expect(inputIconKey('P2_JOYSTICK_LEFT')).toBe('joystick_left');
+        expect(inputIconKey('P1_JOYSTICK_UP')).toBe('joystick_up');
+        expect(inputIconKey('P1_BUTTON3')).toBe('button_3');
+    });
+
+    it('falls back to the plain button past 9, and to nothing for anything else', () => {
+        expect(inputIconKey('P1_BUTTON12')).toBe('button');
+        expect(inputIconKey('UI_MENU')).toBeUndefined();
+        expect(inputIconKey('P1_JOYSTICKLEFT_UP')).toBeUndefined();
     });
 });

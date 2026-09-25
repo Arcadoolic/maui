@@ -69,6 +69,32 @@ export function portTypePlayer(portType: string): number {
     return match ? Number(match[1]) : 0;
 }
 
+/**
+ * Which of the BO's input icons (src/assets/input-icons/<key>.svg) illustrates a port type, or
+ * undefined for one without an icon. Buttons past 9 get the plain button, with no number: the
+ * icon set only has single digits.
+ */
+export function inputIconKey(portType: string): string | undefined {
+    if (portType === 'UI_CANCEL') {
+        return 'quit';
+    }
+    if (/^COIN\d$/.test(portType)) {
+        return 'coin';
+    }
+    if (/^START\d$/.test(portType)) {
+        return 'start';
+    }
+    const direction = /^P\d_JOYSTICK_(UP|DOWN|LEFT|RIGHT)$/.exec(portType);
+    if (direction) {
+        return `joystick_${direction[1].toLowerCase()}`;
+    }
+    const button = /^P\d_BUTTON(\d+)$/.exec(portType);
+    if (button) {
+        return Number(button[1]) <= 9 ? `button_${button[1]}` : 'button';
+    }
+    return undefined;
+}
+
 /** Display order within a player: directions, buttons by number, then start and coin. */
 export function compareGameFields(a: GameField, b: GameField): number {
     const rank = (portType: string): number => {

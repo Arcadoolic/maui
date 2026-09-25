@@ -1,0 +1,10 @@
+Input icons of the BO's Gamepads tab (see boServer.ts's INPUT_ICONS and MameCfg.ts's
+inputIconKey()).
+
+joystick_*, button*, start: composed from Kenney's "Input Prompts" pack 1.5
+(https://kenney.nl/assets/input-prompts), by Kenney (www.kenney.nl), released under
+Creative Commons Zero (CC0 1.0, http://creativecommons.org/publicdomain/zero/1.0/).
+Each file's own comment names the source glyphs it was built from.
+
+coin, quit: drawn for mame-awesome-ui in the same style (white + Kenney's red #E73246),
+same CC0 terms.

@@ -26,6 +26,7 @@ import {parseListFull} from '@/class/MameListFull';
 import {
     compareGameFields,
     gameFieldId,
+    inputIconKey,
     parseGameFields,
     portTypePlayer,
     readGameCfgInputSeqs,
@@ -2521,7 +2522,16 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             border-radius: var(--radius-md);
         }
         .binding-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
             font-weight: bold;
+        }
+        /* The glyphs only fill part of their 64x64 box (Kenney's own margins), hence the size. */
+        .binding-icon {
+            width: 40px;
+            height: 40px;
+            flex-shrink: 0;
         }
         .binding-values {
             display: grid;
@@ -3666,7 +3676,7 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
         const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
         return `
             <div class="binding">
-                <div class="binding-label">${escapeHtml(action.label)}</div>
+                ${renderBindingLabel(action.portType, action.label)}
                 <dl class="binding-values">
                     <dt>Currently</dt>
                     <dd>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>MAME default</em>'}</dd>
@@ -3838,7 +3848,7 @@ function renderGameRemapCard(
             const override = rowState?.capturedToken ?? overrides.get(id);
             return `
                 <div class="binding">
-                    <div class="binding-label">${escapeHtml(field.name || field.portType)}</div>
+                    ${renderBindingLabel(field.portType, field.name || field.portType)}
                     <dl class="binding-values">
                         <dt>MAME default</dt>
                         <dd><code>${escapeHtml(field.defaultSeq)}</code></dd>
@@ -5311,6 +5321,22 @@ const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
         .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
 );
 
+// The Gamepads tab's input icons (see src/assets/input-icons/LICENSE.txt), embedded the same way as
+// CATEGORY_ICONS above: keyed by file name without extension, i.e. by inputIconKey().
+const INPUT_ICONS: {[key: string]: string} = Object.fromEntries(
+    Object.entries(import.meta.glob('./assets/input-icons/*.svg', {query: '?raw', import: 'default', eager: true}))
+        .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
+);
+
+/** Name of a command in the Gamepads cards, after its icon when it has one (see inputIconKey()). */
+function renderBindingLabel(portType: string, label: string): string {
+    const iconKey = inputIconKey(portType);
+    const icon = iconKey && iconKey in INPUT_ICONS
+        ? `<img class="binding-icon" src="/input-icons/${escapeHtml(iconKey)}.svg" alt="">`
+        : '';
+    return `<div class="binding-label">${icon}${escapeHtml(label)}</div>`;
+}
+
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
 function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
     return renderPage(renderFavoritesCard(favoritesInfo, viewer), 'favorites', viewer);
@@ -6196,6 +6222,15 @@ export function startBoServer(
 
     app.get('/category-icons/:key.svg', (req, res) => {
         const svg = CATEGORY_ICONS[req.params.key];
+        if (!svg) {
+            res.sendStatus(404);
+            return;
+        }
+        res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+    });
+
+    app.get('/input-icons/:key.svg', (req, res) => {
+        const svg = INPUT_ICONS[req.params.key];
         if (!svg) {
             res.sendStatus(404);
             return;

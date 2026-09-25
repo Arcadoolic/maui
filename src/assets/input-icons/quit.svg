@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: power symbol -->
+<path d="M22.5 19.5 A17 17 0 1 0 41.5 19.5" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+<path d="M32 10 V32" fill="none" stroke="#E73246" stroke-width="6" stroke-linecap="round"/>
+</svg>
