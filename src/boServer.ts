@@ -57,6 +57,8 @@ import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
 import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
+import {parseGamepadIds} from '@/class/GamepadId';
+import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
@@ -409,9 +411,11 @@ function setMameIniValue(mameIniPath: string, key: string, value: string): boole
         return false;
     }
     const content = readFileSync(mameIniPath, 'utf8');
-    const lineRegex = new RegExp(`^(${key}\\s+)\\S+`, 'm');
+    // [ \t], not \s: -createconfig writes empty-valued keys (e.g. "ctrlr") as the key plus
+    // trailing spaces, and \s+ would run on into the next line and overwrite its key instead.
+    const lineRegex = new RegExp(`^(${key}[ \\t]+)\\S*|^${key}$`, 'm');
     const updated = lineRegex.test(content)
-        ? content.replace(lineRegex, `$1${value}`)
+        ? content.replace(lineRegex, (_line, keyAndSpacing?: string) => `${keyAndSpacing ?? key.padEnd(26)}${value}`)
         : `${content.replace(/\s*$/, '')}\n${key.padEnd(27)}${value}\n`;
     writeFileSync(mameIniPath, updated);
     return true;
@@ -2573,6 +2577,94 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             grid-column: 1 / -1;
             margin: 0;
         }
+        /* Gamepads tab's "Detected devices": one card per device MAME reports, same inset look
+           as the binding cards. */
+        .device-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .device {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 16px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-left: 4px solid var(--success);
+            border-radius: var(--radius-md);
+        }
+        .device-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+        }
+        .device-header h3 {
+            flex: 1;
+            margin: 0;
+            font-size: 1.15em;
+        }
+        /* MAME's player-facing number for the device - the first thing to read on the card. */
+        .device-joy {
+            padding: 4px 10px;
+            border-radius: var(--radius-sm);
+            background-color: var(--accent);
+            color: var(--bg);
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .device-pinned {
+            padding: 2px 8px;
+            border: 1px solid var(--success);
+            border-radius: var(--radius-sm);
+            color: var(--success);
+            font-size: 0.8em;
+        }
+        .device-pin {
+            align-items: center;
+        }
+        .device-pin-label {
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+        .device-absent-title {
+            margin: 24px 0 8px;
+            font-size: 1em;
+        }
+        .device-absent {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+        .device-absent li {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .device-absent code {
+            flex: 1;
+            overflow-wrap: anywhere;
+        }
+        .device-absent form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .device details summary {
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+        .device-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+            font-size: 0.85em;
+        }
         .player-panel {
             display: none;
         }
@@ -3208,17 +3300,20 @@ interface DeviceProbeRow {
     // "<item display name>=<MAME token>" pairs, e.g. "LB=BUTTON5" - kept as raw strings rather
     // than split further, this is a basic detection test, not a mapping UI yet.
     items: string[];
+    // The number MAME gives the device in its input codes, e.g. "JOYCODE_1" - empty if unknown.
+    joycode: string;
 }
 
 interface DeviceProbeState {
     result?: DeviceProbeRow[];
     error?: string;
+    info?: string;
 }
 
 /**
  * Line-based parse of device-probe.lua's stdout, captured amid MAME's normal boot chatter (menu
  * hints, warnings, etc. on other lines - anything not starting with the marker is ignored).
- * Format, one line per device: MAUI_DEVICE_ROW|<device name>|<device id>|<name>=<token>,...
+ * Format, one line per device: MAUI_DEVICE_ROW|<device name>|<device id>|<name>=<token>,...|<JOYCODE_n>
  */
 function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
     const rows: DeviceProbeRow[] = [];
@@ -3226,14 +3321,57 @@ function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
         if (!line.startsWith('MAUI_DEVICE_ROW|')) {
             continue;
         }
-        const [, name, id, itemsRaw] = line.split('|');
+        const [, name, id, itemsRaw, joycode] = line.split('|');
         rows.push({
             name: name ?? '',
             id: id ?? '',
             items: itemsRaw ? itemsRaw.split(',').filter(Boolean) : [],
+            joycode: /^JOYCODE_\d+$/.test(joycode?.trim() ?? '') ? joycode.trim() : '',
         });
     }
-    return rows;
+    // Same order as MAME's own "JOY 1", "JOY 2"... (unknown numbers last).
+    return rows.sort((a, b) => joycodeNumber(a.joycode) - joycodeNumber(b.joycode));
+}
+
+function joycodeNumber(joycode: string): number {
+    return Number(/^JOYCODE_(\d+)$/.exec(joycode)?.[1] ?? Infinity);
+}
+
+/**
+ * The controller file (see MameCtrlr.ts) the Gamepads tab pins devices to their JOYCODE number
+ * in: whichever one mame.ini's `ctrlr` already names, else "maui" (set in mame.ini on the first
+ * pin, so every MAME launch - kiosk, BO probes and sessions - loads it). Resolved under the first
+ * entry of `ctrlrpath`, relative to the mame home like every launch's cwd.
+ */
+const DEFAULT_CTRLR_NAME = 'maui';
+
+function getCtrlrFile(mameInfo: MameInfo): {name: string; path: string; enabled: boolean} {
+    const configured = getMameIniValue(mameInfo.mameIniPath, 'ctrlr')?.replace(/^"|"$/g, '') || '';
+    const name = configured || DEFAULT_CTRLR_NAME;
+    const ctrlrPath = mameInfo.showConfig?.ctrlrpath?.[0] || getMameIniValue(mameInfo.mameIniPath, 'ctrlrpath') || 'ctrlr';
+    return {
+        name,
+        path: join(resolveDirectoryPath(ctrlrPath, mameInfo.iniPath), `${name}.cfg`),
+        enabled: !!configured,
+    };
+}
+
+/** Device id pinned to each JOYCODE number - only once mame.ini actually loads the file. */
+function readPinnedDevices(mameInfo: MameInfo): Map<string, string> {
+    const ctrlr = getCtrlrFile(mameInfo);
+    return ctrlr.enabled && existsSync(ctrlr.path)
+        ? readCtrlrMapDevices(readFileSync(ctrlr.path, 'utf8'))
+        : new Map<string, string>();
+}
+
+function pinDevice(mameInfo: MameInfo, deviceId: string, joycode: string | null): void {
+    const ctrlr = getCtrlrFile(mameInfo);
+    const existing = existsSync(ctrlr.path) ? readFileSync(ctrlr.path, 'utf8') : undefined;
+    mkdirSync(dirname(ctrlr.path), {recursive: true});
+    writeFileSync(ctrlr.path, setCtrlrMapDevice(existing, deviceId, joycode), 'utf8');
+    if (!ctrlr.enabled && !setMameIniValue(mameInfo.mameIniPath, 'ctrlr', ctrlr.name)) {
+        throw new Error(`"${mameInfo.mameIniPath}" not found.`);
+    }
 }
 
 /**
@@ -3273,22 +3411,92 @@ function runDeviceProbe(mameBinary: string, iniPath: string, romName: string): D
 }
 
 /**
- * Basic detection test, not a mapping UI: lists whatever joystick/gamepad devices MAME itself
- * currently sees, with the raw item name=token pairs (e.g. "LT=SLIDER1") it would accept in a
- * default.cfg <newseq> - useful to check a device is recognized, and under what token, before
- * hand-writing any cfg entry for it.
+ * Lists whatever joystick/gamepad devices MAME itself currently sees: its "JOY <n>" number, the
+ * USB vendor/product IDs when the device id carries them (see GamepadId.ts), and the raw item
+ * name=token pairs (e.g. "LT=SLIDER1") it would accept in a default.cfg <newseq>. Each device can
+ * be pinned to a fixed JOY number (see MameCtrlr.ts), since MAME otherwise numbers them in
+ * detection order, which follows plug/pairing order.
  */
-function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): string {
+function renderDeviceProbeCard(romNames: string[], pinned: Map<string, string>, state?: DeviceProbeState): string {
     if (!romNames.length) {
         return '';
     }
-    const rows = (state?.result ?? []).map(device => `
-        <tr>
-            <td>${escapeHtml(device.name)}</td>
-            <td><code>${escapeHtml(device.id)}</code></td>
-            <td>${device.items.map(item => `<code>${escapeHtml(item)}</code>`).join(' ')}</td>
-        </tr>
-    `).join('');
+    const devices = state?.result ?? [];
+    const pinnedJoycodeOf = (deviceId: string): string | undefined =>
+        Array.from(pinned.entries()).find(([, device]) => device === deviceId)?.[0];
+    const joyLabel = (joycode: string) => `JOY ${joycodeNumber(joycode)}`;
+    // Enough JOY numbers for every detected device, and at least P1/P2 for a cabinet.
+    const joycodes = Array.from({length: Math.max(2, devices.length)}, (_, i) => `JOYCODE_${i + 1}`);
+
+    const cards = devices.map(device => {
+        const ids = parseGamepadIds(device.id);
+        const pinnedJoycode = pinnedJoycodeOf(device.id);
+        // <mapdevice> matches by id: two identical pads can't be told apart.
+        const ambiguous = devices.filter(other => other.id === device.id).length > 1;
+        const idValues = ids ? `
+            <dt>Vendor</dt>
+            <dd><code>${escapeHtml(ids.vendorId)}</code>${ids.vendorName ? ` (${escapeHtml(ids.vendorName)})` : ''}</dd>
+            <dt>Product</dt>
+            <dd><code>${escapeHtml(ids.productId)}</code></dd>
+            ${ids.bus ? `<dt>Bus</dt><dd>${escapeHtml(ids.bus)}</dd>` : ''}
+        ` : `
+            <dt>Vendor</dt>
+            <dd class="info">Not reported by this driver</dd>
+        `;
+        const pinButtons = joycodes.map(joycode => `
+            <button type="submit" name="joycode" value="${joycode}"${joycode === pinnedJoycode ? ' disabled' : ''}>${joyLabel(joycode)}</button>
+        `).join('');
+        return `
+            <article class="device">
+                <header class="device-header">
+                    ${device.joycode ? `<span class="device-joy">${joyLabel(device.joycode)}</span>` : ''}
+                    <h3>${escapeHtml(device.name) || 'Unnamed device'}</h3>
+                    ${pinnedJoycode ? `<span class="device-pinned" title="Always ${joyLabel(pinnedJoycode)}, whatever the plug order">Pinned</span>` : ''}
+                </header>
+                <dl class="binding-values">
+                    ${idValues}
+                    <dt>MAME ID</dt>
+                    <dd><code>${escapeHtml(device.id)}</code></dd>
+                </dl>
+                ${ambiguous ? `
+                    <p class="info">Another detected device has the same MAME ID: MAME can't tell them apart,
+                    so neither can be pinned (switch one to another mode, e.g. X-input vs. Switch).</p>
+                ` : `
+                    <form method="post" action="/input-probe/devices/pin" class="binding-actions device-pin">
+                        <input type="hidden" name="deviceId" value="${escapeHtml(device.id)}">
+                        <span class="device-pin-label">Pin as</span>
+                        ${pinButtons}
+                        ${pinnedJoycode ? '<button type="submit" name="joycode" value="">Unpin</button>' : ''}
+                    </form>
+                `}
+                <details>
+                    <summary>${device.items.length} buttons/axes</summary>
+                    <div class="device-items">${device.items.map(item => `<code>${escapeHtml(item)}</code>`).join(' ')}</div>
+                </details>
+            </article>
+        `;
+    }).join('');
+
+    // Pins whose device wasn't in this probe (unplugged, or other mode) - only known after a probe.
+    const detectedIds = new Set(devices.map(device => device.id));
+    const absentPins = state?.result
+        ? Array.from(pinned.entries()).filter(([, deviceId]) => !detectedIds.has(deviceId))
+        : [];
+    const absentList = absentPins.length ? `
+        <h3 class="device-absent-title">Pinned, not connected</h3>
+        <ul class="device-absent">
+            ${absentPins.map(([joycode, deviceId]) => `
+                <li>
+                    <span class="device-joy">${joyLabel(joycode)}</span>
+                    <code>${escapeHtml(deviceId)}</code>
+                    <form method="post" action="/input-probe/devices/pin">
+                        <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
+                        <button type="submit" name="joycode" value="">Unpin</button>
+                    </form>
+                </li>
+            `).join('')}
+        </ul>
+    ` : '';
 
     return `
         <section class="card">
@@ -3296,19 +3504,17 @@ function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): st
             <p class="info">Runs a rom in the background (no video or sound) just to ask MAME
             which joysticks/gamepads it currently detects, and under which name/token
             (<code>JOYCODE_&lt;n&gt;_&lt;token&gt;</code>) each of their buttons/axes is
-            recognized.</p>
+            recognized. JOY 1 plays Player 1 and JOY 2 Player 2 by default; MAME numbers devices in
+            detection order unless they're pinned.</p>
             ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.info ? `<p class="info flash">${escapeHtml(state.info)}</p>` : ''}
             <form method="post" action="/input-probe/devices">
                 <button type="submit">Detect gamepads</button>
             </form>
-            ${state?.result ? (rows ? `
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead><tr><th>Device</th><th>ID</th><th>Buttons/axes</th></tr></thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-            ` : '<p class="info flash">No joystick device detected.</p>') : ''}
+            ${state?.result ? (cards
+                ? `<div class="device-grid">${cards}</div>`
+                : '<p class="info flash">No joystick device detected.</p>') : ''}
+            ${absentList}
         </section>
     `;
 }
@@ -4021,7 +4227,7 @@ function renderForm(
                     remapState,
                 )
                     + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
-                    + renderDeviceProbeCard(romNames, deviceProbeState),
+                    + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
             });
         }
         sections.push({
@@ -7540,6 +7746,54 @@ export function startBoServer(
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 {error: `Device probe failed: ${message} (timeout, non-zero exit code, or binary not found).`},
             ));
+        }
+    });
+
+    // Pins (or with an empty joycode, unpins) a detected device to a fixed JOY number in the
+    // controller file (see getCtrlrFile()), then probes again so the cards show MAME's new numbering.
+    app.post('/input-probe/devices/pin', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).send('Action reserved to administrators.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdmin = req.session.boRole === 'admin';
+        const renderWith = (state: DeviceProbeState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+            state,
+        ));
+
+        const deviceId = typeof req.body.deviceId === 'string' ? req.body.deviceId : '';
+        const joycode = typeof req.body.joycode === 'string' ? req.body.joycode : '';
+        const romName = mameInfo.romPath ? listRomNames(mameInfo.romPath)[0] : undefined;
+        if (mameInfo.error || !romName || !config.mamePath || !config.mameBinaryName) {
+            // Same "shouldn't normally be reachable" caveat as /input-probe/devices above.
+            renderWith({error: 'No valid MAME configuration saved: unable to launch MAME.'}, 422);
+            return;
+        }
+        if (!deviceId || (joycode && !/^JOYCODE_\d+$/.test(joycode))) {
+            renderWith({error: 'Invalid device or JOY number.'}, 400);
+            return;
+        }
+
+        try {
+            pinDevice(mameInfo, deviceId, joycode || null);
+        } catch (error) {
+            console.error('[boServer] Device pin failed:', error);
+            renderWith({error: `Could not write the controller file: ${error instanceof Error ? error.message : 'unexpected error'}.`}, 500);
+            return;
+        }
+        const info = joycode
+            ? `Pinned as JOY ${joycodeNumber(joycode)} (${getCtrlrFile(mameInfo).path}).`
+            : 'Unpinned: MAME numbers this device in detection order again.';
+        try {
+            renderWith({result: runDeviceProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName), info});
+        } catch (error) {
+            console.error('[boServer] Device probe failed:', error);
+            renderWith({info, error: `Device probe failed: ${error instanceof Error ? error.message : 'unexpected error'}.`}, 500);
         }
     });
 
