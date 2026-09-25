@@ -1063,6 +1063,9 @@ const DEFAULT_BO_PASSWORD = 'puckman';
 // The wrapped data key (SecretBox.ts) can be brute-forced offline from a copy of the database,
 // only the password's length and scrypt's cost stand in the way.
 const MIN_BO_PASSWORD_LENGTH = 8;
+// bcrypt cost of the BO password hash. A hash made with a lower one (older MAUI: 10) is redone at
+// the next sign-in, while the password is at hand.
+const BO_PASSWORD_BCRYPT_ROUNDS = 12;
 
 function getSecretsKey(req: Request): Buffer | null {
     return req.session.secretsKey ? Buffer.from(req.session.secretsKey, 'hex') : null;
@@ -6730,6 +6733,10 @@ export function startBoServer(
             res.status(401).send(renderLoginPage('Incorrect username or password.'));
             return;
         }
+        if (bcrypt.getRounds(boUser.passwordHash) < BO_PASSWORD_BCRYPT_ROUNDS) {
+            boUser.passwordHash = bcrypt.hashSync(password, BO_PASSWORD_BCRYPT_ROUNDS);
+            await boUser.save();
+        }
         req.session.boUserId = boUser.id;
         req.session.boUsername = boUser.username;
         req.session.boAdvanced = false;
@@ -6809,7 +6816,7 @@ export function startBoServer(
         const dataKey = getSecretsKey(req)
             ?? (boUser.secretsKey ? unwrapDataKey(currentPassword, boUser.secretsKey) : null)
             ?? generateDataKey();
-        boUser.passwordHash = bcrypt.hashSync(newPassword, 10);
+        boUser.passwordHash = bcrypt.hashSync(newPassword, BO_PASSWORD_BCRYPT_ROUNDS);
         boUser.secretsKey = wrapDataKey(newPassword, dataKey);
         await boUser.save();
         req.session.mustChangePassword = false;
