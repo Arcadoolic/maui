@@ -27,6 +27,8 @@ export interface StartupReport {
     mauiVersion: string;
     os: 'linux' | 'darwin' | 'win32';
     osVersion: string;
+    // Human-readable OS name, sent only when known (see OsName.ts).
+    osName?: string;
     clientDatetime: string;
 }
 
@@ -131,6 +133,7 @@ export class MauiApiClient {
             maui_version: report.mauiVersion.slice(0, MAX_VERSION_LENGTH),
             os: report.os,
             os_version: report.osVersion.slice(0, MAX_OS_VERSION_LENGTH),
+            ...(report.osName ? {os_name: report.osName.slice(0, MAX_OS_VERSION_LENGTH)} : {}),
             client_datetime: report.clientDatetime,
         };
         return this.call('POST', '/startups', 201, async response => parseStartup(await readJson(response)), body);

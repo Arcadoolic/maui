@@ -9,6 +9,7 @@ import {
     readOnlineSettings,
     type OnlineSettings,
 } from '@/class/OnlineSettings';
+import {readOsName} from '@/class/OsName';
 
 // ONLINE mode for one run of MAUI: a startup report, then a heartbeat at a fixed interval (no
 // backoff: MAUI-API shows a cabinet offline after 3 minutes without one, see docs/DECISIONS.md).
@@ -28,6 +29,7 @@ export interface OnlineStatus {
 export interface OnlineSessionDeps {
     mauiVersion: string;
     readMameVersion: () => Promise<string>;
+    readOsName?: () => Promise<string>;
     settingsPath?: string;
     fetchImpl?: typeof fetch;
     machineIdSources?: MachineIdSources;
@@ -139,6 +141,7 @@ export class OnlineSession {
             mauiVersion: this.deps.mauiVersion,
             os: (this.deps.platform ?? process.platform) as StartupReport['os'],
             osVersion: (this.deps.osRelease ?? release)(),
+            osName: await (this.deps.readOsName ?? (() => readOsName(this.deps.platform)))(),
             clientDatetime: new Date().toISOString(),
         };
     }

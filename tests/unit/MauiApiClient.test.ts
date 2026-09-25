@@ -126,6 +126,22 @@ describe('requests', () => {
         expect(body.os_version).toHaveLength(64);
     });
 
+    it('adds os_name when known, truncated to 64 characters', async () => {
+        const {client, fetchImpl} = clientReturning(json(201, {id: 'x', received_at: 'y'}));
+        await client.reportStartup({...report, osName: 'Ubuntu 24.04.5 LTS'});
+        expect(JSON.parse(requestOf(fetchImpl).init.body as string).os_name).toBe('Ubuntu 24.04.5 LTS');
+
+        const long = clientReturning(json(201, {id: 'x', received_at: 'y'}));
+        await long.client.reportStartup({...report, osName: 'n'.repeat(80)});
+        expect(JSON.parse(requestOf(long.fetchImpl).init.body as string).os_name).toHaveLength(64);
+    });
+
+    it('omits os_name when it is unknown', async () => {
+        const {client, fetchImpl} = clientReturning(json(201, {id: 'x', received_at: 'y'}));
+        await client.reportStartup({...report, osName: ''});
+        expect(JSON.parse(requestOf(fetchImpl).init.body as string)).not.toHaveProperty('os_name');
+    });
+
     it('sends POST /heartbeat without a body', async () => {
         const {client, fetchImpl} = clientReturning(new Response(null, {status: 204}));
         await client.heartbeat();
