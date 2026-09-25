@@ -62,6 +62,10 @@ import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
+import {escapeHtml} from '@/class/EscapeHtml';
+import {getOnlineView, resetOnlineSettings, saveConfigurationString, testConnection} from '@/class/OnlineSetup';
+import {renderOnlineCard} from '@/class/OnlineBoCard';
+import {isSameOriginRequest} from '@/class/SameOrigin';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
@@ -1148,14 +1152,6 @@ async function downloadMissingFavoriteMedia(
     }
 
     return summary;
-}
-
-function escapeHtml(value: string): string {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }
 
 /**
@@ -4722,6 +4718,8 @@ interface MauiPageMessages {
     dangerZoneInfo?: string;
     updateInfoMessage?: string;
     updateInfoError?: string;
+    onlineInfo?: string;
+    onlineError?: string;
 }
 
 /**
@@ -4810,6 +4808,12 @@ function renderMauiPage(
     // Import/export and the danger zone both act on the app's own config/database - only
     // shown (and only actionable, see /maui/export, /maui/import and /reset) in Advanced configuration.
     if (isAdvanced) {
+        // Advanced configuration only, see POST /maui/online/*.
+        sections.push({
+            id: 'online',
+            label: 'Online',
+            html: renderOnlineCard(getOnlineView(), {error: messages.onlineError, info: messages.onlineInfo}),
+        });
         sections.push({
             id: 'import-export',
             label: 'Import/Export',
@@ -4820,10 +4824,11 @@ function renderMauiPage(
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
     const defaultSubtab = messages.dangerZoneInfo !== undefined ? 'danger'
-        : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
-            : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
-                : messages.mauiInfo !== undefined ? 'general'
-                    : undefined;
+        : (messages.onlineError !== undefined || messages.onlineInfo !== undefined) ? 'online'
+            : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
+                : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
+                    : messages.mauiInfo !== undefined ? 'general'
+                        : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -6435,6 +6440,23 @@ function renderBrowsePage(
  * Starts the BO. `databaseReady` resolves once the database exists and is migrated (see
  * bootstrapDatabase()); requests arriving before wait for it.
  */
+/**
+ * Guard of the /maui/online/* routes, which decide where the ONLINE token is sent: Advanced
+ * configuration only, and same-origin only since the BO has no CSRF token (see SameOrigin.ts and
+ * docs/DECISIONS.md). Sends the 403 itself; true means the caller must stop.
+ */
+function refuseOnlineRequest(req: Request, res: Response): boolean {
+    if (!req.session.boAdvanced) {
+        res.status(403).send('Available in Advanced configuration only.');
+        return true;
+    }
+    if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+        res.status(403).send('Cross-site request refused.');
+        return true;
+    }
+    return false;
+}
+
 export function startBoServer(
     port: number, reloadFront: () => void, onReset: () => void,
 ): {server: Server; databaseReady: Promise<void>} {
@@ -7385,6 +7407,43 @@ export function startBoServer(
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
         config.save();
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
+    });
+
+    app.post('/maui/online/save', async (req, res) => {
+        if (refuseOnlineRequest(req, res)) {
+            return;
+        }
+        const input = typeof req.body.configuration === 'string' ? req.body.configuration : '';
+        const outcome = saveConfigurationString(input);
+        const config = new Config();
+        config.load();
+        await sendMauiPage(req, res, config, outcome.ok
+            ? {onlineInfo: 'Configuration saved. Use "Test connection" to check it.'}
+            : {onlineError: outcome.error});
+    });
+
+    app.post('/maui/online/test', async (req, res) => {
+        if (refuseOnlineRequest(req, res)) {
+            return;
+        }
+        const result = await testConnection();
+        const config = new Config();
+        config.load();
+        await sendMauiPage(req, res, config, result.level === 'info'
+            ? {onlineInfo: result.message}
+            : {onlineError: result.message});
+    });
+
+    app.post('/maui/online/reset', async (req, res) => {
+        if (refuseOnlineRequest(req, res)) {
+            return;
+        }
+        const result = resetOnlineSettings();
+        const config = new Config();
+        config.load();
+        await sendMauiPage(req, res, config, result.level === 'info'
+            ? {onlineInfo: result.message}
+            : {onlineError: result.message});
     });
 
     // Backup/restore of mame-awesome-ui's own config/database - Advanced configuration only (see the "Import /

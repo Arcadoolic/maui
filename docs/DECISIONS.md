@@ -319,3 +319,44 @@ reworked genre/nplayers sourcing), and one already-shipped upstream bug fix
 independent fix of the identical bug. See commit `7134f90` for the full
 repair, and the "findings during execution" `__static` entry above for the
 scope change it caused.
+
+## ONLINE mode (MAUI-API)
+
+Integration handoff: `maui-api` `docs/MAUI-INTEGRATION.md`. Open questions
+from its section 9 are decided here.
+
+**CSRF, 2026-09-25: `Origin` check on the Online routes only.** The BO has no
+CSRF protection and is reachable from the whole LAN, and the Online routes
+decide where the ONLINE token is sent (a forged configuration pointing to
+another server would leak it with the next heartbeat). `POST /maui/online/*`
+therefore require a same-origin request (`src/class/SameOrigin.ts`: `Origin`
+host equal to `Host`, `Referer` as fallback, neither header refused), on top of
+the Advanced configuration switch. The rest of the BO (export, import, reset)
+keeps the same gap: a CSRF token for the whole BO is a separate piece of work,
+not tied to ONLINE. The URL also only changes by pasting a complete `MAUI1.`
+string, never through a field of its own.
+
+Not covered: DNS rebinding. An attacker's domain first resolves to their
+server, then to the cabinet's IP, so their page reaches the BO while looking
+same-origin to the browser (`Origin` and `Host` both carry the attacker's
+domain). The real BO session cookie is not sent, but the default
+`puckman`/`puckman` login lets the page sign in by itself. For ONLINE this
+allows sabotage, not token theft: the token is never shown again, and pasting
+a new string replaces the URL and the token together, so the saved token
+cannot be redirected to another server. The rest of the BO is more exposed
+(export of the config file with the ScreenScraper passwords, reset). The fix,
+a `Host` header allowlist (`localhost`, IP literals, the machine's own name)
+applied to the whole BO, is a separate piece of work, like a BO-wide CSRF
+token. Changing the default password reduces the risk meanwhile.
+
+**Corrupt `online.json`, 2026-09-25: reset from the BO.** A kiosk cabinet
+often has no reachable shell, so "fix the file by hand" is not an option. The
+Online subtab offers "Reset ONLINE settings" only when the file is unreadable:
+the file is renamed to `online.json.corrupt-<timestamp>` (not deleted), and
+`localUuid` is salvaged from the raw text when it is still there, which keeps
+the machine binding valid. Credentials from a damaged file are never reused:
+the configuration string must be pasted again.
+
+**Unknown rejection code (open, slice 4).** What `OnlineSession` does with a
+`rejected` result whose `code` MAUI does not know: stop, or keep retrying.
+`MauiApiClient` passes the code through either way.
