@@ -7,6 +7,7 @@ import {
     ensureLocalUuid,
     getOnlineSettingsPath,
     readOnlineSettings,
+    resetCorruptOnlineSettings,
     writeOnlineSettings,
 } from '@/class/OnlineSettings';
 
@@ -104,6 +105,52 @@ describe('writeOnlineSettings', () => {
         writeOnlineSettings(saved, path);
         writeOnlineSettings({...saved, enabled: false}, path);
         expect(readdirSync(join(dir, 'app'))).toEqual(['online.json']);
+    });
+});
+
+describe('resetCorruptOnlineSettings', () => {
+    const now = new Date('2026-09-25T10:11:12.345Z');
+    const backupName = 'online.json.corrupt-2026-09-25T10-11-12-345Z';
+
+    function corrupt(content: string): void {
+        writeOnlineSettings(saved, path);
+        writeFileSync(path, content);
+    }
+
+    it('refuses to touch a readable file', () => {
+        writeOnlineSettings(saved, path);
+        expect(resetCorruptOnlineSettings(path, now)).toEqual({reset: false});
+        expect(readOnlineSettings(path)).toEqual(saved);
+    });
+
+    it('refuses when there is no file', () => {
+        expect(resetCorruptOnlineSettings(path, now)).toEqual({reset: false});
+    });
+
+    it('moves the corrupt file aside with a Windows-safe name, keeping its content', () => {
+        corrupt('{garbage');
+        const outcome = resetCorruptOnlineSettings(path, now);
+        expect(outcome).toMatchObject({reset: true, backupPath: join(dir, 'app', backupName)});
+        expect(readFileSync(join(dir, 'app', backupName), 'utf8')).toBe('{garbage');
+        expect(backupName).not.toMatch(/:/);
+    });
+
+    it('recovers localUuid from a truncated file', () => {
+        corrupt(`{"url": "https://api.example.org", "localUuid": "${saved.localUuid}", "tok`);
+        expect(resetCorruptOnlineSettings(path, now)).toMatchObject({reset: true, localUuidRecovered: true});
+        expect(readOnlineSettings(path)).toEqual({url: '', key: '', token: '', localUuid: saved.localUuid, enabled: false});
+    });
+
+    it('starts from scratch when localUuid cannot be recovered', () => {
+        corrupt('\u0000\u0000\u0000');
+        expect(resetCorruptOnlineSettings(path, now)).toMatchObject({reset: true, localUuidRecovered: false});
+        expect(readOnlineSettings(path)).toEqual({url: '', key: '', token: '', localUuid: '', enabled: false});
+    });
+
+    it('never recovers credentials, only the identity', () => {
+        corrupt(`{"key": "mk_x", "token": "1|t", "localUuid": "${saved.localUuid}"`);
+        resetCorruptOnlineSettings(path, now);
+        expect(readOnlineSettings(path)).toMatchObject({key: '', token: ''});
     });
 });
 

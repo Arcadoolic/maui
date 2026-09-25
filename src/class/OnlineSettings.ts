@@ -74,6 +74,49 @@ export function writeOnlineSettings(settings: OnlineSettings, path: string = get
     }
 }
 
+export type ResetOutcome =
+    | {reset: false}
+    | {reset: true; backupPath: string; localUuidRecovered: boolean};
+
+const LOCAL_UUID_PATTERN = /"localUuid"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i;
+
+function readRaw(path: string): string {
+    try {
+        return readFileSync(path, 'utf8');
+    } catch {
+        return '';
+    }
+}
+
+// Way out of a corrupt file from the BO, the only interface on a kiosk cabinet. Only acts on a
+// file that really is unreadable. The file is renamed, not deleted (it keeps its 0600 mode), and
+// only localUuid is salvaged: keeping it keeps the machine binding valid on the API side, while
+// credentials from a damaged file are not trusted and must be pasted again.
+export function resetCorruptOnlineSettings(
+    path: string = getOnlineSettingsPath(), now: Date = new Date(),
+): ResetOutcome {
+    if (!existsSync(path)) {
+        return {reset: false};
+    }
+    try {
+        readOnlineSettings(path);
+        return {reset: false};
+    } catch (error) {
+        if (!(error instanceof OnlineSettingsError)) {
+            throw error;
+        }
+    }
+
+    const localUuid = LOCAL_UUID_PATTERN.exec(readRaw(path))?.[1] ?? '';
+    // No ':' in the name: Windows refuses it in file names.
+    const backupPath = `${path}.corrupt-${now.toISOString().replace(/[:.]/g, '-')}`;
+    renameSync(path, backupPath);
+    if (localUuid !== '') {
+        writeOnlineSettings({...DEFAULTS, localUuid}, path);
+    }
+    return {reset: true, backupPath, localUuidRecovered: localUuid !== ''};
+}
+
 export function ensureLocalUuid(path: string = getOnlineSettingsPath()): OnlineSettings {
     const settings = readOnlineSettings(path);
     if (settings.localUuid !== '') {
