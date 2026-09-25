@@ -57,6 +57,8 @@ import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
 import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
+import {parseGamepadIds} from '@/class/GamepadId';
+import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
@@ -82,14 +84,16 @@ declare module 'express-session' {
     interface SessionData {
         boUserId?: number;
         boUsername?: string;
-        boRole?: 'admin' | 'user';
+        // "Advanced configuration" mode (see POST /advanced): shows the sections an owner rarely
+        // needs (ScreenScraper, Repository, Danger...). Off at every sign-in.
+        boAdvanced?: boolean;
     }
 }
 
 type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui' | 'account';
-// Who a page is rendered for: admin-only tabs are left out of the nav for 'user', and null (signed
-// out - the login page) gets no nav at all.
-type Viewer = 'admin' | 'user' | null;
+// Who a page is rendered for: 'basic' leaves the Advanced configuration tabs/sections out (see
+// POST /advanced), and null (signed out - the login page) gets no nav at all.
+type Viewer = 'advanced' | 'basic' | null;
 type PathField = 'mamePath' | 'pluginsPath';
 
 interface ScreenScraperValues {
@@ -409,9 +413,11 @@ function setMameIniValue(mameIniPath: string, key: string, value: string): boole
         return false;
     }
     const content = readFileSync(mameIniPath, 'utf8');
-    const lineRegex = new RegExp(`^(${key}\\s+)\\S+`, 'm');
+    // [ \t], not \s: -createconfig writes empty-valued keys (e.g. "ctrlr") as the key plus
+    // trailing spaces, and \s+ would run on into the next line and overwrite its key instead.
+    const lineRegex = new RegExp(`^(${key}[ \\t]+)\\S*|^${key}$`, 'm');
     const updated = lineRegex.test(content)
-        ? content.replace(lineRegex, `$1${value}`)
+        ? content.replace(lineRegex, (_line, keyAndSpacing?: string) => `${keyAndSpacing ?? key.padEnd(26)}${value}`)
         : `${content.replace(/\s*$/, '')}\n${key.padEnd(27)}${value}\n`;
     writeFileSync(mameIniPath, updated);
     return true;
@@ -1387,7 +1393,7 @@ function renderPage(body: string, active: Tab, viewer: Viewer, hasSubtabs: boole
 }
 
 function getViewer(req: Request): Viewer {
-    return req.session.boRole === 'admin' ? 'admin' : 'user';
+    return req.session.boAdvanced ? 'advanced' : 'basic';
 }
 
 interface Subsection {
@@ -1577,11 +1583,26 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             width: min(360px, 90vw);
             height: auto;
         }
-        .app-version {
+        /* Fixed top-right corner: the Advanced configuration switch, then the running version. */
+        .top-right {
             position: fixed;
             top: 8px;
             right: 12px;
             z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        /* On a phone the fixed corner would sit on top of the centered logo: back in the flow,
+           right-aligned above the header instead. */
+        @media (max-width: 600px) {
+            .top-right {
+                position: static;
+                justify-content: flex-end;
+                padding: 8px 12px 0;
+            }
+        }
+        .app-version {
             color: #ff4d4d;
             font-size: 0.8em;
             font-weight: bold;
@@ -1626,6 +1647,29 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             /* Already the strongest state on the bar - a hover background would just dim the
                solid pill for no reason. */
             background-color: var(--text);
+        }
+        /* A plain switch, not a tab - it changes which tabs/sections exist. */
+        .advanced-toggle {
+            margin: 0;
+        }
+        /* margin-top: overrides the generic "form > button:last-child" spacing, which pushed the
+           button below the version next to it. */
+        .advanced-toggle > button[type="submit"]:last-child {
+            margin-top: 0;
+            padding: 4px 12px;
+            color: var(--text-muted);
+            background-color: var(--surface-strong);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            font-size: 0.85em;
+        }
+        .advanced-toggle > button[type="submit"]:hover:not(:disabled) {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        .advanced-toggle > button[type="submit"][aria-pressed="true"] {
+            color: var(--warn);
+            border-color: var(--warn);
         }
         .card {
             background-color: var(--surface);
@@ -1923,7 +1967,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .badge-deleted {
             color: var(--text-muted);
         }
-        /* Deleted players, listed after the others in the same Players table (admins only). */
+        /* Deleted players, listed after the others in the same Players table (Advanced configuration only). */
         table.favorites-table tr.row-deleted td {
             opacity: 0.6;
         }
@@ -2573,6 +2617,94 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             grid-column: 1 / -1;
             margin: 0;
         }
+        /* Gamepads tab's "Detected devices": one card per device MAME reports, same inset look
+           as the binding cards. */
+        .device-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .device {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 16px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-left: 4px solid var(--success);
+            border-radius: var(--radius-md);
+        }
+        .device-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+        }
+        .device-header h3 {
+            flex: 1;
+            margin: 0;
+            font-size: 1.15em;
+        }
+        /* MAME's player-facing number for the device - the first thing to read on the card. */
+        .device-joy {
+            padding: 4px 10px;
+            border-radius: var(--radius-sm);
+            background-color: var(--accent);
+            color: var(--bg);
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .device-pinned {
+            padding: 2px 8px;
+            border: 1px solid var(--success);
+            border-radius: var(--radius-sm);
+            color: var(--success);
+            font-size: 0.8em;
+        }
+        .device-pin {
+            align-items: center;
+        }
+        .device-pin-label {
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+        .device-absent-title {
+            margin: 24px 0 8px;
+            font-size: 1em;
+        }
+        .device-absent {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+        .device-absent li {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .device-absent code {
+            flex: 1;
+            overflow-wrap: anywhere;
+        }
+        .device-absent form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .device details summary {
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+        .device-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+            font-size: 0.85em;
+        }
         .player-panel {
             display: none;
         }
@@ -2589,14 +2721,22 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
 </head>
 <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <div class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</div>
+    <div class="top-right">
+        ${viewer ? `<form method="post" action="/advanced" class="advanced-toggle">
+            <button type="submit" aria-pressed="${viewer === 'advanced'}"
+                title="${viewer === 'advanced' ? 'Hide' : 'Show'} ScreenScraper, Repository, Danger and the other rarely needed settings">
+                Advanced configuration: ${viewer === 'advanced' ? 'on' : 'off'}
+            </button>
+        </form>` : ''}
+        <span class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</span>
+    </div>
     <header>
         <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
         ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
-            ${viewer === 'admin' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
+            ${viewer === 'advanced' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
             ${renderNavTabLink('/maui', 'MAUI', active === 'maui')}
             ${renderNavTabLink('/account', 'My account', active === 'account')}
         </nav>` : ''}
@@ -2940,11 +3080,11 @@ function renderLoginPage(error?: string): string {
     `, 'mame', null);
 }
 
-function renderAccountPage(username: string, role: string, error?: string, info?: string): string {
+function renderAccountPage(username: string, viewer: Viewer, error?: string, info?: string): string {
     return renderPage(`
         <section class="card">
             <h2>My account</h2>
-            <p>Signed in as <strong>${escapeHtml(username)}</strong> (${escapeHtml(role)}).</p>
+            <p>Signed in as <strong>${escapeHtml(username)}</strong>.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/account/password">
@@ -2962,7 +3102,7 @@ function renderAccountPage(username: string, role: string, error?: string, info?
                 <button type="submit">Sign out</button>
             </form>
         </section>
-    `, 'account', role === 'admin' ? 'admin' : 'user');
+    `, 'account', viewer);
 }
 
 interface ConfigFormValues {
@@ -3208,17 +3348,20 @@ interface DeviceProbeRow {
     // "<item display name>=<MAME token>" pairs, e.g. "LB=BUTTON5" - kept as raw strings rather
     // than split further, this is a basic detection test, not a mapping UI yet.
     items: string[];
+    // The number MAME gives the device in its input codes, e.g. "JOYCODE_1" - empty if unknown.
+    joycode: string;
 }
 
 interface DeviceProbeState {
     result?: DeviceProbeRow[];
     error?: string;
+    info?: string;
 }
 
 /**
  * Line-based parse of device-probe.lua's stdout, captured amid MAME's normal boot chatter (menu
  * hints, warnings, etc. on other lines - anything not starting with the marker is ignored).
- * Format, one line per device: MAUI_DEVICE_ROW|<device name>|<device id>|<name>=<token>,...
+ * Format, one line per device: MAUI_DEVICE_ROW|<device name>|<device id>|<name>=<token>,...|<JOYCODE_n>
  */
 function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
     const rows: DeviceProbeRow[] = [];
@@ -3226,14 +3369,57 @@ function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
         if (!line.startsWith('MAUI_DEVICE_ROW|')) {
             continue;
         }
-        const [, name, id, itemsRaw] = line.split('|');
+        const [, name, id, itemsRaw, joycode] = line.split('|');
         rows.push({
             name: name ?? '',
             id: id ?? '',
             items: itemsRaw ? itemsRaw.split(',').filter(Boolean) : [],
+            joycode: /^JOYCODE_\d+$/.test(joycode?.trim() ?? '') ? joycode.trim() : '',
         });
     }
-    return rows;
+    // Same order as MAME's own "JOY 1", "JOY 2"... (unknown numbers last).
+    return rows.sort((a, b) => joycodeNumber(a.joycode) - joycodeNumber(b.joycode));
+}
+
+function joycodeNumber(joycode: string): number {
+    return Number(/^JOYCODE_(\d+)$/.exec(joycode)?.[1] ?? Infinity);
+}
+
+/**
+ * The controller file (see MameCtrlr.ts) the Gamepads tab pins devices to their JOYCODE number
+ * in: whichever one mame.ini's `ctrlr` already names, else "maui" (set in mame.ini on the first
+ * pin, so every MAME launch - kiosk, BO probes and sessions - loads it). Resolved under the first
+ * entry of `ctrlrpath`, relative to the mame home like every launch's cwd.
+ */
+const DEFAULT_CTRLR_NAME = 'maui';
+
+function getCtrlrFile(mameInfo: MameInfo): {name: string; path: string; enabled: boolean} {
+    const configured = getMameIniValue(mameInfo.mameIniPath, 'ctrlr')?.replace(/^"|"$/g, '') || '';
+    const name = configured || DEFAULT_CTRLR_NAME;
+    const ctrlrPath = mameInfo.showConfig?.ctrlrpath?.[0] || getMameIniValue(mameInfo.mameIniPath, 'ctrlrpath') || 'ctrlr';
+    return {
+        name,
+        path: join(resolveDirectoryPath(ctrlrPath, mameInfo.iniPath), `${name}.cfg`),
+        enabled: !!configured,
+    };
+}
+
+/** Device id pinned to each JOYCODE number - only once mame.ini actually loads the file. */
+function readPinnedDevices(mameInfo: MameInfo): Map<string, string> {
+    const ctrlr = getCtrlrFile(mameInfo);
+    return ctrlr.enabled && existsSync(ctrlr.path)
+        ? readCtrlrMapDevices(readFileSync(ctrlr.path, 'utf8'))
+        : new Map<string, string>();
+}
+
+function pinDevice(mameInfo: MameInfo, deviceId: string, joycode: string | null): void {
+    const ctrlr = getCtrlrFile(mameInfo);
+    const existing = existsSync(ctrlr.path) ? readFileSync(ctrlr.path, 'utf8') : undefined;
+    mkdirSync(dirname(ctrlr.path), {recursive: true});
+    writeFileSync(ctrlr.path, setCtrlrMapDevice(existing, deviceId, joycode), 'utf8');
+    if (!ctrlr.enabled && !setMameIniValue(mameInfo.mameIniPath, 'ctrlr', ctrlr.name)) {
+        throw new Error(`"${mameInfo.mameIniPath}" not found.`);
+    }
 }
 
 /**
@@ -3273,22 +3459,92 @@ function runDeviceProbe(mameBinary: string, iniPath: string, romName: string): D
 }
 
 /**
- * Basic detection test, not a mapping UI: lists whatever joystick/gamepad devices MAME itself
- * currently sees, with the raw item name=token pairs (e.g. "LT=SLIDER1") it would accept in a
- * default.cfg <newseq> - useful to check a device is recognized, and under what token, before
- * hand-writing any cfg entry for it.
+ * Lists whatever joystick/gamepad devices MAME itself currently sees: its "JOY <n>" number, the
+ * USB vendor/product IDs when the device id carries them (see GamepadId.ts), and the raw item
+ * name=token pairs (e.g. "LT=SLIDER1") it would accept in a default.cfg <newseq>. Each device can
+ * be pinned to a fixed JOY number (see MameCtrlr.ts), since MAME otherwise numbers them in
+ * detection order, which follows plug/pairing order.
  */
-function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): string {
+function renderDeviceProbeCard(romNames: string[], pinned: Map<string, string>, state?: DeviceProbeState): string {
     if (!romNames.length) {
         return '';
     }
-    const rows = (state?.result ?? []).map(device => `
-        <tr>
-            <td>${escapeHtml(device.name)}</td>
-            <td><code>${escapeHtml(device.id)}</code></td>
-            <td>${device.items.map(item => `<code>${escapeHtml(item)}</code>`).join(' ')}</td>
-        </tr>
-    `).join('');
+    const devices = state?.result ?? [];
+    const pinnedJoycodeOf = (deviceId: string): string | undefined =>
+        Array.from(pinned.entries()).find(([, device]) => device === deviceId)?.[0];
+    const joyLabel = (joycode: string) => `JOY ${joycodeNumber(joycode)}`;
+    // Enough JOY numbers for every detected device, and at least P1/P2 for a cabinet.
+    const joycodes = Array.from({length: Math.max(2, devices.length)}, (_, i) => `JOYCODE_${i + 1}`);
+
+    const cards = devices.map(device => {
+        const ids = parseGamepadIds(device.id);
+        const pinnedJoycode = pinnedJoycodeOf(device.id);
+        // <mapdevice> matches by id: two identical pads can't be told apart.
+        const ambiguous = devices.filter(other => other.id === device.id).length > 1;
+        const idValues = ids ? `
+            <dt>Vendor</dt>
+            <dd><code>${escapeHtml(ids.vendorId)}</code>${ids.vendorName ? ` (${escapeHtml(ids.vendorName)})` : ''}</dd>
+            <dt>Product</dt>
+            <dd><code>${escapeHtml(ids.productId)}</code></dd>
+            ${ids.bus ? `<dt>Bus</dt><dd>${escapeHtml(ids.bus)}</dd>` : ''}
+        ` : `
+            <dt>Vendor</dt>
+            <dd class="info">Not reported by this driver</dd>
+        `;
+        const pinButtons = joycodes.map(joycode => `
+            <button type="submit" name="joycode" value="${joycode}"${joycode === pinnedJoycode ? ' disabled' : ''}>${joyLabel(joycode)}</button>
+        `).join('');
+        return `
+            <article class="device">
+                <header class="device-header">
+                    ${device.joycode ? `<span class="device-joy">${joyLabel(device.joycode)}</span>` : ''}
+                    <h3>${escapeHtml(device.name) || 'Unnamed device'}</h3>
+                    ${pinnedJoycode ? `<span class="device-pinned" title="Always ${joyLabel(pinnedJoycode)}, whatever the plug order">Pinned</span>` : ''}
+                </header>
+                <dl class="binding-values">
+                    ${idValues}
+                    <dt>MAME ID</dt>
+                    <dd><code>${escapeHtml(device.id)}</code></dd>
+                </dl>
+                ${ambiguous ? `
+                    <p class="info">Another detected device has the same MAME ID: MAME can't tell them apart,
+                    so neither can be pinned (switch one to another mode, e.g. X-input vs. Switch).</p>
+                ` : `
+                    <form method="post" action="/input-probe/devices/pin" class="binding-actions device-pin">
+                        <input type="hidden" name="deviceId" value="${escapeHtml(device.id)}">
+                        <span class="device-pin-label">Pin as</span>
+                        ${pinButtons}
+                        ${pinnedJoycode ? '<button type="submit" name="joycode" value="">Unpin</button>' : ''}
+                    </form>
+                `}
+                <details>
+                    <summary>${device.items.length} buttons/axes</summary>
+                    <div class="device-items">${device.items.map(item => `<code>${escapeHtml(item)}</code>`).join(' ')}</div>
+                </details>
+            </article>
+        `;
+    }).join('');
+
+    // Pins whose device wasn't in this probe (unplugged, or other mode) - only known after a probe.
+    const detectedIds = new Set(devices.map(device => device.id));
+    const absentPins = state?.result
+        ? Array.from(pinned.entries()).filter(([, deviceId]) => !detectedIds.has(deviceId))
+        : [];
+    const absentList = absentPins.length ? `
+        <h3 class="device-absent-title">Pinned, not connected</h3>
+        <ul class="device-absent">
+            ${absentPins.map(([joycode, deviceId]) => `
+                <li>
+                    <span class="device-joy">${joyLabel(joycode)}</span>
+                    <code>${escapeHtml(deviceId)}</code>
+                    <form method="post" action="/input-probe/devices/pin">
+                        <input type="hidden" name="deviceId" value="${escapeHtml(deviceId)}">
+                        <button type="submit" name="joycode" value="">Unpin</button>
+                    </form>
+                </li>
+            `).join('')}
+        </ul>
+    ` : '';
 
     return `
         <section class="card">
@@ -3296,19 +3552,17 @@ function renderDeviceProbeCard(romNames: string[], state?: DeviceProbeState): st
             <p class="info">Runs a rom in the background (no video or sound) just to ask MAME
             which joysticks/gamepads it currently detects, and under which name/token
             (<code>JOYCODE_&lt;n&gt;_&lt;token&gt;</code>) each of their buttons/axes is
-            recognized.</p>
+            recognized. JOY 1 plays Player 1 and JOY 2 Player 2 by default; MAME numbers devices in
+            detection order unless they're pinned.</p>
             ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.info ? `<p class="info flash">${escapeHtml(state.info)}</p>` : ''}
             <form method="post" action="/input-probe/devices">
                 <button type="submit">Detect gamepads</button>
             </form>
-            ${state?.result ? (rows ? `
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead><tr><th>Device</th><th>ID</th><th>Buttons/axes</th></tr></thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-            ` : '<p class="info flash">No joystick device detected.</p>') : ''}
+            ${state?.result ? (cards
+                ? `<div class="device-grid">${cards}</div>`
+                : '<p class="info flash">No joystick device detected.</p>') : ''}
+            ${absentList}
         </section>
     `;
 }
@@ -3376,7 +3630,7 @@ interface RemapState {
     error?: string;
     capturedToken?: string;
     // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
-    // binds it to them by default - shown so the admin knows why e.g. the menu key changed.
+    // binds it to them by default - shown so the user knows why e.g. the menu key changed.
     releasedFrom?: string[];
 }
 
@@ -3392,9 +3646,10 @@ interface MameConfigSession {
     cfgEdits: (() => void)[];
 }
 
-// Module-scope: at most one config session at a time, explicitly started/stopped by an admin from
+// Module-scope: at most one config session at a time, explicitly started/stopped by a BO user from
 // the Gamepads tab (see startMameConfigSession()/stopMameConfigSession()/captureOnePress() below) -
-// there's only ever one admin configuring one cabinet's inputs, no need for more than one.
+// there's only one cabinet (one MAME window) to configure, so users signed in at the same time
+// share it rather than each getting their own.
 let mameConfigSession: MameConfigSession | undefined;
 
 function isMameConfigSessionAlive(): boolean {
@@ -3502,7 +3757,7 @@ function stopMameConfigSession(): void {
 /**
  * Arms the running config session for one press and blocks - poll/sleep, same spirit as the
  * execFileSync-based probes elsewhere in this file, just spread across a loop instead of one
- * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the admin may need
+ * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the user may need
  * to walk over to the cabinet's pad; the session runs with -background_input, see
  * startMameConfigSession(), so MAME doesn't need the focus). Returns the exact token MAME resolved the press to (e.g. "JOYCODE_1_BUTTON5"), null
  * if no session is running or nothing was captured in time.
@@ -3793,7 +4048,7 @@ function readSessionGameFields(): GameField[] | undefined {
 /**
  * Blocks (same poll/sleep spirit as captureOnePress()) until the freshly launched session has
  * dumped its game's fields, so the per-game card lists the commands right away instead of asking
- * the admin to reload it. Gives up silently after `timeoutMs`: the card then says MAME is still
+ * the user to reload it. Gives up silently after `timeoutMs`: the card then says MAME is still
  * starting.
  */
 function waitForSessionGameFields(timeoutMs: number): void {
@@ -3971,7 +4226,7 @@ function renderMauiDangerZoneCard(info?: string): string {
 function renderForm(
     values: ConfigFormValues,
     mameInfo: MameInfo,
-    isAdmin: boolean,
+    isAdvanced: boolean,
     error?: string,
     info?: string,
     mameInfoMessage?: string,
@@ -4004,26 +4259,25 @@ function renderForm(
         // Starting packs are MAME-only content (roms/artwork/favorites/categories/player
         // counts, all resolved from this same MAME install) - kept on this tab instead of
         // its own, next to the MAME info it depends on and updates.
-        // Admin-only: every action on this tab spawns MAME on the machine hosting the BO (and the
-        // remap card rewrites default.cfg) - their routes reject non-admins server-side too.
-        if (isAdmin) {
-            const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
-            const romLabels = config.mamePath && config.mameBinaryName
-                ? getRomLabels(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romNames)
-                : new Map<string, string>();
-            const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
-            sections.push({
-                id: 'gamepads',
-                label: 'Gamepads',
-                html: renderRemapCard(
-                    romNames,
-                    readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
-                    remapState,
-                )
-                    + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
-                    + renderDeviceProbeCard(romNames, deviceProbeState),
-            });
-        }
+        // Always shown, not part of Advanced configuration: gamepad setup is everyday cabinet
+        // tuning (the actions spawn MAME on the machine hosting the BO and rewrite default.cfg,
+        // game cfgs and the controller file - input bindings only, nothing destructive).
+        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
+        const romLabels = config.mamePath && config.mameBinaryName
+            ? getRomLabels(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romNames)
+            : new Map<string, string>();
+        const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
+        sections.push({
+            id: 'gamepads',
+            label: 'Gamepads',
+            html: renderRemapCard(
+                romNames,
+                readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
+                remapState,
+            )
+                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
+                + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+        });
         sections.push({
             id: 'import',
             label: 'Import',
@@ -4031,8 +4285,8 @@ function renderForm(
             // comment) - not a section of its own.
             html: renderPythonWarning() + renderImportCard(importError),
         });
-        // Destructive/irreversible - only shown (and only actionable, see /reset) for admins.
-        if (isAdmin) {
+        // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
+        if (isAdvanced) {
             sections.push({
                 id: 'repository',
                 label: 'Repository',
@@ -4059,11 +4313,11 @@ function renderForm(
                         : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
     // launches/closes the shared MAME config session the Gamepads cards capture through - see
-    // startMameConfigSession(). Administrator's call only (the routes reject anyone else too).
+    // startMameConfigSession(). Shown to every signed-in user, like the Gamepads tab itself.
     // data-mame-session lets the page notice MAME being closed from its own window (see
     // renderPageTail()).
-    const sessionRunning = isAdmin && isMameConfigSessionAlive();
-    const launchButton = isAdmin ? `
+    const sessionRunning = isMameConfigSessionAlive();
+    const launchButton = `
         <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}"
             ${sessionRunning ? 'data-mame-session="running"' : ''}>
             <button type="submit" class="launch-button">
@@ -4071,8 +4325,8 @@ function renderForm(
                 ${sessionRunning ? 'Close MAME' : 'Launch MAME'}
             </button>
         </form>
-    ` : '';
-    return renderSubtabbedPage('mame', sections, isAdmin ? 'admin' : 'user', defaultSubtab, launchButton);
+    `;
+    return renderSubtabbedPage('mame', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab, launchButton);
 }
 
 const GITHUB_REPO = 'Arcadoolic/maui';
@@ -4142,7 +4396,7 @@ let releasesCache: {fetchedAt: number; releases: GithubRelease[]} | null = null;
 const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000;
 
 // Public GitHub Releases - no auth needed (repo is public), so this is safe to call for every
-// BO role, not just admins. Cached briefly so repeatedly loading the MAUI tab doesn't burn
+// viewer, Advanced configuration or not. Cached briefly so repeatedly loading the MAUI tab doesn't burn
 // through the anonymous API's 60 req/h/IP rate limit. Includes both real releases (tagged on
 // main by semantic-release) and dev prereleases (tagged on every push to develop by build.yml,
 // see its "Publish develop prerelease" job) - GitHub's /releases endpoint returns both, told
@@ -4165,7 +4419,7 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
 /**
  * Computes everything the "Update" subtab needs to render: the public releases list (any
  * BO role can see/install those), split into real releases and develop prereleases (the latter
- * only rendered for admins, see renderUpdateCard()). Called by every route that (re-)renders
+ * only rendered in Advanced configuration, see renderUpdateCard()). Called by every route that (re-)renders
  * the MAUI page, same as getMameInfo() is recomputed fresh by every route touching the MAME tab.
  */
 async function getUpdateInfo(): Promise<UpdateInfo> {
@@ -4346,7 +4600,7 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
 }
 
 function renderUpdateCard(
-    updateInfo: UpdateInfo, isAdmin: boolean, installMessage?: string, installError?: string,
+    updateInfo: UpdateInfo, isAdvanced: boolean, installMessage?: string, installError?: string,
 ): string {
     const confirmRelease = 'Install version {tag}? The Pi will then need to be restarted.';
     const releaseRows = updateInfo.releases
@@ -4385,7 +4639,7 @@ function renderUpdateCard(
                     <tbody>${releaseRows || '<tr><td colspan="3"><em>No release found.</em></td></tr>'}</tbody>
                 </table>`}
         </section>
-        ${isAdmin ? `
+        ${isAdvanced ? `
             <section class="card">
                 <h2>Development builds (unpublished)</h2>
                 <p class="error">GitHub prereleases generated automatically on every push to
@@ -4401,7 +4655,7 @@ function renderUpdateCard(
     `;
 }
 
-function renderMauiCard(config: Config, isAdmin: boolean, info?: string): string {
+function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): string {
     return `
         <section class="card">
             <h2>mame-awesome-ui</h2>
@@ -4411,7 +4665,7 @@ function renderMauiCard(config: Config, isAdmin: boolean, info?: string): string
                     <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
                     Show fullscreen (unchecked = windowed)
                 </label>
-                ${isAdmin ? `
+                ${isAdvanced ? `
                     <label class="checkbox-row">
                         <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
                         Open DevTools on startup (development mode)
@@ -4539,23 +4793,23 @@ function renderMauiControlsCard(): string {
 }
 
 function renderMauiPage(
-    config: Config, messages: MauiPageMessages = {}, isAdmin: boolean = false,
+    config: Config, messages: MauiPageMessages = {}, isAdvanced: boolean = false,
     updateInfo?: UpdateInfo,
 ): string {
     const sections: Subsection[] = [
-        {id: 'general', label: 'General', html: renderMauiCard(config, isAdmin, messages.mauiInfo)},
+        {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
         {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
     ];
     if (updateInfo) {
         sections.push({
             id: 'update',
             label: 'Update',
-            html: renderUpdateCard(updateInfo, isAdmin, messages.updateInfoMessage, messages.updateInfoError),
+            html: renderUpdateCard(updateInfo, isAdvanced, messages.updateInfoMessage, messages.updateInfoError),
         });
     }
     // Import/export and the danger zone both act on the app's own config/database - only
-    // shown (and only actionable, see /maui/export, /maui/import and /reset) for admins.
-    if (isAdmin) {
+    // shown (and only actionable, see /maui/export, /maui/import and /reset) in Advanced configuration.
+    if (isAdvanced) {
         sections.push({
             id: 'import-export',
             label: 'Import/Export',
@@ -4570,7 +4824,7 @@ function renderMauiPage(
             : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                 : messages.mauiInfo !== undefined ? 'general'
                     : undefined;
-    return renderSubtabbedPage('maui', sections, isAdmin ? 'admin' : 'user', defaultSubtab);
+    return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
 /**
@@ -4581,9 +4835,9 @@ function renderMauiPage(
 async function sendMauiPage(
     req: express.Request, res: Response, config: Config, messages: MauiPageMessages = {},
 ): Promise<void> {
-    const isAdmin = req.session.boRole === 'admin';
+    const isAdvanced = req.session.boAdvanced === true;
     const updateInfo = await getUpdateInfo();
-    res.send(renderMauiPage(config, messages, isAdmin, updateInfo));
+    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo));
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -4668,7 +4922,7 @@ function renderScreenScraperPage(
             label: 'Download',
             html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
         },
-    ], 'admin', defaultSubtab);
+    ], 'advanced', defaultSubtab);
 }
 
 // 16x16 stroke icons (drawn with currentColor, so the caller's color class tints them). Each
@@ -5269,7 +5523,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             closes.</p>
             ${ASSET_PREVIEW_SCRIPT}
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
-            present (hover it to preview the image), red (struck through) when it is missing.${viewer === 'admin'
+            present (hover it to preview the image), red (struck through) when it is missing.${viewer === 'advanced'
                 ? ' To download the missing artwork from ScreenScraper, use the button in the '
                     + '<a href="/screenscraper">ScreenScraper</a> tab.'
                 : ''}</p>
@@ -5923,7 +6177,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
 /**
  * Settings form (POST /repo/save) for repo.maui.afronob.com's basic-auth credentials, plus -
  * once repoUrl is set - a button to browse it (GET /import/from-url/packs) and, once packs have
- * been fetched, the picker itself. Admin-only, same gating as renderMameDangerZoneCard() (see
+ * been fetched, the picker itself. Advanced configuration only, same gating as renderMameDangerZoneCard() (see
  * renderForm()): downloading and importing an arbitrary pack from a configured repo is no less
  * consequential than the manual upload form right above it.
  */
@@ -5941,7 +6195,7 @@ function renderRepoImportCard(
             <form method="post" action="/repo/save" novalidate>
                 <label for="repoUrl">Repository URL</label>
                 <input type="text" id="repoUrl" name="repoUrl" value="${escapeHtml(config.repoUrl)}"
-                    placeholder="https://repo.maui.afronob.com" autocomplete="off">
+                    placeholder="https://repo.maui.domaine.com" autocomplete="off">
                 <label for="repoUser">Username</label>
                 <input type="text" id="repoUser" name="repoUser" value="${escapeHtml(config.repoUser)}" autocomplete="off">
                 <label for="repoPassword">Password</label>
@@ -5986,12 +6240,12 @@ function renderCreateUserCard(error?: string): string {
 }
 
 interface UsersListExtras {
-    isAdmin: boolean;
+    isAdvanced: boolean;
     deleted: DeletedUserRow[];
 }
 
 /**
- * Every player in one table: the active/inactive ones first, then - for an administrator only,
+ * Every player in one table: the active/inactive ones first, then - in Advanced configuration only,
  * who alone can restore or purge them - the deleted ones, dimmed, with their restore/purge
  * actions in place of the usual ones. A deleted player is only soft-deleted: the nickname stays
  * reserved and their scores stay in the database (hidden from the hiscore views), so restoring
@@ -5999,7 +6253,7 @@ interface UsersListExtras {
  */
 function renderUsersListCard(
     users: User[], avatarFilenames: string[], error?: string, info?: string,
-    extras: UsersListExtras = {isAdmin: false, deleted: []},
+    extras: UsersListExtras = {isAdvanced: false, deleted: []},
 ): string {
     const avatarsPath = new Config().avatarsPath;
     const rows = users.map(user => {
@@ -6031,7 +6285,7 @@ function renderUsersListCard(
                             : renderIconButton('Activate', PLAY_ICON_PATHS, 'ok')}
                     </form>
                     <form method="post" action="/users/${user.id_user}/delete"
-                        onsubmit="return confirm('Delete ${escapeHtml(user.pseudo_3)}? The nickname stays reserved and an administrator can restore it later.')">
+                        onsubmit="return confirm('Delete ${escapeHtml(user.pseudo_3)}? The nickname stays reserved; the player can be restored later in Advanced configuration.')">
                         ${renderIconButton('Delete player', TRASH_ICON_PATHS)}
                     </form>
                 </div>
@@ -6040,7 +6294,7 @@ function renderUsersListCard(
     `;
     }).join('');
 
-    const deleted = extras.isAdmin ? extras.deleted : [];
+    const deleted = extras.isAdvanced ? extras.deleted : [];
     const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
@@ -6099,14 +6353,14 @@ function renderUsersListCard(
 
 function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
-    extras: UsersListExtras = {isAdmin: false, deleted: []},
+    extras: UsersListExtras = {isAdvanced: false, deleted: []},
 ): string {
     // One page, no subtabs: the add form, then every player (deleted ones included, see
     // renderUsersListCard()) in a single list.
     return renderPage(
         renderCreateUserCard(createError) + renderUsersListCard(users, avatarFilenames, error, info, extras),
         'users',
-        extras.isAdmin ? 'admin' : 'user',
+        extras.isAdvanced ? 'advanced' : 'basic',
     );
 }
 
@@ -6282,8 +6536,25 @@ export function startBoServer(
         }
         req.session.boUserId = boUser.id;
         req.session.boUsername = boUser.username;
-        req.session.boRole = boUser.role;
+        req.session.boAdvanced = false;
         res.redirect('/');
+    });
+
+    // Flips Advanced configuration for this session and goes back to the page it was toggled from
+    // (an advanced-only page such as /screenscraper then redirects basic viewers to / by itself).
+    app.post('/advanced', (req, res) => {
+        req.session.boAdvanced = !req.session.boAdvanced;
+        let back = '/';
+        try {
+            const referer = new URL(req.get('referer') || '', `http://${req.get('host')}`);
+            // Same-origin paths only - never an open redirect.
+            if (referer.host === req.get('host') && !referer.pathname.startsWith('//')) {
+                back = referer.pathname + referer.search;
+            }
+        } catch {
+            // Missing/malformed Referer: back to /.
+        }
+        res.redirect(back);
     });
 
     app.post('/logout', (req, res) => {
@@ -6296,7 +6567,7 @@ export function startBoServer(
             req.session.destroy(() => res.redirect('/login'));
             return;
         }
-        res.send(renderAccountPage(boUser.username, boUser.role));
+        res.send(renderAccountPage(boUser.username, getViewer(req)));
     });
 
     app.post('/account/password', async (req, res) => {
@@ -6310,25 +6581,25 @@ export function startBoServer(
         const confirmPassword: string = req.body.confirmPassword || '';
 
         if (!bcrypt.compareSync(currentPassword, boUser.passwordHash)) {
-            res.status(401).send(renderAccountPage(boUser.username, boUser.role, 'Incorrect current password.'));
+            res.status(401).send(renderAccountPage(boUser.username, getViewer(req), 'Incorrect current password.'));
             return;
         }
         if (newPassword.length < 4) {
             res.status(422).send(renderAccountPage(
-                boUser.username, boUser.role, 'The new password must be at least 4 characters long.',
+                boUser.username, getViewer(req), 'The new password must be at least 4 characters long.',
             ));
             return;
         }
         if (newPassword !== confirmPassword) {
             res.status(422).send(renderAccountPage(
-                boUser.username, boUser.role, 'The confirmation does not match the new password.',
+                boUser.username, getViewer(req), 'The confirmation does not match the new password.',
             ));
             return;
         }
 
         boUser.passwordHash = bcrypt.hashSync(newPassword, 10);
         await boUser.save();
-        res.send(renderAccountPage(boUser.username, boUser.role, undefined, 'Password updated.'));
+        res.send(renderAccountPage(boUser.username, getViewer(req), undefined, 'Password updated.'));
     });
 
     app.get('/', (req, res) => {
@@ -6342,14 +6613,14 @@ export function startBoServer(
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
         res.send(renderForm(
-            {mamePath}, mameInfo, req.session.boRole === 'admin',
+            {mamePath}, mameInfo, req.session.boAdvanced === true,
         ));
     });
 
-    // The whole ScreenScraper tab is admin-only (its link is left out of a user's nav, see
+    // The whole ScreenScraper tab is Advanced configuration only (its link is left out of the basic nav, see
     // renderPageHead()): the credentials it holds, and the media download it runs.
     app.get('/screenscraper', (req, res) => {
-        if (req.session.boRole !== 'admin') {
+        if (!req.session.boAdvanced) {
             res.redirect('/');
             return;
         }
@@ -6571,7 +6842,7 @@ export function startBoServer(
     });
 
     /**
-     * Renders the Players tab. The deleted players (administrators only) are loaded here, on
+     * Renders the Players tab. The deleted players (Advanced configuration only) are loaded here, on
      * every render, so each route below keeps showing up-to-date deleted players without
      * having to pass it along.
      */
@@ -6579,9 +6850,9 @@ export function startBoServer(
         req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
         createError?: string,
     ): Promise<string> => {
-        const isAdmin = req.session.boRole === 'admin';
-        const deleted = isAdmin ? await listDeletedUsers().catch(() => []) : [];
-        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdmin, deleted});
+        const isAdvanced = req.session.boAdvanced === true;
+        const deleted = isAdvanced ? await listDeletedUsers().catch(() => []) : [];
+        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdvanced, deleted});
     };
 
     app.get('/users', async (req, res) => {
@@ -6608,8 +6879,8 @@ export function startBoServer(
                 const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
                 res.status(422).send(await usersPage(
                     req, users, getAvatarFilenames(config), undefined, undefined,
-                    `The nickname "${pseudo3}" belongs to a deleted player and is reserved. An administrator `
-                    + 'can restore that player from the players list.',
+                    `The nickname "${pseudo3}" belongs to a deleted player and is reserved. That player `
+                    + 'can be restored from the players list in Advanced configuration.',
                 ));
                 return;
             }
@@ -6656,20 +6927,20 @@ export function startBoServer(
         const user = await User.findByPk(req.params.id);
         if (user) {
             // Soft delete (User is paranoid): the nickname stays reserved and the scores are kept,
-            // hidden from the hiscore views, until an administrator restores the player.
+            // hidden from the hiscore views, until the player is restored (Advanced configuration).
             await user.destroy();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(
             req, users, getAvatarFilenames(new Config()), undefined,
-            user ? `Player "${user.pseudo_3}" deleted. The nickname stays reserved; an administrator can `
-                + 'restore it from the players list.' : undefined,
+            user ? `Player "${user.pseudo_3}" deleted. The nickname stays reserved; it can be `
+                + 'restored from the players list in Advanced configuration.' : undefined,
         ));
     });
 
     app.post('/users/:id/purge', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const purged = await purgeDeletedUser(String(req.params.id), new Config().avatarsPath);
@@ -6682,8 +6953,8 @@ export function startBoServer(
     });
 
     app.post('/users/:id/restore', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const restored = await restoreDeletedUser(String(req.params.id));
@@ -6767,8 +7038,8 @@ export function startBoServer(
     });
 
     app.post('/favorites/download-media', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();
@@ -6863,11 +7134,11 @@ export function startBoServer(
         const config = new Config();
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         if (!req.file) {
             res.status(400).send(renderForm(
-                values, getMameInfo(config), isAdmin, undefined, undefined, undefined, 'No file received.',
+                values, getMameInfo(config), isAdvanced, undefined, undefined, undefined, 'No file received.',
             ));
             return;
         }
@@ -6877,7 +7148,7 @@ export function startBoServer(
         if (!isPython3Available()) {
             rmSync(req.file.path, {force: true});
             res.status(500).send(renderForm(
-                values, getMameInfo(config), isAdmin, undefined, undefined, undefined,
+                values, getMameInfo(config), isAdvanced, undefined, undefined, undefined,
                 'python3 not found on this machine - unable to import a starting pack.',
             ));
             return;
@@ -6920,12 +7191,12 @@ export function startBoServer(
         reloadFront();
     });
 
-    // Same admin gating as renderRepoImportCard()'s visibility in renderForm(): configuring where
+    // Same Advanced configuration gating as renderRepoImportCard()'s visibility in renderForm(): configuring where
     // packs come from, and importing an arbitrary one from there, is no less consequential than
     // the manual upload right above it.
     app.post('/repo/save', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();
@@ -6948,8 +7219,8 @@ export function startBoServer(
     // Proxied server-side (rather than the browser fetching index.json directly) so the repo's
     // basic-auth credentials never need to reach the browser at all.
     app.get('/import/from-url/packs', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();
@@ -7004,8 +7275,8 @@ export function startBoServer(
     });
 
     app.post('/import/from-url', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();
@@ -7104,9 +7375,9 @@ export function startBoServer(
     app.post('/maui/save', async (req, res) => {
         const config = new Config();
         config.load();
-        // Admin-only option (see renderMauiCard()): a user's form has no such checkbox, which
+        // Advanced configuration option (see renderMauiCard()): the basic form has no such checkbox, which
         // must not read as "unchecked" and switch it off.
-        if (req.session.boRole === 'admin') {
+        if (req.session.boAdvanced === true) {
             config.openDevTools = req.body.openDevTools === 'on';
         }
         config.fullscreen = req.body.fullscreen === 'on';
@@ -7116,11 +7387,11 @@ export function startBoServer(
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
     });
 
-    // Backup/restore of mame-awesome-ui's own config/database - admin only (see the "Import /
-    // export mame-awesome-ui" card, hidden from non-admins in renderMauiPage()).
+    // Backup/restore of mame-awesome-ui's own config/database - Advanced configuration only (see the "Import /
+    // export mame-awesome-ui" card, hidden outside Advanced configuration in renderMauiPage()).
     app.get('/maui/export', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();
@@ -7167,8 +7438,8 @@ export function startBoServer(
     });
 
     app.post('/maui/import', upload.single('file'), async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();
@@ -7256,7 +7527,7 @@ export function startBoServer(
     // the device the BO itself runs on is exactly what a "user"-role account (e.g. puckman) is
     // meant to be able to do, same trust level as everything else on the "General" MAUI subtab.
     // A dev build (GitHub prerelease published from develop, see getUpdateInfo()) stays
-    // admin-only even though the asset itself needs no auth to download - checked server-side
+    // Advanced configuration only even though the asset itself needs no auth to download - checked server-side
     // below, not just by hiding the row in renderUpdateCard(), since the tagName/assetUrl pair
     // is posted back by the client and could otherwise be forged by a "user"-role account.
     app.post('/maui/update/install', async (req, res) => {
@@ -7264,7 +7535,7 @@ export function startBoServer(
         config.load();
         const tagName = typeof req.body.tagName === 'string' ? req.body.tagName : '';
         const assetUrl = typeof req.body.assetUrl === 'string' ? req.body.assetUrl : '';
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         if (!isSelfUpdateCapable() || !assetUrl) {
             await sendMauiPage(req, res, config, {updateInfoError: 'Installation unavailable on this machine.'});
@@ -7272,8 +7543,8 @@ export function startBoServer(
         }
 
         const preUpdateInfo = await getUpdateInfo();
-        if (!isAdmin && preUpdateInfo.devBuilds.some(build => build.tagName === tagName)) {
-            res.status(403).send('Action reserved to administrators.');
+        if (!isAdvanced && preUpdateInfo.devBuilds.some(build => build.tagName === tagName)) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
 
@@ -7283,9 +7554,9 @@ export function startBoServer(
         await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
 
         const updateInfo = await getUpdateInfo();
-        res.write(renderMauiCard(config, isAdmin));
-        res.write(renderUpdateCard(updateInfo, isAdmin));
-        if (isAdmin) {
+        res.write(renderMauiCard(config, isAdvanced));
+        res.write(renderUpdateCard(updateInfo, isAdvanced));
+        if (isAdvanced) {
             res.write(renderMauiImportExportCard());
             res.write(renderMauiDangerZoneCard());
         }
@@ -7331,8 +7602,8 @@ export function startBoServer(
     });
 
     app.post('/screenscraper/save', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const values: ScreenScraperValues = {
@@ -7394,7 +7665,7 @@ export function startBoServer(
         const windowed = req.body.fullscreen !== 'on';
         const config = new Config();
         config.load();
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
         // On an error below, the page comes back with what was typed in both fields.
         const typedMameInfo = () => {
             const mameInfo = getMameInfo(config);
@@ -7409,7 +7680,7 @@ export function startBoServer(
 
         if (!existsSync(mamePath)) {
             res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdmin,
+                {mamePath}, typedMameInfo(), isAdvanced,
                 `The folder "${mamePath}" does not exist.`,
             ));
             return;
@@ -7417,7 +7688,7 @@ export function startBoServer(
         const mameBinaryName = findMameBinary(mamePath);
         if (!mameBinaryName) {
             res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdmin,
+                {mamePath}, typedMameInfo(), isAdvanced,
                 `No mame binary found in "${mamePath}".`,
             ));
             return;
@@ -7427,7 +7698,7 @@ export function startBoServer(
             ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
         } catch (error) {
             res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdmin,
+                {mamePath}, typedMameInfo(), isAdvanced,
                 'Failed to initialize mame ("-createconfig"): '
                     + `${error instanceof Error ? error.message : 'unexpected error'}.`,
             ));
@@ -7493,7 +7764,7 @@ export function startBoServer(
 
         res.send(renderForm(
             {mamePath: config.mamePath},
-            getMameInfo(config), req.session.boRole === 'admin',
+            getMameInfo(config), req.session.boAdvanced === true,
             undefined,
             undefined,
             added
@@ -7503,14 +7774,10 @@ export function startBoServer(
     });
 
     app.post('/input-probe/devices', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         const romName = romNames[0];
@@ -7520,7 +7787,7 @@ export function startBoServer(
             // and at least one rom exists, but the config could have changed underneath a stale
             // form submission (e.g. mamePath cleared in another tab/request).
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
+                {mamePath: config.mamePath || ''}, mameInfo, isAdvanced,
             ));
             return;
         }
@@ -7528,7 +7795,7 @@ export function startBoServer(
         try {
             const result = runDeviceProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
             res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
+                {mamePath: config.mamePath}, mameInfo, isAdvanced,
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 {result},
             ));
@@ -7536,22 +7803,62 @@ export function startBoServer(
             console.error('[boServer] Device probe failed:', error);
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
+                {mamePath: config.mamePath}, mameInfo, isAdvanced,
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 {error: `Device probe failed: ${message} (timeout, non-zero exit code, or binary not found).`},
             ));
         }
     });
 
-    app.post('/input-probe/mame/start', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
+    // Pins (or with an empty joycode, unpins) a detected device to a fixed JOY number in the
+    // controller file (see getCtrlrFile()), then probes again so the cards show MAME's new numbering.
+    app.post('/input-probe/devices/pin', (req, res) => {
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
+        const renderWith = (state: DeviceProbeState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath || ''}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+            state,
+        ));
+
+        const deviceId = typeof req.body.deviceId === 'string' ? req.body.deviceId : '';
+        const joycode = typeof req.body.joycode === 'string' ? req.body.joycode : '';
+        const romName = mameInfo.romPath ? listRomNames(mameInfo.romPath)[0] : undefined;
+        if (mameInfo.error || !romName || !config.mamePath || !config.mameBinaryName) {
+            // Same "shouldn't normally be reachable" caveat as /input-probe/devices above.
+            renderWith({error: 'No valid MAME configuration saved: unable to launch MAME.'}, 422);
+            return;
+        }
+        if (!deviceId || (joycode && !/^JOYCODE_\d+$/.test(joycode))) {
+            renderWith({error: 'Invalid device or JOY number.'}, 400);
+            return;
+        }
+
+        try {
+            pinDevice(mameInfo, deviceId, joycode || null);
+        } catch (error) {
+            console.error('[boServer] Device pin failed:', error);
+            renderWith({error: `Could not write the controller file: ${error instanceof Error ? error.message : 'unexpected error'}.`}, 500);
+            return;
+        }
+        const info = joycode
+            ? `Pinned as JOY ${joycodeNumber(joycode)} (${getCtrlrFile(mameInfo).path}).`
+            : 'Unpinned: MAME numbers this device in detection order again.';
+        try {
+            renderWith({result: runDeviceProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName), info});
+        } catch (error) {
+            console.error('[boServer] Device probe failed:', error);
+            renderWith({info, error: `Device probe failed: ${error instanceof Error ? error.message : 'unexpected error'}.`}, 500);
+        }
+    });
+
+    app.post('/input-probe/mame/start', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
 
         // MAME only runs the capture script (-autoboot_script) once a machine is running - opened
         // on its own menu, with no rom, it never does (checked against 0.289) - so the session
@@ -7560,7 +7867,7 @@ export function startBoServer(
         const romName = romNames[0];
         if (mameInfo.error || !romName) {
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
+                {mamePath: config.mamePath || ''}, mameInfo, isAdvanced,
                 mameInfo.error
                     ? 'No valid MAME configuration saved: unable to launch MAME.'
                     : 'No rom found in the roms folder - MAME needs at least one to launch.',
@@ -7569,43 +7876,31 @@ export function startBoServer(
         }
 
         startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
-        res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdmin));
+        res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
     });
 
     // Polled by the page while a config session runs (see renderPageTail()), so it notices MAME
     // being closed from its own window.
     app.get('/input-probe/mame/status', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).json({error: 'Action reserved to administrators.'});
-            return;
-        }
         res.json({running: isMameConfigSessionAlive()});
     });
 
     app.post('/input-probe/mame/stop', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         stopMameConfigSession();
 
-        res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdmin));
+        res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
     });
 
     app.post('/input-probe/remap', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         const portType: string = (req.body.portType || '').trim();
         const action = REMAP_ACTIONS_BY_TYPE.get(portType);
@@ -7618,7 +7913,7 @@ export function startBoServer(
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
             // every form's hidden portType field is one of ours.
             res.status(422).send(renderForm(
-                {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
+                {mamePath: config.mamePath || ''}, mameInfo, isAdvanced,
             ));
             return;
         }
@@ -7627,7 +7922,7 @@ export function startBoServer(
         // page rendered before MAME was closed.
         if (!isMameConfigSessionAlive()) {
             res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
+                {mamePath: config.mamePath}, mameInfo, isAdvanced,
                 undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 undefined,
                 {portType, error: 'MAME is not running - click "Launch MAME" first.'},
@@ -7642,7 +7937,7 @@ export function startBoServer(
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
                 applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
                 res.send(renderForm(
-                    {mamePath: config.mamePath}, mameInfo, isAdmin,
+                    {mamePath: config.mamePath}, mameInfo, isAdvanced,
                     undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                     undefined,
                     {portType},
@@ -7651,7 +7946,7 @@ export function startBoServer(
                 console.error(`[boServer] Remap reset failed for "${portType}":`, error);
                 const message = error instanceof Error ? error.message : 'unexpected error';
                 res.status(500).send(renderForm(
-                    {mamePath: config.mamePath}, mameInfo, isAdmin,
+                    {mamePath: config.mamePath}, mameInfo, isAdvanced,
                     undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                     undefined,
                     {portType, error: `Reset failed: ${message}`},
@@ -7675,7 +7970,7 @@ export function startBoServer(
                 }
             }
             res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
+                {mamePath: config.mamePath}, mameInfo, isAdvanced,
                 undefined, // error
                 undefined, // info
                 undefined, // mameInfoMessage
@@ -7691,7 +7986,7 @@ export function startBoServer(
             console.error(`[boServer] Remap capture failed for "${portType}":`, error);
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
+                {mamePath: config.mamePath}, mameInfo, isAdvanced,
                 undefined, // error
                 undefined, // info
                 undefined, // mameInfoMessage
@@ -7708,9 +8003,9 @@ export function startBoServer(
 
     // Renders the whole page with only the per-game remap state set (renderForm() has a long
     // positional list - see /input-probe/remap above).
-    const renderGameRemapPage = (config: Config, mameInfo: MameInfo, isAdmin: boolean, gameRemapState: GameRemapState): string =>
+    const renderGameRemapPage = (config: Config, mameInfo: MameInfo, isAdvanced: boolean, gameRemapState: GameRemapState): string =>
         renderForm(
-            {mamePath: config.mamePath}, mameInfo, isAdmin,
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
             undefined, // error
             undefined, // info
             undefined, // mameInfoMessage
@@ -7725,38 +8020,30 @@ export function startBoServer(
         );
 
     app.post('/input-probe/game/start', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         const romName: string = (req.body.romName || '').trim();
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         if (mameInfo.error || !romNames.includes(romName)) {
             // Same "shouldn't normally be reachable" caveat as /input-probe/devices above - the
             // form only renders once mameInfo.error is unset, with a select of the roms actually present.
-            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdmin));
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
 
         startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName, true);
         waitForSessionGameFields(10000);
-        res.send(renderGameRemapPage(config, mameInfo, isAdmin, {romName}));
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
     });
 
     app.post('/input-probe/game/remap', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
+        const isAdvanced = req.session.boAdvanced === true;
 
         const romName: string = (req.body.romName || '').trim();
         const fieldId: string = (req.body.fieldId || '').trim();
@@ -7765,7 +8052,7 @@ export function startBoServer(
         // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
         // roms actually present - never a client-supplied path fragment.
         if (mameInfo.error || !romNames.includes(romName) || !['capture', 'reset'].includes(action)) {
-            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdmin));
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
 
@@ -7775,7 +8062,7 @@ export function startBoServer(
             ? readSessionGameFields()?.find(candidate => gameFieldId(candidate) === fieldId)
             : undefined;
         if (!field) {
-            res.send(renderGameRemapPage(config, mameInfo, isAdmin, {
+            res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
                 romName,
                 error: `MAME is not running with "${romName}" (or doesn't know this command) - launch it again below.`,
             }));
@@ -7786,7 +8073,7 @@ export function startBoServer(
             const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
             if (action === 'reset') {
                 applyCfgEdit(() => removeGameCfgOverride(cfgPath, field));
-                res.send(renderGameRemapPage(config, mameInfo, isAdmin, {romName, fieldId}));
+                res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }
 
@@ -7802,11 +8089,11 @@ export function startBoServer(
                     gameRemapState.releasedFrom = released;
                 }
             }
-            res.send(renderGameRemapPage(config, mameInfo, isAdmin, gameRemapState));
+            res.send(renderGameRemapPage(config, mameInfo, isAdvanced, gameRemapState));
         } catch (error) {
             console.error(`[boServer] Game remap failed for "${romName}" / "${field.portType}":`, error);
             const message = error instanceof Error ? error.message : 'unexpected error';
-            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdmin, {
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {
                 romName,
                 fieldId,
                 error: `${action === 'reset' ? 'Reset' : 'Capture'} failed: ${message}`,
@@ -7815,8 +8102,8 @@ export function startBoServer(
     });
 
     app.post('/reset', async (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
             return;
         }
         const config = new Config();

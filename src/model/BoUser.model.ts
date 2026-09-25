@@ -2,7 +2,9 @@ import {Column, CreatedAt, DataType, Model, Table, UpdatedAt} from 'sequelize-ty
 
 /**
  * A BO (back office) login account - distinct from User.model.ts, which is the arcade-cabinet
- * player profile (pseudo/avatar/hiscores) managed from the BO's own "Players" tab.
+ * player profile (pseudo/avatar/hiscores) managed from the BO's own "Players" tab. A single
+ * account (puckman) since the admin one was dropped: the bo_user table still has a legacy `role`
+ * column (see migrations/20260925090000-drop-bo-admin-user.js), deliberately not mapped here.
  */
 @Table({
     timestamps: true,
@@ -27,13 +29,6 @@ export default class BoUser extends Model<BoUser> {
         allowNull: false,
     })
     public passwordHash!: string;
-
-    @Column({
-        type: DataType.TEXT,
-        allowNull: false,
-        defaultValue: 'user',
-    })
-    public role!: 'admin' | 'user';
 
     @CreatedAt
     public creationDate!: Date;
