@@ -60,7 +60,8 @@ import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
-    MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
+    MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs, describeGamepadInput,
+    mergeControllerMappings, bindGamepadInput, resetMauiKey, type GamepadInput,
 } from '@/class/MauiControls';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
@@ -2587,6 +2588,22 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             width: 64px;
             height: 64px;
         }
+        /* MAUI > Controls: the key itself stands in for the command icon. */
+        .maui-key {
+            display: block;
+            min-width: 48px;
+            margin-bottom: 4px;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background-color: var(--surface-strong);
+            color: var(--text);
+            font-size: 1.4em;
+        }
+        .maui-layout-form {
+            max-width: 480px;
+            margin-bottom: 16px;
+        }
         .binding-values {
             display: grid;
             grid-template-columns: auto 1fr;
@@ -4722,6 +4739,87 @@ interface MauiPageMessages {
     dangerZoneInfo?: string;
     updateInfoMessage?: string;
     updateInfoError?: string;
+    // MAUI > Controls bindings card: which layout it shows, and the outcome of a capture/reset.
+    controlsLayout?: string;
+    controlsKey?: string;
+    controlsInfo?: string;
+    controlsError?: string;
+}
+
+const BASE_CONTROLLER_MAPPINGS = ControllerMappings as unknown as Record<string, ControllerMapping>;
+
+// How long the BO's MAUI > Controls capture waits for a press on the cabinet (same as MAME's).
+const MAUI_CAPTURE_TIMEOUT_MS = 30000;
+
+/** What a layout's pad buttons are called in the BO - named only for the "standard" layout. */
+function buttonNamesOf(layout: string): Record<number, string> {
+    return layout === 'standard' ? STANDARD_BUTTON_NAMES : {};
+}
+
+/**
+ * Gamepad bindings of MAUI's own keys, changeable from here like MAME's in the Gamepads tab, but
+ * without MAME: the press is captured by the cabinet's MAUI window itself (Gamepads.capturePress()
+ * via background.ts) and saved in MAUI's config file (Config.mauiControls, on top of
+ * controllers.json) - the cabinet picks it up within a second, no restart.
+ */
+function renderMauiBindingsCard(config: Config, messages: MauiPageMessages): string {
+    const mappings = mergeControllerMappings(BASE_CONTROLLER_MAPPINGS, config.mauiControls);
+    const layout = messages.controlsLayout && mappings[messages.controlsLayout] ? messages.controlsLayout : 'standard';
+    const mapping = mappings[layout];
+    const baseMapping = BASE_CONTROLLER_MAPPINGS[layout] ?? BASE_CONTROLLER_MAPPINGS.standard;
+    const buttonNames = buttonNamesOf(layout);
+    // The game list's role when the key has one there (the screen it's mostly used on), else its
+    // first role anywhere.
+    const roleOf = (key: string): string => {
+        const roles = MAUI_CONTROL_CONTEXTS.flatMap(context => context.controls.filter(control => control.key === key));
+        return (roles.find(control => !control.longPressMs) ?? roles[0])?.role ?? '';
+    };
+
+    const cards = Object.values(MAUI_KEYS).map(key => {
+        const inputs = describeGamepadInputs(mapping, key, buttonNames);
+        const changed = inputs.join() !== describeGamepadInputs(baseMapping, key, buttonNames).join();
+        const state = messages.controlsKey === key ? messages : undefined;
+        return `
+            <div class="binding">
+                <div class="binding-label"><span class="maui-key">${escapeHtml(keyLabel(key))}</span></div>
+                <dl class="binding-values">
+                    <dt>Role</dt>
+                    <dd>${escapeHtml(roleOf(key))}</dd>
+                    <dt>Currently</dt>
+                    <dd>${inputs.length ? inputs.map(input => `<code>${escapeHtml(input)}</code>`).join(' ') : '<em>no input</em>'}${changed ? ' <em>(changed)</em>' : ''}</dd>
+                </dl>
+                <form method="post" action="/maui/controls" class="binding-actions">
+                    <input type="hidden" name="key" value="${escapeHtml(key)}">
+                    <input type="hidden" name="layout" value="${escapeHtml(layout)}">
+                    <button type="submit" name="action" value="replace" title="The next press on the cabinet replaces this key's inputs">Capture a press</button>
+                    <button type="submit" name="action" value="add" title="The next press on the cabinet is added to this key's inputs">Add a press</button>
+                    ${changed ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
+                </form>
+                ${state?.controlsError ? `<p class="error flash">${escapeHtml(state.controlsError)}</p>` : ''}
+                ${state?.controlsInfo ? `<p class="info flash">${escapeHtml(state.controlsInfo)}</p>` : ''}
+            </div>
+        `;
+    }).join('');
+
+    const layouts = Object.keys(mappings);
+    return `
+        <section class="card">
+            <h2>Gamepad bindings</h2>
+            <p class="info">Click <em>Capture a press</em>, then press the button (or push the stick)
+            on the cabinet within ${MAUI_CAPTURE_TIMEOUT_MS / 1000} seconds (MAUI must have reached its game
+            list once since it started). The layout changed is the one of the gamepad pressed; the change
+            applies on the cabinet right away and is saved in MAUI's config file.</p>
+            ${layouts.length > 1 ? `
+                <form method="get" action="/maui" class="maui-layout-form">
+                    <label for="maui-layout">Layout</label>
+                    <select id="maui-layout" name="layout" onchange="this.form.submit()">
+                        ${layouts.map(name => `<option value="${escapeHtml(name)}"${name === layout ? ' selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+                    </select>
+                </form>
+            ` : ''}
+            <div class="binding-grid">${cards}</div>
+        </section>
+    `;
 }
 
 /**
@@ -4730,8 +4828,8 @@ interface MauiPageMessages {
  * layout of controllers.json - what Gamepads.class.ts falls back to for any pad it has no entry
  * for - and any pad with an entry of its own is listed under it.
  */
-function renderMauiControlsCard(): string {
-    const mappings = ControllerMappings as unknown as Record<string, ControllerMapping>;
+function renderMauiControlsCard(config: Config): string {
+    const mappings = mergeControllerMappings(BASE_CONTROLLER_MAPPINGS, config.mauiControls);
     const standard = mappings.standard;
     const renderInputs = (inputs: string[]): string => inputs.length
         ? inputs.map(input => `<code>${escapeHtml(input)}</code>`).join(' ')
@@ -4783,7 +4881,7 @@ function renderMauiControlsCard(): string {
             <h2>MAUI controls</h2>
             <p class="info">The keys the cabinet interface understands, with their role. The
             same keys do not have the same role depending on the screen. A gamepad produces these keys via
-            <code>controllers.json</code>: an entry reading <em>no input</em> means the
+            <code>controllers.json</code>, plus the changes made above: an entry reading <em>no input</em> means the
             command is only reachable from the keyboard with this layout. Not to be confused with the MAME
             &gt; Gamepads tab, which sets MAME's inputs (in games) and not MAUI's.</p>
             ${contextTables}
@@ -4798,7 +4896,7 @@ function renderMauiPage(
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
-        {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
+        {id: 'controls', label: 'Controls', html: renderMauiBindingsCard(config, messages) + renderMauiControlsCard(config)},
     ];
     if (updateInfo) {
         sections.push({
@@ -4823,7 +4921,8 @@ function renderMauiPage(
         : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
             : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                 : messages.mauiInfo !== undefined ? 'general'
-                    : undefined;
+                    : messages.controlsLayout !== undefined ? 'controls'
+                        : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -6435,8 +6534,34 @@ function renderBrowsePage(
  * Starts the BO. `databaseReady` resolves once the database exists and is migrated (see
  * bootstrapDatabase()); requests arriving before wait for it.
  */
+/**
+ * Checks what the cabinet window sent back for a capture (see Gamepads.capturePress()) - it
+ * crosses a process boundary, so its shape is verified rather than trusted.
+ */
+function parseCapturedPress(result: unknown): {mappingName: string; gamepadId: string; input: GamepadInput} | {error: string} {
+    const value = result as Record<string, unknown> | null;
+    if (value && typeof value.error === 'string') {
+        return {error: value.error};
+    }
+    const input = value?.input as Record<string, unknown> | undefined;
+    const index = input?.index;
+    if (!value || typeof value.mappingName !== 'string' || !value.mappingName || typeof value.gamepadId !== 'string'
+        || !input || typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+        return {error: 'Unexpected answer from the MAUI window on the cabinet.'};
+    }
+    if (input.kind === 'button') {
+        return {mappingName: value.mappingName, gamepadId: value.gamepadId, input: {kind: 'button', index}};
+    }
+    if (input.kind === 'axis' && (input.direction === 0 || input.direction === 1)) {
+        return {mappingName: value.mappingName, gamepadId: value.gamepadId, input: {kind: 'axis', index, direction: input.direction}};
+    }
+    return {error: 'Unexpected answer from the MAUI window on the cabinet.'};
+}
+
 export function startBoServer(
     port: number, reloadFront: () => void, onReset: () => void,
+    // Asks the cabinet's MAUI window for the next gamepad press (see background.ts).
+    captureMauiPress: (timeoutMs: number) => Promise<unknown>,
 ): {server: Server; databaseReady: Promise<void>} {
     const app = express();
     app.use(express.urlencoded({extended: false}));
@@ -7369,7 +7494,56 @@ export function startBoServer(
     app.get('/maui', async (req, res) => {
         const config = new Config();
         config.load();
-        await sendMauiPage(req, res, config);
+        const layout = typeof req.query.layout === 'string' ? req.query.layout : undefined;
+        await sendMauiPage(req, res, config, layout !== undefined ? {controlsLayout: layout} : {});
+    });
+
+    // MAUI > Controls: binds the next press on the cabinet to a MAUI key (replace/add), or resets
+    // the key to controllers.json - see renderMauiBindingsCard().
+    app.post('/maui/controls', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const key = typeof req.body.key === 'string' ? req.body.key : '';
+        const action = req.body.action;
+        let layout = typeof req.body.layout === 'string' && req.body.layout ? req.body.layout : 'standard';
+        if (!(Object.values(MAUI_KEYS) as string[]).includes(key) || !['replace', 'add', 'reset'].includes(action)) {
+            res.status(400);
+            await sendMauiPage(req, res, config, {controlsLayout: layout, controlsKey: key, controlsError: 'Invalid key or action.'});
+            return;
+        }
+
+        if (action === 'reset') {
+            config.mauiControls = resetMauiKey(BASE_CONTROLLER_MAPPINGS, config.mauiControls, layout, key);
+            config.save();
+            await sendMauiPage(req, res, config, {
+                controlsLayout: layout, controlsKey: key, controlsInfo: 'Back to the default inputs.',
+            });
+            return;
+        }
+
+        let result: unknown;
+        try {
+            result = await captureMauiPress(MAUI_CAPTURE_TIMEOUT_MS);
+        } catch (error) {
+            console.error('[boServer] MAUI press capture failed:', error);
+            result = {error: 'Could not reach the MAUI window on the cabinet.'};
+        }
+        const captured = parseCapturedPress(result);
+        if ('error' in captured) {
+            await sendMauiPage(req, res, config, {controlsLayout: layout, controlsKey: key, controlsError: captured.error});
+            return;
+        }
+        layout = captured.mappingName;
+        config.mauiControls = bindGamepadInput(
+            BASE_CONTROLLER_MAPPINGS, config.mauiControls, layout, key, captured.input, action === 'replace',
+        );
+        config.save();
+        await sendMauiPage(req, res, config, {
+            controlsLayout: layout,
+            controlsKey: key,
+            controlsInfo: `${describeGamepadInput(captured.input, buttonNamesOf(layout))} of "${captured.gamepadId}" `
+                + `${action === 'replace' ? 'now produces' : 'also produces'} ${keyLabel(key)}.`,
+        });
     });
 
     app.post('/maui/save', async (req, res) => {

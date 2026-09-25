@@ -123,3 +123,150 @@ export function describeGamepadInputs(
     }
     return inputs;
 }
+
+/**
+ * Per-layout overrides of controllers.json, saved in MAUI's own config file (Config.mauiControls)
+ * by the BO's MAUI > Controls capture: same shape as a controllers.json entry, holding only the
+ * inputs that differ from it ("" unbinds an input the base entry binds). Keyed like
+ * controllers.json - by the name Gamepads.class.ts looks a pad up under (gamepad.mapping, i.e.
+ * "standard", or else gamepad.id) - except that a pad with no entry of its own gets one keyed by
+ * its id, based on "standard", instead of changing every pad that falls back to "standard".
+ */
+export type ControllerMappingOverrides = Record<string, ControllerMapping>;
+
+export type GamepadInput = {kind: 'button'; index: number} | {kind: 'axis'; index: number; direction: 0 | 1};
+
+const EMPTY_MAPPING: ControllerMapping = {buttons: {}, axes: {}};
+
+/** The name Gamepads.class.ts looks a pad up under, and the one its overrides are saved under. */
+export function mappingNameOf(gamepadMapping: string, gamepadId: string): string {
+    return gamepadMapping || gamepadId;
+}
+
+function baseMappingOf(base: Record<string, ControllerMapping>, name: string): ControllerMapping {
+    return base[name] ?? base.standard ?? EMPTY_MAPPING;
+}
+
+function copyMapping(mapping: ControllerMapping): ControllerMapping {
+    const axes: ControllerMapping['axes'] = {};
+    for (const [index, directions] of Object.entries(mapping.axes)) {
+        axes[Number(index)] = {...directions};
+    }
+    return {buttons: {...mapping.buttons}, axes};
+}
+
+function inputKey(mapping: ControllerMapping | undefined, input: GamepadInput): string | undefined {
+    return input.kind === 'button'
+        ? mapping?.buttons[input.index]
+        : mapping?.axes[input.index]?.[input.direction];
+}
+
+function setInputKey(mapping: ControllerMapping, input: GamepadInput, key: string): void {
+    if (input.kind === 'button') {
+        mapping.buttons[input.index] = key;
+    } else {
+        mapping.axes[input.index] = {...mapping.axes[input.index], [input.direction]: key};
+    }
+}
+
+function inputsOf(mapping: ControllerMapping): GamepadInput[] {
+    const inputs: GamepadInput[] = Object.keys(mapping.buttons).map(index => ({kind: 'button', index: Number(index)}));
+    for (const [index, directions] of Object.entries(mapping.axes)) {
+        for (const direction of Object.keys(directions)) {
+            inputs.push({kind: 'axis', index: Number(index), direction: Number(direction) as 0 | 1});
+        }
+    }
+    return inputs;
+}
+
+/** `base` with `override` applied on top - what a pad of that layout actually produces. */
+export function mergeMapping(base: ControllerMapping, override?: ControllerMapping): ControllerMapping {
+    const merged = copyMapping(base);
+    if (override) {
+        for (const input of inputsOf(override)) {
+            setInputKey(merged, input, inputKey(override, input) ?? '');
+        }
+    }
+    return merged;
+}
+
+/** controllers.json with every saved override applied, plus the layouts only overrides define. */
+export function mergeControllerMappings(
+    base: Record<string, ControllerMapping>, overrides: ControllerMappingOverrides,
+): Record<string, ControllerMapping> {
+    const merged: Record<string, ControllerMapping> = {};
+    for (const name of new Set([...Object.keys(base), ...Object.keys(overrides)])) {
+        merged[name] = mergeMapping(baseMappingOf(base, name), overrides[name]);
+    }
+    return merged;
+}
+
+/** Drops the override entries that match the base layout anyway, and the layout if none is left. */
+function withNormalizedOverride(
+    base: Record<string, ControllerMapping>, overrides: ControllerMappingOverrides, name: string,
+    override: ControllerMapping,
+): ControllerMappingOverrides {
+    const baseMapping = baseMappingOf(base, name);
+    const normalized: ControllerMapping = {buttons: {}, axes: {}};
+    let empty = true;
+    for (const input of inputsOf(override)) {
+        const key = inputKey(override, input) ?? '';
+        if (key !== (inputKey(baseMapping, input) ?? '')) {
+            setInputKey(normalized, input, key);
+            empty = false;
+        }
+    }
+    const others = {...overrides};
+    delete others[name];
+    return empty ? others : {...others, [name]: normalized};
+}
+
+/**
+ * Binds `input` to `key` on layout `name`. `replace`: the inputs that produced `key` until now
+ * stop doing so (a captured button replaces the old one); otherwise `input` is added to them.
+ * Either way `input` stops producing whatever other key it produced.
+ */
+export function bindGamepadInput(
+    base: Record<string, ControllerMapping>, overrides: ControllerMappingOverrides, name: string,
+    key: string, input: GamepadInput, replace: boolean,
+): ControllerMappingOverrides {
+    const effective = mergeMapping(baseMappingOf(base, name), overrides[name]);
+    const override = copyMapping(overrides[name] ?? EMPTY_MAPPING);
+    if (replace) {
+        for (const bound of inputsOf(effective)) {
+            if (inputKey(effective, bound) === key) {
+                setInputKey(override, bound, '');
+            }
+        }
+    }
+    setInputKey(override, input, key);
+    return withNormalizedOverride(base, overrides, name, override);
+}
+
+/** Back to controllers.json for `key` on layout `name`: every input it had there, and only those. */
+export function resetMauiKey(
+    base: Record<string, ControllerMapping>, overrides: ControllerMappingOverrides, name: string, key: string,
+): ControllerMappingOverrides {
+    const override = overrides[name];
+    if (!override) {
+        return overrides;
+    }
+    const baseMapping = baseMappingOf(base, name);
+    const kept: ControllerMapping = {buttons: {}, axes: {}};
+    for (const input of inputsOf(override)) {
+        const overridden = inputKey(override, input) ?? '';
+        if (overridden !== key && (inputKey(baseMapping, input) ?? '') !== key) {
+            setInputKey(kept, input, overridden);
+        }
+    }
+    return withNormalizedOverride(base, overrides, name, kept);
+}
+
+/** e.g. "Button 3 (Y)", "Axis 1 +" - same wording as describeGamepadInputs(). */
+export function describeGamepadInput(input: GamepadInput, buttonNames: Record<number, string> = {}): string {
+    if (input.kind === 'axis') {
+        return `Axis ${input.index} ${input.direction === 0 ? '−' : '+'}`;
+    }
+    const name = buttonNames[input.index];
+    return name ? `Button ${input.index} (${name})` : `Button ${input.index}`;
+}

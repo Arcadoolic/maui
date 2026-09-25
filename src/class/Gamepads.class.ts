@@ -1,4 +1,20 @@
+import {watchFile} from 'fs';
 import ControllerMappingJson from '../assets/controllers.json';
+import Config from '@/class/Config.class';
+import {mappingNameOf, mergeControllerMappings, type GamepadInput} from '@/class/MauiControls';
+
+const BASE_MAPPINGS = ControllerMappingJson as unknown as Record<string, ControllerMapping>;
+
+/** What the BO's MAUI > Controls capture gets back (see capturePress()). */
+export type GamepadCaptureResult = {mappingName: string; gamepadId: string; input: GamepadInput} | {error: string};
+
+declare global {
+    interface Window {
+        // Called by the main process (webContents.executeJavaScript(), see background.ts) on
+        // behalf of the BO - there's no IPC/preload boundary in this app.
+        mauiCapturePress?: (timeoutMs: number) => Promise<GamepadCaptureResult>;
+    }
+}
 
 export default class Gamepads {
     // Threshold an axis must cross to count as "pressed", and fall back under to count as
@@ -7,7 +23,8 @@ export default class Gamepads {
     protected static readonly AXIS_DEADZONE = 0.4;
     public static gamepadsIndex: number[] = [];
     public static animationFrameRequest: number = 0;
-    public static controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
+    // controllers.json plus the BO's overrides (Config.mauiControls) - see reloadMapping().
+    public static controllerMapping: {[key: string]: ControllerMapping} = BASE_MAPPINGS;
     public static gamepadKeyPressed:
     Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
     protected static stop: boolean = false;
@@ -18,6 +35,18 @@ export default class Gamepads {
     // doubling (or worse) every button press.
     protected static running: boolean = false;
     protected static warnedUnmappedGamepadIds: Set<string> = new Set();
+    protected static watchingConfig: boolean = false;
+    // Armed by capturePress(): the next new press on any pad resolves it instead of reaching
+    // MAUI's screens. `baseline` holds what each pad already had held when polled first, so an
+    // input held since before the capture never counts as the press.
+    protected static pendingCapture?: {
+        resolve: (result: GamepadCaptureResult) => void;
+        timer: ReturnType<typeof setTimeout>;
+        baseline: Map<number, {buttons: boolean[]; axes: number[]}>;
+    };
+    // Polls for a pending capture while the regular loop is paused - it stops whenever the
+    // window loses the focus (App.vue), e.g. to the BO opened in a browser on the cabinet itself.
+    protected static captureLoop?: ReturnType<typeof setInterval>;
 
     // Bound once and reused for both addEventListener and removeEventListener - passing
     // `this.onGamepadconnected.bind(this)` at each call site (as this used to) creates a new
@@ -35,6 +64,14 @@ export default class Gamepads {
      * shows up - no point running a ~60Hz requestAnimationFrame loop with nothing to poll.
      */
     public static init() {
+        if (!this.watchingConfig) {
+            this.watchingConfig = true;
+            this.reloadMapping();
+            // Polled rather than fs.watch(): also sees the file being replaced as a whole, and
+            // behaves the same on Linux, macOS and Windows. Cheap - one stat() a second.
+            watchFile(new Config().configPath, {interval: 1000}, () => this.reloadMapping());
+            window.mauiCapturePress = (timeoutMs: number) => this.capturePress(timeoutMs);
+        }
         if (!this.boundOnGamepadconnected) {
             this.boundOnGamepadconnected = this.onGamepadconnected.bind(this);
             this.boundOnGamepaddisconnected = this.onGamepaddisconnected.bind(this);
@@ -46,10 +83,116 @@ export default class Gamepads {
         }
     }
 
+    /** controllers.json with the BO's current overrides applied (see Config.mauiControls). */
+    public static reloadMapping() {
+        try {
+            const config = new Config();
+            config.load();
+            this.controllerMapping = mergeControllerMappings(BASE_MAPPINGS, config.mauiControls);
+        } catch (error) {
+            // Typically the file caught mid-write: keep the previous mapping, the next change
+            // notification reloads it.
+            console.warn('[Gamepads] Could not reload the controls from the config file:', error);
+        }
+    }
+
+    /**
+     * Resolves with the next new press (button, or axis half crossing the deadzone) on any pad,
+     * for the BO to bind it to a MAUI key - or with an error if none comes within `timeoutMs`.
+     * Works whether or not the window has the focus. That press does not reach MAUI's screens.
+     */
+    public static capturePress(timeoutMs: number): Promise<GamepadCaptureResult> {
+        if (this.pendingCapture) {
+            return Promise.resolve({error: 'A capture is already waiting for a press.'});
+        }
+        return new Promise(resolve => {
+            const timer = setTimeout(() => this.finishCapture({
+                error: `No press detected within ${Math.round(timeoutMs / 1000)}s - check that a gamepad `
+                    + 'is connected to the cabinet, then try again.',
+            }), timeoutMs);
+            this.pendingCapture = {resolve, timer, baseline: new Map()};
+            if (!this.running) {
+                this.startCaptureLoop();
+            }
+        });
+    }
+
+    protected static startCaptureLoop() {
+        if (!this.captureLoop) {
+            this.captureLoop = setInterval(() => {
+                for (const gamepad of navigator.getGamepads()) {
+                    if (gamepad && gamepad.connected && gamepad.buttons) {
+                        this.checkCapture(gamepad);
+                    }
+                }
+            }, 16);
+        }
+    }
+
+    protected static stopCaptureLoop() {
+        if (this.captureLoop) {
+            clearInterval(this.captureLoop);
+            this.captureLoop = undefined;
+        }
+    }
+
+    protected static finishCapture(result: GamepadCaptureResult) {
+        const capture = this.pendingCapture;
+        if (capture) {
+            clearTimeout(capture.timer);
+            this.pendingCapture = undefined;
+            this.stopCaptureLoop();
+            capture.resolve(result);
+        }
+    }
+
+    protected static checkCapture(gamepad: Gamepad) {
+        const capture = this.pendingCapture;
+        if (!capture) {
+            return;
+        }
+        const now = {
+            buttons: gamepad.buttons.map(button => button.pressed),
+            axes: gamepad.axes.map(value => Math.abs(value) > this.AXIS_DEADZONE ? Math.sign(value) : 0),
+        };
+        const before = capture.baseline.get(gamepad.index);
+        // Released inputs become pressable again on the next frame.
+        capture.baseline.set(gamepad.index, now);
+        if (!before) {
+            return;
+        }
+        let input: GamepadInput | undefined;
+        const button = now.buttons.findIndex((pressed, index) => pressed && !before.buttons[index]);
+        if (button !== -1) {
+            input = {kind: 'button', index: button};
+        } else {
+            const axis = now.axes.findIndex((direction, index) => direction !== 0 && direction !== before.axes[index]);
+            if (axis !== -1) {
+                input = {kind: 'axis', index: axis, direction: now.axes[axis] > 0 ? 1 : 0};
+            }
+        }
+        if (input) {
+            this.finishCapture({mappingName: mappingNameOf(gamepad.mapping, gamepad.id), gamepadId: gamepad.id, input});
+        }
+    }
+
+    /**
+     * Keydowns are held back while a capture waits for its press (see capturePress()); keyups
+     * always go through, so no screen is left thinking a key it saw pressed stays down.
+     */
+    protected static emit(eventName: 'gamepadKeydown' | 'gamepadKeyup', key: string, value: number) {
+        if (eventName === 'gamepadKeydown' && this.pendingCapture) {
+            return;
+        }
+        window.dispatchEvent(new CustomEvent(eventName, {detail: {key, value}}));
+    }
+
     protected static resumePolling() {
         if (this.running) {
             return;
         }
+        // The regular loop checks a pending capture itself (startGamepadListeners()).
+        this.stopCaptureLoop();
         this.running = true;
         this.stop = false;
         this.startGamepadListeners();
@@ -91,67 +234,50 @@ export default class Gamepads {
                 }
             }
 
-            // Joysticks
+            // Joysticks. State is tracked for every axis/button, mapped or not, so an input bound
+            // by a capture while held (see capturePress()) isn't seen as a fresh press once the
+            // new mapping loads - only the events need a mapped key.
             gamepad.axes.forEach((value: number, index: number) => {
-                let eventName: string|null = null;
-                if (mapping.axes[index]) {
-                    if (!this.gamepadKeyPressed[gamepadsKey].axes[index]) {
-                        this.gamepadKeyPressed[gamepadsKey].axes[index] = {
-                            wasPressed: false as boolean,
-                            lastPressedKey: null as string|null,
-                        };
+                if (!this.gamepadKeyPressed[gamepadsKey].axes[index]) {
+                    this.gamepadKeyPressed[gamepadsKey].axes[index] = {
+                        wasPressed: false as boolean,
+                        lastPressedKey: null as string|null,
+                    };
+                }
+                const axe = this.gamepadKeyPressed[gamepadsKey].axes[index];
+                if (Math.abs(value) > this.AXIS_DEADZONE && !axe.wasPressed) {
+                    axe.wasPressed = true;
+                    axe.lastPressedKey = mapping.axes[index]?.[value > 0 ? 1 : 0] || null;
+                    if (axe.lastPressedKey) {
+                        this.emit('gamepadKeydown', axe.lastPressedKey, value);
                     }
-                    const axe = this.gamepadKeyPressed[gamepadsKey].axes[index];
-                    if (Math.abs(value) > this.AXIS_DEADZONE && !axe.wasPressed) {
-                        eventName = 'gamepadKeydown';
-                        axe.wasPressed = true;
-                        axe.lastPressedKey = value > 0 ?
-                            mapping.axes[index][1] : mapping.axes[index][0];
-                    // Symmetric with the press threshold above, rather than an exact `=== 0`
-                    // check: plenty of sticks/hat-switches never rest at a perfect 0 (potentiometer
-                    // calibration drift, or a residual value from the driver), which left wasPressed
-                    // stuck true forever - blocking any further press on that axis after the first
-                    // one (e.g. "down" and "right" each working exactly once, then nothing).
-                    } else if (Math.abs(value) <= this.AXIS_DEADZONE && axe.wasPressed) {
-                        eventName = 'gamepadKeyup';
-                        axe.wasPressed = false;
-                    }
-
-                    if (eventName) {
-                        const event = new CustomEvent(eventName, {
-                            detail: {
-                                key: axe.lastPressedKey,
-                                value,
-                            },
-                        });
-                        window.dispatchEvent(event);
+                // Symmetric with the press threshold above, rather than an exact `=== 0`
+                // check: plenty of sticks/hat-switches never rest at a perfect 0 (potentiometer
+                // calibration drift, or a residual value from the driver), which left wasPressed
+                // stuck true forever - blocking any further press on that axis after the first
+                // one (e.g. "down" and "right" each working exactly once, then nothing).
+                } else if (Math.abs(value) <= this.AXIS_DEADZONE && axe.wasPressed) {
+                    axe.wasPressed = false;
+                    if (axe.lastPressedKey) {
+                        this.emit('gamepadKeyup', axe.lastPressedKey, value);
                     }
                 }
             });
 
             gamepad.buttons.forEach((button: GamepadButton, index: number) => {
-                let eventName: string|null = null;
-                if (mapping.buttons[index]) {
-                    const wasPressed = this.gamepadKeyPressed[gamepadsKey].buttons[index];
-                    if (button.pressed && !wasPressed) {
-                        eventName = 'gamepadKeydown';
-                        this.gamepadKeyPressed[gamepadsKey].buttons[index] = true;
-                    } else if (!button.pressed && wasPressed) {
-                        eventName = 'gamepadKeyup';
-                        this.gamepadKeyPressed[gamepadsKey].buttons[index] = false;
-                    }
-
-                    if (eventName) {
-                        const event = new CustomEvent(eventName, {
-                            detail: {
-                                key: mapping.buttons[index],
-                                value: button.value,
-                            },
-                        });
-                        window.dispatchEvent(event);
+                const wasPressed = this.gamepadKeyPressed[gamepadsKey].buttons[index] === true;
+                if (button.pressed !== wasPressed) {
+                    this.gamepadKeyPressed[gamepadsKey].buttons[index] = button.pressed;
+                    const key = mapping.buttons[index];
+                    if (key) {
+                        this.emit(button.pressed ? 'gamepadKeydown' : 'gamepadKeyup', key, button.value);
                     }
                 }
             });
+
+            // After the regular handling above, so the captured press's own keydown is held
+            // back (emit()) and its state recorded as pressed.
+            this.checkCapture(gamepad);
         }
 
         this.animationFrameRequest = requestAnimationFrame(this.startGamepadListeners.bind(this));
@@ -166,6 +292,10 @@ export default class Gamepads {
      * next window blur/focus cycle happened to re-register them via init().
      */
     public static stopGamepadsListeners() {
+        // A pending capture keeps going without the regular loop.
+        if (this.pendingCapture) {
+            this.startCaptureLoop();
+        }
         this.stop = true;
         this.running = false;
         cancelAnimationFrame(this.animationFrameRequest);
@@ -187,13 +317,16 @@ export default class Gamepads {
      * @param gamepadIndex
      */
     public static stopGamepadListeners(gamepad: Gamepad, gamepadIndex: number) {
-        const mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
+        // Same standard-layout fallback as the polling loop.
+        const mapping = this.controllerMapping[gamepad.mapping || gamepad.id] ?? this.controllerMapping.standard;
         if (!mapping || !this.gamepadKeyPressed[gamepadIndex]) {
             return;
         }
+        // Every input's state is tracked (see startGamepadListeners()), only the ones producing
+        // a key get a keyup.
         for (let axesIndex = 0; axesIndex < this.gamepadKeyPressed[gamepadIndex].axes.length; axesIndex++) {
             const axe = this.gamepadKeyPressed[gamepadIndex].axes[axesIndex];
-            if (axe && axe.wasPressed) {
+            if (axe && axe.wasPressed && axe.lastPressedKey) {
                 window.dispatchEvent(new CustomEvent(
                     'gamepadKeyup',
                     { detail: {key: axe.lastPressedKey, value: 0}},
@@ -201,7 +334,7 @@ export default class Gamepads {
             }
         }
         for (let buttonIndex = 0; buttonIndex < this.gamepadKeyPressed[gamepadIndex].buttons.length; buttonIndex++) {
-            if (this.gamepadKeyPressed[gamepadIndex].buttons[buttonIndex]) {
+            if (this.gamepadKeyPressed[gamepadIndex].buttons[buttonIndex] && mapping.buttons[buttonIndex]) {
                 window.dispatchEvent(new CustomEvent(
                     'gamepadKeyup',
                     { detail: {key: mapping.buttons[buttonIndex], value: 0}},

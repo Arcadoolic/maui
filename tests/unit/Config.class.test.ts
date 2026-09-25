@@ -219,6 +219,7 @@ describe('Config.save', () => {
         written.bezelAspect = '4:3';
         written.openDevTools = true;
         written.fullscreen = true;
+        written.mauiControls = {standard: {buttons: {0: '', 3: 'Enter'}, axes: {}}};
         written.save();
 
         expect(existsSync(configPath)).toBe(true);
@@ -234,6 +235,14 @@ describe('Config.save', () => {
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(true);
+        expect(read.mauiControls).toEqual({standard: {buttons: {0: '', 3: 'Enter'}, axes: {}}});
+    });
+
+    it('ignores a malformed mauiControls value', () => {
+        const config = new Config();
+        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame', mauiControls: 'oops'}));
+        config.load();
+        expect(config.mauiControls).toEqual({});
     });
 
     it('writes only the documented keys, and never avatarsPath', () => {
@@ -247,6 +256,7 @@ describe('Config.save', () => {
             'fullscreen',
             'mameBinaryName',
             'mamePath',
+            'mauiControls',
             'openDevTools',
             'repoPassword',
             'repoUrl',

@@ -1,6 +1,7 @@
 import {existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import * as os from 'os';
+import type {ControllerMappingOverrides} from '@/class/MauiControls';
 
 // This app's own state directory - separate from ~/.mame (see Helpers.getMameHomePath()),
 // which belongs to mame itself, not to mame-awesome-ui. Config/DB live here rather than under
@@ -72,6 +73,11 @@ export default class Config {
     // the other way round.
     public thumbsDownRemovesFavorite: boolean = true;
 
+    // Gamepad bindings of MAUI's own controls changed from the BO (MAUI > Controls), on top of
+    // src/assets/controllers.json - see ControllerMappingOverrides in MauiControls.ts. Read by
+    // Gamepads.class.ts, which reloads them whenever this file changes.
+    public mauiControls: ControllerMappingOverrides = {};
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
 
@@ -106,6 +112,9 @@ export default class Config {
             this.fullscreen = configFile.fullscreen === true;
             this.voteEnabled = configFile.voteEnabled !== false;
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
+            this.mauiControls = configFile.mauiControls && typeof configFile.mauiControls === 'object'
+                ? configFile.mauiControls
+                : {};
 
             this._configLoaded = true;
             return true;
@@ -132,6 +141,7 @@ export default class Config {
                 fullscreen: this.fullscreen,
                 voteEnabled: this.voteEnabled,
                 thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
+                mauiControls: this.mauiControls,
             }),
         );
     }

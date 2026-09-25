@@ -86,6 +86,16 @@ app.on('ready', async () => {
         // tells the user to close and restart manually (`just serve` in dev; relaunching the
         // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
+    }, async (timeoutMs) => {
+        // The BO's MAUI > Controls capture: the press has to be seen by the cabinet window's
+        // Gamepad API, so ask it (see Gamepads.capturePress()) - no IPC channel in this app.
+        if (!win || win.isDestroyed()) {
+            return {error: 'The MAUI window is not open on the cabinet.'};
+        }
+        const result = await win.webContents.executeJavaScript(
+            `window.mauiCapturePress ? window.mauiCapturePress(${Number(timeoutMs)}) : null`,
+        );
+        return result ?? {error: 'MAUI is still starting on the cabinet (game list not reached yet) - try again.'};
     });
     boServer = bo.server;
     // The BO creates/migrates the database first (see boServer.ts's bootstrapDatabase()): the
