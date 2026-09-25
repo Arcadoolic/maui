@@ -2725,6 +2725,46 @@ function renderPageTail(): string {
                 }
             } catch (error) { /* nothing to restore */ }
         })();
+
+        // While a MAME config session runs (the Gamepads tab marks it with data-mame-session),
+        // ask the server every couple of seconds whether it's still alive, and reload the page
+        // once it isn't - MAME can be closed from its own window, which the server-rendered
+        // "Close MAME" buttons and "running" status would otherwise keep showing. The interval
+        // handle lives on window, not in this closure: a form submission swaps the document in
+        // place (document.write() above) without clearing the previous page's timers, so each
+        // new page first stops the one before it.
+        (function () {
+            clearInterval(window.boMameSessionWatch);
+            if (!document.querySelector('[data-mame-session="running"]')) {
+                return;
+            }
+            window.boMameSessionWatch = setInterval(function () {
+                fetch('/input-probe/mame/status')
+                    .then(function (response) { return response.ok ? response.json() : null; })
+                    .then(function (status) {
+                        if (!status || status.running) {
+                            return;
+                        }
+                        clearInterval(window.boMameSessionWatch);
+                        // Same entry the scroll-restore script above reads, so the reloaded page
+                        // opens where this one was; the hash keeps it on this subtab.
+                        try {
+                            var subtab = document.querySelector('.subtabs a.active');
+                            var tab = document.querySelector('nav.tabs a.active');
+                            sessionStorage.setItem('boScrollRestore', JSON.stringify({
+                                y: window.scrollY,
+                                where: (tab ? tab.textContent : '') + '/' + (subtab ? subtab.dataset.subtab : ''),
+                                at: Date.now(),
+                            }));
+                            if (subtab) {
+                                history.replaceState(null, '', '#' + subtab.dataset.subtab);
+                            }
+                        } catch (error) { /* the page just reloads at the top */ }
+                        location.reload();
+                    })
+                    .catch(function () { /* server unreachable for now - try again next tick */ });
+            }, 2000);
+        })();
     </script>
 </body>
 </html>`;
@@ -3537,7 +3577,7 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
             the file, so MAME's own default binding applies again (MAME doesn't need to be
             running for that).</p>
-            <p><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
+            <p${sessionRunning ? ' data-mame-session="running"' : ''}><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
             <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}">
                 <button type="submit">${sessionRunning ? 'Close MAME' : 'Launch MAME'}</button>
             </form>
@@ -7387,6 +7427,16 @@ export function startBoServer(
         }
 
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdmin));
+    });
+
+    // Polled by the page while a config session runs (see renderPageTail()), so it notices MAME
+    // being closed from its own window.
+    app.get('/input-probe/mame/status', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).json({error: 'Action reserved to administrators.'});
+            return;
+        }
+        res.json({running: isMameConfigSessionAlive()});
     });
 
     app.post('/input-probe/mame/stop', (req, res) => {
