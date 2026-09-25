@@ -10,12 +10,13 @@ name: Build
 # Matrix covers linux-x64, linux-arm64 (Raspberry Pi), macos-arm64, and
 # windows-x64.
 #
-# The publish-develop-prerelease job below additionally republishes the
-# linux-x64/linux-arm64 AppImages as a GitHub prerelease - this is what the
-# BO's "Mise à jour" tab lists as develop builds for admin accounts
-# (src/boServer.ts's getUpdateInfo(), filtered on the GitHub Release
-# `prerelease` flag), replacing the old admin-only "builds de PR" mechanism
-# (PR CI artifacts, needed a GitHub token to list).
+# The publish-develop-prerelease job below additionally republishes every
+# platform's build (Linux AppImages, macOS zip, Windows exe) as a GitHub
+# prerelease. The BO's update card lists these as develop builds in Advanced
+# configuration (src/boServer.ts's getUpdateInfo(), filtered on the GitHub
+# Release `prerelease` flag, and only ever picking the running arch's Linux
+# AppImage), replacing the old "builds de PR" mechanism (PR CI artifacts,
+# needed a GitHub token to list).
 
 on:
   workflow_dispatch:
@@ -101,9 +102,9 @@ jobs:
           path: ${{ matrix.artifact_glob }}
           retention-days: 7
 
-  # Only Linux gets a dev build: the BO's self-update ("Mise à jour" tab) only ever runs on
-  # the Linux cabinet/Pi (see isSelfUpdateCapable() in src/boServer.ts) - macOS/Windows
-  # artifacts stay workflow-artifact-only (7-day retention, above), not worth publishing.
+  # All platforms are published, so macOS/Windows dev builds can be downloaded for testing
+  # beyond the 7-day workflow artifact retention above. The BO's self-update still only ever
+  # installs the Linux AppImage (see isSelfUpdateCapable()/getUpdateInfo() in src/boServer.ts).
   publish-develop-prerelease:
     needs: build
     if: github.event_name == 'workflow_dispatch'
@@ -114,10 +115,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download Linux artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: linux-*
           path: dist_electron
           merge-multiple: true
 
@@ -132,7 +132,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" dist_electron/*.AppImage \
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            dist_electron/*.AppImage dist_electron/*.zip dist_electron/*.exe \
             --repo "${{ github.repository }}" \
             --title "Dev build ${{ steps.tag.outputs.tag }}" \
             --notes "Automated build from develop@${{ github.sha }}. Not reviewed, not merged to main." \
