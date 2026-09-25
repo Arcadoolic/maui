@@ -102,6 +102,42 @@ function getCategoryClasses(index: number) {
         transform: translate3d(-50%, 200%, 0) scale(0.4);
     }
 
+    .categories .category.action_platformer {
+        background-image: url(../assets/categories/action_platformer.svg);
+    }
+
+    .categories .category.beat_em_up {
+        background-image: url(../assets/categories/beat_em_up.svg);
+    }
+
+    .categories .category.fixed_shooter {
+        background-image: url(../assets/categories/fixed_shooter.svg);
+    }
+
+    .categories .category.light_gun {
+        background-image: url(../assets/categories/light_gun.svg);
+    }
+
+    .categories .category.multidirectional_shooter {
+        background-image: url(../assets/categories/multidirectional_shooter.svg);
+    }
+
+    .categories .category.rail_shooter {
+        background-image: url(../assets/categories/rail_shooter.svg);
+    }
+
+    .categories .category.run_n_gun {
+        background-image: url(../assets/categories/run_n_gun.svg);
+    }
+
+    .categories .category.shoot_em_up {
+        background-image: url(../assets/categories/shoot_em_up.svg);
+    }
+
+    .categories .category.tabletop {
+        background-image: url(../assets/categories/tabletop.svg);
+    }
+
     .categories .category.arcade {
         background-image: url(../assets/categories/arcade.svg);
     }

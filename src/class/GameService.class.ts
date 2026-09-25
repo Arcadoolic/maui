@@ -13,6 +13,7 @@ import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
 import {Vote, VOTE_DOWN} from '@/class/GameVote';
 import {removeFavoriteFromDisk} from '@/class/FavoritesStore';
+import {parseCatverIni} from '@/class/CatverGenres';
 
 export default class GameService {
     protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
@@ -132,12 +133,19 @@ export default class GameService {
      * when it's absent (no import done yet, or a MAME version without a "folders" pack) this
      * returns an empty set of categories instead of throwing - callers then see "no category"
      * for every rom, which is how the UI falls back to a flat game list (see Home.vue).
+     * catver.ini, when installed next to it (MameService.catverIniPath), takes precedence: same
+     * genres plus subgenres, regrouped into finer MAUI genres (Fighting vs Beat 'em Up...) by
+     * parseCatverIni().
      */
     public getGameCategories() {
         if (!GameService.genreIni) {
-            GameService.genreIni = this.mameService.genreIniPath
-                ? iniParse(readFileSync(this.mameService.genreIniPath, 'utf8'))
-                : {};
+            const catverIniPath = this.mameService.catverIniPath;
+            const genreIniPath = this.mameService.genreIniPath;
+            GameService.genreIni = catverIniPath
+                ? parseCatverIni(readFileSync(catverIniPath, 'utf8'))
+                : genreIniPath
+                    ? iniParse(readFileSync(genreIniPath, 'utf8'))
+                    : {};
         }
         return GameService.genreIni;
     }
