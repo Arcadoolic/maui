@@ -50,9 +50,9 @@ export default class Database {
     }
 
     /**
-     * (Re)seeds the category table from genre.ini (see GameService.getGameCategories()), which
-     * is only ever installed by a starting pack import (see scripts/import-starting-pack.py)
-     * and is optional - possibly added (or replaced by a newer pack) well after the database
+     * (Re)seeds the category table from genre.ini, or catver.ini when installed (see
+     * GameService.getGameCategories()). genre.ini is only ever installed by a starting pack
+     * import (see scripts/import-starting-pack.py); both are optional - possibly added (or replaced by a newer pack) well after the database
      * already exists. Idempotent (upserts by the same positional id_category
      * GameService.getGameCategoryId() derives games' id_category from) so it's safe - and
      * necessary - to call on every launch, not just Database.install()'s first-ever run:

@@ -166,6 +166,20 @@ export default class MameService {
     }
 
     /**
+     * Path to progettoSNAPS' catver.ini inside ui.ini's categorypath directory - the same
+     * genres as genre.ini plus their subgenres (see CatverGenres.ts). Optional: null unless
+     * installed there; when present, GameService.getGameCategories() reads it instead of
+     * genre.ini.
+     */
+    public get catverIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'catver.ini',
+        );
+    }
+
+    /**
      * Path to Multiplayer.ini inside ui.ini's categorypath directory - the game player-count
      * dataset matching the installed mame version. Optional, same as genreIniPath: null until a
      * starting pack import installs it; Home.vue hides the player-count display entirely when

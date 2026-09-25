@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="140px" height="140px" viewBox="0 0 140 140">
+<circle fill="#3B4A6B" cx="70" cy="70" r="70"/>
+<polygon fill="#F9D423" points="70,10 80,38 108,22 98,50 128,52 104,70 128,88 98,90 108,118 80,102 70,130 60,102 32,118 42,90 12,88 36,70 12,52 42,50 32,22 60,38"/>
+<rect x="44" y="40" width="15" height="34" rx="7.5" fill="#F2B48C"/>
+<rect x="57" y="36" width="15" height="38" rx="7.5" fill="#F2B48C"/>
+<rect x="70" y="36" width="15" height="38" rx="7.5" fill="#F2B48C"/>
+<rect x="83" y="40" width="15" height="34" rx="7.5" fill="#F2B48C"/>
+<rect x="57" y="46" width="2" height="18" fill="#E09A70"/>
+<rect x="70" y="42" width="2" height="22" fill="#E09A70"/>
+<rect x="83" y="46" width="2" height="18" fill="#E09A70"/>
+<path fill="#E09A70" d="M44,62h54v18c0,12-10,22-22,22H66c-12,0-22-10-22-22V62z"/>
+<rect x="46" y="64" width="42" height="13" rx="6.5" fill="#F7C9A6"/>
+<rect x="54" y="100" width="36" height="12" rx="3" fill="#C8412E"/>
+</svg>

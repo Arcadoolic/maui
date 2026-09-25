@@ -72,6 +72,7 @@ import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
 type Sequelize = SequelizeTS.Sequelize;
 import Category from '@/model/Category.model';
+import {CONF_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
@@ -364,6 +365,9 @@ interface MameLocations {
     // missing, so a starting pack import always has somewhere to write them into.
     categoryDir: string | null;
     genreIniPath: string | null;
+    // Optional progettoSNAPS catver.ini: read instead of genre.ini when present (see
+    // GameService.getGameCategories()).
+    catverIniPath: string | null;
     nplayersIniPath: string | null;
 }
 
@@ -383,11 +387,15 @@ function getMameLocations(iniPath: string): MameLocations {
     const genreIniPath = categoryDir && existsSync(join(categoryDir, 'genre.ini'))
         ? join(categoryDir, 'genre.ini')
         : null;
+    const catverIniPath = categoryDir && existsSync(join(categoryDir, 'catver.ini'))
+        ? join(categoryDir, 'catver.ini')
+        : null;
     const nplayersIniPath = categoryDir && existsSync(join(categoryDir, 'Multiplayer.ini'))
         ? join(categoryDir, 'Multiplayer.ini')
         : null;
     return {
-        uiIni, marqueePath, flyerPath, logoPath, favoritesPath, categoryDir, genreIniPath, nplayersIniPath,
+        uiIni, marqueePath, flyerPath, logoPath, favoritesPath, categoryDir, genreIniPath, catverIniPath,
+        nplayersIniPath,
     };
 }
 
@@ -512,6 +520,7 @@ interface MameInfo {
     logoPath: string | null;
     favoritesPath: string | null;
     genreIniPath: string | null;
+    catverIniPath: string | null;
     nplayersIniPath: string | null;
     windowed: boolean;
     pluginsPath: string | null;
@@ -528,7 +537,7 @@ function getMameInfo(config: Config): MameInfo {
     const uiIniPath = join(iniPath, 'ui.ini');
     const pluginIniPath = join(iniPath, 'plugin.ini');
     const {
-        marqueePath, flyerPath, logoPath, favoritesPath, genreIniPath, nplayersIniPath,
+        marqueePath, flyerPath, logoPath, favoritesPath, genreIniPath, catverIniPath, nplayersIniPath,
     } = getMameLocations(iniPath);
     const windowed = getMameIniValue(mameIniPath, 'window') === '1';
     const pluginsPath = getMameIniValue(mameIniPath, 'pluginspath');
@@ -538,7 +547,7 @@ function getMameInfo(config: Config): MameInfo {
     if (!config.mamePath || !config.mameBinaryName) {
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
-            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
+            favoritesPath, genreIniPath, catverIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: 'Configure the mame binary (Config tab) to see the roms path.',
         };
     }
@@ -547,7 +556,7 @@ function getMameInfo(config: Config): MameInfo {
     if (!existsSync(mameBinary)) {
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
-            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
+            favoritesPath, genreIniPath, catverIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: `The binary "${mameBinary}" was not found.`,
         };
     }
@@ -562,12 +571,12 @@ function getMameInfo(config: Config): MameInfo {
         const romPath = ensureFirstDirectory(parsed.rompath, iniPath);
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath, marqueePath, flyerPath, logoPath,
-            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: parsed,
+            favoritesPath, genreIniPath, catverIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: parsed,
         };
     } catch {
         return {
             iniPath, mameIniPath, uiIniPath, pluginIniPath, romPath: null, marqueePath, flyerPath, logoPath,
-            favoritesPath, genreIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
+            favoritesPath, genreIniPath, catverIniPath, nplayersIniPath, windowed, pluginsPath, missingPlugins, showConfig: null,
             error: 'Unable to read the mame configuration ("-showconfig" failed).',
         };
     }
@@ -1170,6 +1179,20 @@ function escapeHtml(value: string): string {
  * caller skips its own post-import render; on a normal close, it only closes the `<section>` and
  * resolves true, leaving the rest of the page (and res.end()) to the caller.
  */
+/**
+ * Downloads and imports the repository's configuration pack (a plain `folders/` ZIP, so the
+ * whole file, no --only) through runImportScript(), into an already-headed streamed response.
+ * Same result: false when the script could not be launched (response already closed).
+ */
+function runConfPackImport(res: Response, config: Config): Promise<boolean> {
+    return runImportScript(
+        res,
+        `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`,
+        ['--url', `${config.repoUrl}/${CONF_PACK_FILENAME}`],
+        {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+    );
+}
+
 function runImportScript(
     res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
     overall?: {index: number; total: number}, tabbed = false,
@@ -3248,6 +3271,13 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
+                    <dt>Subgenres file (catver.ini, categorypath)</dt>
+                    <dd>${renderFoundIcon(!!mameInfo.catverIniPath)}${mameInfo.catverIniPath
+                        ? escapeHtml(mameInfo.catverIniPath) + ' <em>(used instead of genre.ini)</em>'
+                        : '<em>Optional — add progettoSNAPS\' catver.ini at the path given by '
+                            + 'categorypath in ui.ini for finer genres (Fighting, Beat \'em Up...).</em>'}</dd>
+                </div>
+                <div class="info-field">
                     <dt>Player count file (Multiplayer.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
@@ -4232,9 +4262,6 @@ function renderForm(
     mameInfoMessage?: string,
     importError?: string,
     dangerZoneInfo?: string,
-    repoPacks?: RepoPack[],
-    repoError?: string,
-    repoInfo?: string,
     deviceProbeState?: DeviceProbeState,
     remapState?: RemapState,
     gameRemapState?: GameRemapState,
@@ -4283,15 +4310,10 @@ function renderForm(
             label: 'Import',
             // renderPythonWarning() is meant to sit right above renderImportCard() (see its own
             // comment) - not a section of its own.
-            html: renderPythonWarning() + renderImportCard(importError),
+            html: renderPythonWarning() + renderConfPackCard(config, mameInfo) + renderImportCard(importError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
         if (isAdvanced) {
-            sections.push({
-                id: 'repository',
-                label: 'Repository',
-                html: renderRepoImportCard(config, mameInfo, repoPacks, repoError, repoInfo),
-            });
             sections.push({
                 id: 'danger',
                 label: 'Danger',
@@ -4300,17 +4322,16 @@ function renderForm(
         }
     }
     // Which of the params above is actually filled in tells us which section this specific
-    // response is about - e.g. a POST to /repo/save only ever sets repoInfo/repoError, nothing
+    // response is about - e.g. a POST to /reset only ever sets dangerZoneInfo, nothing
     // else, regardless of what other sections might separately have a standing .flash warning
     // of their own (missing plugins, no python3...) that would otherwise wrongly win just for
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
-        : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'repository'
-            : importError !== undefined ? 'import'
-                : (deviceProbeState !== undefined || remapState !== undefined
-                    || gameRemapState !== undefined) ? 'gamepads'
-                    : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
-                        : undefined;
+        : importError !== undefined ? 'import'
+            : (deviceProbeState !== undefined || remapState !== undefined
+                || gameRemapState !== undefined) ? 'gamepads'
+                : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
+                    : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
     // launches/closes the shared MAME config session the Gamepads cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Gamepads tab itself.
@@ -5605,8 +5626,36 @@ function renderBindingLabel(portType: string, label: string): string {
 }
 
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
-function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
-    return renderPage(renderFavoritesCard(favoritesInfo, viewer), 'favorites', viewer);
+/** What the Games tab's Repository subtab shows (Advanced configuration only, see renderFavoritesPage()). */
+interface RepoSection {
+    config: Config;
+    mameInfo: MameInfo;
+    packs?: RepoPack[];
+    error?: string;
+    info?: string;
+}
+
+/**
+ * The Games tab: the favorites and, in Advanced configuration, the pack repository the games come
+ * from (`repository`), as a second subtab - opened by default when a repository action set its
+ * packs or a message.
+ */
+function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer, repository?: RepoSection): string {
+    const favoritesHtml = renderFavoritesCard(favoritesInfo, viewer);
+    if (!repository) {
+        return renderPage(favoritesHtml, 'favorites', viewer);
+    }
+    const {config, mameInfo, packs, error, info} = repository;
+    // The repository's imports resolve every path from the MAME binary: nothing to act on until
+    // it is configured (same gating as the MAME tab's Import section).
+    const repositoryHtml = mameInfo.error
+        ? `<section class="card"><h2>Starting pack repository</h2>
+            <p class="error">${escapeHtml(mameInfo.error)}</p></section>`
+        : renderRepoImportCard(config, mameInfo, packs, error, info);
+    return renderSubtabbedPage('favorites', [
+        {id: 'favorites', label: 'Favorites', html: favoritesHtml},
+        {id: 'repository', label: 'Repository', html: repositoryHtml},
+    ], viewer, packs !== undefined || error !== undefined || info !== undefined ? 'repository' : undefined);
 }
 
 /**
@@ -5653,6 +5702,36 @@ function renderImportCard(error?: string): string {
                 <input type="file" id="pack" name="pack" accept=".zip" required>
                 <button type="submit">Import</button>
             </form>
+        </section>
+    `;
+}
+
+/**
+ * The configuration pack (see ConfPack.ts): the category files the carousel needs, downloaded
+ * from the pack repository. Shown outside Advanced configuration too - without it the carousel
+ * has no genres - but installing it needs the repository configured (Advanced configuration,
+ * Games > Repository); it can also be imported by hand with the form below it, being a plain `folders/`
+ * ZIP.
+ */
+function renderConfPackCard(config: Config, mameInfo: MameInfo): string {
+    const missing = getMissingConfPackFiles(mameInfo);
+    const status = missing.length
+        ? `<p class="error">${renderFoundIcon(false)}Missing: ${missing.map(escapeHtml).join(', ')} - the game
+            packs of the repository stay locked until it is installed.</p>`
+        : `<p class="info">${renderFoundIcon(true)}Installed (catver.ini, genre.ini, Multiplayer.ini).</p>`;
+    const action = config.repoUrl
+        ? `<form method="post" action="/import/conf-pack" data-stream>
+                <button type="submit">${missing.length ? 'Install' : 'Update'} the configuration pack</button>
+            </form>`
+        : `<p class="info"><em>Set the repository (Advanced configuration, Games > Repository) to download it, or import
+            ${escapeHtml(CONF_PACK_FILENAME)} with the form below.</em></p>`;
+    return `
+        <section class="card">
+            <h2>Configuration pack</h2>
+            <p class="info">Genres (catver.ini, genre.ini) and player counts (Multiplayer.ini) the carousel is
+            built from. Required: it is also reinstalled before every game pack import from the repository.</p>
+            ${status}
+            ${action}
         </section>
     `;
 }
@@ -6189,7 +6268,7 @@ function renderRepoImportCard(
             <h2>Starting pack repository</h2>
             <p class="info">Browses and imports a starting pack directly from a password-protected
             HTTP repository, without going through the upload
-            (Import tab) - useful for a pack too large for a browser form.</p>
+            (MAME > Import tab) - useful for a pack too large for a browser form.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/repo/save" novalidate>
@@ -6204,10 +6283,12 @@ function renderRepoImportCard(
             </form>
             ${config.repoUrl ? `
                 ${renderDiskSpaceInfo(mameInfo)}
-                <form method="get" action="/import/from-url/packs">
-                    <button type="submit">Browse available packs</button>
-                </form>
-                ${packs ? renderRepoPackPicker(packs) : ''}
+                ${getMissingConfPackFiles(mameInfo).length
+                    ? '<p class="info"><em>Install the configuration pack first (MAME > Import tab) to browse the game packs.</em></p>'
+                    : `<form method="get" action="/import/from-url/packs">
+                        <button type="submit">Browse available packs</button>
+                    </form>
+                    ${packs ? renderRepoPackPicker(packs) : ''}`}
             ` : ''}
         </section>
     `;
@@ -6641,13 +6722,19 @@ export function startBoServer(
      * re-renders after POST /favorites/delete, /favorites/restore and /votes/set, `flash` being
      * that action's message.
      */
-    const renderFavoritesTab = async (req: Request, flash: FavoritesFlash = {}): Promise<string> => {
+    const renderFavoritesTab = async (
+        req: Request, flash: FavoritesFlash = {}, repository: Omit<RepoSection, 'config' | 'mameInfo'> = {},
+    ): Promise<string> => {
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
+        // Repository subtab: Advanced configuration only, like the routes below it.
+        const repositorySection = req.session.boAdvanced
+            ? {config, mameInfo: getMameInfo(config), ...repository}
+            : undefined;
 
         if ('error' in context) {
-            return renderFavoritesPage({rows: [], error: context.error, ...flash}, getViewer(req));
+            return renderFavoritesPage({rows: [], error: context.error, ...flash}, getViewer(req), repositorySection);
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
@@ -6660,6 +6747,7 @@ export function startBoServer(
         return renderFavoritesPage(
             {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...flash},
             getViewer(req),
+            repositorySection,
         );
     };
 
@@ -7181,6 +7269,7 @@ export function startBoServer(
         // validated (see there for why).
         if (!refreshedMameInfo.error) {
             res.write(renderPythonWarning());
+            res.write(renderConfPackCard(config, refreshedMameInfo));
             res.write(renderImportCard());
         }
         res.write(renderPageTail());
@@ -7191,10 +7280,10 @@ export function startBoServer(
         reloadFront();
     });
 
-    // Same Advanced configuration gating as renderRepoImportCard()'s visibility in renderForm(): configuring where
+    // Same Advanced configuration gating as the Games tab's Repository subtab: configuring where
     // packs come from, and importing an arbitrary one from there, is no less consequential than
     // the manual upload right above it.
-    app.post('/repo/save', (req, res) => {
+    app.post('/repo/save', async (req, res) => {
         if (!req.session.boAdvanced) {
             res.status(403).send('Available in Advanced configuration only.');
             return;
@@ -7209,11 +7298,7 @@ export function startBoServer(
         config.repoPassword = (req.body.repoPassword || '').trim();
         config.save();
 
-        const values: ConfigFormValues = {mamePath: config.mamePath || ''};
-        res.send(renderForm(
-            values, getMameInfo(config), true, undefined, undefined, undefined, undefined, undefined,
-            undefined, undefined, 'Repository configuration saved.',
-        ));
+        res.send(await renderFavoritesTab(req, {}, {info: 'Repository configuration saved.'}));
     });
 
     // Proxied server-side (rather than the browser fetching index.json directly) so the repo's
@@ -7225,13 +7310,16 @@ export function startBoServer(
         }
         const config = new Config();
         config.load();
-        const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         const mameInfo = getMameInfo(config);
 
         if (!config.repoUrl) {
-            res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Enter the repository URL before browsing it.',
-            ));
+            res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Enter the repository URL before browsing it.'}));
+            return;
+        }
+        if (getMissingConfPackFiles(mameInfo).length) {
+            res.status(422).send(await renderFavoritesTab(req, {}, {
+                error: 'Install the configuration pack first (MAME > Import tab).',
+            }));
             return;
         }
 
@@ -7246,7 +7334,8 @@ export function startBoServer(
                 throw new Error(`HTTP ${response.status}`);
             }
             const data = await response.json() as {packs?: RepoPack[]};
-            const packs = data.packs ?? [];
+            // The configuration pack has its own card (see renderConfPackCard()).
+            const packs = (data.packs ?? []).filter(pack => isGamePack(pack.filename));
             const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
             const authorization = 'Basic '
                 + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64');
@@ -7263,15 +7352,55 @@ export function startBoServer(
                 pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             }));
-            res.send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, packs,
-            ));
+            res.send(await renderFavoritesTab(req, {}, {packs}));
         } catch (error) {
             const message = error instanceof Error ? error.message : 'unexpected error';
-            res.status(502).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, `Unable to reach the repository: ${message}`,
-            ));
+            res.status(502).send(await renderFavoritesTab(req, {}, {error: `Unable to reach the repository: ${message}`}));
         }
+    });
+
+    // Not Advanced-only, unlike the game packs below: the carousel needs this pack to have genres.
+    app.post('/import/conf-pack', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const values: ConfigFormValues = {mamePath: config.mamePath || ''};
+        const isAdvanced = req.session.boAdvanced === true;
+        const mameInfo = getMameInfo(config);
+
+        if (!config.repoUrl) {
+            res.status(422).send(renderForm(
+                values, mameInfo, isAdvanced, undefined, undefined, undefined, 'Repository URL not configured.',
+            ));
+            return;
+        }
+        if (!isPython3Available()) {
+            res.status(500).send(renderForm(
+                values, mameInfo, isAdvanced, undefined, undefined, undefined,
+                'python3 not found on this machine - unable to import from the repository.',
+            ));
+            return;
+        }
+
+        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+        res.socket?.setNoDelay(true);
+        res.write(renderPageHead('mame', getViewer(req)));
+        if (!await runConfPackImport(res, config)) {
+            return;
+        }
+
+        const refreshedMameInfo = getMameInfo(config);
+        res.write(renderConfigCard(values, refreshedMameInfo));
+        res.write(renderMameInfoCard(refreshedMameInfo));
+        if (!refreshedMameInfo.error) {
+            res.write(renderPythonWarning());
+            res.write(renderConfPackCard(config, refreshedMameInfo));
+            res.write(renderImportCard());
+        }
+        res.write(renderPageTail());
+        res.end();
+
+        // Back through Init.vue, which re-seeds the categories from the new files.
+        reloadFront();
     });
 
     app.post('/import/from-url', async (req, res) => {
@@ -7281,49 +7410,51 @@ export function startBoServer(
         }
         const config = new Config();
         config.load();
-        const values: ConfigFormValues = {mamePath: config.mamePath || ''};
-        const mameInfo = getMameInfo(config);
         // One "<pack>.zip|<romName>" per ticked game, grouped by pack (a game listed by several
         // packs is kept for the first). urlencoded (extended: false) yields a string for one
         // ticked box, an array for several; anything malformed is refused (see the function).
         const selection = groupSelectedGames(req.body?.game);
 
         if (!config.repoUrl) {
-            res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Repository URL not configured.',
-            ));
+            res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Repository URL not configured.'}));
             return;
         }
         if (selection && !selection.size) {
-            res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Tick at least one game to import.',
-            ));
+            res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Tick at least one game to import.'}));
             return;
         }
         if (!selection) {
-            res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Invalid pack or game name.',
-            ));
+            res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Invalid pack or game name.'}));
             return;
         }
         // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below -
         // macOS in particular doesn't always ship a working python3 without Xcode CLT installed.
         if (!isPython3Available()) {
-            res.status(500).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'python3 not found on this machine - unable to import from the repository.',
-            ));
+            res.status(500).send(await renderFavoritesTab(req, {}, {error: 'python3 not found on this machine - unable to import from the repository.'}));
             return;
         }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame', getViewer(req)));
+        res.write(renderPageHead('favorites', getViewer(req)));
 
         // Packs are imported one after the other (one script run each, one progress card each):
         // the script rewrites favorites.ini and shared category files, so runs must not overlap.
         // Credentials go through env, never argv, so they don't leak via `ps`/
         // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
         // trust level as ssDevPassword).
+        // The configuration pack first, every time (see ConfPack.ts): game packs no longer ship
+        // the category files, so this keeps them matching the repository's.
+        if (!await runConfPackImport(res, config)) {
+            return;
+        }
+        if (getMissingConfPackFiles(getMameInfo(config)).length) {
+            res.write('<p class="error flash">The configuration pack could not be installed: game packs not imported.</p>');
+            res.write(renderPageTail());
+            res.end();
+            return;
+        }
+
         // Several packs: one tab per pack instead of one card each (17 packs made a very long page).
         const tabbed = selection.size > 1;
         if (tabbed) {
@@ -7351,14 +7482,7 @@ export function startBoServer(
 
         streamFavoritesRefreshAfterImport(res, config);
 
-        const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo));
-        res.write(renderMameInfoCard(refreshedMameInfo));
-        if (!refreshedMameInfo.error) {
-            res.write(renderPythonWarning());
-            res.write(renderImportCard());
-            res.write(renderRepoImportCard(config, refreshedMameInfo));
-        }
+        res.write(renderRepoImportCard(config, getMameInfo(config)));
         res.write(renderPageTail());
         res.end();
 
@@ -7796,7 +7920,7 @@ export function startBoServer(
             const result = runDeviceProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
             res.send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, undefined, undefined, undefined, undefined,
                 {result},
             ));
         } catch (error) {
@@ -7804,7 +7928,7 @@ export function startBoServer(
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, undefined, undefined, undefined, undefined,
                 {error: `Device probe failed: ${message} (timeout, non-zero exit code, or binary not found).`},
             ));
         }
@@ -7819,7 +7943,7 @@ export function startBoServer(
         const isAdvanced = req.session.boAdvanced === true;
         const renderWith = (state: DeviceProbeState, status = 200) => res.status(status).send(renderForm(
             {mamePath: config.mamePath || ''}, mameInfo, isAdvanced,
-            undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+            undefined, undefined, undefined, undefined, undefined,
             state,
         ));
 
@@ -7923,7 +8047,7 @@ export function startBoServer(
         if (!isMameConfigSessionAlive()) {
             res.send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, undefined, undefined, undefined, undefined,
                 undefined,
                 {portType, error: 'MAME is not running - click "Launch MAME" first.'},
             ));
@@ -7938,7 +8062,7 @@ export function startBoServer(
                 applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
                 res.send(renderForm(
                     {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined, undefined, undefined, undefined, undefined,
                     undefined,
                     {portType},
                 ));
@@ -7947,7 +8071,7 @@ export function startBoServer(
                 const message = error instanceof Error ? error.message : 'unexpected error';
                 res.status(500).send(renderForm(
                     {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined, undefined, undefined, undefined, undefined,
                     undefined,
                     {portType, error: `Reset failed: ${message}`},
                 ));
@@ -7976,9 +8100,6 @@ export function startBoServer(
                 undefined, // mameInfoMessage
                 undefined, // importError
                 undefined, // dangerZoneInfo
-                undefined, // repoPacks
-                undefined, // repoError
-                undefined, // repoInfo
                 undefined, // deviceProbeState
                 remapState,
             ));
@@ -7992,9 +8113,6 @@ export function startBoServer(
                 undefined, // mameInfoMessage
                 undefined, // importError
                 undefined, // dangerZoneInfo
-                undefined, // repoPacks
-                undefined, // repoError
-                undefined, // repoInfo
                 undefined, // deviceProbeState
                 {portType, error: `Capture failed: ${message}`},
             ));
@@ -8011,9 +8129,6 @@ export function startBoServer(
             undefined, // mameInfoMessage
             undefined, // importError
             undefined, // dangerZoneInfo
-            undefined, // repoPacks
-            undefined, // repoError
-            undefined, // repoInfo
             undefined, // deviceProbeState
             undefined, // remapState
             gameRemapState,
