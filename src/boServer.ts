@@ -2512,26 +2512,36 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
             gap: 12px;
         }
+        /* Values and buttons on the left, the command's icon and name on the right (spanning
+           both rows), a flash message across the whole card under them. */
         .binding {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px 12px;
+            align-content: start;
             padding: 12px;
             background-color: var(--surface-inset);
             border: 1px solid var(--border-subtle);
             border-radius: var(--radius-md);
         }
-        .binding-label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-weight: bold;
+        .binding > * {
+            grid-column: 1;
         }
-        /* The glyphs only fill part of their 64x64 box (Kenney's own margins), hence the size. */
+        .binding-label {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 96px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-align: center;
+            color: var(--text-muted);
+        }
         .binding-icon {
-            width: 40px;
-            height: 40px;
-            flex-shrink: 0;
+            width: 64px;
+            height: 64px;
         }
         .binding-values {
             display: grid;
@@ -2552,12 +2562,15 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .binding-actions {
             display: flex;
             flex-wrap: wrap;
+            align-items: flex-start;
+            align-self: start;
             gap: 8px;
         }
         .binding-actions > button[type="submit"]:last-child {
             margin-top: 0;
         }
         .binding .flash {
+            grid-column: 1 / -1;
             margin: 0;
         }
         .player-panel {
