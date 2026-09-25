@@ -63,7 +63,11 @@ import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
 import {escapeHtml} from '@/class/EscapeHtml';
-import {getOnlineView, resetOnlineSettings, saveConfigurationString, testConnection} from '@/class/OnlineSetup';
+import {
+    describeOnlineStatus, getOnlineView, resetOnlineSettings, saveConfigurationString, setOnlineEnabled, testConnection,
+} from '@/class/OnlineSetup';
+import {OnlineSession} from '@/class/OnlineSession';
+import {readMameVersion} from '@/class/MameVersion';
 import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import ControllerMappings from '@/assets/controllers.json';
@@ -4817,6 +4821,18 @@ function renderMauiControlsCard(): string {
     `;
 }
 
+// Set once by startBoServer(); read by the MAUI page renderer, which runs outside its closure.
+let onlineSession: OnlineSession | null = null;
+
+function renderOnlineSection(messages: MauiPageMessages): string {
+    const view = getOnlineView();
+    const status = onlineSession?.getStatus();
+    const session = view.state === 'configured' && status
+        ? {stopped: status.state === 'stopped', status: describeOnlineStatus(status, view.url)}
+        : undefined;
+    return renderOnlineCard(view, {error: messages.onlineError, info: messages.onlineInfo}, session);
+}
+
 function renderMauiPage(
     config: Config, messages: MauiPageMessages = {}, isAdvanced: boolean = false,
     updateInfo?: UpdateInfo,
@@ -4839,7 +4855,7 @@ function renderMauiPage(
         sections.push({
             id: 'online',
             label: 'Online',
-            html: renderOnlineCard(getOnlineView(), {error: messages.onlineError, info: messages.onlineInfo}),
+            html: renderOnlineSection(messages),
         });
         sections.push({
             id: 'import-export',
@@ -6546,7 +6562,19 @@ function refuseOnlineRequest(req: Request, res: Response): boolean {
 
 export function startBoServer(
     port: number, reloadFront: () => void, onReset: () => void,
-): {server: Server; databaseReady: Promise<void>} {
+): {server: Server; databaseReady: Promise<void>; online: OnlineSession} {
+    // Created here so the Online routes can restart it; started and stopped by background.ts.
+    const online = new OnlineSession({
+        mauiVersion: getRunningVersion(),
+        readMameVersion: () => {
+            const config = new Config();
+            config.load();
+            return readMameVersion(config.mamePath && config.mameBinaryName
+                ? join(config.mamePath, config.mameBinaryName)
+                : '');
+        },
+    });
+    onlineSession = online;
     const app = express();
     app.use(express.urlencoded({extended: false}));
     // A fresh secret per server start (rather than a persisted one) invalidates every session on
@@ -7545,11 +7573,30 @@ export function startBoServer(
         }
         const input = typeof req.body.configuration === 'string' ? req.body.configuration : '';
         const outcome = saveConfigurationString(input);
+        if (outcome.ok) {
+            // New credentials: an ONLINE session still running would keep the old ones.
+            await online.restart();
+        }
         const config = new Config();
         config.load();
         await sendMauiPage(req, res, config, outcome.ok
             ? {onlineInfo: 'Configuration saved. Use "Test connection" to check it.'}
             : {onlineError: outcome.error});
+    });
+
+    app.post('/maui/online/enabled', async (req, res) => {
+        if (refuseOnlineRequest(req, res)) {
+            return;
+        }
+        const result = setOnlineEnabled(req.body.enabled === 'on');
+        if (result.level === 'info') {
+            await online.restart();
+        }
+        const config = new Config();
+        config.load();
+        await sendMauiPage(req, res, config, result.level === 'info'
+            ? {onlineInfo: result.message}
+            : {onlineError: result.message});
     });
 
     app.post('/maui/online/test', async (req, res) => {
@@ -7569,6 +7616,7 @@ export function startBoServer(
             return;
         }
         const result = resetOnlineSettings();
+        await online.restart();
         const config = new Config();
         config.load();
         await sendMauiPage(req, res, config, result.level === 'info'
@@ -8436,5 +8484,5 @@ export function startBoServer(
     const server = app.listen(port, () => {
         console.log(`BO server listening on http://localhost:${port}`);
     });
-    return {server, databaseReady};
+    return {server, databaseReady, online};
 }

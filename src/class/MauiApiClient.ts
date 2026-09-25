@@ -43,6 +43,8 @@ export type ApiResult<T> =
     // Transient: worth retrying at the next heartbeat.
     | {kind: 'unavailable'; reason: 'network' | 'timeout' | 'server_error' | 'invalid_response'; status?: number};
 
+export type ApiFailure = Exclude<ApiResult<unknown>, {kind: 'ok'}>;
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_AFTER_SECONDS = 60;
 const MAX_VERSION_LENGTH = 32;

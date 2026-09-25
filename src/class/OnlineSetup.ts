@@ -1,6 +1,7 @@
 import {ConfigurationStringError, parseConfigurationString, toApiBaseUrl} from '@/class/ConfigurationString';
 import {computeMachineFingerprint, readOsMachineId, type MachineIdSources} from '@/class/MachineFingerprint';
-import {MauiApiClient, type ApiResult, type PingResult} from '@/class/MauiApiClient';
+import {MauiApiClient, type ApiFailure, type ApiResult, type PingResult} from '@/class/MauiApiClient';
+import type {OnlineStatus} from '@/class/OnlineSession';
 import {
     OnlineSettingsError,
     ensureLocalUuid,
@@ -16,7 +17,7 @@ import {
 
 export type OnlineView =
     | {state: 'unconfigured'}
-    | {state: 'configured'; url: string; key: string}
+    | {state: 'configured'; url: string; key: string; enabled: boolean}
     | {state: 'unreadable'; message: string};
 
 export type SaveOutcome = {ok: true} | {ok: false; error: string};
@@ -72,7 +73,7 @@ export function getOnlineView(path: string = getOnlineSettingsPath()): OnlineVie
         return {state: 'unreadable', message: settings.unreadable};
     }
     return isConfigured(settings)
-        ? {state: 'configured', url: settings.url, key: settings.key}
+        ? {state: 'configured', url: settings.url, key: settings.key, enabled: settings.enabled}
         : {state: 'unconfigured'};
 }
 
@@ -111,20 +112,64 @@ export function resetOnlineSettings(path: string = getOnlineSettingsPath()): BoM
     };
 }
 
-function describePing(result: ApiResult<PingResult>, url: string): BoMessage {
-    switch (result.kind) {
-        case 'ok': {
-            const {client, machine} = result.value;
-            const binding = machine.newlyBound ? ', now bound to these credentials' : '';
-            return {level: 'info', message: `Connected: this cabinet is "${client.name}"${binding}.`};
-        }
-        case 'rejected':
-            return {level: 'error', message: describeRejection(result.code)};
-        case 'rate_limited':
-            return {level: 'error', message: `Too many requests to MAUI-API, try again in ${result.retryAfterSeconds} s.`};
-        case 'unavailable':
-            return {level: 'error', message: describeUnavailable(result, url)};
+export function setOnlineEnabled(enabled: boolean, path: string = getOnlineSettingsPath()): BoMessage {
+    const settings = readSettings(path);
+    if ('unreadable' in settings) {
+        return {level: 'error', message: settings.unreadable};
     }
+    if (enabled && !isConfigured(settings)) {
+        return {level: 'error', message: 'Paste a configuration string first.'};
+    }
+    writeOnlineSettings({...settings, enabled}, path);
+    return {level: 'info', message: enabled ? 'ONLINE turned on.' : 'ONLINE turned off.'};
+}
+
+function describePing(result: ApiResult<PingResult>, url: string): BoMessage {
+    if (result.kind !== 'ok') {
+        return {level: 'error', message: describeFailure(result, url)};
+    }
+    const {client, machine} = result.value;
+    const binding = machine.newlyBound ? ', now bound to these credentials' : '';
+    return {level: 'info', message: `Connected: this cabinet is "${client.name}"${binding}.`};
+}
+
+export function describeFailure(result: ApiFailure, url: string): string {
+    switch (result.kind) {
+        case 'rejected':
+            return describeRejection(result.code);
+        case 'rate_limited':
+            return `Too many requests to MAUI-API, try again in ${result.retryAfterSeconds} s.`;
+        case 'unavailable':
+            return describeUnavailable(result, url);
+    }
+}
+
+function formatUtc(iso: string): string {
+    return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+}
+
+export function describeOnlineStatus(status: OnlineStatus, url: string): BoMessage {
+    const {state, lastSuccessAt, lastFailure} = status;
+    if (state === 'stopped') {
+        const reason = lastFailure
+            ? describeFailure(lastFailure.result, url)
+            : 'an unexpected error, see the logs.';
+        return {level: 'error', message: `ONLINE stopped: ${reason} Fix the cause, then Retry.`};
+    }
+    if (state !== 'running') {
+        return {level: 'info', message: 'ONLINE is off.'};
+    }
+    const running = lastSuccessAt
+        ? `ONLINE is on. Last contact with MAUI-API: ${formatUtc(lastSuccessAt)}.`
+        : 'ONLINE is on, no successful contact yet.';
+    // ISO timestamps from the same clock compare as strings.
+    if (lastFailure && (!lastSuccessAt || lastFailure.at > lastSuccessAt)) {
+        return {
+            level: 'error',
+            message: `${running} Last error (${formatUtc(lastFailure.at)}): ${describeFailure(lastFailure.result, url)}`,
+        };
+    }
+    return {level: 'info', message: running};
 }
 
 function describeUnavailable(result: Extract<ApiResult<never>, {kind: 'unavailable'}>, url: string): string {

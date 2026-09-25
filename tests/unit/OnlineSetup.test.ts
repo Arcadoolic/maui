@@ -4,11 +4,14 @@ import {join, dirname} from 'path';
 import {tmpdir} from 'os';
 import {
     describeRejection,
+    describeOnlineStatus,
     getOnlineView,
     resetOnlineSettings,
     saveConfigurationString,
+    setOnlineEnabled,
     testConnection,
 } from '@/class/OnlineSetup';
+import type {OnlineStatus} from '@/class/OnlineSession';
 import {readOnlineSettings, writeOnlineSettings} from '@/class/OnlineSettings';
 import {computeMachineFingerprint, type MachineIdSources} from '@/class/MachineFingerprint';
 
@@ -48,7 +51,7 @@ describe('getOnlineView', () => {
     it('exposes the url and the key, never the token', () => {
         saveConfigurationString(encode(configuration), path);
         const view = getOnlineView(path);
-        expect(view).toEqual({state: 'configured', url: configuration.url, key: configuration.key});
+        expect(view).toEqual({state: 'configured', url: configuration.url, key: configuration.key, enabled: false});
         expect(JSON.stringify(view)).not.toContain('secret');
     });
 
@@ -214,7 +217,84 @@ describe('resetOnlineSettings', () => {
     it('does nothing on a readable file', () => {
         saveConfigurationString(encode(configuration), path);
         expect(resetOnlineSettings(path).level).toBe('error');
-        expect(getOnlineView(path)).toEqual({state: 'configured', url: configuration.url, key: configuration.key});
+        expect(getOnlineView(path)).toEqual({state: 'configured', url: configuration.url, key: configuration.key, enabled: false});
+    });
+});
+
+describe('setOnlineEnabled', () => {
+    it('turns ONLINE on and off, keeping the credentials', () => {
+        saveConfigurationString(encode(configuration), path);
+        expect(setOnlineEnabled(true, path)).toEqual({level: 'info', message: 'ONLINE turned on.'});
+        expect(readOnlineSettings(path)).toMatchObject({...configuration, enabled: true});
+        expect(setOnlineEnabled(false, path)).toEqual({level: 'info', message: 'ONLINE turned off.'});
+        expect(readOnlineSettings(path)).toMatchObject({...configuration, enabled: false});
+    });
+
+    it('refuses to turn ONLINE on without credentials', () => {
+        expect(setOnlineEnabled(true, path)).toEqual({level: 'error', message: expect.stringMatching(/Paste a configuration/)});
+        expect(readOnlineSettings(path).enabled).toBe(false);
+    });
+
+    it('does not overwrite a corrupt file', () => {
+        corruptFile();
+        expect(setOnlineEnabled(false, path)).toEqual({level: 'error', message: expect.stringMatching(/online\.json/)});
+    });
+});
+
+describe('describeOnlineStatus', () => {
+    const base: OnlineStatus = {state: 'running', startupId: null, lastSuccessAt: null, lastFailure: null};
+    const url = 'https://api.example.org';
+
+    it('says when ONLINE is off', () => {
+        expect(describeOnlineStatus({...base, state: 'disabled'}, url)).toEqual({level: 'info', message: 'ONLINE is off.'});
+    });
+
+    it('gives the last contact while running', () => {
+        const status = {...base, lastSuccessAt: '2026-09-25T10:01:00.000Z'};
+        expect(describeOnlineStatus(status, url)).toEqual({
+            level: 'info', message: 'ONLINE is on. Last contact with MAUI-API: 2026-09-25 10:01:00 UTC.',
+        });
+    });
+
+    it('says when there was no successful contact yet', () => {
+        expect(describeOnlineStatus(base, url).message).toMatch(/no successful contact yet/);
+    });
+
+    it('adds the last error when it is newer than the last success', () => {
+        const status: OnlineStatus = {
+            ...base,
+            lastSuccessAt: '2026-09-25T10:01:00.000Z',
+            lastFailure: {at: '2026-09-25T10:02:00.000Z', result: {kind: 'unavailable', reason: 'network'}},
+        };
+        const described = describeOnlineStatus(status, url);
+        expect(described.level).toBe('error');
+        expect(described.message).toContain('2026-09-25 10:02:00 UTC');
+        expect(described.message).toContain('unreachable at https://api.example.org');
+    });
+
+    it('drops an error older than the last success', () => {
+        const status: OnlineStatus = {
+            ...base,
+            lastSuccessAt: '2026-09-25T10:03:00.000Z',
+            lastFailure: {at: '2026-09-25T10:02:00.000Z', result: {kind: 'unavailable', reason: 'network'}},
+        };
+        expect(describeOnlineStatus(status, url).level).toBe('info');
+    });
+
+    it('explains why ONLINE stopped', () => {
+        const status: OnlineStatus = {
+            ...base,
+            state: 'stopped',
+            lastFailure: {at: '2026-09-25T10:00:00.000Z', result: {kind: 'rejected', status: 403, code: 'client_disabled'}},
+        };
+        const described = describeOnlineStatus(status, url);
+        expect(described.level).toBe('error');
+        expect(described.message).toContain(describeRejection('client_disabled'));
+        expect(described.message).toMatch(/Retry/);
+    });
+
+    it('explains a stop without an API answer', () => {
+        expect(describeOnlineStatus({...base, state: 'stopped'}, url).message).toMatch(/unexpected error/);
     });
 });
 
