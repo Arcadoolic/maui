@@ -8,7 +8,7 @@ import {
 import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
-import {ChildProcess, execFile, execFileSync, spawn} from 'child_process';
+import {ChildProcess, execFileSync, spawn} from 'child_process';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
 import {app as electronApp} from 'electron';
@@ -1758,7 +1758,14 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         /* Subtabs on the left, the page's action (see renderSubtabbedPage()'s navAction) pinned to
            the right of the same row; wraps under them on a narrow screen. */
+        /* Sticky: the MAME launch/close button stays in reach while scrolling a long subtab (the
+           Gamepads tables especially). */
         .subtabs-bar {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            padding: 8px 0;
+            background-color: var(--surface-strong);
             display: flex;
             flex-wrap: wrap;
             align-items: center;
@@ -3567,22 +3574,18 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
         <section class="card">
             <h2>Global input configuration</h2>
             <p class="info">Binds a gamepad button to a command. <strong>1.</strong>
-            Launch MAME below (a real window, not in the background) and leave it open
+            Launch MAME with the button at the top of the page and leave it open
             for the whole configuration - all captures then share the same startup, so the
             same gamepad indexes from start to finish.
             <strong>2.</strong> Click "Capture a press" for the wanted command, then press the
             button on the gamepad within 30 seconds (MAME picks it up even when its window is
             not the one in front). Each press is saved at once to <code>default.cfg</code> (valid
             for all games, unless a specific game has its own override). <strong>3.</strong>
-            Close MAME when done, from here or from its own window: either way keeps the
+            Close MAME when done, from the top button or from its own window: either way keeps the
             changes. <strong>Currently</strong> reflects what is really saved
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
             the file, so MAME's own default binding applies again. Both buttons stay disabled
             until MAME is launched.</p>
-            <p${sessionRunning ? ' data-mame-session="running"' : ''}><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
-            <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}">
-                <button type="submit">${sessionRunning ? 'Close MAME' : 'Launch MAME'}</button>
-            </form>
             ${REMAP_GROUPS.map(group => `
                 <h3>${escapeHtml(group.title)}</h3>
                 <div class="table-wrap">
@@ -3750,8 +3753,8 @@ function renderGameRemapCard(
                     MAME picks it up even when its window is not the one in front. The result shows
                     here and is saved at once.</li>
                     <li><strong>Reset</strong> gives a command back its global binding. When you are
-                    done, close MAME from here or from its own window: either way keeps the
-                    changes.</li>
+                    done, close MAME with the button at the top of the page or from its own window:
+                    either way keeps the changes.</li>
                 </ol>
             ` : `
                 <ol class="info">
@@ -3766,9 +3769,6 @@ function renderGameRemapCard(
             </form>
             ${sessionRunning ? `
                 <p><strong>MAME:</strong> running (${escapeHtml(sessionRom ? (romLabels.get(sessionRom) ?? sessionRom) : '')})</p>
-                <form method="post" action="/input-probe/mame/stop">
-                    <button type="submit">Close MAME</button>
-                </form>
             ` : ''}
             ${state?.error && !state.fieldId ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
             ${sessionRom && sessionRom === selectedRom ? renderTable(sessionRom) : ''}
@@ -3830,7 +3830,7 @@ function renderForm(
     gameRemapState?: GameRemapState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
-    // see /save, /launch, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
+    // see /save, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
     // credential fields; a sync JSON read is cheap and every route already re-loads Config at
     // least once per request anyway.
     const config = new Config();
@@ -3902,13 +3902,18 @@ function renderForm(
                     || gameRemapState !== undefined) ? 'gamepads'
                     : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
                         : undefined;
-    // Right of the subtabs: launching mame is the administrator's call (the route rejects anyone
-    // else too).
+    // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
+    // launches/closes the shared MAME config session the Gamepads cards capture through - see
+    // startMameConfigSession(). Administrator's call only (the routes reject anyone else too).
+    // data-mame-session lets the page notice MAME being closed from its own window (see
+    // renderPageTail()).
+    const sessionRunning = isAdmin && isMameConfigSessionAlive();
     const launchButton = isAdmin ? `
-        <form method="post" action="/launch">
+        <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}"
+            ${sessionRunning ? 'data-mame-session="running"' : ''}>
             <button type="submit" class="launch-button">
                 <img src="/mame-logo.svg" alt="" class="launch-logo">
-                Launch mame
+                ${sessionRunning ? 'Close MAME' : 'Launch MAME'}
             </button>
         </form>
     ` : '';
@@ -7279,60 +7284,6 @@ export function startBoServer(
         reloadFront();
     });
 
-    app.post('/launch', (req, res) => {
-        const config = new Config();
-        config.load();
-
-        const isAdmin = req.session.boRole === 'admin';
-
-        if (!isAdmin) {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
-
-        if (!config.mamePath || !config.mameBinaryName) {
-            res.status(422).send(renderForm(
-                {mamePath: config.mamePath || ''},
-                getMameInfo(config), isAdmin,
-                'No valid configuration saved: unable to launch mame.',
-            ));
-            return;
-        }
-
-        const mameBinary = join(config.mamePath, config.mameBinaryName);
-        if (!existsSync(mameBinary)) {
-            res.status(422).send(renderForm(
-                {mamePath: config.mamePath},
-                getMameInfo(config), isAdmin,
-                `The binary "${mameBinary}" was not found.`,
-            ));
-            return;
-        }
-
-        // Same launch shape as MameService.startGame(), minus -skip_gameinfo/romName:
-        // no rom selected here, so mame opens its own UI, on the dedicated home
-        // directory mame-awesome-ui always pins it to.
-        const iniPath = getMameHomePath();
-        const mameProcess = execFile(mameBinary, ['-inipath', iniPath, '-homepath', iniPath], {
-            killSignal: 'SIGQUIT',
-            cwd: iniPath,
-        }, error => {
-            if (error) {
-                console.error('[boServer] mame exited with an error:', error);
-            }
-        });
-        mameProcess.once('error', error => {
-            console.error('[boServer] failed to launch mame:', error);
-        });
-
-        res.send(renderForm(
-            {mamePath: config.mamePath},
-            getMameInfo(config), isAdmin,
-            undefined,
-            'Mame was launched, check that a window actually opened on the machine hosting mame-awesome-ui.',
-        ));
-    });
-
     /**
      * Writes pluginspath into mame.ini and, as soon as it points at a folder that actually has
      * plugins in it, initializes/completes plugin.ini right away instead of making the user click
@@ -7422,12 +7373,22 @@ export function startBoServer(
         const mameInfo = getMameInfo(config);
         const isAdmin = req.session.boRole === 'admin';
 
+        // MAME only runs the capture script (-autoboot_script) once a machine is running - opened
+        // on its own menu, with no rom, it never does (checked against 0.289) - so the session
+        // needs a rom, any of them: default.cfg is global.
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         const romName = romNames[0];
-        if (!mameInfo.error && romName) {
-            startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        if (mameInfo.error || !romName) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
+                mameInfo.error
+                    ? 'No valid MAME configuration saved: unable to launch MAME.'
+                    : 'No rom found in the roms folder - MAME needs at least one to launch.',
+            ));
+            return;
         }
 
+        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdmin));
     });
 
