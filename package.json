@@ -41,7 +41,7 @@
         "sqlite3": "^6.0.1",
         "umzug": "^3.8.3",
         "velocity-animate": "^2.0.5",
-        "vue": "^3.5.42",
+        "vue": "^3.5.43",
         "vue-router": "^5.3.1"
     },
     "devDependencies": {
