@@ -56,6 +56,7 @@ function session(fetchImpl: typeof fetch, overrides: Partial<OnlineSessionDeps> 
         osRelease: () => '6.8.0-139-generic',
         mauiVersion: '2.6.0',
         readMameVersion: async () => '0.272',
+        readOsName: async () => 'Ubuntu 24.04.5 LTS',
         log,
         ...overrides,
     });
@@ -106,6 +107,7 @@ describe('start', () => {
             maui_version: '2.6.0',
             os: 'linux',
             os_version: '6.8.0-139-generic',
+            os_name: 'Ubuntu 24.04.5 LTS',
             client_datetime: '2026-09-25T10:00:00.000Z',
         });
         expect(instance.getStatus()).toMatchObject({
