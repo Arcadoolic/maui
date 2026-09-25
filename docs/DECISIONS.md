@@ -357,6 +357,18 @@ the file is renamed to `online.json.corrupt-<timestamp>` (not deleted), and
 the machine binding valid. Credentials from a damaged file are never reused:
 the configuration string must be pasted again.
 
-**Unknown rejection code (open, slice 4).** What `OnlineSession` does with a
-`rejected` result whose `code` MAUI does not know: stop, or keep retrying.
-`MauiApiClient` passes the code through either way.
+**Unknown rejection code, 2026-09-25: stop.** `OnlineSession` stops on any
+`rejected` result, known code or not: every 4xx is definitive per the
+contract, and retrying would only fill MAUI-API's logs. If MAUI-API ever adds
+a transient 4xx code, MAUI needs an update to handle it. The BO shows the
+code, and "Retry" restarts the session once the cause is fixed.
+
+**Heartbeat backoff, 2026-09-25: none, fixed 60 s.** MAUI-API shows a cabinet
+offline after 3 minutes without a heartbeat, and one call a minute is far
+below its rate limit (60 per minute per key). A long outage costs one failed
+call a minute. The only longer wait is a `429`: `Retry-After`, never shorter
+than the interval.
+
+**ONLINE status in the cabinet UI, 2026-09-25: none, BO only.** An icon would
+need a main-to-renderer channel in the Vue front end for a need nobody has
+expressed yet. Players do not see that the cabinet is offline.

@@ -7,6 +7,7 @@ import {join} from 'path';
 import {Server} from 'http';
 import {startBoServer} from '@/boServer';
 import {BO_SERVER_PORT} from '@/boServerPort';
+import type {OnlineSession} from '@/class/OnlineSession';
 import Config from '@/class/Config.class';
 import {exitWhenParentGone} from '@/devParentWatch';
 
@@ -18,6 +19,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 // be closed automatically when the JavaScript object is garbage collected.
 let win: BrowserWindow | null;
 let boServer: Server | undefined;
+let onlineSession: OnlineSession | undefined;
 
 function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.ELECTRON_RENDERER_URL) {
@@ -91,10 +93,14 @@ app.on('ready', async () => {
     // The BO creates/migrates the database first (see boServer.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
+    onlineSession = bo.online;
+    // Not awaited: ONLINE must never delay the window (start() never throws, see OnlineSession.ts).
+    void onlineSession.start();
     win = createSplashWin();
 });
 
 app.on('will-quit', () => {
+    onlineSession?.stop();
     boServer?.close();
 });
 

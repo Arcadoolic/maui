@@ -1,7 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {renderOnlineCard} from '@/class/OnlineBoCard';
 
-const configured = {state: 'configured' as const, url: 'https://api.example.org', key: 'mk_7F3aQ9dLx2PzK8wR4mT6vYb1'};
+const configured = {state: 'configured' as const, url: 'https://api.example.org', key: 'mk_7F3aQ9dLx2PzK8wR4mT6vYb1', enabled: false};
 
 describe('renderOnlineCard', () => {
     it('offers only the paste form when nothing is configured', () => {
@@ -30,7 +30,7 @@ describe('renderOnlineCard', () => {
 
     it('escapes every value', () => {
         const html = renderOnlineCard(
-            {state: 'configured', url: 'https://x.org/"><script>', key: '<b>k</b>'},
+            {state: 'configured', url: 'https://x.org/"><script>', key: '<b>k</b>', enabled: false},
             {error: '<img src=x>', info: '"quoted"'},
         );
         expect(html).not.toContain('<script>');
@@ -51,6 +51,39 @@ describe('renderOnlineCard', () => {
     it('shows the outcome flashes of a reset', () => {
         const html = renderOnlineCard({state: 'unconfigured'}, {info: 'Reset done.'});
         expect(html).toContain('Reset done.');
+    });
+
+    it('offers to turn ONLINE on when it is off', () => {
+        const html = renderOnlineCard(configured, {}, {stopped: false, status: {level: 'info', message: 'ONLINE is off.'}});
+        expect(html).toContain('action="/maui/online/enabled"');
+        expect(html).toMatch(/name="enabled" value="on"/);
+        expect(html).toContain('Turn ONLINE on');
+        expect(html).toContain('ONLINE is off.');
+    });
+
+    it('offers to turn ONLINE off when it is on', () => {
+        const html = renderOnlineCard({...configured, enabled: true}, {}, {stopped: false, status: {level: 'info', message: 'ONLINE is on.'}});
+        expect(html).toMatch(/name="enabled" value="off"/);
+        expect(html).toContain('Turn ONLINE off');
+    });
+
+    it('offers a retry once the session stopped', () => {
+        const html = renderOnlineCard(
+            {...configured, enabled: true}, {}, {stopped: true, status: {level: 'error', message: 'ONLINE stopped: <b>x</b>'}},
+        );
+        expect(html).toContain('Retry');
+        expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
+    });
+
+    it('offers no retry for a transient error, the next heartbeat retries anyway', () => {
+        const html = renderOnlineCard(
+            {...configured, enabled: true}, {}, {stopped: false, status: {level: 'error', message: 'Last error: network'}},
+        );
+        expect(html).not.toContain('Retry');
+    });
+
+    it('no longer announces ONLINE mode for a later version', () => {
+        expect(renderOnlineCard(configured)).not.toMatch(/later version/);
     });
 
     it('never offers the reset when the file is readable', () => {

@@ -1,5 +1,5 @@
 import {escapeHtml} from '@/class/EscapeHtml';
-import type {OnlineView} from '@/class/OnlineSetup';
+import type {BoMessage, OnlineView} from '@/class/OnlineSetup';
 
 export interface OnlineCardMessages {
     error?: string;
@@ -25,6 +25,32 @@ function renderCredentials(url: string, key: string): string {
             </form>`;
 }
 
+function renderEnabledForm(value: 'on' | 'off', label: string): string {
+    return `
+            <form method="post" action="/maui/online/enabled">
+                <input type="hidden" name="enabled" value="${value}">
+                <button type="submit">${label}</button>
+            </form>`;
+}
+
+export interface OnlineCardSession {
+    stopped: boolean;
+    status: BoMessage;
+}
+
+// ONLINE switch and live status. Retry (a session restart, hence a new startup report) only once
+// the session stopped: a transient error is already retried by the next heartbeat.
+function renderSession(enabled: boolean, session?: OnlineCardSession): string {
+    const statusLine = session
+        ? `<p class="${session.status.level === 'error' ? 'error' : 'info'}">${escapeHtml(session.status.message)}</p>`
+        : '';
+    if (!enabled) {
+        return statusLine + renderEnabledForm('on', 'Turn ONLINE on');
+    }
+    const retry = session?.stopped ? renderEnabledForm('on', 'Retry') : '';
+    return statusLine + retry + renderEnabledForm('off', 'Turn ONLINE off');
+}
+
 // The URL only ever changes by pasting a whole MAUI1. string, never through a field of its own,
 // and the field is never prefilled: the saved token must not come back into the page.
 function renderPasteForm(replacing: boolean): string {
@@ -36,11 +62,12 @@ function renderPasteForm(replacing: boolean): string {
             </form>`;
 }
 
-export function renderOnlineCard(view: OnlineView, messages: OnlineCardMessages = {}): string {
+export function renderOnlineCard(view: OnlineView, messages: OnlineCardMessages = {}, session?: OnlineCardSession): string {
     const intro = `
             <h2>Online (MAUI-API)</h2>
-            <p>Connects this cabinet to a MAUI-API server. Paste the configuration string (it starts
-            with <code>MAUI1.</code>) shown once on the invitation page.</p>`;
+            <p>Connects this cabinet to a MAUI-API server: a startup report at launch, then a heartbeat
+            every minute while ONLINE is on. Paste the configuration string (it starts with
+            <code>MAUI1.</code>) shown once on the invitation page.</p>`;
 
     if (view.state === 'unreadable') {
         return `
@@ -54,13 +81,19 @@ export function renderOnlineCard(view: OnlineView, messages: OnlineCardMessages 
         </section>`;
     }
 
-    const configured = view.state === 'configured';
+    if (view.state === 'unconfigured') {
+        return `
+        <section class="card">${intro}
+            ${renderFlashes(messages)}
+            ${renderPasteForm(false)}
+        </section>`;
+    }
+
     return `
         <section class="card">${intro}
             ${renderFlashes(messages)}
-            ${configured ? renderCredentials(view.url, view.key) : ''}
-            ${renderPasteForm(configured)}
-            <p class="info">ONLINE mode itself (startup report, heartbeat) comes in a later version:
-            saving and testing here is all MAUI sends to MAUI-API for now.</p>
+            ${renderSession(view.enabled, session)}
+            ${renderCredentials(view.url, view.key)}
+            ${renderPasteForm(true)}
         </section>`;
 }
