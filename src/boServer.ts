@@ -3278,7 +3278,7 @@ function stopMameConfigSession(): void {
     if (isMameConfigSessionAlive()) {
         // SIGKILL, not the default SIGTERM - confirmed by hand that a real windowed MAME process
         // just ignores SIGTERM outright (same "hung mame process can ignore SIGTERM under some
-        // video backends" reason runDeviceProbe()/runCaptureInput() already use it for).
+        // video backends" reason runDeviceProbe() already uses it for).
         mameConfigSession?.child.kill('SIGKILL');
     }
 }
@@ -3400,7 +3400,12 @@ function readDefaultCfgUiInputs(cfgPath: string): Map<string, string> {
     return ports;
 }
 
-function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string): void {
+/**
+ * Rewrites default.cfg's <input> block with exactly `ports` - shared by setDefaultCfgUiInput() and
+ * removeDefaultCfgUiInput() below. An empty map drops the block altogether rather than leaving an
+ * empty <input></input> behind.
+ */
+function writeDefaultCfgUiInputs(cfgPath: string, ports: Map<string, string>): void {
     const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : `<?xml version="1.0"?>
 <mameconfig version="10">
     <system name="default">
@@ -3408,11 +3413,11 @@ function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string):
 </mameconfig>
 `;
 
-    const inputBlockMatch = /<input>[\s\S]*?<\/input>\s*/.exec(existing);
-    const ports = readDefaultCfgUiInputs(cfgPath);
-    ports.set(portType, token);
+    // Whole lines only (the block's own indentation and line break): matching from "<input>" to
+    // the next non-blank character instead made every rewrite indent the block a bit further.
+    const inputBlockMatch = /[ \t]*<input>[\s\S]*?<\/input>[ \t]*\n?/.exec(existing);
 
-    const newInputBlock = '        <input>\n'
+    const newInputBlock = !ports.size ? '' : '        <input>\n'
         + Array.from(ports.entries()).map(([type, seq]) => ''
             + `            <port type="${type}">\n`
             + '                <newseq type="standard">\n'
@@ -3429,11 +3434,29 @@ function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string):
     writeFileSync(cfgPath, updated, 'utf8');
 }
 
+function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string): void {
+    const ports = readDefaultCfgUiInputs(cfgPath);
+    ports.set(portType, token);
+    writeDefaultCfgUiInputs(cfgPath, ports);
+}
+
 /**
- * Global input remap: "Lancer MAME"/"Fermer MAME" control the shared config session
- * (startMameConfigSession()/stopMameConfigSession() above), and one "Capturer un appui" form per
+ * Drops `portType`'s override from default.cfg, so MAME falls back to its own default binding for
+ * it. A no-op when there's no such override (nothing to rewrite).
+ */
+function removeDefaultCfgUiInput(cfgPath: string, portType: string): void {
+    const ports = readDefaultCfgUiInputs(cfgPath);
+    if (ports.delete(portType)) {
+        writeDefaultCfgUiInputs(cfgPath, ports);
+    }
+}
+
+/**
+ * Global input remap: "Launch MAME"/"Close MAME" control the shared config session
+ * (startMameConfigSession()/stopMameConfigSession() above), and one "Capture a press" form per
  * REMAP_GROUPS action arms it for one press (captureOnePress() above) - the resulting token is
  * written straight into default.cfg's matching <port> entry (setDefaultCfgUiInput() above).
+ * "Reset" drops that entry again (removeDefaultCfgUiInput() above).
  * Groups/actions are meant to keep growing in REMAP_GROUPS - this only renders whatever's in it,
  * no other change needed to add more.
  */
@@ -3447,11 +3470,12 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
         return `
             <tr>
                 <td>${escapeHtml(action.label)}</td>
-                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>unassigned</em>'}</td>
+                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>MAME default</em>'}</td>
                 <td class="center">
                     <form method="post" action="/input-probe/remap">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                        <button type="submit">Capture a press</button>
+                        <button type="submit" name="action" value="capture">Capture a press</button>
+                        ${persisted.has(action.portType) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
                     </form>
                 </td>
             </tr>
@@ -3480,7 +3504,9 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             not the one in front). <strong>3.</strong> Close MAME when done. The result is written
             directly to <code>default.cfg</code> (valid for all games, unless a specific game
             has its own override). <strong>Currently</strong> reflects what is really saved
-            in the file, not just the last capture.</p>
+            in the file, not just the last capture; <strong>Reset</strong> removes a command from
+            the file, so MAME's own default binding applies again (MAME doesn't need to be
+            running for that).</p>
             <p><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
             <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}">
                 <button type="submit">${sessionRunning ? 'Close MAME' : 'Launch MAME'}</button>
@@ -7360,8 +7386,10 @@ export function startBoServer(
 
         const portType: string = (req.body.portType || '').trim();
         const action = REMAP_ACTIONS_BY_TYPE.get(portType);
+        // Defaults to capture: a form rendered before the Reset button existed posts no action.
+        const formAction: string = (req.body.action || 'capture').trim();
 
-        if (mameInfo.error || !action) {
+        if (mameInfo.error || !action || !['capture', 'reset'].includes(formAction)) {
             // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe/devices
             // above - the form only renders once mameInfo.error is unset. !action: portType isn't in
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
@@ -7369,6 +7397,30 @@ export function startBoServer(
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
             ));
+            return;
+        }
+
+        if (formAction === 'reset') {
+            // Edits default.cfg directly, no MAME session involved - unlike the per-game reset,
+            // which needs the running game's field (tag/mask/defvalue) to find its cfg entry.
+            try {
+                removeDefaultCfgUiInput(getDefaultCfgPath(mameInfo.iniPath), portType);
+                res.send(renderForm(
+                    {mamePath: config.mamePath}, mameInfo, isAdmin,
+                    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined,
+                    {portType},
+                ));
+            } catch (error) {
+                console.error(`[boServer] Remap reset failed for "${portType}":`, error);
+                const message = error instanceof Error ? error.message : 'unexpected error';
+                res.status(500).send(renderForm(
+                    {mamePath: config.mamePath}, mameInfo, isAdmin,
+                    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined,
+                    {portType, error: `Reset failed: ${message}`},
+                ));
+            }
             return;
         }
 
