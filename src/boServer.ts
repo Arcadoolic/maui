@@ -2476,6 +2476,39 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .subtabs a.active:hover {
             background-color: var(--accent);
         }
+        /* Player switcher inside the Gamepads cards (see renderPlayerTabs()) - same pill look as
+           .subtabs above, one level down. */
+        .player-tabs {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 2px;
+            margin: 16px 0 12px;
+            padding: 3px;
+            background-color: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-subtle);
+            border-radius: 999px;
+        }
+        .player-tabs button {
+            padding: 6px 14px;
+            color: var(--text-muted);
+            background-color: transparent;
+            border-radius: 999px;
+            font-size: 0.9em;
+        }
+        .player-tabs button:hover:not(:disabled) {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        .player-tabs button.active, .player-tabs button.active:hover:not(:disabled) {
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .player-panel {
+            display: none;
+        }
+        .player-panel.active {
+            display: block;
+        }
         .subtab-panel {
             display: none;
         }
@@ -2731,6 +2764,43 @@ function renderPageTail(): string {
                     window.scrollTo(0, saved.y);
                 }
             } catch (error) { /* nothing to restore */ }
+        })();
+
+        // Player switchers of the Gamepads cards (see renderPlayerTabs()). Opens on the tab the
+        // server asks for (data-active: the one holding the command just captured/reset), else
+        // the last one picked in this card (kept across the page swaps every form submission
+        // does), else the first.
+        (function () {
+            document.querySelectorAll('[data-player-tabs]').forEach(function (bar) {
+                var card = bar.dataset.playerTabs;
+                var key = 'boPlayerTab:' + card;
+                var buttons = bar.querySelectorAll('[data-player-tab]');
+                var panels = document.querySelectorAll('[data-player-panel^="' + card + ':"]');
+                function activate(id) {
+                    buttons.forEach(function (button) {
+                        var selected = button.dataset.playerTab === id;
+                        button.classList.toggle('active', selected);
+                        button.setAttribute('aria-selected', selected ? 'true' : 'false');
+                    });
+                    panels.forEach(function (panel) {
+                        panel.classList.toggle('active', panel.dataset.playerPanel === card + ':' + id);
+                    });
+                    try {
+                        sessionStorage.setItem(key, id);
+                    } catch (error) { /* storage blocked: back to the first tab next time */ }
+                }
+                buttons.forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        activate(button.dataset.playerTab);
+                    });
+                });
+                var saved = null;
+                try {
+                    saved = sessionStorage.getItem(key);
+                } catch (error) { /* nothing remembered */ }
+                var ids = Array.prototype.map.call(buttons, function (button) { return button.dataset.playerTab; });
+                activate([bar.dataset.active, saved].find(function (id) { return id && ids.indexOf(id) !== -1; }) || ids[0]);
+            });
         })();
 
         // While a MAME config session runs (the Gamepads tab marks it with data-mame-session),
@@ -3586,18 +3656,48 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
             the file, so MAME's own default binding applies again. Both buttons stay disabled
             until MAME is launched.</p>
-            ${REMAP_GROUPS.map(group => `
-                <h3>${escapeHtml(group.title)}</h3>
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead>
-                            <tr><th>Command</th><th>Currently</th><th class="center"></th></tr>
-                        </thead>
-                        <tbody>${renderActionRows(group.actions)}</tbody>
-                    </table>
-                </div>
-            `).join('')}
+            ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
+                id: String(index),
+                title: group.title,
+                html: `
+                    <div class="table-wrap">
+                        <table class="favorites-table">
+                            <thead>
+                                <tr><th>Command</th><th>Currently</th><th class="center"></th></tr>
+                            </thead>
+                            <tbody>${renderActionRows(group.actions)}</tbody>
+                        </table>
+                    </div>
+                `,
+            })), state ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
         </section>
+    `;
+}
+
+interface PlayerPanel {
+    // Short slug, unique within the card - what the tab button and its panel are matched on.
+    id: string;
+    title: string;
+    html: string;
+}
+
+/**
+ * One tab per player (plus "System"/"Other" where there is one) instead of every player's table
+ * stacked one after the other - the Gamepads cards grow long otherwise. Switched client side (see
+ * renderPageTail()); `activeId` is the panel to open on, e.g. the one holding the command just
+ * captured, so a capture on Player 2 doesn't land back on Player 1.
+ */
+function renderPlayerTabs(cardId: string, panels: PlayerPanel[], activeId?: string): string {
+    return `
+        <div class="player-tabs" role="tablist" data-player-tabs="${escapeHtml(cardId)}"
+            ${activeId ? `data-active="${escapeHtml(activeId)}"` : ''}>
+            ${panels.map(panel => `
+                <button type="button" role="tab" data-player-tab="${escapeHtml(panel.id)}">${escapeHtml(panel.title)}</button>
+            `).join('')}
+        </div>
+        ${panels.map(panel => `
+            <div class="player-panel" role="tabpanel" data-player-panel="${escapeHtml(`${cardId}:${panel.id}`)}">${panel.html}</div>
+        `).join('')}
     `;
 }
 
@@ -3724,17 +3824,21 @@ function renderGameRemapCard(
             `;
         }).join('');
 
-        return players.map(player => `
-            <h3>${player ? `Player ${player}` : 'Other'}</h3>
-            <div class="table-wrap">
-                <table class="favorites-table">
-                    <thead>
-                        <tr><th>Command</th><th>MAME default</th><th>This game</th><th class="center"></th></tr>
-                    </thead>
-                    <tbody>${renderRows(fields.filter(field => portTypePlayer(field.portType) === player))}</tbody>
-                </table>
-            </div>
-        `).join('');
+        const stateField = fields.find(field => gameFieldId(field) === state?.fieldId);
+        return renderPlayerTabs('game', players.map(player => ({
+            id: String(player),
+            title: player ? `Player ${player}` : 'Other',
+            html: `
+                <div class="table-wrap">
+                    <table class="favorites-table">
+                        <thead>
+                            <tr><th>Command</th><th>MAME default</th><th>This game</th><th class="center"></th></tr>
+                        </thead>
+                        <tbody>${renderRows(fields.filter(field => portTypePlayer(field.portType) === player))}</tbody>
+                    </table>
+                </div>
+            `,
+        })), stateField ? String(portTypePlayer(stateField.portType)) : undefined);
     };
 
     return `
