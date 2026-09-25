@@ -1509,6 +1509,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             --border-subtle: #222222;
             --text: #ffffff;
             --text-muted: #aaaaaa;
+            /* Inactive menu entries (tabs, subtabs, player tabs): lighter than --text-muted, which
+               read poorly as grey-on-grey over the translucent capsules. */
+            --text-nav: #e0e0e0;
             --accent: #8ab4f8;
             --success: #6bff8a;
             --warn: #ffd166;
@@ -1613,7 +1616,8 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             gap: 2px;
             margin-top: 16px;
             padding: 4px;
-            background-color: rgba(255, 255, 255, 0.06);
+            /* Opaque enough to read over the busy background image, unlike the former 6% white. */
+            background-color: var(--surface-strong);
             border: 1px solid var(--border);
             border-radius: 999px;
             /* An inline-flex box (unlike a block-level flex one) shrinks to its content's width
@@ -1625,7 +1629,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .tabs a {
             display: inline-block;
             padding: 8px 16px;
-            color: var(--text-muted);
+            color: var(--text-nav);
             text-decoration: none;
             border-radius: 999px;
             transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
@@ -1653,7 +1657,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .advanced-toggle > button[type="submit"]:last-child {
             margin-top: 0;
             padding: 4px 12px;
-            color: var(--text-muted);
+            color: var(--text-nav);
             background-color: var(--surface-strong);
             border: 1px solid var(--border);
             border-radius: 999px;
@@ -2433,16 +2437,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             50% { opacity: 0.4; }
         }
         /* Present once a page has subtabs (see renderSubtabbedPage()) - the primary nav steps
-           back (dimmed except the active tab) so the subtabs row below reads as the primary
+           back (muted except the active tab) so the subtabs row below reads as the primary
            navigation for the page actually being looked at, without hiding the way back to the
            other top-level tabs. Dimmed only, not shrunk: a smaller font/padding here made the
            whole menu visibly jump in size between pages with subtabs and pages without
            (My account, single-section tabs). */
-        .tabs.compact a {
-            opacity: 0.55;
+        .tabs.compact a:not(.active) {
+            /* Muted color rather than opacity: 55% opacity over the capsule made the labels
+               unreadable. */
+            color: var(--text-muted);
         }
-        .tabs.compact a.active {
-            opacity: 1;
+        .tabs.compact a:not(.active):hover {
+            color: var(--text);
         }
         /* Multi-pack import (see renderImportTabsOpen()): one tab per pack, the pack's own
            progress in the panel below. Buttons, unlike the .tabs links, so the generic white
@@ -2500,7 +2506,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .subtabs a {
             display: inline-block;
             padding: 6px 14px;
-            color: var(--text-muted);
+            color: var(--text-nav);
             text-decoration: none;
             border-radius: 999px;
             font-size: 0.9em;
@@ -2531,7 +2537,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .player-tabs button {
             padding: 6px 14px;
-            color: var(--text-muted);
+            color: var(--text-nav);
             background-color: transparent;
             border-radius: 999px;
             font-size: 0.9em;
