@@ -3,7 +3,7 @@ import {join} from 'path';
 
 /**
  * Directory holding the files shipped in public/ (currently img/ and lua/ -
- * boServer.ts's background.jpg, mame-logo.svg and input-probe.lua).
+ * boServer.ts's background.jpg, mame-logo.svg and device-probe.lua/capture-daemon.lua).
  *
  * Replaces the __static global, which vue-cli-plugin-electron-builder injected
  * through webpack's DefinePlugin and which electron-vite does not provide. Main
