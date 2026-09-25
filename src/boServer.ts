@@ -2503,6 +2503,53 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--bg);
             background-color: var(--accent);
         }
+        /* One small card per command in the Gamepads input configuration cards: as many per row
+           as fit (2-3 on a desktop window), down to one per row on a phone. min(100%, ...) keeps
+           a lone column from overflowing a screen narrower than the minimum. */
+        .binding-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+            gap: 12px;
+        }
+        .binding {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+        }
+        .binding-label {
+            font-weight: bold;
+        }
+        .binding-values {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 4px 12px;
+            margin: 0;
+            font-size: 0.9em;
+        }
+        .binding-values dt {
+            color: var(--text-muted);
+        }
+        .binding-values dd {
+            margin: 0;
+            /* Sequences like "KEYCODE_TAB NOT KEYCODE_LALT NOT KEYCODE_RALT" have no natural
+               break point. */
+            overflow-wrap: anywhere;
+        }
+        .binding-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .binding-actions > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .binding .flash {
+            margin: 0;
+        }
         .player-panel {
             display: none;
         }
@@ -3614,29 +3661,28 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
     // Both buttons only make sense with MAME open: a capture needs it to see the press, and a
     // reset is kept consistent with it (the route rejects both while MAME is closed).
     const disabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
-    const renderActionRows = (actions: RemapAction[]): string => actions.map(action => {
+    const renderActionItems = (actions: RemapAction[]): string => actions.map(action => {
         const actionState = state?.portType === action.portType ? state : undefined;
         const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
         return `
-            <tr>
-                <td>${escapeHtml(action.label)}</td>
-                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>MAME default</em>'}</td>
-                <td class="center">
-                    <form method="post" action="/input-probe/remap">
-                        <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                        <button type="submit" name="action" value="capture"${disabled}>Capture a press</button>
-                        ${persisted.has(action.portType) ? `<button type="submit" name="action" value="reset"${disabled}>Reset</button>` : ''}
-                    </form>
-                </td>
-            </tr>
-            ${actionState?.error ? `
-                <tr><td colspan="3"><p class="error flash">${escapeHtml(actionState.error)}</p></td></tr>
-            ` : ''}
-            ${actionState?.releasedFrom?.length ? `
-                <tr><td colspan="3"><p class="info flash">This button was also bound by default to
-                ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
-                MAME - it was removed from there to avoid a double trigger.</p></td></tr>
-            ` : ''}
+            <div class="binding">
+                <div class="binding-label">${escapeHtml(action.label)}</div>
+                <dl class="binding-values">
+                    <dt>Currently</dt>
+                    <dd>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>MAME default</em>'}</dd>
+                </dl>
+                <form method="post" action="/input-probe/remap" class="binding-actions">
+                    <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
+                    <button type="submit" name="action" value="capture"${disabled}>Capture a press</button>
+                    ${persisted.has(action.portType) ? `<button type="submit" name="action" value="reset"${disabled}>Reset</button>` : ''}
+                </form>
+                ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
+                ${actionState?.releasedFrom?.length ? `
+                    <p class="info flash">This button was also bound by default to
+                    ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                    MAME - it was removed from there to avoid a double trigger.</p>
+                ` : ''}
+            </div>
         `;
     }).join('');
 
@@ -3659,16 +3705,7 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
-                html: `
-                    <div class="table-wrap">
-                        <table class="favorites-table">
-                            <thead>
-                                <tr><th>Command</th><th>Currently</th><th class="center"></th></tr>
-                            </thead>
-                            <tbody>${renderActionRows(group.actions)}</tbody>
-                        </table>
-                    </div>
-                `,
+                html: `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
             })), state ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
         </section>
     `;
@@ -3795,32 +3832,32 @@ function renderGameRemapCard(
         const overrides = readGameCfgOverrides(getGameCfgPath(iniPath, romName));
         const players = Array.from(new Set(fields.map(field => portTypePlayer(field.portType))));
 
-        const renderRows = (playerFields: GameField[]): string => playerFields.map(field => {
+        const renderItems = (playerFields: GameField[]): string => playerFields.map(field => {
             const id = gameFieldId(field);
             const rowState = state?.fieldId === id ? state : undefined;
             const override = rowState?.capturedToken ?? overrides.get(id);
             return `
-                <tr>
-                    <td>${escapeHtml(field.name || field.portType)}</td>
-                    <td><code>${escapeHtml(field.defaultSeq)}</code></td>
-                    <td>${override ? `<code>${escapeHtml(override)}</code>` : '<em>global</em>'}</td>
-                    <td class="center">
-                        <form method="post" action="/input-probe/game/remap">
-                            <input type="hidden" name="romName" value="${escapeHtml(romName)}">
-                            <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
-                            <button type="submit" name="action" value="capture">Capture a press</button>
-                            ${overrides.has(id) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
-                        </form>
-                    </td>
-                </tr>
-                ${rowState?.error ? `
-                    <tr><td colspan="4"><p class="error flash">${escapeHtml(rowState.error)}</p></td></tr>
-                ` : ''}
-                ${rowState?.releasedFrom?.length ? `
-                    <tr><td colspan="4"><p class="info flash">This button was also bound by default to
-                    ${escapeHtml(rowState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
-                    MAME - it was removed from there (globally) to avoid a double trigger.</p></td></tr>
-                ` : ''}
+                <div class="binding">
+                    <div class="binding-label">${escapeHtml(field.name || field.portType)}</div>
+                    <dl class="binding-values">
+                        <dt>MAME default</dt>
+                        <dd><code>${escapeHtml(field.defaultSeq)}</code></dd>
+                        <dt>This game</dt>
+                        <dd>${override ? `<code>${escapeHtml(override)}</code>` : '<em>global</em>'}</dd>
+                    </dl>
+                    <form method="post" action="/input-probe/game/remap" class="binding-actions">
+                        <input type="hidden" name="romName" value="${escapeHtml(romName)}">
+                        <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
+                        <button type="submit" name="action" value="capture">Capture a press</button>
+                        ${overrides.has(id) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
+                    </form>
+                    ${rowState?.error ? `<p class="error flash">${escapeHtml(rowState.error)}</p>` : ''}
+                    ${rowState?.releasedFrom?.length ? `
+                        <p class="info flash">This button was also bound by default to
+                        ${escapeHtml(rowState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                        MAME - it was removed from there (globally) to avoid a double trigger.</p>
+                    ` : ''}
+                </div>
             `;
         }).join('');
 
@@ -3828,16 +3865,7 @@ function renderGameRemapCard(
         return renderPlayerTabs('game', players.map(player => ({
             id: String(player),
             title: player ? `Player ${player}` : 'Other',
-            html: `
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead>
-                            <tr><th>Command</th><th>MAME default</th><th>This game</th><th class="center"></th></tr>
-                        </thead>
-                        <tbody>${renderRows(fields.filter(field => portTypePlayer(field.portType) === player))}</tbody>
-                    </table>
-                </div>
-            `,
+            html: `<div class="binding-grid">${renderItems(fields.filter(field => portTypePlayer(field.portType) === player))}</div>`,
         })), stateField ? String(portTypePlayer(stateField.portType)) : undefined);
     };
 
