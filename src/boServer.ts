@@ -81,6 +81,7 @@ const Sequelize = SequelizeTS.Sequelize;
 type Sequelize = SequelizeTS.Sequelize;
 import Category from '@/model/Category.model';
 import {CONF_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
+import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
@@ -96,6 +97,12 @@ declare module 'express-session' {
         // "Advanced configuration" mode (see POST /advanced): shows the sections an owner rarely
         // needs (ScreenScraper, Repository, Danger...). Off at every sign-in.
         boAdvanced?: boolean;
+        // Data key of the config file's encrypted credentials (hex, see SecretBox.ts), unwrapped
+        // at sign-in - the session store is in memory only, so it never reaches the disk.
+        secretsKey?: string;
+        // Signed in with the default password: every page but /account (and sign-out) redirects
+        // there until it is changed, and the credentials stay locked meanwhile.
+        mustChangePassword?: boolean;
     }
 }
 
@@ -1048,6 +1055,46 @@ function resolveFavorites(
         return row;
     });
     return {rows, cache: writeFavoritesCache(cacheEntries)};
+}
+
+// The BO account's seeded password (see migrations/20260917061122-create-bo-user.js), public by
+// definition: never accepted as a new password, and forced to be changed at sign-in.
+const DEFAULT_BO_PASSWORD = 'puckman';
+// The wrapped data key (SecretBox.ts) can be brute-forced offline from a copy of the database,
+// only the password's length and scrypt's cost stand in the way.
+const MIN_BO_PASSWORD_LENGTH = 8;
+
+function getSecretsKey(req: Request): Buffer | null {
+    return req.session.secretsKey ? Buffer.from(req.session.secretsKey, 'hex') : null;
+}
+
+/**
+ * Unlocks the config file's credentials for this session: unwraps boUser's data key with
+ * `password` - or creates one (first sign-in since the encryption, or a key wrapped with another
+ * password, e.g. a database imported from another cabinet: what it encrypted is then lost, to
+ * re-enter) - then encrypts whatever password the config file still holds in the clear.
+ */
+async function unlockSecrets(req: Request, boUser: BoUser, password: string): Promise<void> {
+    let dataKey = boUser.secretsKey ? unwrapDataKey(password, boUser.secretsKey) : null;
+    if (!dataKey) {
+        dataKey = generateDataKey();
+        boUser.secretsKey = wrapDataKey(password, dataKey);
+        await boUser.save();
+    }
+    req.session.secretsKey = dataKey.toString('hex');
+
+    const config = new Config(dataKey);
+    if (config.load() && config.hasPlaintextSecrets()) {
+        config.save();
+    }
+}
+
+/**
+ * `value` attribute of a password field: never the stored password itself (it would sit in the
+ * page source), only a hint that one is saved - an empty submission keeps it.
+ */
+function renderSavedPasswordAttributes(saved: string): string {
+    return saved ? 'value="" placeholder="Saved - leave empty to keep it"' : 'value=""';
 }
 
 function hasScreenScraperCredentials(config: Config): boolean {
@@ -3109,20 +3156,24 @@ function renderLoginPage(error?: string): string {
     `, 'mame', null);
 }
 
-function renderAccountPage(username: string, viewer: Viewer, error?: string, info?: string): string {
+function renderAccountPage(
+    username: string, viewer: Viewer, mustChangePassword: boolean, error?: string, info?: string,
+): string {
     return renderPage(`
         <section class="card">
             <h2>My account</h2>
             <p>Signed in as <strong>${escapeHtml(username)}</strong>.</p>
+            ${mustChangePassword ? `<p class="error flash">You are using the default password.
+            Choose a new one to continue: it also encrypts the saved credentials.</p>` : ''}
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/account/password">
                 <label for="currentPassword">Current password</label>
                 <input type="password" id="currentPassword" name="currentPassword" required>
                 <label for="newPassword">New password</label>
-                <input type="password" id="newPassword" name="newPassword" required minlength="4">
+                <input type="password" id="newPassword" name="newPassword" required minlength="${MIN_BO_PASSWORD_LENGTH}">
                 <label for="confirmPassword">Confirm the new password</label>
-                <input type="password" id="confirmPassword" name="confirmPassword" required minlength="4">
+                <input type="password" id="confirmPassword" name="confirmPassword" required minlength="${MIN_BO_PASSWORD_LENGTH}">
                 <button type="submit">Change password</button>
             </form>
         </section>
@@ -4900,14 +4951,14 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
                 <label for="ssUserId">User ID (ssid)</label>
                 <input type="text" id="ssUserId" name="ssUserId" value="${escapeHtml(values.ssUserId)}" autocomplete="off">
                 <label for="ssUserPassword">User password (sspassword)</label>
-                <input type="password" id="ssUserPassword" name="ssUserPassword" value="${escapeHtml(values.ssUserPassword)}" autocomplete="off">
+                <input type="password" id="ssUserPassword" name="ssUserPassword" ${renderSavedPasswordAttributes(values.ssUserPassword)} autocomplete="off">
 
                 <label for="ssSoftName">Software name (softname)</label>
                 <input type="text" id="ssSoftName" name="ssSoftName" value="${escapeHtml(values.ssSoftName)}" autocomplete="off">
                 <label for="ssDevId">Developer ID (devid) — to be created on screenscraper.fr, the application provides no default value</label>
                 <input type="text" id="ssDevId" name="ssDevId" value="${escapeHtml(values.ssDevId)}" autocomplete="off">
                 <label for="ssDevPassword">Developer password (devpassword)</label>
-                <input type="password" id="ssDevPassword" name="ssDevPassword" value="${escapeHtml(values.ssDevPassword)}" autocomplete="off">
+                <input type="password" id="ssDevPassword" name="ssDevPassword" ${renderSavedPasswordAttributes(values.ssDevPassword)} autocomplete="off">
 
                 <label for="bezelAspect">Bezel format (aspect_ratio of the target screen)</label>
                 <select id="bezelAspect" name="bezelAspect">
@@ -6305,7 +6356,7 @@ function renderRepoImportCard(
                 <label for="repoUser">Username</label>
                 <input type="text" id="repoUser" name="repoUser" value="${escapeHtml(config.repoUser)}" autocomplete="off">
                 <label for="repoPassword">Password</label>
-                <input type="password" id="repoPassword" name="repoPassword" value="${escapeHtml(config.repoPassword)}" autocomplete="off">
+                <input type="password" id="repoPassword" name="repoPassword" ${renderSavedPasswordAttributes(config.repoPassword)} autocomplete="off">
                 <button type="submit">Save</button>
             </form>
             ${config.repoUrl ? `
@@ -6597,6 +6648,14 @@ export function startBoServer(
         }
         res.redirect('/login');
     });
+    const DEFAULT_PASSWORD_PATHS = new Set(['/account', '/account/password', '/logout']);
+    app.use((req, res, next) => {
+        if (!req.session.mustChangePassword || PUBLIC_PATHS.has(req.path) || DEFAULT_PASSWORD_PATHS.has(req.path)) {
+            next();
+            return;
+        }
+        res.redirect('/account');
+    });
     // Disk storage, not memory: the import route hands the upload straight to
     // scripts/import-starting-pack.py by path, which streams it instead of buffering it in RAM -
     // the whole reason that script exists (see its own docstring). The temp file is removed by
@@ -6674,6 +6733,13 @@ export function startBoServer(
         req.session.boUserId = boUser.id;
         req.session.boUsername = boUser.username;
         req.session.boAdvanced = false;
+        if (password === DEFAULT_BO_PASSWORD) {
+            // Never unlock (hence never encrypt) the credentials with a public password.
+            req.session.mustChangePassword = true;
+            res.redirect('/account');
+            return;
+        }
+        await unlockSecrets(req, boUser, password);
         res.redirect('/');
     });
 
@@ -6704,7 +6770,7 @@ export function startBoServer(
             req.session.destroy(() => res.redirect('/login'));
             return;
         }
-        res.send(renderAccountPage(boUser.username, getViewer(req)));
+        res.send(renderAccountPage(boUser.username, getViewer(req), req.session.mustChangePassword === true));
     });
 
     app.post('/account/password', async (req, res) => {
@@ -6716,27 +6782,39 @@ export function startBoServer(
         const currentPassword: string = req.body.currentPassword || '';
         const newPassword: string = req.body.newPassword || '';
         const confirmPassword: string = req.body.confirmPassword || '';
+        const mustChange = req.session.mustChangePassword === true;
+        const sendError = (status: number, error: string) => {
+            res.status(status).send(renderAccountPage(boUser.username, getViewer(req), mustChange, error));
+        };
 
         if (!bcrypt.compareSync(currentPassword, boUser.passwordHash)) {
-            res.status(401).send(renderAccountPage(boUser.username, getViewer(req), 'Incorrect current password.'));
+            sendError(401, 'Incorrect current password.');
             return;
         }
-        if (newPassword.length < 4) {
-            res.status(422).send(renderAccountPage(
-                boUser.username, getViewer(req), 'The new password must be at least 4 characters long.',
-            ));
+        if (newPassword.length < MIN_BO_PASSWORD_LENGTH) {
+            sendError(422, `The new password must be at least ${MIN_BO_PASSWORD_LENGTH} characters long.`);
+            return;
+        }
+        if (newPassword === DEFAULT_BO_PASSWORD) {
+            sendError(422, 'Choose a password other than the default one.');
             return;
         }
         if (newPassword !== confirmPassword) {
-            res.status(422).send(renderAccountPage(
-                boUser.username, getViewer(req), 'The confirmation does not match the new password.',
-            ));
+            sendError(422, 'The confirmation does not match the new password.');
             return;
         }
 
+        // Same data key, re-wrapped with the new password: the config file stays as it is. Not
+        // unlocked yet when signed in with the default password - unlocked here instead.
+        const dataKey = getSecretsKey(req)
+            ?? (boUser.secretsKey ? unwrapDataKey(currentPassword, boUser.secretsKey) : null)
+            ?? generateDataKey();
         boUser.passwordHash = bcrypt.hashSync(newPassword, 10);
+        boUser.secretsKey = wrapDataKey(newPassword, dataKey);
         await boUser.save();
-        res.send(renderAccountPage(boUser.username, getViewer(req), undefined, 'Password updated.'));
+        req.session.mustChangePassword = false;
+        await unlockSecrets(req, boUser, newPassword);
+        res.send(renderAccountPage(boUser.username, getViewer(req), false, undefined, 'Password updated.'));
     });
 
     app.get('/', (req, res) => {
@@ -7186,7 +7264,7 @@ export function startBoServer(
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
-        const config = new Config();
+        const config = new Config(getSecretsKey(req));
         config.load();
         const ssValues: ScreenScraperValues = {
             ssDevId: config.ssDevId,
@@ -7344,14 +7422,15 @@ export function startBoServer(
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
-        const config = new Config();
+        const config = new Config(getSecretsKey(req));
         config.load();
         // Trailing slash trimmed once here so every consumer (index.json fetch, pack download
         // URL) can always join with a bare '/', instead of each guarding against a possible
         // double slash.
         config.repoUrl = (req.body.repoUrl || '').trim().replace(/\/+$/, '');
         config.repoUser = (req.body.repoUser || '').trim();
-        config.repoPassword = (req.body.repoPassword || '').trim();
+        // Never pre-filled (see renderSavedPasswordAttributes()): left empty means unchanged.
+        config.repoPassword = (req.body.repoPassword || '').trim() || config.repoPassword;
         config.save();
 
         res.send(await renderFavoritesTab(req, {}, {info: 'Repository configuration saved.'}));
@@ -7364,7 +7443,7 @@ export function startBoServer(
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
-        const config = new Config();
+        const config = new Config(getSecretsKey(req));
         config.load();
         const mameInfo = getMameInfo(config);
 
@@ -7417,7 +7496,7 @@ export function startBoServer(
 
     // Not Advanced-only, unlike the game packs below: the carousel needs this pack to have genres.
     app.post('/import/conf-pack', async (req, res) => {
-        const config = new Config();
+        const config = new Config(getSecretsKey(req));
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         const isAdvanced = req.session.boAdvanced === true;
@@ -7464,7 +7543,7 @@ export function startBoServer(
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
-        const config = new Config();
+        const config = new Config(getSecretsKey(req));
         config.load();
         // One "<pack>.zip|<romName>" per ticked game, grouped by pack (a game listed by several
         // packs is kept for the first). urlencoded (extended: false) yields a string for one
@@ -7852,18 +7931,21 @@ export function startBoServer(
             bezelAspect: req.body.bezelAspect === '4:3' ? '4:3' : '16:9',
         };
 
-        const config = new Config();
+        const config = new Config(getSecretsKey(req));
         config.load();
         config.ssDevId = values.ssDevId;
-        config.ssDevPassword = values.ssDevPassword;
+        // Password fields are never pre-filled (see renderSavedPasswordAttributes()): left empty
+        // means unchanged.
+        config.ssDevPassword = values.ssDevPassword || config.ssDevPassword;
         config.ssSoftName = values.ssSoftName;
         config.ssUserId = values.ssUserId;
-        config.ssUserPassword = values.ssUserPassword;
+        config.ssUserPassword = values.ssUserPassword || config.ssUserPassword;
         config.bezelAspect = values.bezelAspect;
         config.save();
 
         res.send(renderScreenScraperPage(
-            values, hasScreenScraperCredentials(config), undefined, 'ScreenScraper configuration saved.',
+            {...values, ssDevPassword: config.ssDevPassword, ssUserPassword: config.ssUserPassword},
+            hasScreenScraperCredentials(config), undefined, 'ScreenScraper configuration saved.',
         ));
     });
 

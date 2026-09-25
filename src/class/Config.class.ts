@@ -1,6 +1,12 @@
-import {existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
+import {chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import * as os from 'os';
+import {decryptSecret, encryptSecret, isEncryptedSecret} from '@/class/SecretBox';
+
+// Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, repoUser...) stay
+// in the clear: they are shown back in the BO forms, the passwords are not.
+const SECRET_FIELDS = ['ssDevPassword', 'ssUserPassword', 'repoPassword'] as const;
+const FILE_MODE = 0o600;
 
 // This app's own state directory - separate from ~/.mame (see Helpers.getMameHomePath()),
 // which belongs to mame itself, not to mame-awesome-ui. Config/DB live here rather than under
@@ -74,9 +80,15 @@ export default class Config {
 
     public configPath!: string;
     protected _configLoaded: boolean = false;
+    protected _plaintextSecrets: boolean = false;
+    // The BO session's data key (see SecretBox.ts): with it, load() decrypts SECRET_FIELDS and
+    // save() encrypts them. Without it (the front, a BO route that doesn't touch them), they are
+    // carried as stored, so a load()/save() round trip never alters them.
+    protected readonly dataKey: Buffer | null;
 
-    public constructor() {
+    public constructor(dataKey: Buffer | null = null) {
         this.configPath = join(getAppDataPath(), 'mame-awesome-ui-config.json');
+        this.dataKey = dataKey;
     }
 
     public exist(): boolean {
@@ -107,6 +119,17 @@ export default class Config {
             this.voteEnabled = configFile.voteEnabled !== false;
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
 
+            this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
+            if (this.dataKey) {
+                for (const field of SECRET_FIELDS) {
+                    // A value encrypted with another key (a config imported from another cabinet,
+                    // whose password differs) can't be recovered: read as unset, to re-enter.
+                    if (isEncryptedSecret(this[field])) {
+                        this[field] = decryptSecret(this.dataKey, this[field]) ?? '';
+                    }
+                }
+            }
+
             this._configLoaded = true;
             return true;
         }
@@ -114,26 +137,44 @@ export default class Config {
     }
 
     public save() {
+        const secrets = Object.fromEntries(SECRET_FIELDS.map(field => {
+            const value = this[field];
+            return [field, this.dataKey && value && !isEncryptedSecret(value)
+                ? encryptSecret(this.dataKey, value)
+                : value];
+        }));
         writeFileSync(
             this.configPath,
             JSON.stringify({
                 mamePath: this.mamePath,
                 mameBinaryName: this.mameBinaryName,
                 ssDevId: this.ssDevId,
-                ssDevPassword: this.ssDevPassword,
+                ssDevPassword: secrets.ssDevPassword,
                 ssSoftName: this.ssSoftName,
                 ssUserId: this.ssUserId,
-                ssUserPassword: this.ssUserPassword,
+                ssUserPassword: secrets.ssUserPassword,
                 repoUrl: this.repoUrl,
                 repoUser: this.repoUser,
-                repoPassword: this.repoPassword,
+                repoPassword: secrets.repoPassword,
                 bezelAspect: this.bezelAspect,
                 openDevTools: this.openDevTools,
                 fullscreen: this.fullscreen,
                 voteEnabled: this.voteEnabled,
                 thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
             }),
+            {mode: FILE_MODE},
         );
+        // `mode` only applies when the file is created: tightens one written by an older MAUI.
+        // A no-op on Windows beyond the read-only bit, where the profile directory's ACL applies.
+        chmodSync(this.configPath, FILE_MODE);
+    }
+
+    /**
+     * Whether the file, as last loaded, held a password in the clear (written by a MAUI older
+     * than the encryption) - migrated by the BO at the next sign-in.
+     */
+    public hasPlaintextSecrets(): boolean {
+        return this._plaintextSecrets;
     }
 
     public loaded() {
