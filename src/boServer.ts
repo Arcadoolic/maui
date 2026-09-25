@@ -8,7 +8,7 @@ import {
 import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
-import {ChildProcess, execFile, execFileSync, spawn} from 'child_process';
+import {ChildProcess, execFileSync, spawn} from 'child_process';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
 import {app as electronApp} from 'electron';
@@ -26,6 +26,7 @@ import {parseListFull} from '@/class/MameListFull';
 import {
     compareGameFields,
     gameFieldId,
+    inputIconKey,
     parseGameFields,
     portTypePlayer,
     readGameCfgInputSeqs,
@@ -603,8 +604,8 @@ function extractXmlAttribute(xml: string, tagName: string, attributeName: string
 /**
  * `.zip` filenames (extension stripped) directly inside romPath, sorted for a stable <select>
  * order. Deliberately readdirSync, not Game.findAll(): renderForm()/its call sites are all
- * synchronous, and the input-probe dropdown (see renderInputProbeCard()) only needs romName, not
- * Game's fullname.
+ * synchronous, and the rom dropdowns (see renderRomPicker()) only need romName, not Game's
+ * fullname.
  */
 function listRomNames(romPath: string): string[] {
     try {
@@ -1758,7 +1759,14 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         /* Subtabs on the left, the page's action (see renderSubtabbedPage()'s navAction) pinned to
            the right of the same row; wraps under them on a narrow screen. */
+        /* Sticky: the MAME launch/close button stays in reach while scrolling a long subtab (the
+           Gamepads tables especially). */
         .subtabs-bar {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            padding: 8px 0;
+            background-color: var(--surface-strong);
             display: flex;
             flex-wrap: wrap;
             align-items: center;
@@ -2469,6 +2477,108 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .subtabs a.active:hover {
             background-color: var(--accent);
         }
+        /* Player switcher inside the Gamepads cards (see renderPlayerTabs()) - same pill look as
+           .subtabs above, one level down. */
+        .player-tabs {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 2px;
+            margin: 16px 0 12px;
+            padding: 3px;
+            background-color: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-subtle);
+            border-radius: 999px;
+        }
+        .player-tabs button {
+            padding: 6px 14px;
+            color: var(--text-muted);
+            background-color: transparent;
+            border-radius: 999px;
+            font-size: 0.9em;
+        }
+        .player-tabs button:hover:not(:disabled) {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        .player-tabs button.active, .player-tabs button.active:hover:not(:disabled) {
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        /* One small card per command in the Gamepads input configuration cards: as many per row
+           as fit (2-3 on a desktop window), down to one per row on a phone. min(100%, ...) keeps
+           a lone column from overflowing a screen narrower than the minimum. */
+        .binding-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+            gap: 12px;
+        }
+        /* Values and buttons on the left, the command's icon and name on the right (spanning
+           both rows), a flash message across the whole card under them. */
+        .binding {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 8px 12px;
+            align-content: start;
+            padding: 12px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+        }
+        .binding > * {
+            grid-column: 1;
+        }
+        .binding-label {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 96px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        .binding-icon {
+            width: 64px;
+            height: 64px;
+        }
+        .binding-values {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 4px 12px;
+            margin: 0;
+            font-size: 0.9em;
+        }
+        .binding-values dt {
+            color: var(--text-muted);
+        }
+        .binding-values dd {
+            margin: 0;
+            /* Sequences like "KEYCODE_TAB NOT KEYCODE_LALT NOT KEYCODE_RALT" have no natural
+               break point. */
+            overflow-wrap: anywhere;
+        }
+        .binding-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            align-self: start;
+            gap: 8px;
+        }
+        .binding-actions > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .binding .flash {
+            grid-column: 1 / -1;
+            margin: 0;
+        }
+        .player-panel {
+            display: none;
+        }
+        .player-panel.active {
+            display: block;
+        }
         .subtab-panel {
             display: none;
         }
@@ -2724,6 +2834,83 @@ function renderPageTail(): string {
                     window.scrollTo(0, saved.y);
                 }
             } catch (error) { /* nothing to restore */ }
+        })();
+
+        // Player switchers of the Gamepads cards (see renderPlayerTabs()). Opens on the tab the
+        // server asks for (data-active: the one holding the command just captured/reset), else
+        // the last one picked in this card (kept across the page swaps every form submission
+        // does), else the first.
+        (function () {
+            document.querySelectorAll('[data-player-tabs]').forEach(function (bar) {
+                var card = bar.dataset.playerTabs;
+                var key = 'boPlayerTab:' + card;
+                var buttons = bar.querySelectorAll('[data-player-tab]');
+                var panels = document.querySelectorAll('[data-player-panel^="' + card + ':"]');
+                function activate(id) {
+                    buttons.forEach(function (button) {
+                        var selected = button.dataset.playerTab === id;
+                        button.classList.toggle('active', selected);
+                        button.setAttribute('aria-selected', selected ? 'true' : 'false');
+                    });
+                    panels.forEach(function (panel) {
+                        panel.classList.toggle('active', panel.dataset.playerPanel === card + ':' + id);
+                    });
+                    try {
+                        sessionStorage.setItem(key, id);
+                    } catch (error) { /* storage blocked: back to the first tab next time */ }
+                }
+                buttons.forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        activate(button.dataset.playerTab);
+                    });
+                });
+                var saved = null;
+                try {
+                    saved = sessionStorage.getItem(key);
+                } catch (error) { /* nothing remembered */ }
+                var ids = Array.prototype.map.call(buttons, function (button) { return button.dataset.playerTab; });
+                activate([bar.dataset.active, saved].find(function (id) { return id && ids.indexOf(id) !== -1; }) || ids[0]);
+            });
+        })();
+
+        // While a MAME config session runs (the Gamepads tab marks it with data-mame-session),
+        // ask the server every couple of seconds whether it's still alive, and reload the page
+        // once it isn't - MAME can be closed from its own window, which the server-rendered
+        // "Close MAME" buttons and "running" status would otherwise keep showing. The interval
+        // handle lives on window, not in this closure: a form submission swaps the document in
+        // place (document.write() above) without clearing the previous page's timers, so each
+        // new page first stops the one before it.
+        (function () {
+            clearInterval(window.boMameSessionWatch);
+            if (!document.querySelector('[data-mame-session="running"]')) {
+                return;
+            }
+            window.boMameSessionWatch = setInterval(function () {
+                fetch('/input-probe/mame/status')
+                    .then(function (response) { return response.ok ? response.json() : null; })
+                    .then(function (status) {
+                        if (!status || status.running) {
+                            return;
+                        }
+                        clearInterval(window.boMameSessionWatch);
+                        // Same entry the scroll-restore script above reads, so the reloaded page
+                        // opens where this one was; the hash keeps it on this subtab.
+                        try {
+                            var subtab = document.querySelector('.subtabs a.active');
+                            var tab = document.querySelector('nav.tabs a.active');
+                            sessionStorage.setItem('boScrollRestore', JSON.stringify({
+                                y: window.scrollY,
+                                where: (tab ? tab.textContent : '') + '/' + (subtab ? subtab.dataset.subtab : ''),
+                                at: Date.now(),
+                            }));
+                            if (subtab) {
+                                history.replaceState(null, '', '#' + subtab.dataset.subtab);
+                            }
+                        } catch (error) { /* the page just reloads at the top */ }
+                        location.reload();
+                    })
+                    .catch(function () { /* server unreachable for now - try again next tick */ });
+            }, 2000);
         })();
     </script>
 </body>
@@ -3015,15 +3202,6 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
     `;
 }
 
-interface InputProbeRow {
-    player: 1 | 2;
-    // MAME's own display name for the field, e.g. "P1 Up" / "P2 Button 3" - see
-    // public/lua/input-probe.lua's is_wanted_field().
-    fieldName: string;
-    defaultText: string;
-    currentText: string;
-}
-
 interface DeviceProbeRow {
     name: string;
     id: string;
@@ -3038,8 +3216,9 @@ interface DeviceProbeState {
 }
 
 /**
- * Line-based parse of device-probe.lua's stdout, same MAUI_..._ROW| convention as
- * parseInputProbeOutput() above - see that function's comment.
+ * Line-based parse of device-probe.lua's stdout, captured amid MAME's normal boot chatter (menu
+ * hints, warnings, etc. on other lines - anything not starting with the marker is ignored).
+ * Format, one line per device: MAUI_DEVICE_ROW|<device name>|<device id>|<name>=<token>,...
  */
 function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
     const rows: DeviceProbeRow[] = [];
@@ -3059,9 +3238,14 @@ function parseDeviceProbeOutput(stdout: string): DeviceProbeRow[] {
 
 /**
  * Boots `romName` headlessly just long enough for device-probe.lua to dump every joystick/gamepad
- * device MAME currently detects and exit the machine - same approach as runInputProbe() above,
- * just a different Lua script and result shape. Which rom is booted doesn't matter (device
- * detection isn't per-game), it's only needed because -autoboot_script requires a running machine.
+ * device MAME currently detects and exit the machine, then parses the captured stdout. Which rom is
+ * booted doesn't matter (device detection isn't per-game), it's only needed because
+ * -autoboot_script requires a running machine. -skip_gameinfo avoids an extra keypress-wait;
+ * -video none/-sound none skip creating a window or touching the audio device entirely. timeout
+ * is a hard backstop in case a driver never reaches "running" (bad rom, missing BIOS) - the Lua
+ * script's own machine:exit() should fire in well under a second normally. killSignal SIGKILL
+ * (not the default SIGTERM) because a hung mame process can ignore SIGTERM under some video
+ * backends. maxBuffer covers MAME's boot-time stdout chatter.
  */
 function runDeviceProbe(mameBinary: string, iniPath: string, romName: string): DeviceProbeRow[] {
     const stdout = execFileSync(
@@ -3203,6 +3387,9 @@ interface MameConfigSession {
     // The rom MAME was launched with - the per-game remap card is only valid for that one game
     // (its fields dump, game-fields.txt, describes it and nothing else).
     romName: string;
+    // Every cfg edit made while this session runs, replayed in order once MAME exits - see
+    // applyCfgEdit().
+    cfgEdits: (() => void)[];
 }
 
 // Module-scope: at most one config session at a time, explicitly started/stopped by an admin from
@@ -3212,6 +3399,23 @@ let mameConfigSession: MameConfigSession | undefined;
 
 function isMameConfigSessionAlive(): boolean {
     return !!mameConfigSession && mameConfigSession.child.exitCode === null && !mameConfigSession.child.killed;
+}
+
+/**
+ * Runs a cfg edit (default.cfg or cfg/<rom>.cfg) and, while a config session is running, records it
+ * so it's replayed once that MAME exits. MAME keeps the input settings it loaded at startup in
+ * memory and, on a normal exit (its window's close button, Esc...), rewrites its cfg files from
+ * them - silently reverting every edit made in the meantime. Checked against 0.289: a default.cfg
+ * edited mid-session was back to its startup content after a normal exit, kept as edited after a
+ * SIGKILL. Replaying on exit makes both ways of closing MAME equivalent. Edits are replayed rather
+ * than the files restored wholesale, so whatever else MAME saves on exit (mixer, counters, settings
+ * changed from its own menus) is kept.
+ */
+function applyCfgEdit(edit: () => void): void {
+    edit();
+    if (isMameConfigSessionAlive()) {
+        mameConfigSession?.cfgEdits.push(edit);
+    }
 }
 
 /**
@@ -3267,21 +3471,30 @@ function startMameConfigSession(
     child.stderr?.on('data', (chunk: Buffer) => {
         console.error('[boServer] mame config session stderr:', chunk.toString('utf8').trim());
     });
+    const session: MameConfigSession = {child, dir, nonceCounter: 0, romName, cfgEdits: []};
     child.on('exit', () => {
-        if (mameConfigSession?.child === child) {
+        if (mameConfigSession === session) {
             mameConfigSession = undefined;
+        }
+        // MAME has finished writing its own cfg files by now - see applyCfgEdit().
+        for (const edit of session.cfgEdits) {
+            try {
+                edit();
+            } catch (error) {
+                console.error('[boServer] Failed to replay a cfg edit after MAME exited:', error);
+            }
         }
         rmSync(dir, {recursive: true, force: true});
     });
 
-    mameConfigSession = {child, dir, nonceCounter: 0, romName};
+    mameConfigSession = session;
 }
 
 function stopMameConfigSession(): void {
     if (isMameConfigSessionAlive()) {
         // SIGKILL, not the default SIGTERM - confirmed by hand that a real windowed MAME process
         // just ignores SIGTERM outright (same "hung mame process can ignore SIGTERM under some
-        // video backends" reason runInputProbe()/runCaptureInput() already used it for).
+        // video backends" reason runDeviceProbe() already uses it for).
         mameConfigSession?.child.kill('SIGKILL');
     }
 }
@@ -3359,7 +3572,7 @@ function releaseTokenFromInGameUiPorts(cfgPath: string, portType: string, token:
         // null: the token was the port's only binding - leave it rather than hand-write an empty
         // sequence (see setDefaultCfgUiInput()'s note on hand-written <newseq> values).
         if (stripped && stripped !== effective) {
-            setDefaultCfgUiInput(cfgPath, otherPort, stripped);
+            applyCfgEdit(() => setDefaultCfgUiInput(cfgPath, otherPort, stripped));
             released.push(otherPort);
         }
     }
@@ -3403,7 +3616,12 @@ function readDefaultCfgUiInputs(cfgPath: string): Map<string, string> {
     return ports;
 }
 
-function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string): void {
+/**
+ * Rewrites default.cfg's <input> block with exactly `ports` - shared by setDefaultCfgUiInput() and
+ * removeDefaultCfgUiInput() below. An empty map drops the block altogether rather than leaving an
+ * empty <input></input> behind.
+ */
+function writeDefaultCfgUiInputs(cfgPath: string, ports: Map<string, string>): void {
     const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : `<?xml version="1.0"?>
 <mameconfig version="10">
     <system name="default">
@@ -3411,11 +3629,11 @@ function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string):
 </mameconfig>
 `;
 
-    const inputBlockMatch = /<input>[\s\S]*?<\/input>\s*/.exec(existing);
-    const ports = readDefaultCfgUiInputs(cfgPath);
-    ports.set(portType, token);
+    // Whole lines only (the block's own indentation and line break): matching from "<input>" to
+    // the next non-blank character instead made every rewrite indent the block a bit further.
+    const inputBlockMatch = /[ \t]*<input>[\s\S]*?<\/input>[ \t]*\n?/.exec(existing);
 
-    const newInputBlock = '        <input>\n'
+    const newInputBlock = !ports.size ? '' : '        <input>\n'
         + Array.from(ports.entries()).map(([type, seq]) => ''
             + `            <port type="${type}">\n`
             + '                <newseq type="standard">\n'
@@ -3432,11 +3650,29 @@ function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string):
     writeFileSync(cfgPath, updated, 'utf8');
 }
 
+function setDefaultCfgUiInput(cfgPath: string, portType: string, token: string): void {
+    const ports = readDefaultCfgUiInputs(cfgPath);
+    ports.set(portType, token);
+    writeDefaultCfgUiInputs(cfgPath, ports);
+}
+
 /**
- * Global input remap: "Lancer MAME"/"Fermer MAME" control the shared config session
- * (startMameConfigSession()/stopMameConfigSession() above), and one "Capturer un appui" form per
+ * Drops `portType`'s override from default.cfg, so MAME falls back to its own default binding for
+ * it. A no-op when there's no such override (nothing to rewrite).
+ */
+function removeDefaultCfgUiInput(cfgPath: string, portType: string): void {
+    const ports = readDefaultCfgUiInputs(cfgPath);
+    if (ports.delete(portType)) {
+        writeDefaultCfgUiInputs(cfgPath, ports);
+    }
+}
+
+/**
+ * Global input remap: "Launch MAME"/"Close MAME" control the shared config session
+ * (startMameConfigSession()/stopMameConfigSession() above), and one "Capture a press" form per
  * REMAP_GROUPS action arms it for one press (captureOnePress() above) - the resulting token is
  * written straight into default.cfg's matching <port> entry (setDefaultCfgUiInput() above).
+ * "Reset" drops that entry again (removeDefaultCfgUiInput() above).
  * Groups/actions are meant to keep growing in REMAP_GROUPS - this only renders whatever's in it,
  * no other change needed to add more.
  */
@@ -3444,62 +3680,84 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
     if (!romNames.length) {
         return '';
     }
-    const renderActionRows = (actions: RemapAction[]): string => actions.map(action => {
+    const sessionRunning = isMameConfigSessionAlive();
+    // Both buttons only make sense with MAME open: a capture needs it to see the press, and a
+    // reset is kept consistent with it (the route rejects both while MAME is closed).
+    const disabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
+    const renderActionItems = (actions: RemapAction[]): string => actions.map(action => {
         const actionState = state?.portType === action.portType ? state : undefined;
         const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
         return `
-            <tr>
-                <td>${escapeHtml(action.label)}</td>
-                <td>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>unassigned</em>'}</td>
-                <td class="center">
-                    <form method="post" action="/input-probe/remap">
-                        <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                        <button type="submit">Capture a press</button>
-                    </form>
-                </td>
-            </tr>
-            ${actionState?.error ? `
-                <tr><td colspan="3"><p class="error flash">${escapeHtml(actionState.error)}</p></td></tr>
-            ` : ''}
-            ${actionState?.releasedFrom?.length ? `
-                <tr><td colspan="3"><p class="info flash">This button was also bound by default to
-                ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
-                MAME - it was removed from there to avoid a double trigger.</p></td></tr>
-            ` : ''}
+            <div class="binding">
+                ${renderBindingLabel(action.portType, action.label)}
+                <dl class="binding-values">
+                    <dt>Currently</dt>
+                    <dd>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>MAME default</em>'}</dd>
+                </dl>
+                <form method="post" action="/input-probe/remap" class="binding-actions">
+                    <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
+                    <button type="submit" name="action" value="capture"${disabled}>Capture a press</button>
+                    ${persisted.has(action.portType) ? `<button type="submit" name="action" value="reset"${disabled}>Reset</button>` : ''}
+                </form>
+                ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
+                ${actionState?.releasedFrom?.length ? `
+                    <p class="info flash">This button was also bound by default to
+                    ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                    MAME - it was removed from there to avoid a double trigger.</p>
+                ` : ''}
+            </div>
         `;
     }).join('');
-
-    const sessionRunning = isMameConfigSessionAlive();
 
     return `
         <section class="card">
             <h2>Global input configuration</h2>
             <p class="info">Binds a gamepad button to a command. <strong>1.</strong>
-            Launch MAME below (a real window, not in the background) and leave it open
+            Launch MAME with the button at the top of the page and leave it open
             for the whole configuration - all captures then share the same startup, so the
             same gamepad indexes from start to finish.
             <strong>2.</strong> Click "Capture a press" for the wanted command, then press the
             button on the gamepad within 30 seconds (MAME picks it up even when its window is
-            not the one in front). <strong>3.</strong> Close MAME when done. The result is written
-            directly to <code>default.cfg</code> (valid for all games, unless a specific game
-            has its own override). <strong>Currently</strong> reflects what is really saved
-            in the file, not just the last capture.</p>
-            <p><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
-            <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}">
-                <button type="submit">${sessionRunning ? 'Close MAME' : 'Launch MAME'}</button>
-            </form>
-            ${REMAP_GROUPS.map(group => `
-                <h3>${escapeHtml(group.title)}</h3>
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead>
-                            <tr><th>Command</th><th>Currently</th><th class="center"></th></tr>
-                        </thead>
-                        <tbody>${renderActionRows(group.actions)}</tbody>
-                    </table>
-                </div>
-            `).join('')}
+            not the one in front). Each press is saved at once to <code>default.cfg</code> (valid
+            for all games, unless a specific game has its own override). <strong>3.</strong>
+            Close MAME when done, from the top button or from its own window: either way keeps the
+            changes. <strong>Currently</strong> reflects what is really saved
+            in the file, not just the last capture; <strong>Reset</strong> removes a command from
+            the file, so MAME's own default binding applies again. Both buttons stay disabled
+            until MAME is launched.</p>
+            ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
+                id: String(index),
+                title: group.title,
+                html: `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
+            })), state ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
         </section>
+    `;
+}
+
+interface PlayerPanel {
+    // Short slug, unique within the card - what the tab button and its panel are matched on.
+    id: string;
+    title: string;
+    html: string;
+}
+
+/**
+ * One tab per player (plus "System"/"Other" where there is one) instead of every player's table
+ * stacked one after the other - the Gamepads cards grow long otherwise. Switched client side (see
+ * renderPageTail()); `activeId` is the panel to open on, e.g. the one holding the command just
+ * captured, so a capture on Player 2 doesn't land back on Player 1.
+ */
+function renderPlayerTabs(cardId: string, panels: PlayerPanel[], activeId?: string): string {
+    return `
+        <div class="player-tabs" role="tablist" data-player-tabs="${escapeHtml(cardId)}"
+            ${activeId ? `data-active="${escapeHtml(activeId)}"` : ''}>
+            ${panels.map(panel => `
+                <button type="button" role="tab" data-player-tab="${escapeHtml(panel.id)}">${escapeHtml(panel.title)}</button>
+            `).join('')}
+        </div>
+        ${panels.map(panel => `
+            <div class="player-panel" role="tabpanel" data-player-panel="${escapeHtml(`${cardId}:${panel.id}`)}">${panel.html}</div>
+        `).join('')}
     `;
 }
 
@@ -3597,46 +3855,41 @@ function renderGameRemapCard(
         const overrides = readGameCfgOverrides(getGameCfgPath(iniPath, romName));
         const players = Array.from(new Set(fields.map(field => portTypePlayer(field.portType))));
 
-        const renderRows = (playerFields: GameField[]): string => playerFields.map(field => {
+        const renderItems = (playerFields: GameField[]): string => playerFields.map(field => {
             const id = gameFieldId(field);
             const rowState = state?.fieldId === id ? state : undefined;
             const override = rowState?.capturedToken ?? overrides.get(id);
             return `
-                <tr>
-                    <td>${escapeHtml(field.name || field.portType)}</td>
-                    <td><code>${escapeHtml(field.defaultSeq)}</code></td>
-                    <td>${override ? `<code>${escapeHtml(override)}</code>` : '<em>global</em>'}</td>
-                    <td class="center">
-                        <form method="post" action="/input-probe/game/remap">
-                            <input type="hidden" name="romName" value="${escapeHtml(romName)}">
-                            <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
-                            <button type="submit" name="action" value="capture">Capture a press</button>
-                            ${overrides.has(id) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
-                        </form>
-                    </td>
-                </tr>
-                ${rowState?.error ? `
-                    <tr><td colspan="4"><p class="error flash">${escapeHtml(rowState.error)}</p></td></tr>
-                ` : ''}
-                ${rowState?.releasedFrom?.length ? `
-                    <tr><td colspan="4"><p class="info flash">This button was also bound by default to
-                    ${escapeHtml(rowState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
-                    MAME - it was removed from there (globally) to avoid a double trigger.</p></td></tr>
-                ` : ''}
+                <div class="binding">
+                    ${renderBindingLabel(field.portType, field.name || field.portType)}
+                    <dl class="binding-values">
+                        <dt>MAME default</dt>
+                        <dd><code>${escapeHtml(field.defaultSeq)}</code></dd>
+                        <dt>This game</dt>
+                        <dd>${override ? `<code>${escapeHtml(override)}</code>` : '<em>global</em>'}</dd>
+                    </dl>
+                    <form method="post" action="/input-probe/game/remap" class="binding-actions">
+                        <input type="hidden" name="romName" value="${escapeHtml(romName)}">
+                        <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
+                        <button type="submit" name="action" value="capture">Capture a press</button>
+                        ${overrides.has(id) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
+                    </form>
+                    ${rowState?.error ? `<p class="error flash">${escapeHtml(rowState.error)}</p>` : ''}
+                    ${rowState?.releasedFrom?.length ? `
+                        <p class="info flash">This button was also bound by default to
+                        ${escapeHtml(rowState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                        MAME - it was removed from there (globally) to avoid a double trigger.</p>
+                    ` : ''}
+                </div>
             `;
         }).join('');
 
-        return players.map(player => `
-            <h3>${player ? `Player ${player}` : 'Other'}</h3>
-            <div class="table-wrap">
-                <table class="favorites-table">
-                    <thead>
-                        <tr><th>Command</th><th>MAME default</th><th>This game</th><th class="center"></th></tr>
-                    </thead>
-                    <tbody>${renderRows(fields.filter(field => portTypePlayer(field.portType) === player))}</tbody>
-                </table>
-            </div>
-        `).join('');
+        const stateField = fields.find(field => gameFieldId(field) === state?.fieldId);
+        return renderPlayerTabs('game', players.map(player => ({
+            id: String(player),
+            title: player ? `Player ${player}` : 'Other',
+            html: `<div class="binding-grid">${renderItems(fields.filter(field => portTypePlayer(field.portType) === player))}</div>`,
+        })), stateField ? String(portTypePlayer(stateField.portType)) : undefined);
     };
 
     return `
@@ -3655,8 +3908,8 @@ function renderGameRemapCard(
                     MAME picks it up even when its window is not the one in front. The result shows
                     here and is saved at once.</li>
                     <li><strong>Reset</strong> gives a command back its global binding. When you are
-                    done, use <strong>Close MAME</strong> (not the window's own close button, which
-                    would discard the changes).</li>
+                    done, close MAME with the button at the top of the page or from its own window:
+                    either way keeps the changes.</li>
                 </ol>
             ` : `
                 <ol class="info">
@@ -3671,195 +3924,9 @@ function renderGameRemapCard(
             </form>
             ${sessionRunning ? `
                 <p><strong>MAME:</strong> running (${escapeHtml(sessionRom ? (romLabels.get(sessionRom) ?? sessionRom) : '')})</p>
-                <form method="post" action="/input-probe/mame/stop">
-                    <button type="submit">Close MAME</button>
-                </form>
             ` : ''}
             ${state?.error && !state.fieldId ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
             ${sessionRom && sessionRom === selectedRom ? renderTable(sessionRom) : ''}
-        </section>
-    `;
-}
-
-interface InputProbeState {
-    selectedRom?: string;
-    result?: InputProbeRow[];
-    error?: string;
-}
-
-/**
- * Maps MAME's own field display name (e.g. "P1 Up", "P2 Button 3") to a French label, stripping
- * the "P<n> " prefix. Falls back to the raw suffix for anything unexpected instead of throwing -
- * defensive only, input-probe.lua's own filter should never let anything else through.
- */
-function labelForProbeFieldName(fieldName: string): string {
-    const suffix = fieldName.replace(/^P[12] /, '');
-    const directions: { [key: string]: string } = {Up: 'Up', Down: 'Down', Left: 'Left', Right: 'Right'};
-    if (directions[suffix]) {
-        return directions[suffix];
-    }
-    const buttonMatch = /^Button (\d+)$/.exec(suffix);
-    return buttonMatch ? `Button ${buttonMatch[1]}` : suffix;
-}
-
-/**
- * Line-based parse of input-probe.lua's stdout, captured amid MAME's normal boot chatter (menu
- * hints, warnings, etc. on other lines - anything not starting with the marker is ignored).
- * Format, one line per wanted field: MAUI_INPUT_ROW|<field name>|<default text>|<current text>
- * e.g. "MAUI_INPUT_ROW|P1 Up|KEYCODE_UP|KEYCODE_UP or Joy1 Up". seq_name() never emits "|", so a
- * plain split is safe. Row order isn't guaranteed here (mirrors the Lua script's own pairs()
- * iteration) - renderInputProbeCard() sorts by player then a fixed direction/button order.
- */
-function parseInputProbeOutput(stdout: string): InputProbeRow[] {
-    const rows: InputProbeRow[] = [];
-    for (const line of stdout.split('\n')) {
-        if (!line.startsWith('MAUI_INPUT_ROW|')) {
-            continue;
-        }
-        const [, fieldName, defaultText, currentText] = line.split('|');
-        const playerMatch = /^P([12]) /.exec(fieldName || '');
-        if (!playerMatch) {
-            continue;
-        }
-        rows.push({
-            player: Number(playerMatch[1]) as 1 | 2,
-            fieldName,
-            defaultText: defaultText ?? '',
-            currentText: currentText ?? '',
-        });
-    }
-    return rows;
-}
-
-/**
- * Boots `romName` headlessly just long enough for input-probe.lua to dump P1/P2's default vs.
- * current input sequences and exit the machine, then parses the captured stdout. -skip_gameinfo
- * avoids an extra keypress-wait; -video none/-sound none skip creating a window or touching the
- * audio device entirely (no emulation beyond machine start is meant to be seen or heard). timeout
- * is a hard backstop in case a driver never reaches "running" (bad rom, missing BIOS) - the Lua
- * script's own machine:exit() should fire in well under a second normally. killSignal SIGKILL
- * (not the default SIGTERM) because a hung mame process can ignore SIGTERM under some video
- * backends. maxBuffer covers MAME's boot-time stdout chatter, which stays well under a few KB per
- * run in practice.
- */
-function runInputProbe(mameBinary: string, iniPath: string, romName: string): InputProbeRow[] {
-    const stdout = execFileSync(
-        mameBinary,
-        [
-            romName,
-            '-video', 'none',
-            '-sound', 'none',
-            '-skip_gameinfo',
-            '-autoboot_delay', '0',
-            '-autoboot_script', join(getStaticPath(), 'lua', 'input-probe.lua'),
-            '-inipath', iniPath,
-            '-homepath', iniPath,
-        ],
-        {
-            cwd: iniPath,
-            encoding: 'utf8',
-            timeout: 15000,
-            killSignal: 'SIGKILL',
-            maxBuffer: 4 * 1024 * 1024,
-            stdio: ['ignore', 'pipe', 'pipe'],
-        },
-    );
-    return parseInputProbeOutput(stdout);
-}
-
-/**
- * On-demand MAME Lua probe for P1/P2 controller bindings: an admin picks a rom, mame boots it
- * headlessly with input-probe.lua (-autoboot_script), and this renders what that script printed -
- * MAME's own hardcoded default *and* its current effective (merged, post-cfg-override) value for
- * each field, side by side. Unlike a static default.cfg viewer, this reflects per-game
- * <romname>.cfg overrides too, because that's exactly what MAME itself just resolved while
- * booting that rom - see input-probe.lua and runInputProbe() above.
- */
-function renderInputProbeCard(
-    romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, state?: InputProbeState,
-): string {
-    if (!romNames.length) {
-        return `
-            <section class="card">
-                <h2>Keys and gamepads (MAME probe)</h2>
-                <p class="info flash">No rom found in the roms folder - import a starting
-                pack or drop at least one .zip file in that folder to be able to probe an
-                input configuration.</p>
-            </section>
-        `;
-    }
-
-    const picker = renderRomPicker('probeRomName', romNames, romLabels, withCfg, state?.selectedRom);
-
-    const renderPlayerTable = (player: 1 | 2): string => {
-        const directionOrder = ['Up', 'Down', 'Left', 'Right'];
-        const rank = (fieldName: string): [number, number] => {
-            const suffix = fieldName.replace(/^P[12] /, '');
-            const directionIndex = directionOrder.indexOf(suffix);
-            if (directionIndex !== -1) {
-                return [0, directionIndex];
-            }
-            const buttonMatch = /^Button (\d+)$/.exec(suffix);
-            if (buttonMatch) {
-                return [1, Number(buttonMatch[1])];
-            }
-            if (suffix === 'Start') {
-                return [2, 0];
-            }
-            if (suffix === 'Coin') {
-                return [3, 0];
-            }
-            return [4, 0];
-        };
-        const rows = (state?.result ?? [])
-            .filter(row => row.player === player)
-            .sort((a, b) => {
-                const [groupA, orderA] = rank(a.fieldName);
-                const [groupB, orderB] = rank(b.fieldName);
-                return groupA - groupB || orderA - orderB;
-            })
-            .map((row) => {
-                const overridden = row.currentText !== row.defaultText;
-                const currentCell = overridden
-                    ? `<strong>${escapeHtml(row.currentText)}</strong>`
-                    : escapeHtml(row.currentText);
-                return `
-                    <tr>
-                        <td>${escapeHtml(labelForProbeFieldName(row.fieldName))}</td>
-                        <td>${escapeHtml(row.defaultText)}</td>
-                        <td>${currentCell}</td>
-                    </tr>
-                `;
-            }).join('');
-        return `
-            <h3>Player ${player}</h3>
-            ${rows ? `
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead><tr><th>Command</th><th>Default</th><th>Current</th></tr></thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>
-            ` : '<p class="info flash">No binding found for this player.</p>'}
-        `;
-    };
-
-    return `
-        <section class="card">
-            <h2>Keys and gamepads (MAME probe)</h2>
-            <p class="info">Runs the selected rom in the background (no video or sound) to
-            ask MAME itself for its P1/P2 input configuration (joystick directions,
-            buttons, start and coin) - <strong>Default</strong> is MAME's original value,
-            <strong>Current</strong> is the effective value once the global and per-game
-            settings are applied (in <strong>bold</strong> when it differs from the default).
-            <code>KEYCODE_*</code> = keyboard key, <code>JOYCODE_&lt;n&gt;_*</code> = gamepad
-            no. n; several bindings can be combined with OR/AND/NOT.</p>
-            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
-            <form method="post" action="/input-probe">
-                ${picker}
-                <button type="submit">Probe</button>
-            </form>
-            ${state?.result ? `${renderPlayerTable(1)}${renderPlayerTable(2)}` : ''}
         </section>
     `;
 }
@@ -3910,7 +3977,6 @@ function renderForm(
     mameInfoMessage?: string,
     importError?: string,
     dangerZoneInfo?: string,
-    inputProbeState?: InputProbeState,
     repoPacks?: RepoPack[],
     repoError?: string,
     repoInfo?: string,
@@ -3919,7 +3985,7 @@ function renderForm(
     gameRemapState?: GameRemapState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
-    // see /save, /launch, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
+    // see /save, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
     // credential fields; a sync JSON read is cheap and every route already re-loads Config at
     // least once per request anyway.
     const config = new Config();
@@ -3949,12 +4015,11 @@ function renderForm(
             sections.push({
                 id: 'gamepads',
                 label: 'Gamepads',
-                html: renderInputProbeCard(romNames, romLabels, withCfg, inputProbeState)
-                    + renderRemapCard(
-                        romNames,
-                        readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
-                        remapState,
-                    )
+                html: renderRemapCard(
+                    romNames,
+                    readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
+                    remapState,
+                )
                     + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
                     + renderDeviceProbeCard(romNames, deviceProbeState),
             });
@@ -3988,17 +4053,22 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : (repoError !== undefined || repoInfo !== undefined || repoPacks !== undefined) ? 'repository'
             : importError !== undefined ? 'import'
-                : (inputProbeState !== undefined || deviceProbeState !== undefined || remapState !== undefined
+                : (deviceProbeState !== undefined || remapState !== undefined
                     || gameRemapState !== undefined) ? 'gamepads'
                     : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
                         : undefined;
-    // Right of the subtabs: launching mame is the administrator's call (the route rejects anyone
-    // else too).
+    // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
+    // launches/closes the shared MAME config session the Gamepads cards capture through - see
+    // startMameConfigSession(). Administrator's call only (the routes reject anyone else too).
+    // data-mame-session lets the page notice MAME being closed from its own window (see
+    // renderPageTail()).
+    const sessionRunning = isAdmin && isMameConfigSessionAlive();
     const launchButton = isAdmin ? `
-        <form method="post" action="/launch">
+        <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}"
+            ${sessionRunning ? 'data-mame-session="running"' : ''}>
             <button type="submit" class="launch-button">
                 <img src="/mame-logo.svg" alt="" class="launch-logo">
-                Launch mame
+                ${sessionRunning ? 'Close MAME' : 'Launch MAME'}
             </button>
         </form>
     ` : '';
@@ -5264,6 +5334,22 @@ const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
         .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
 );
 
+// The Gamepads tab's input icons (see src/assets/input-icons/LICENSE.txt), embedded the same way as
+// CATEGORY_ICONS above: keyed by file name without extension, i.e. by inputIconKey().
+const INPUT_ICONS: {[key: string]: string} = Object.fromEntries(
+    Object.entries(import.meta.glob('./assets/input-icons/*.svg', {query: '?raw', import: 'default', eager: true}))
+        .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
+);
+
+/** Name of a command in the Gamepads cards, after its icon when it has one (see inputIconKey()). */
+function renderBindingLabel(portType: string, label: string): string {
+    const iconKey = inputIconKey(portType);
+    const icon = iconKey && iconKey in INPUT_ICONS
+        ? `<img class="binding-icon" src="/input-icons/${escapeHtml(iconKey)}.svg" alt="">`
+        : '';
+    return `<div class="binding-label">${icon}${escapeHtml(label)}</div>`;
+}
+
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
 function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer): string {
     return renderPage(renderFavoritesCard(favoritesInfo, viewer), 'favorites', viewer);
@@ -6156,6 +6242,15 @@ export function startBoServer(
         res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
     });
 
+    app.get('/input-icons/:key.svg', (req, res) => {
+        const svg = INPUT_ICONS[req.params.key];
+        if (!svg) {
+            res.sendStatus(404);
+            return;
+        }
+        res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+    });
+
     app.get('/maui-logo.png', (req, res) => {
         res.sendFile('img/maui-logo.png', {root: getStaticPath()});
     });
@@ -6846,7 +6941,7 @@ export function startBoServer(
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         res.send(renderForm(
             values, getMameInfo(config), true, undefined, undefined, undefined, undefined, undefined,
-            undefined, undefined, undefined, 'Repository configuration saved.',
+            undefined, undefined, 'Repository configuration saved.',
         ));
     });
 
@@ -6864,8 +6959,7 @@ export function startBoServer(
 
         if (!config.repoUrl) {
             res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Enter the repository URL before browsing it.',
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Enter the repository URL before browsing it.',
             ));
             return;
         }
@@ -6899,14 +6993,12 @@ export function startBoServer(
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             }));
             res.send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                packs,
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, packs,
             ));
         } catch (error) {
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(502).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, `Unable to reach the repository: ${message}`,
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, `Unable to reach the repository: ${message}`,
             ));
         }
     });
@@ -6927,22 +7019,19 @@ export function startBoServer(
 
         if (!config.repoUrl) {
             res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Repository URL not configured.',
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Repository URL not configured.',
             ));
             return;
         }
         if (selection && !selection.size) {
             res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Tick at least one game to import.',
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Tick at least one game to import.',
             ));
             return;
         }
         if (!selection) {
             res.status(422).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'Invalid pack or game name.',
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'Invalid pack or game name.',
             ));
             return;
         }
@@ -6950,8 +7039,7 @@ export function startBoServer(
         // macOS in particular doesn't always ship a working python3 without Xcode CLT installed.
         if (!isPython3Available()) {
             res.status(500).send(renderForm(
-                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined, 'python3 not found on this machine - unable to import from the repository.',
+                values, mameInfo, true, undefined, undefined, undefined, undefined, undefined, undefined, 'python3 not found on this machine - unable to import from the repository.',
             ));
             return;
         }
@@ -7376,60 +7464,6 @@ export function startBoServer(
         reloadFront();
     });
 
-    app.post('/launch', (req, res) => {
-        const config = new Config();
-        config.load();
-
-        const isAdmin = req.session.boRole === 'admin';
-
-        if (!isAdmin) {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
-
-        if (!config.mamePath || !config.mameBinaryName) {
-            res.status(422).send(renderForm(
-                {mamePath: config.mamePath || ''},
-                getMameInfo(config), isAdmin,
-                'No valid configuration saved: unable to launch mame.',
-            ));
-            return;
-        }
-
-        const mameBinary = join(config.mamePath, config.mameBinaryName);
-        if (!existsSync(mameBinary)) {
-            res.status(422).send(renderForm(
-                {mamePath: config.mamePath},
-                getMameInfo(config), isAdmin,
-                `The binary "${mameBinary}" was not found.`,
-            ));
-            return;
-        }
-
-        // Same launch shape as MameService.startGame(), minus -skip_gameinfo/romName:
-        // no rom selected here, so mame opens its own UI, on the dedicated home
-        // directory mame-awesome-ui always pins it to.
-        const iniPath = getMameHomePath();
-        const mameProcess = execFile(mameBinary, ['-inipath', iniPath, '-homepath', iniPath], {
-            killSignal: 'SIGQUIT',
-            cwd: iniPath,
-        }, error => {
-            if (error) {
-                console.error('[boServer] mame exited with an error:', error);
-            }
-        });
-        mameProcess.once('error', error => {
-            console.error('[boServer] failed to launch mame:', error);
-        });
-
-        res.send(renderForm(
-            {mamePath: config.mamePath},
-            getMameInfo(config), isAdmin,
-            undefined,
-            'Mame was launched, check that a window actually opened on the machine hosting mame-awesome-ui.',
-        ));
-    });
-
     /**
      * Writes pluginspath into mame.ini and, as soon as it points at a folder that actually has
      * plugins in it, initializes/completes plugin.ini right away instead of making the user click
@@ -7468,60 +7502,6 @@ export function startBoServer(
         ));
     });
 
-    app.post('/input-probe', (req, res) => {
-        if (req.session.boRole !== 'admin') {
-            res.status(403).send('Action reserved to administrators.');
-            return;
-        }
-        const config = new Config();
-        config.load();
-        const mameInfo = getMameInfo(config);
-        const isAdmin = req.session.boRole === 'admin';
-
-        const romName: string = (req.body.romName || '').trim();
-
-        if (mameInfo.error) {
-            // Shouldn't normally be reachable (renderForm() only renders the probe card once
-            // mameInfo.error is unset), but the config could have changed underneath a stale
-            // form submission (e.g. mamePath cleared in another tab/request).
-            res.status(422).send(renderForm(
-                {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
-            ));
-            return;
-        }
-
-        const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
-        if (!romName || !romNames.includes(romName)) {
-            res.status(422).send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined,
-                {selectedRom: romName, error: 'Invalid rom, or not found in the roms folder.'},
-            ));
-            return;
-        }
-
-        try {
-            const result = runInputProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
-            res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined,
-                {selectedRom: romName, result},
-            ));
-        } catch (error) {
-            console.error(`[boServer] Input probe failed for "${romName}":`, error);
-            const message = error instanceof Error ? error.message : 'unexpected error';
-            res.status(500).send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined,
-                {
-                    selectedRom: romName,
-                    error: `Probe of "${romName}" failed: ${message}`
-                        + ' (timeout, non-zero exit code, or binary not found).',
-                },
-            ));
-        }
-    });
-
     app.post('/input-probe/devices', (req, res) => {
         if (req.session.boRole !== 'admin') {
             res.status(403).send('Action reserved to administrators.');
@@ -7536,8 +7516,9 @@ export function startBoServer(
         const romName = romNames[0];
 
         if (mameInfo.error || !romName) {
-            // Same "shouldn't normally be reachable" caveat as /input-probe above - the form only
-            // renders once mameInfo.error is unset and at least one rom exists.
+            // Shouldn't normally be reachable - the form only renders once mameInfo.error is unset
+            // and at least one rom exists, but the config could have changed underneath a stale
+            // form submission (e.g. mamePath cleared in another tab/request).
             res.status(422).send(renderForm(
                 {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
             ));
@@ -7548,7 +7529,7 @@ export function startBoServer(
             const result = runDeviceProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
             res.send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 {result},
             ));
         } catch (error) {
@@ -7556,7 +7537,7 @@ export function startBoServer(
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 {error: `Device probe failed: ${message} (timeout, non-zero exit code, or binary not found).`},
             ));
         }
@@ -7572,13 +7553,33 @@ export function startBoServer(
         const mameInfo = getMameInfo(config);
         const isAdmin = req.session.boRole === 'admin';
 
+        // MAME only runs the capture script (-autoboot_script) once a machine is running - opened
+        // on its own menu, with no rom, it never does (checked against 0.289) - so the session
+        // needs a rom, any of them: default.cfg is global.
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         const romName = romNames[0];
-        if (!mameInfo.error && romName) {
-            startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        if (mameInfo.error || !romName) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || ''}, mameInfo, isAdmin,
+                mameInfo.error
+                    ? 'No valid MAME configuration saved: unable to launch MAME.'
+                    : 'No rom found in the roms folder - MAME needs at least one to launch.',
+            ));
+            return;
         }
 
+        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdmin));
+    });
+
+    // Polled by the page while a config session runs (see renderPageTail()), so it notices MAME
+    // being closed from its own window.
+    app.get('/input-probe/mame/status', (req, res) => {
+        if (req.session.boRole !== 'admin') {
+            res.status(403).json({error: 'Action reserved to administrators.'});
+            return;
+        }
+        res.json({running: isMameConfigSessionAlive()});
     });
 
     app.post('/input-probe/mame/stop', (req, res) => {
@@ -7608,10 +7609,12 @@ export function startBoServer(
 
         const portType: string = (req.body.portType || '').trim();
         const action = REMAP_ACTIONS_BY_TYPE.get(portType);
+        // Defaults to capture: a form rendered before the Reset button existed posts no action.
+        const formAction: string = (req.body.action || 'capture').trim();
 
-        if (mameInfo.error || !action) {
-            // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe above
-            // - the form only renders once mameInfo.error is unset. !action: portType isn't in
+        if (mameInfo.error || !action || !['capture', 'reset'].includes(formAction)) {
+            // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe/devices
+            // above - the form only renders once mameInfo.error is unset. !action: portType isn't in
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
             // every form's hidden portType field is one of ours.
             res.status(422).send(renderForm(
@@ -7620,13 +7623,40 @@ export function startBoServer(
             return;
         }
 
+        // Both actions need MAME open (their buttons are disabled otherwise) - only reachable from a
+        // page rendered before MAME was closed.
         if (!isMameConfigSessionAlive()) {
             res.send(renderForm(
                 {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
                 undefined,
                 {portType, error: 'MAME is not running - click "Launch MAME" first.'},
             ));
+            return;
+        }
+
+        if (formAction === 'reset') {
+            // Edits default.cfg directly - the running MAME is only needed so the edit is
+            // replayed once it exits (see applyCfgEdit()).
+            try {
+                const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+                applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
+                res.send(renderForm(
+                    {mamePath: config.mamePath}, mameInfo, isAdmin,
+                    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined,
+                    {portType},
+                ));
+            } catch (error) {
+                console.error(`[boServer] Remap reset failed for "${portType}":`, error);
+                const message = error instanceof Error ? error.message : 'unexpected error';
+                res.status(500).send(renderForm(
+                    {mamePath: config.mamePath}, mameInfo, isAdmin,
+                    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                    undefined,
+                    {portType, error: `Reset failed: ${message}`},
+                ));
+            }
             return;
         }
 
@@ -7638,7 +7668,7 @@ export function startBoServer(
                     '(is the gamepad connected, and MAME still open?).'};
             if (token) {
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
-                setDefaultCfgUiInput(cfgPath, portType, token);
+                applyCfgEdit(() => setDefaultCfgUiInput(cfgPath, portType, token));
                 const released = releaseTokenFromInGameUiPorts(cfgPath, portType, token);
                 if (released.length) {
                     remapState.releasedFrom = released;
@@ -7651,7 +7681,6 @@ export function startBoServer(
                 undefined, // mameInfoMessage
                 undefined, // importError
                 undefined, // dangerZoneInfo
-                undefined, // inputProbeState
                 undefined, // repoPacks
                 undefined, // repoError
                 undefined, // repoInfo
@@ -7668,7 +7697,6 @@ export function startBoServer(
                 undefined, // mameInfoMessage
                 undefined, // importError
                 undefined, // dangerZoneInfo
-                undefined, // inputProbeState
                 undefined, // repoPacks
                 undefined, // repoError
                 undefined, // repoInfo
@@ -7688,7 +7716,6 @@ export function startBoServer(
             undefined, // mameInfoMessage
             undefined, // importError
             undefined, // dangerZoneInfo
-            undefined, // inputProbeState
             undefined, // repoPacks
             undefined, // repoError
             undefined, // repoInfo
@@ -7710,8 +7737,8 @@ export function startBoServer(
         const romName: string = (req.body.romName || '').trim();
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         if (mameInfo.error || !romNames.includes(romName)) {
-            // Same "shouldn't normally be reachable" caveat as /input-probe above - the form only
-            // renders once mameInfo.error is unset, with a select of the roms actually present.
+            // Same "shouldn't normally be reachable" caveat as /input-probe/devices above - the
+            // form only renders once mameInfo.error is unset, with a select of the roms actually present.
             res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdmin));
             return;
         }
@@ -7758,7 +7785,7 @@ export function startBoServer(
         try {
             const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
             if (action === 'reset') {
-                removeGameCfgOverride(cfgPath, field);
+                applyCfgEdit(() => removeGameCfgOverride(cfgPath, field));
                 res.send(renderGameRemapPage(config, mameInfo, isAdmin, {romName, fieldId}));
                 return;
             }
@@ -7769,7 +7796,7 @@ export function startBoServer(
                 : {romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
                     '(is the gamepad connected, and MAME still open?).'};
             if (token) {
-                setGameCfgOverride(cfgPath, romName, field, token);
+                applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, token));
                 const released = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token);
                 if (released.length) {
                     gameRemapState.releasedFrom = released;
