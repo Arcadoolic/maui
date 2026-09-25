@@ -3533,6 +3533,10 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
     if (!romNames.length) {
         return '';
     }
+    const sessionRunning = isMameConfigSessionAlive();
+    // Both buttons only make sense with MAME open: a capture needs it to see the press, and a
+    // reset is kept consistent with it (the route rejects both while MAME is closed).
+    const disabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
     const renderActionRows = (actions: RemapAction[]): string => actions.map(action => {
         const actionState = state?.portType === action.portType ? state : undefined;
         const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
@@ -3543,8 +3547,8 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
                 <td class="center">
                     <form method="post" action="/input-probe/remap">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                        <button type="submit" name="action" value="capture">Capture a press</button>
-                        ${persisted.has(action.portType) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
+                        <button type="submit" name="action" value="capture"${disabled}>Capture a press</button>
+                        ${persisted.has(action.portType) ? `<button type="submit" name="action" value="reset"${disabled}>Reset</button>` : ''}
                     </form>
                 </td>
             </tr>
@@ -3558,8 +3562,6 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             ` : ''}
         `;
     }).join('');
-
-    const sessionRunning = isMameConfigSessionAlive();
 
     return `
         <section class="card">
@@ -3575,8 +3577,8 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             Close MAME when done, from here or from its own window: either way keeps the
             changes. <strong>Currently</strong> reflects what is really saved
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
-            the file, so MAME's own default binding applies again (MAME doesn't need to be
-            running for that).</p>
+            the file, so MAME's own default binding applies again. Both buttons stay disabled
+            until MAME is launched.</p>
             <p${sessionRunning ? ' data-mame-session="running"' : ''}><strong>MAME:</strong> ${sessionRunning ? 'running' : 'closed'}</p>
             <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}">
                 <button type="submit">${sessionRunning ? 'Close MAME' : 'Launch MAME'}</button>
@@ -7480,9 +7482,21 @@ export function startBoServer(
             return;
         }
 
+        // Both actions need MAME open (their buttons are disabled otherwise) - only reachable from a
+        // page rendered before MAME was closed.
+        if (!isMameConfigSessionAlive()) {
+            res.send(renderForm(
+                {mamePath: config.mamePath}, mameInfo, isAdmin,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                undefined,
+                {portType, error: 'MAME is not running - click "Launch MAME" first.'},
+            ));
+            return;
+        }
+
         if (formAction === 'reset') {
-            // Edits default.cfg directly, no MAME session involved - unlike the per-game reset,
-            // which needs the running game's field (tag/mask/defvalue) to find its cfg entry.
+            // Edits default.cfg directly - the running MAME is only needed so the edit is
+            // replayed once it exits (see applyCfgEdit()).
             try {
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
                 applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
@@ -7502,16 +7516,6 @@ export function startBoServer(
                     {portType, error: `Reset failed: ${message}`},
                 ));
             }
-            return;
-        }
-
-        if (!isMameConfigSessionAlive()) {
-            res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdmin,
-                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-                undefined,
-                {portType, error: 'MAME is not running - click "Launch MAME" first.'},
-            ));
             return;
         }
 
