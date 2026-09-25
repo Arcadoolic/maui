@@ -3200,6 +3200,9 @@ interface MameConfigSession {
     // The rom MAME was launched with - the per-game remap card is only valid for that one game
     // (its fields dump, game-fields.txt, describes it and nothing else).
     romName: string;
+    // Every cfg edit made while this session runs, replayed in order once MAME exits - see
+    // applyCfgEdit().
+    cfgEdits: (() => void)[];
 }
 
 // Module-scope: at most one config session at a time, explicitly started/stopped by an admin from
@@ -3209,6 +3212,23 @@ let mameConfigSession: MameConfigSession | undefined;
 
 function isMameConfigSessionAlive(): boolean {
     return !!mameConfigSession && mameConfigSession.child.exitCode === null && !mameConfigSession.child.killed;
+}
+
+/**
+ * Runs a cfg edit (default.cfg or cfg/<rom>.cfg) and, while a config session is running, records it
+ * so it's replayed once that MAME exits. MAME keeps the input settings it loaded at startup in
+ * memory and, on a normal exit (its window's close button, Esc...), rewrites its cfg files from
+ * them - silently reverting every edit made in the meantime. Checked against 0.289: a default.cfg
+ * edited mid-session was back to its startup content after a normal exit, kept as edited after a
+ * SIGKILL. Replaying on exit makes both ways of closing MAME equivalent. Edits are replayed rather
+ * than the files restored wholesale, so whatever else MAME saves on exit (mixer, counters, settings
+ * changed from its own menus) is kept.
+ */
+function applyCfgEdit(edit: () => void): void {
+    edit();
+    if (isMameConfigSessionAlive()) {
+        mameConfigSession?.cfgEdits.push(edit);
+    }
 }
 
 /**
@@ -3264,14 +3284,23 @@ function startMameConfigSession(
     child.stderr?.on('data', (chunk: Buffer) => {
         console.error('[boServer] mame config session stderr:', chunk.toString('utf8').trim());
     });
+    const session: MameConfigSession = {child, dir, nonceCounter: 0, romName, cfgEdits: []};
     child.on('exit', () => {
-        if (mameConfigSession?.child === child) {
+        if (mameConfigSession === session) {
             mameConfigSession = undefined;
+        }
+        // MAME has finished writing its own cfg files by now - see applyCfgEdit().
+        for (const edit of session.cfgEdits) {
+            try {
+                edit();
+            } catch (error) {
+                console.error('[boServer] Failed to replay a cfg edit after MAME exited:', error);
+            }
         }
         rmSync(dir, {recursive: true, force: true});
     });
 
-    mameConfigSession = {child, dir, nonceCounter: 0, romName};
+    mameConfigSession = session;
 }
 
 function stopMameConfigSession(): void {
@@ -3356,7 +3385,7 @@ function releaseTokenFromInGameUiPorts(cfgPath: string, portType: string, token:
         // null: the token was the port's only binding - leave it rather than hand-write an empty
         // sequence (see setDefaultCfgUiInput()'s note on hand-written <newseq> values).
         if (stripped && stripped !== effective) {
-            setDefaultCfgUiInput(cfgPath, otherPort, stripped);
+            applyCfgEdit(() => setDefaultCfgUiInput(cfgPath, otherPort, stripped));
             released.push(otherPort);
         }
     }
@@ -3501,9 +3530,10 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             same gamepad indexes from start to finish.
             <strong>2.</strong> Click "Capture a press" for the wanted command, then press the
             button on the gamepad within 30 seconds (MAME picks it up even when its window is
-            not the one in front). <strong>3.</strong> Close MAME when done. The result is written
-            directly to <code>default.cfg</code> (valid for all games, unless a specific game
-            has its own override). <strong>Currently</strong> reflects what is really saved
+            not the one in front). Each press is saved at once to <code>default.cfg</code> (valid
+            for all games, unless a specific game has its own override). <strong>3.</strong>
+            Close MAME when done, from here or from its own window: either way keeps the
+            changes. <strong>Currently</strong> reflects what is really saved
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
             the file, so MAME's own default binding applies again (MAME doesn't need to be
             running for that).</p>
@@ -3678,8 +3708,8 @@ function renderGameRemapCard(
                     MAME picks it up even when its window is not the one in front. The result shows
                     here and is saved at once.</li>
                     <li><strong>Reset</strong> gives a command back its global binding. When you are
-                    done, use <strong>Close MAME</strong> (not the window's own close button, which
-                    would discard the changes).</li>
+                    done, close MAME from here or from its own window: either way keeps the
+                    changes.</li>
                 </ol>
             ` : `
                 <ol class="info">
@@ -7404,7 +7434,8 @@ export function startBoServer(
             // Edits default.cfg directly, no MAME session involved - unlike the per-game reset,
             // which needs the running game's field (tag/mask/defvalue) to find its cfg entry.
             try {
-                removeDefaultCfgUiInput(getDefaultCfgPath(mameInfo.iniPath), portType);
+                const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+                applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
                 res.send(renderForm(
                     {mamePath: config.mamePath}, mameInfo, isAdmin,
                     undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
@@ -7442,7 +7473,7 @@ export function startBoServer(
                     '(is the gamepad connected, and MAME still open?).'};
             if (token) {
                 const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
-                setDefaultCfgUiInput(cfgPath, portType, token);
+                applyCfgEdit(() => setDefaultCfgUiInput(cfgPath, portType, token));
                 const released = releaseTokenFromInGameUiPorts(cfgPath, portType, token);
                 if (released.length) {
                     remapState.releasedFrom = released;
@@ -7559,7 +7590,7 @@ export function startBoServer(
         try {
             const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
             if (action === 'reset') {
-                removeGameCfgOverride(cfgPath, field);
+                applyCfgEdit(() => removeGameCfgOverride(cfgPath, field));
                 res.send(renderGameRemapPage(config, mameInfo, isAdmin, {romName, fieldId}));
                 return;
             }
@@ -7570,7 +7601,7 @@ export function startBoServer(
                 : {romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
                     '(is the gamepad connected, and MAME still open?).'};
             if (token) {
-                setGameCfgOverride(cfgPath, romName, field, token);
+                applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, token));
                 const released = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token);
                 if (released.length) {
                     gameRemapState.releasedFrom = released;
