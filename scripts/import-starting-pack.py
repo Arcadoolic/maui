@@ -3,7 +3,7 @@
 repository).
 
 The single implementation for starting-pack import: both of src/boServer.ts's BO routes
-(`/import`, a manual upload, and `/import/from-url`, browsing repo.maui.afronob.com) spawn this
+(`/import`, a manual upload, and `/import/from-url`, browsing the repository of MAUI-API) spawn this
 script rather than importing in-process, and it can also be run standalone (e.g. over SSH,
 directly on the machine hosting the MAME home) with no BO involved at all. Reads the ZIP as a
 stream: `zipfile` only loads the central directory (a few KB) into memory, and every
@@ -20,20 +20,22 @@ Usage (on the machine hosting the MAME home, e.g. the Pi, after scp'ing the pack
     python3 import-starting-pack.py /home/puckman/mega-starting-pack-20260916.zip
     python3 import-starting-pack.py --yes /home/puckman/mega-starting-pack-20260916.zip
 
-Or straight from repo.maui.afronob.com, no local file needed:
-    MAUI_REPO_USER=admin MAUI_REPO_PASSWORD=... \\
-        python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip -y
+Or straight from the starting-pack repository, no local file needed. The repository checks every
+request against MAUI-API, so it takes the headers of a cabinet (key, token, machine fingerprint)
+or of a service account (key and token only), read from the environment - never from the command
+line, where `ps` and the shell history would show the token:
+    MAUI_REPO_KEY=mk_... MAUI_REPO_TOKEN='12|...' MAUI_REPO_MACHINE=<fingerprint> \\
+        python3 import-starting-pack.py --url https://repo.maui.staging.afronob.com/some-pack.zip -y
 
 With --only, just some games of a pack: only those games' roms/artwork (and the BIOS they need)
 are read, and only they are added to the database and favorites. Combined with --url the pack is
 never downloaded whole: its central directory and the needed entries are fetched with HTTP Range
-requests (the repository must support them - nginx does).
-        python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip \\
+requests (the repository must support them - Caddy does).
+        python3 import-starting-pack.py --url https://repo.maui.staging.afronob.com/some-pack.zip \\
             --only sf2,ffight -y
 """
 
 import argparse
-import base64
 import io
 import json
 import os
@@ -623,6 +625,50 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
 # run unattended on a cabinet's BO instead of requiring an scp'd file already on disk.
 # ---------------------------------------------------------------------------
 
+def repository_headers():
+    """Headers for the repository, from MAUI_REPO_KEY / MAUI_REPO_TOKEN / MAUI_REPO_MACHINE (set by
+    the BO). No machine header for a service account. Empty when nothing is set (a repository
+    without access control, e.g. a local test server)."""
+    key = os.environ.get('MAUI_REPO_KEY', '')
+    token = os.environ.get('MAUI_REPO_TOKEN', '')
+    machine = os.environ.get('MAUI_REPO_MACHINE', '')
+    headers = {}
+    if key:
+        headers['X-Maui-Key'] = key
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    if machine:
+        headers['X-Maui-Machine'] = machine
+    return headers
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """The requests carry the cabinet token: a redirect could hand it to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f'redirect to {newurl} refused', headers, fp)
+
+
+_opener = urllib.request.build_opener(_RefuseRedirects)
+
+
+def open_url(request, timeout=None):
+    return _opener.open(request, timeout=timeout)
+
+
+def describe_http_error(error):
+    """The repository relays MAUI-API's refusals as problem+json: show their stable `code`."""
+    if isinstance(error, urllib.error.HTTPError):
+        try:
+            code = json.loads(error.read().decode('utf-8')).get('code')
+        except (ValueError, AttributeError, OSError):
+            code = None
+        if isinstance(code, str):
+            return f'HTTP {error.code}, refused by MAUI-API ({code})'
+        return f'HTTP {error.code} {error.reason}'
+    return str(error)
+
+
 class HttpRangeFile(io.RawIOBase):
     """Read-only, seekable view of a remote file, backed by HTTP Range requests: what
     zipfile.ZipFile needs to open a pack's central directory and pull individual entries out of
@@ -633,13 +679,10 @@ class HttpRangeFile(io.RawIOBase):
     WINDOW = 4 * 1024 * 1024
     RETRIES = 3
 
-    def __init__(self, url, user='', password=''):
+    def __init__(self, url, headers):
         super().__init__()
         self.url = url
-        self.headers = {}
-        if user or password:
-            credentials = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
-            self.headers['Authorization'] = f'Basic {credentials}'
+        self.headers = headers
         self.position = 0
         self.window_start = 0
         self.window = b''
@@ -656,7 +699,7 @@ class HttpRangeFile(io.RawIOBase):
         last_error = None
         for _ in range(self.RETRIES):
             try:
-                return urllib.request.urlopen(request, timeout=60)
+                return open_url(request, timeout=60)
             except urllib.error.HTTPError:
                 raise
             except (urllib.error.URLError, OSError) as error:
@@ -721,21 +764,18 @@ def emit_progress(phase, done, total):
         print(f'@@PROGRESS {phase} {done} {total}', flush=True)
 
 
-def download_to_tempfile(url, user, password):
+def download_to_tempfile(url, headers):
     """Downloads `url` into a temp .zip file and returns its path. zipfile.ZipFile needs a
     seekable file (it reads the central directory from the end), so true streaming extraction
     straight from an HTTP response isn't possible with the stdlib - download-to-temp-then-open is
     required. Preflights free disk space against Content-Length when the server reports one
     (same 5%-margin convention as check_disk_space()); otherwise lets copyfileobj surface ENOSPC
     cleanly instead of guessing."""
-    request = urllib.request.Request(url)
-    if user or password:
-        credentials = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
-        request.add_header('Authorization', f'Basic {credentials}')
+    request = urllib.request.Request(url, headers=headers)
 
     fd, temp_path = tempfile.mkstemp(suffix='.zip')
     try:
-        with os.fdopen(fd, 'wb') as dst, urllib.request.urlopen(request) as response:
+        with os.fdopen(fd, 'wb') as dst, open_url(request) as response:
             content_length = response.headers.get('Content-Length')
             if content_length:
                 needed = int(content_length) * 1.05
@@ -823,14 +863,9 @@ def main():
                     "unusable for a big pack on a Raspberry Pi).",
     )
     parser.add_argument('pack', nargs='?', help='Path of the starting pack ZIP file (local)')
-    parser.add_argument('--url', help='HTTP(S) URL of the pack to download before importing (repo.maui.afronob.com)')
     parser.add_argument(
-        '--user', help='Basic-auth username for --url - manual testing only, visible in '
-                        '`ps`/the shell history; prefer the MAUI_REPO_USER variable',
-    )
-    parser.add_argument(
-        '--password', help='Basic-auth password for --url - manual testing only, visible '
-                            'in `ps`/the shell history; prefer the MAUI_REPO_PASSWORD variable',
+        '--url', help='HTTP(S) URL of the pack to download before importing (starting-pack repository); '
+                      'credentials from MAUI_REPO_KEY, MAUI_REPO_TOKEN and MAUI_REPO_MACHINE',
     )
     parser.add_argument(
         '--only', help='Comma-separated romNames: import only these games of the pack (their roms, '
@@ -855,13 +890,11 @@ def main():
     if args.url and only:
         # Never downloaded whole: zipfile reads the central directory and each wanted entry
         # through HTTP Range requests (see HttpRangeFile).
-        user = args.user or os.environ.get('MAUI_REPO_USER', '')
-        password = args.password or os.environ.get('MAUI_REPO_PASSWORD', '')
         print(f'[import-starting-pack] Reading: {args.url} ({len(only)} game(s) wanted)')
         try:
-            remote = HttpRangeFile(args.url, user, password)
+            remote = HttpRangeFile(args.url, repository_headers())
         except (urllib.error.URLError, OSError, RuntimeError) as error:
-            fail(f'Cannot read the pack: {error}')
+            fail(f'Cannot read the pack: {describe_http_error(error)}')
             return
         try:
             _run_import(remote, args.yes, only, args.url)
@@ -871,13 +904,11 @@ def main():
 
     temp_path = None
     if args.url:
-        user = args.user or os.environ.get('MAUI_REPO_USER', '')
-        password = args.password or os.environ.get('MAUI_REPO_PASSWORD', '')
         print(f'[import-starting-pack] Downloading: {args.url}')
         try:
-            temp_path = download_to_tempfile(args.url, user, password)
+            temp_path = download_to_tempfile(args.url, repository_headers())
         except (urllib.error.URLError, OSError, RuntimeError) as error:
-            fail(f'Download failed: {error}')
+            fail(f'Download failed: {describe_http_error(error)}')
     pack_path = temp_path if args.url else args.pack
 
     try:

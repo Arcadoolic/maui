@@ -280,3 +280,30 @@ describe('transient failures', () => {
         expect(await client.heartbeat()).toEqual({kind: 'unavailable', reason: 'timeout'});
     });
 });
+
+describe('repository', () => {
+    it('gets the repository URL announced by the API', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {url: 'https://repo.example.org'}));
+        expect(await client.repository()).toEqual({kind: 'ok', value: {url: 'https://repo.example.org'}});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/repository');
+        expect(init.method).toBe('GET');
+    });
+
+    it('accepts a null URL: this server has no repository', async () => {
+        const {client} = clientReturning(json(200, {url: null}));
+        expect(await client.repository()).toEqual({kind: 'ok', value: {url: null}});
+    });
+
+    it('treats any other body as an invalid response', async () => {
+        for (const body of [{}, {url: 42}, {address: 'https://repo.example.org'}, []]) {
+            const {client} = clientReturning(json(200, body));
+            expect(await client.repository()).toEqual({kind: 'unavailable', reason: 'invalid_response', status: 200});
+        }
+    });
+
+    it('maps a rejection to its problem code', async () => {
+        const {client} = clientReturning(problem(problems.insufficientAbility));
+        expect(await client.repository()).toEqual({kind: 'rejected', status: 403, code: 'insufficient_ability'});
+    });
+});

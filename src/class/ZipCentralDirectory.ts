@@ -75,6 +75,7 @@ export async function fetchRemoteZipEntrySizes(
     try {
         const tailResponse = await fetchImpl(url, {
             headers: {...headers, Range: `bytes=-${ZIP_TAIL_LENGTH}`},
+            redirect: 'error',
             signal: AbortSignal.timeout(10_000),
         });
         // 200 = the server ignored the range and is sending the whole file: not worth reading.
@@ -95,6 +96,7 @@ export async function fetchRemoteZipEntrySizes(
         }
         const directoryResponse = await fetchImpl(url, {
             headers: {...headers, Range: `bytes=${end.directoryOffset}-${end.directoryOffset + end.directorySize - 1}`},
+            redirect: 'error',
             signal: AbortSignal.timeout(10_000),
         });
         if (directoryResponse.status !== 206) {

@@ -3,9 +3,9 @@ import {join} from 'path';
 import * as os from 'os';
 import {decryptSecret, encryptSecret, isEncryptedSecret} from '@/class/SecretBox';
 
-// Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, repoUser...) stay
-// in the clear: they are shown back in the BO forms, the passwords are not.
-const SECRET_FIELDS = ['ssDevPassword', 'ssUserPassword', 'repoPassword'] as const;
+// Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
+// the clear: they are shown back in the BO forms, the passwords are not.
+const SECRET_FIELDS = ['ssDevPassword', 'ssUserPassword'] as const;
 const FILE_MODE = 0o600;
 
 // This app's own state directory - separate from ~/.mame (see Helpers.getMameHomePath()),
@@ -46,12 +46,9 @@ export default class Config {
     public ssUserId: string = '';
     public ssUserPassword: string = '';
 
-    // Starting-pack repository (repo.maui.afronob.com or equivalent) - basic-auth credentials
-    // used both to browse its index.json from the BO and to download a pack via
-    // scripts/import-starting-pack.py --url.
-    public repoUrl: string = '';
-    public repoUser: string = '';
-    public repoPassword: string = '';
+    // No starting-pack repository settings: its URL and credentials come from ONLINE mode (see
+    // RepositoryAuth.ts). The repoUrl/repoUser/repoPassword keys of older files are dropped at the
+    // next save().
 
     // Preferred bezel aspect ratio when fetching bezel artwork from ScreenScraper - 16:9 default
     // since new cabinet builds mostly use widescreen LCD monitors rather than 4:3 CRTs.
@@ -108,10 +105,6 @@ export default class Config {
             this.ssUserId = configFile.ssUserId || '';
             this.ssUserPassword = configFile.ssUserPassword || '';
 
-            this.repoUrl = configFile.repoUrl || '';
-            this.repoUser = configFile.repoUser || '';
-            this.repoPassword = configFile.repoPassword || '';
-
             this.bezelAspect = configFile.bezelAspect === '4:3' ? '4:3' : '16:9';
 
             this.openDevTools = configFile.openDevTools === true;
@@ -153,9 +146,6 @@ export default class Config {
                 ssSoftName: this.ssSoftName,
                 ssUserId: this.ssUserId,
                 ssUserPassword: secrets.ssUserPassword,
-                repoUrl: this.repoUrl,
-                repoUser: this.repoUser,
-                repoPassword: secrets.repoPassword,
                 bezelAspect: this.bezelAspect,
                 openDevTools: this.openDevTools,
                 fullscreen: this.fullscreen,
