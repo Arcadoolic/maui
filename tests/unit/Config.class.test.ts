@@ -1,8 +1,9 @@
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
-import {mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync} from 'fs';
+import {mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync} from 'fs';
 import {join} from 'path';
 import {tmpdir} from 'os';
 import Config from '@/class/Config.class';
+import {encryptSecret, generateDataKey, isEncryptedSecret} from '@/class/SecretBox';
 
 // Config.class.ts fixes its directory at os.homedir()/.mame-awesome-ui, with no
 // NODE_ENV branching (refacto-2026 dropped the old dev-vs-production split, see
@@ -301,5 +302,78 @@ describe('Config.delete', () => {
     it('does not throw when there is no file to delete', () => {
         const config = new Config();
         expect(() => config.delete()).not.toThrow();
+    });
+});
+
+describe('Config secrets encryption', () => {
+    const plaintextFile = {
+        mamePath: '/mame', mameBinaryName: 'mame',
+        ssDevId: 'dev', ssDevPassword: 'devpass', ssUserId: 'user', ssUserPassword: 'userpass',
+        repoUser: 'repo', repoPassword: 'repopass',
+    };
+
+    it('writes the passwords encrypted with a data key, identifiers in the clear', () => {
+        new Config().exist(); // creates the app data directory
+        writeFileSync(configPath, JSON.stringify(plaintextFile));
+        const dataKey = generateDataKey();
+
+        const config = new Config(dataKey);
+        config.load();
+        expect(config.hasPlaintextSecrets()).toBe(true);
+        config.save();
+
+        const saved = JSON.parse(readFileSync(configPath, 'utf8'));
+        expect(saved.ssDevId).toBe('dev');
+        expect(saved.repoUser).toBe('repo');
+        for (const field of ['ssDevPassword', 'ssUserPassword', 'repoPassword']) {
+            expect(isEncryptedSecret(saved[field])).toBe(true);
+        }
+
+        const reloaded = new Config(dataKey);
+        reloaded.load();
+        expect(reloaded.hasPlaintextSecrets()).toBe(false);
+        expect([reloaded.ssDevPassword, reloaded.ssUserPassword, reloaded.repoPassword])
+            .toEqual(['devpass', 'userpass', 'repopass']);
+    });
+
+    it('carries encrypted values untouched through a load/save without a data key', () => {
+        new Config().exist();
+        writeFileSync(configPath, JSON.stringify(plaintextFile));
+        const encrypting = new Config(generateDataKey());
+        encrypting.load();
+        encrypting.save();
+        const before = JSON.parse(readFileSync(configPath, 'utf8'));
+
+        const config = new Config();
+        config.load();
+        config.fullscreen = true;
+        config.save();
+
+        const after = JSON.parse(readFileSync(configPath, 'utf8'));
+        expect(after.ssDevPassword).toBe(before.ssDevPassword);
+        expect(after.repoPassword).toBe(before.repoPassword);
+    });
+
+    it('reads a value encrypted with another key as unset', () => {
+        new Config().exist();
+        writeFileSync(configPath, JSON.stringify({
+            ...plaintextFile, repoPassword: encryptSecret(generateDataKey(), 'other cabinet'),
+        }));
+
+        const config = new Config(generateDataKey());
+        config.load();
+
+        expect(config.repoPassword).toBe('');
+    });
+
+    it.skipIf(process.platform === 'win32')('writes the file owner-only, even one created wider', () => {
+        new Config().exist();
+        writeFileSync(configPath, JSON.stringify(plaintextFile), {mode: 0o644});
+
+        const config = new Config();
+        config.load();
+        config.save();
+
+        expect(statSync(configPath).mode & 0o777).toBe(0o600);
     });
 });

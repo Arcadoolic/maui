@@ -30,6 +30,14 @@ export default class BoUser extends Model<BoUser> {
     })
     public passwordHash!: string;
 
+    // Data key of the config file's encrypted credentials, wrapped with this account's password
+    // (see SecretBox.ts) - null until the first sign-in with a non-default password.
+    @Column({
+        type: DataType.TEXT,
+        allowNull: true,
+    })
+    public secretsKey!: string | null;
+
     @CreatedAt
     public creationDate!: Date;
 
