@@ -2,10 +2,11 @@
 """Import a MAUI starting pack ZIP (built by the starting pack tooling, which lives outside this
 repository).
 
-The single implementation for starting-pack import: both of src/boServer.ts's BO routes
-(`/import`, a manual upload, and `/import/from-url`, browsing the repository of MAUI-API) spawn this
-script rather than importing in-process, and it can also be run standalone (e.g. over SSH,
-directly on the machine hosting the MAME home) with no BO involved at all. Reads the ZIP as a
+The single implementation for starting-pack import: the BO's repository routes
+(src/boServer.ts: the configuration pack, the starter pack and `/import/from-url`) spawn this
+script rather than importing in-process, and it can also be run standalone on a local ZIP (e.g.
+over SSH, directly on the machine hosting the MAME home) with no BO involved at all - the only
+way left to import a pack without ONLINE mode. Reads the ZIP as a
 stream: `zipfile` only loads the central directory (a few KB) into memory, and every
 rom/marquee/flyer/logo/config file is copied one entry at a time via shutil.copyfileobj - memory
 use stays flat regardless of the pack's total size, and `zipfile` handles ZIP64 archives (>4 GiB
@@ -858,9 +859,9 @@ def main():
         pass
 
     parser = argparse.ArgumentParser(
-        description="Imports a MAUI starting pack directly onto the disk, bypassing "
-                    "the BO form (Multer 500 MiB limit + full RAM double-buffering - "
-                    "unusable for a big pack on a Raspberry Pi).",
+        description="Imports a MAUI starting pack (a local ZIP, or one from the starting-pack "
+                    "repository) into the MAME home, streaming it: memory use stays flat even "
+                    "for a big pack on a Raspberry Pi.",
     )
     parser.add_argument('pack', nargs='?', help='Path of the starting pack ZIP file (local)')
     parser.add_argument(

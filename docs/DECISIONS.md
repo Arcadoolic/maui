@@ -394,7 +394,10 @@ pack download button, and `/import/from-url/packs`, `/import/from-url`,
 session could post directly). The starter pack (`starter-pack.zip`, a few
 curated games) sits next to the configuration pack in MAME > Import, not
 Advanced-only, and installs the configuration pack first.
-Manual ZIP import (MAME > Import) stays available OFFLINE. `repoUrl`,
+There is no manual starting-pack import anymore (2026-09-27): MAME experts
+set the emulator up themselves, everyone else turns ONLINE on; OFFLINE, the
+Import cards only say so. `scripts/import-starting-pack.py` still imports a
+local ZIP when run by hand. `repoUrl`,
 `repoUser` and `repoPassword` are gone from `Config`: older files load, and
 the keys disappear at the next save. Cabinets not updated lose repository
 access when the old Basic Auth domain is removed.

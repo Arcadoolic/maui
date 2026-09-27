@@ -144,32 +144,6 @@ interface RepoPack {
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
 
-/**
- * mame.ini/ui.ini directory settings eligible for a plain folder import (as opposed to the
- * starting pack roms/manifest.json flow below): each holds files mame itself reads/writes there,
- * with no per-file metadata to interpret, so unlike a rom a manifest is never needed to import
- * one - the zip just needs a top-level folder named after `zipFolder` (mame's own conventional
- * basename for that directory), copied wholesale into wherever `iniKey` currently resolves to on
- * this mame home. Deliberately a fixed table, not "every ini key": most other settings are
- * multi-path search lists (rompath, artpath, cheatpath...) or non-directory values, and blindly
- * matching a zip folder name against any of those wouldn't be safe or meaningful. Only the
- * *value* each key resolves to is dynamic (read from mame.ini's own -showconfig output and
- * ui.ini, merged - see the /import route) - the key names and their zip folder names stay fixed
- * here. `categorypath`/`folders` is ui.ini's own directory (default name "folders") for
- * genre.ini/Multiplayer.ini/category.ini - the one from the original "importer des folders/"
- * ask; the rest come from mame.ini.
- */
-const IMPORTABLE_MAME_DIRECTORIES: {zipFolder: string; iniKey: string}[] = [
-    {zipFolder: 'cfg', iniKey: 'cfg_directory'},
-    {zipFolder: 'nvram', iniKey: 'nvram_directory'},
-    {zipFolder: 'diff', iniKey: 'diff_directory'},
-    {zipFolder: 'comments', iniKey: 'comment_directory'},
-    {zipFolder: 'inp', iniKey: 'input_directory'},
-    {zipFolder: 'sta', iniKey: 'state_directory'},
-    {zipFolder: 'snap', iniKey: 'snapshot_directory'},
-    {zipFolder: 'folders', iniKey: 'categorypath'},
-];
-
 function findMameBinary(mamePath: string): string|null {
     for (const name of MAME_BINARY_NAMES) {
         if (existsSync(join(mamePath, name))) {
@@ -4379,8 +4353,6 @@ function renderForm(
         sections.push({
             id: 'import',
             label: 'Import',
-            // renderPythonWarning() is meant to sit right above renderImportCard() (see its own
-            // comment) - not a section of its own.
             html: renderImportSection(mameInfo, importError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
@@ -5767,7 +5739,7 @@ function isPython3Available(): boolean {
 }
 
 /**
- * Shown right above renderImportCard() wherever it renders (initial page load and both
+ * Shown at the top of the Import section wherever it renders (initial page load and the
  * post-import re-renders), so a missing python3 surfaces proactively instead of only once an
  * import is attempted.
  */
@@ -5779,31 +5751,11 @@ function renderPythonWarning(): string {
         + 'is unavailable.</p>';
 }
 
-function renderImportCard(error?: string): string {
-    return `
-        <section class="card">
-            <h2>Import a starting pack</h2>
-            <p class="info">Fully replaces the games/roms/artwork present in
-            the pack and adds its games to MAME's favorites (existing favorites are kept). Other
-            games, players and scores are left untouched.</p>
-            <p class="info">A ZIP can also contain only ${IMPORTABLE_MAME_DIRECTORIES
-                .map(d => escapeHtml(d.zipFolder)).join(', ')} folders (copied as-is into the
-            current mame configuration) - in that case, no manifest.json is needed.</p>
-            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <form method="post" action="/import" enctype="multipart/form-data" data-stream>
-                <label for="pack">ZIP file</label>
-                <input type="file" id="pack" name="pack" accept=".zip" required>
-                <button type="submit">Import</button>
-            </form>
-        </section>
-    `;
-}
-
 /**
  * The configuration pack (see ConfPack.ts): the category files the carousel needs. Shown outside
  * Advanced configuration too - without it the carousel has no genres. Downloaded from the pack
- * repository in ONLINE mode only (see RepositoryAuth.ts); it can always be imported by hand with
- * the form below it, being a plain `folders/` ZIP.
+ * repository in ONLINE mode only (see RepositoryAuth.ts). There is no manual import: MAME experts
+ * set the emulator up themselves, everyone else goes ONLINE.
  */
 function renderConfPackCard(mameInfo: MameInfo): string {
     const online = isOnlineActive();
@@ -5816,8 +5768,7 @@ function renderConfPackCard(mameInfo: MameInfo): string {
         ? `<form method="post" action="/import/conf-pack" data-stream>
                 <button type="submit">${missing.length ? 'Install' : 'Update'} the configuration pack</button>
             </form>`
-        : `<p class="info"><em>Import ${escapeHtml(CONF_PACK_FILENAME)} with the form below, or turn ONLINE
-            mode on (MAUI tab) to download it.</em></p>`;
+        : '<p class="info"><em>Turn ONLINE mode on (MAUI tab) to download it.</em></p>';
     return `
         <section class="card">
             <h2>Configuration pack</h2>
@@ -5839,8 +5790,7 @@ function renderStarterPackCard(): string {
         ? `<form method="post" action="/import/starter-pack" data-stream>
                 <button type="submit">Install the starter pack</button>
             </form>`
-        : `<p class="info"><em>Import ${escapeHtml(STARTER_PACK_FILENAME)} with the form below, or turn ONLINE
-            mode on (MAUI tab) to download it.</em></p>`;
+        : '<p class="info"><em>Turn ONLINE mode on (MAUI tab) to download it.</em></p>';
     return `
         <section class="card">
             <h2>Starter pack</h2>
@@ -5853,10 +5803,13 @@ function renderStarterPackCard(): string {
 
 /**
  * The MAME tab's Import section, also re-rendered after each import: renderPythonWarning() sits
- * right above the cards that run the import script.
+ * right above the cards that run the import script. `error`: a failed repository action.
  */
-function renderImportSection(mameInfo: MameInfo, importError?: string): string {
-    return renderPythonWarning() + renderConfPackCard(mameInfo) + renderStarterPackCard() + renderImportCard(importError);
+function renderImportSection(mameInfo: MameInfo, error?: string): string {
+    return renderPythonWarning()
+        + (error ? `<p class="error flash">${escapeHtml(error)}</p>` : '')
+        + renderConfPackCard(mameInfo)
+        + renderStarterPackCard();
 }
 
 function humanFileSize(bytes: number): string {
@@ -6392,9 +6345,8 @@ function renderRepoImportCard(
     return `
         <section class="card">
             <h2>Starting pack repository</h2>
-            <p class="info">Browses and imports a starting pack directly from the repository of
-            MAUI-API, without going through the upload (MAME > Import tab) - useful for a pack too
-            large for a browser form.</p>
+            <p class="info">Browses the starting packs of the repository of MAUI-API and imports
+            the games you pick.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             ${url ? `<p class="info">Repository: ${escapeHtml(url)}</p>` : ''}
@@ -6693,10 +6645,7 @@ export function startBoServer(
         }
         res.redirect('/account');
     });
-    // Disk storage, not memory: the import route hands the upload straight to
-    // scripts/import-starting-pack.py by path, which streams it instead of buffering it in RAM -
-    // the whole reason that script exists (see its own docstring). The temp file is removed by
-    // the /import handler once the script finishes.
+    // Disk storage for the MAUI configuration import (/maui/import).
     const upload = multer({
         storage: multer.diskStorage({
             destination: (_req, _file, cb) => cb(null, os.tmpdir()),
@@ -7388,70 +7337,10 @@ export function startBoServer(
         res.end();
     });
 
-    // Starting packs are MAME-only content, imported from the MAME tab (see renderForm()) -
-    // kept as a redirect rather than a 404 for anyone with the old standalone page bookmarked.
+    // Starting packs come from the repository only (MAME > Import, Games > Repository): kept as a
+    // redirect rather than a 404 for anyone with the old standalone upload page bookmarked.
     app.get('/import', (req, res) => {
         res.redirect('/');
-    });
-
-    app.post('/import', upload.single('pack'), async (req, res) => {
-        const config = new Config();
-        config.load();
-        const values: ConfigFormValues = {mamePath: config.mamePath || ''};
-        const isAdvanced = req.session.boAdvanced === true;
-
-        if (!req.file) {
-            res.status(400).send(renderForm(
-                values, getMameInfo(config), isAdvanced, undefined, undefined, undefined, 'No file received.',
-            ));
-            return;
-        }
-
-        // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below - macOS
-        // in particular doesn't always ship a working python3 without Xcode CLT installed.
-        if (!isPython3Available()) {
-            rmSync(req.file.path, {force: true});
-            res.status(500).send(renderForm(
-                values, getMameInfo(config), isAdvanced, undefined, undefined, undefined,
-                'python3 not found on this machine - unable to import a starting pack.',
-            ));
-            return;
-        }
-
-        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-        res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame', getViewer(req)));
-
-        // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
-        // the actual import both happen inside the script now - it mirrors this same logic and
-        // reports failures through its own stdout/stderr lines, same as /import/from-url below.
-        const started = await runImportScript(
-            res, `Import in progress… (${escapeHtml(req.file.originalname)})`, [req.file.path], {...process.env},
-        );
-        rmSync(req.file.path, {force: true});
-        if (!started) {
-            return;
-        }
-
-        streamFavoritesRefreshAfterImport(res, config);
-
-        // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
-        // above reflect what the import just installed, instead of a "Retour" link to a
-        // separate page.
-        const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo));
-        res.write(renderMameInfoCard(refreshedMameInfo));
-        // Same gating as renderForm(): import only makes sense once the binary's configured and
-        // validated (see there for why).
-        if (!refreshedMameInfo.error) {
-            res.write(renderImportSection(refreshedMameInfo));
-        }
-        res.write(renderPageTail());
-        res.end();
-
-        // Back through Init.vue, which re-seeds categories and re-syncs games from the new
-        // favorites.ini/genre.ini - the front would otherwise keep showing the pre-import list.
-        reloadFront();
     });
 
     // Every route that downloads from the repository: ONLINE mode only (see RepositoryAuth.ts).
