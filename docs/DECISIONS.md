@@ -372,3 +372,32 @@ than the interval.
 **ONLINE status in the cabinet UI, 2026-09-25: none, BO only.** An icon would
 need a main-to-renderer channel in the Vue front end for a need nobody has
 expressed yet. Players do not see that the cabinet is offline.
+
+**Starting-pack repository, 2026-09-26: through MAUI-API, ONLINE only.**
+(`maui-api` D46.) The repository no longer has a Basic Auth account copied into
+every cabinet: its web server checks each request against MAUI-API, so the
+cabinet sends its usual `X-Maui-Key`, Bearer and `X-Maui-Machine` headers
+(`src/class/RepositoryAuth.ts`). Its URL is announced by MAUI-API
+(`GET /repository`) and never typed in the BO: the repository only accepts
+the cabinets of the API it asks, so a separate field could only produce
+mismatches (a staging API with a production repository), and a wrong or
+malicious URL would receive the token. The URL is asked for before each
+repository action, without cache, so a change on the server applies at once.
+It must be `https:`, or `http:` only when the API itself is (local
+development), and repository requests never follow redirects (`redirect:
+'error'` in Node, a refusing redirect handler in
+`scripts/import-starting-pack.py`, which gets the credentials through its
+environment, never argv). Without ONLINE on, nothing downloads from the
+repository: no Games > Repository subtab, no configuration pack or starter
+pack download button, and `/import/from-url/packs`, `/import/from-url`,
+`/import/conf-pack` and `/import/starter-pack` answer 403 (an Advanced
+session could post directly). The starter pack (`starter-pack.zip`, a few
+curated games) sits next to the configuration pack in MAME > Import, not
+Advanced-only, and installs the configuration pack first.
+There is no manual starting-pack import anymore (2026-09-27): MAME experts
+set the emulator up themselves, everyone else turns ONLINE on; OFFLINE, the
+Import cards only say so. `scripts/import-starting-pack.py` still imports a
+local ZIP when run by hand. `repoUrl`,
+`repoUser` and `repoPassword` are gone from `Config`: older files load, and
+the keys disappear at the next save. Cabinets not updated lose repository
+access when the old Basic Auth domain is removed.

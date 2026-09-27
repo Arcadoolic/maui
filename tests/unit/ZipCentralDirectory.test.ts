@@ -87,6 +87,18 @@ describe('zip central directory', () => {
             expect(log[1]).toMatch(/^bytes=\d+-\d+$/);
         });
 
+        it('never follows a redirect: the headers carry the cabinet token', async () => {
+            const inits: RequestInit[] = [];
+            const server = (async (_url: unknown, init?: RequestInit) => {
+                inits.push(init ?? {});
+                return rangeServer([])(_url as string, init);
+            }) as unknown as typeof fetch;
+
+            await fetchRemoteZipEntrySizes('http://repo/pack.zip', {}, server);
+
+            expect(inits.map(init => init.redirect)).toEqual(['error']);
+        });
+
         it('gives up when the server ignores ranges, instead of reading the whole file', async () => {
             expect(await fetchRemoteZipEntrySizes('http://repo/pack.zip', {}, rangeServer([], false))).toBeNull();
         });

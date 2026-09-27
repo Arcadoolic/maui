@@ -1,10 +1,10 @@
-import {ConfigurationStringError, parseConfigurationString, toApiBaseUrl} from '@/class/ConfigurationString';
-import {computeMachineFingerprint, readOsMachineId, type MachineIdSources} from '@/class/MachineFingerprint';
+import {ConfigurationStringError, parseConfigurationString} from '@/class/ConfigurationString';
+import type {MachineIdSources} from '@/class/MachineFingerprint';
+import {buildApiCredentials, isOnlineConfigured} from '@/class/OnlineCredentials';
 import {MauiApiClient, type ApiFailure, type ApiResult, type PingResult} from '@/class/MauiApiClient';
 import type {OnlineStatus} from '@/class/OnlineSession';
 import {
     OnlineSettingsError,
-    ensureLocalUuid,
     getOnlineSettingsPath,
     readOnlineSettings,
     resetCorruptOnlineSettings,
@@ -51,10 +51,6 @@ function unreadableMessage(error: OnlineSettingsError): string {
     return `${error.message}. Fix or delete it: deleting it makes this cabinet a new machine for MAUI-API.`;
 }
 
-function isConfigured(settings: OnlineSettings): boolean {
-    return settings.url !== '' && settings.key !== '' && settings.token !== '';
-}
-
 // Reads the settings, turning a corrupt file into a message instead of an exception.
 function readSettings(path: string): OnlineSettings | {unreadable: string} {
     try {
@@ -72,7 +68,7 @@ export function getOnlineView(path: string = getOnlineSettingsPath()): OnlineVie
     if ('unreadable' in settings) {
         return {state: 'unreadable', message: settings.unreadable};
     }
-    return isConfigured(settings)
+    return isOnlineConfigured(settings)
         ? {state: 'configured', url: settings.url, key: settings.key, enabled: settings.enabled}
         : {state: 'unconfigured'};
 }
@@ -117,7 +113,7 @@ export function setOnlineEnabled(enabled: boolean, path: string = getOnlineSetti
     if ('unreadable' in settings) {
         return {level: 'error', message: settings.unreadable};
     }
-    if (enabled && !isConfigured(settings)) {
+    if (enabled && !isOnlineConfigured(settings)) {
         return {level: 'error', message: 'Paste a configuration string first.'};
     }
     writeOnlineSettings({...settings, enabled}, path);
@@ -194,17 +190,10 @@ export async function testConnection(
     if ('unreadable' in settings) {
         return {level: 'error', message: settings.unreadable};
     }
-    if (!isConfigured(settings)) {
+    if (!isOnlineConfigured(settings)) {
         return {level: 'error', message: 'Paste a configuration string first.'};
     }
 
-    const {localUuid} = ensureLocalUuid(path);
-    const osMachineId = await readOsMachineId(deps.platform, deps.machineIdSources);
-    const client = new MauiApiClient({
-        baseUrl: toApiBaseUrl(settings.url),
-        key: settings.key,
-        token: settings.token,
-        fingerprint: computeMachineFingerprint(localUuid, osMachineId),
-    }, {fetchImpl: deps.fetchImpl});
+    const client = new MauiApiClient(await buildApiCredentials(settings, path, deps), {fetchImpl: deps.fetchImpl});
     return describePing(await client.ping(), settings.url);
 }

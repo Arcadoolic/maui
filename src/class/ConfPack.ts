@@ -8,6 +8,12 @@
 
 export const CONF_PACK_FILENAME = 'mame-conf-pack.zip';
 
+/**
+ * The starter pack: a small curated game pack at the root of the repository, offered next to the
+ * configuration pack for a first installation. Still a game pack: also listed in Games > Repository.
+ */
+export const STARTER_PACK_FILENAME = 'starter-pack.zip';
+
 /** Where each required file of the pack is found, null when missing (see MameInfo). */
 export interface ConfPackPaths {
     catverIniPath: string | null;

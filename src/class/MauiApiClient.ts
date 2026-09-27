@@ -1,4 +1,4 @@
-// Client for the three Lot 1 MAUI-API calls (contract: maui-api docs/openapi.yaml). Never throws:
+// Client for the MAUI-API calls (contract: maui-api docs/openapi.yaml). Never throws:
 // every outcome is an ApiResult, so a failing API can never break MAUI, which stays usable in
 // LOCAL mode. Branches on the problem `code`, never on `title` or `detail`, as the contract asks.
 
@@ -35,6 +35,11 @@ export interface StartupReport {
 export interface StartupResult {
     id: string;
     receivedAt: string;
+}
+
+export interface RepositoryInfo {
+    // Base URL of the starting-pack repository, null when this server has none.
+    url: string | null;
 }
 
 export type ApiResult<T> =
@@ -110,6 +115,13 @@ function parseStartup(body: unknown): StartupResult | null {
     return {id: body.id, receivedAt: body.received_at};
 }
 
+function parseRepository(body: unknown): RepositoryInfo | null {
+    if (!isObject(body) || !(typeof body.url === 'string' || body.url === null)) {
+        return null;
+    }
+    return {url: body.url};
+}
+
 function isTimeout(error: unknown): boolean {
     return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
 }
@@ -141,6 +153,10 @@ export class MauiApiClient {
 
     public heartbeat(): Promise<ApiResult<void>> {
         return this.call('POST', '/heartbeat', 204, async () => undefined);
+    }
+
+    public repository(): Promise<ApiResult<RepositoryInfo>> {
+        return this.call('GET', '/repository', 200, async response => parseRepository(await readJson(response)));
     }
 
     private headers(hasBody: boolean): Record<string, string> {

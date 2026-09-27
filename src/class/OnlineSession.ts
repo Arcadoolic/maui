@@ -1,14 +1,13 @@
 import {release} from 'os';
-import {toApiBaseUrl} from '@/class/ConfigurationString';
-import {computeMachineFingerprint, readOsMachineId, type MachineIdSources} from '@/class/MachineFingerprint';
+import type {MachineIdSources} from '@/class/MachineFingerprint';
 import {MauiApiClient, type ApiFailure, type ApiResult, type StartupReport} from '@/class/MauiApiClient';
 import {
     OnlineSettingsError,
-    ensureLocalUuid,
     getOnlineSettingsPath,
     readOnlineSettings,
     type OnlineSettings,
 } from '@/class/OnlineSettings';
+import {buildApiCredentials, isOnlineConfigured} from '@/class/OnlineCredentials';
 import {readOsName} from '@/class/OsName';
 
 // ONLINE mode for one run of MAUI: a startup report, then a heartbeat at a fixed interval (no
@@ -42,10 +41,6 @@ export interface OnlineSessionDeps {
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
 const idle = (state: OnlineState): OnlineStatus => ({state, startupId: null, lastSuccessAt: null, lastFailure: null});
-
-function isConfigured(settings: OnlineSettings): boolean {
-    return settings.url !== '' && settings.key !== '' && settings.token !== '';
-}
 
 export class OnlineSession {
     private status: OnlineStatus = idle('disabled');
@@ -94,7 +89,7 @@ export class OnlineSession {
             this.status = idle('disabled');
             return;
         }
-        if (!isConfigured(settings)) {
+        if (!isOnlineConfigured(settings)) {
             this.status = idle('not_configured');
             return;
         }
@@ -125,14 +120,9 @@ export class OnlineSession {
     }
 
     private async createClient(settings: OnlineSettings): Promise<MauiApiClient> {
-        const {localUuid} = ensureLocalUuid(this.settingsPath);
-        const osMachineId = await readOsMachineId(this.deps.platform, this.deps.machineIdSources);
-        return new MauiApiClient({
-            baseUrl: toApiBaseUrl(settings.url),
-            key: settings.key,
-            token: settings.token,
-            fingerprint: computeMachineFingerprint(localUuid, osMachineId),
-        }, {fetchImpl: this.deps.fetchImpl});
+        return new MauiApiClient(
+            await buildApiCredentials(settings, this.settingsPath, this.deps), {fetchImpl: this.deps.fetchImpl},
+        );
     }
 
     private async startupReport(): Promise<StartupReport> {

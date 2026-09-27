@@ -117,7 +117,7 @@ describe('Config.load', () => {
         expect(config.ssUserPassword).toBe('');
     });
 
-    it('reads the starting-pack repo credentials, defaulting to empty strings when absent', () => {
+    it('drops the former starting-pack repository settings (the URL now comes from MAUI-API)', () => {
         new Config();
         writeFileSync(configPath, JSON.stringify({
             mamePath: '/opt/mame',
@@ -128,17 +128,14 @@ describe('Config.load', () => {
         }));
 
         const config = new Config();
-        config.load();
-        expect(config.repoUrl).toBe('https://repo.maui.afronob.com');
-        expect(config.repoUser).toBe('admin');
-        expect(config.repoPassword).toBe('secret');
+        expect(config.load()).toBe(true);
+        expect(config.mamePath).toBe('/opt/mame');
+        config.save();
 
-        const withoutRepo = new Config();
-        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
-        withoutRepo.load();
-        expect(withoutRepo.repoUrl).toBe('');
-        expect(withoutRepo.repoUser).toBe('');
-        expect(withoutRepo.repoPassword).toBe('');
+        const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+        expect(raw).not.toHaveProperty('repoUrl');
+        expect(raw).not.toHaveProperty('repoUser');
+        expect(raw).not.toHaveProperty('repoPassword');
     });
 
     it('defaults bezelAspect to 16:9 unless the file says exactly 4:3', () => {
@@ -214,9 +211,6 @@ describe('Config.save', () => {
         written.mamePath = '/opt/mame';
         written.mameBinaryName = 'mame64';
         written.ssSoftName = 'mame-awesome-ui';
-        written.repoUrl = 'https://repo.maui.afronob.com';
-        written.repoUser = 'admin';
-        written.repoPassword = 'secret';
         written.bezelAspect = '4:3';
         written.openDevTools = true;
         written.fullscreen = true;
@@ -229,9 +223,6 @@ describe('Config.save', () => {
         expect(read.mamePath).toBe('/opt/mame');
         expect(read.mameBinaryName).toBe('mame64');
         expect(read.ssSoftName).toBe('mame-awesome-ui');
-        expect(read.repoUrl).toBe('https://repo.maui.afronob.com');
-        expect(read.repoUser).toBe('admin');
-        expect(read.repoPassword).toBe('secret');
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(true);
@@ -249,9 +240,6 @@ describe('Config.save', () => {
             'mameBinaryName',
             'mamePath',
             'openDevTools',
-            'repoPassword',
-            'repoUrl',
-            'repoUser',
             'ssDevId',
             'ssDevPassword',
             'ssSoftName',
@@ -309,7 +297,6 @@ describe('Config secrets encryption', () => {
     const plaintextFile = {
         mamePath: '/mame', mameBinaryName: 'mame',
         ssDevId: 'dev', ssDevPassword: 'devpass', ssUserId: 'user', ssUserPassword: 'userpass',
-        repoUser: 'repo', repoPassword: 'repopass',
     };
 
     it('writes the passwords encrypted with a data key, identifiers in the clear', () => {
@@ -324,16 +311,15 @@ describe('Config secrets encryption', () => {
 
         const saved = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(saved.ssDevId).toBe('dev');
-        expect(saved.repoUser).toBe('repo');
-        for (const field of ['ssDevPassword', 'ssUserPassword', 'repoPassword']) {
+        expect(saved.ssUserId).toBe('user');
+        for (const field of ['ssDevPassword', 'ssUserPassword']) {
             expect(isEncryptedSecret(saved[field])).toBe(true);
         }
 
         const reloaded = new Config(dataKey);
         reloaded.load();
         expect(reloaded.hasPlaintextSecrets()).toBe(false);
-        expect([reloaded.ssDevPassword, reloaded.ssUserPassword, reloaded.repoPassword])
-            .toEqual(['devpass', 'userpass', 'repopass']);
+        expect([reloaded.ssDevPassword, reloaded.ssUserPassword]).toEqual(['devpass', 'userpass']);
     });
 
     it('carries encrypted values untouched through a load/save without a data key', () => {
@@ -351,19 +337,19 @@ describe('Config secrets encryption', () => {
 
         const after = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(after.ssDevPassword).toBe(before.ssDevPassword);
-        expect(after.repoPassword).toBe(before.repoPassword);
+        expect(after.ssUserPassword).toBe(before.ssUserPassword);
     });
 
     it('reads a value encrypted with another key as unset', () => {
         new Config().exist();
         writeFileSync(configPath, JSON.stringify({
-            ...plaintextFile, repoPassword: encryptSecret(generateDataKey(), 'other cabinet'),
+            ...plaintextFile, ssUserPassword: encryptSecret(generateDataKey(), 'other cabinet'),
         }));
 
         const config = new Config(generateDataKey());
         config.load();
 
-        expect(config.repoPassword).toBe('');
+        expect(config.ssUserPassword).toBe('');
     });
 
     it.skipIf(process.platform === 'win32')('writes the file owner-only, even one created wider', () => {

@@ -67,6 +67,10 @@ import {
     describeOnlineStatus, getOnlineView, resetOnlineSettings, saveConfigurationString, setOnlineEnabled, testConnection,
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
+import {
+    describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, repositoryEnv, resolveRepository,
+    type RepositoryAccess,
+} from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {isSameOriginRequest} from '@/class/SameOrigin';
@@ -80,7 +84,7 @@ import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
 type Sequelize = SequelizeTS.Sequelize;
 import Category from '@/model/Category.model';
-import {CONF_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
+import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
@@ -139,32 +143,6 @@ interface RepoPack {
 }
 
 const MAME_BINARY_NAMES = ['mame.exe', 'mame64.exe', 'mame'];
-
-/**
- * mame.ini/ui.ini directory settings eligible for a plain folder import (as opposed to the
- * starting pack roms/manifest.json flow below): each holds files mame itself reads/writes there,
- * with no per-file metadata to interpret, so unlike a rom a manifest is never needed to import
- * one - the zip just needs a top-level folder named after `zipFolder` (mame's own conventional
- * basename for that directory), copied wholesale into wherever `iniKey` currently resolves to on
- * this mame home. Deliberately a fixed table, not "every ini key": most other settings are
- * multi-path search lists (rompath, artpath, cheatpath...) or non-directory values, and blindly
- * matching a zip folder name against any of those wouldn't be safe or meaningful. Only the
- * *value* each key resolves to is dynamic (read from mame.ini's own -showconfig output and
- * ui.ini, merged - see the /import route) - the key names and their zip folder names stay fixed
- * here. `categorypath`/`folders` is ui.ini's own directory (default name "folders") for
- * genre.ini/Multiplayer.ini/category.ini - the one from the original "importer des folders/"
- * ask; the rest come from mame.ini.
- */
-const IMPORTABLE_MAME_DIRECTORIES: {zipFolder: string; iniKey: string}[] = [
-    {zipFolder: 'cfg', iniKey: 'cfg_directory'},
-    {zipFolder: 'nvram', iniKey: 'nvram_directory'},
-    {zipFolder: 'diff', iniKey: 'diff_directory'},
-    {zipFolder: 'comments', iniKey: 'comment_directory'},
-    {zipFolder: 'inp', iniKey: 'input_directory'},
-    {zipFolder: 'sta', iniKey: 'state_directory'},
-    {zipFolder: 'snap', iniKey: 'snapshot_directory'},
-    {zipFolder: 'folders', iniKey: 'categorypath'},
-];
 
 function findMameBinary(mamePath: string): string|null {
     for (const name of MAME_BINARY_NAMES) {
@@ -1234,12 +1212,19 @@ async function downloadMissingFavoriteMedia(
  * whole file, no --only) through runImportScript(), into an already-headed streamed response.
  * Same result: false when the script could not be launched (response already closed).
  */
-function runConfPackImport(res: Response, config: Config): Promise<boolean> {
+function runConfPackImport(res: Response, repository: Extract<RepositoryAccess, {ok: true}>): Promise<boolean> {
+    return runRepositoryPackImport(res, repository, 'Configuration pack', CONF_PACK_FILENAME);
+}
+
+/** Downloads a whole pack of the repository and imports it, same contract as runConfPackImport(). */
+function runRepositoryPackImport(
+    res: Response, repository: Extract<RepositoryAccess, {ok: true}>, label: string, filename: string,
+): Promise<boolean> {
     return runImportScript(
         res,
-        `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`,
-        ['--url', `${config.repoUrl}/${CONF_PACK_FILENAME}`],
-        {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+        `${label} import in progress… (${escapeHtml(filename)})`,
+        ['--url', `${repository.url}/${filename}`],
+        {...process.env, ...repositoryEnv(repository.headers)},
     );
 }
 
@@ -2931,7 +2916,7 @@ function renderPageTail(): string {
             var scrollY = window.scrollY;
             fetch(action, {method: 'POST', body: body})
                 .then(function (response) {
-                    // A handful of these (login, logout, /repo/save) res.redirect() elsewhere on
+                    // A handful of these (login, logout) res.redirect() elsewhere on
                     // success instead of responding in place - fetch() follows that transparently,
                     // so response.redirected/response.url say where it actually ended up. Those
                     // belong on the address bar for real (e.g. landing on "/" after signing in),
@@ -4368,9 +4353,7 @@ function renderForm(
         sections.push({
             id: 'import',
             label: 'Import',
-            // renderPythonWarning() is meant to sit right above renderImportCard() (see its own
-            // comment) - not a section of its own.
-            html: renderPythonWarning() + renderConfPackCard(config, mameInfo) + renderImportCard(importError),
+            html: renderImportSection(mameInfo, importError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
         if (isAdvanced) {
@@ -5709,11 +5692,12 @@ function renderBindingLabel(portType: string, label: string): string {
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
 /** What the Games tab's Repository subtab shows (Advanced configuration only, see renderFavoritesPage()). */
 interface RepoSection {
-    config: Config;
     mameInfo: MameInfo;
     packs?: RepoPack[];
     error?: string;
     info?: string;
+    // Announced by MAUI-API, shown once the packs are loaded.
+    url?: string;
 }
 
 /**
@@ -5726,13 +5710,13 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer, repos
     if (!repository) {
         return renderPage(favoritesHtml, 'favorites', viewer);
     }
-    const {config, mameInfo, packs, error, info} = repository;
+    const {mameInfo, packs, error, info, url} = repository;
     // The repository's imports resolve every path from the MAME binary: nothing to act on until
     // it is configured (same gating as the MAME tab's Import section).
     const repositoryHtml = mameInfo.error
         ? `<section class="card"><h2>Starting pack repository</h2>
             <p class="error">${escapeHtml(mameInfo.error)}</p></section>`
-        : renderRepoImportCard(config, mameInfo, packs, error, info);
+        : renderRepoImportCard(mameInfo, packs, error, info, url);
     return renderSubtabbedPage('favorites', [
         {id: 'favorites', label: 'Favorites', html: favoritesHtml},
         {id: 'repository', label: 'Repository', html: repositoryHtml},
@@ -5755,7 +5739,7 @@ function isPython3Available(): boolean {
 }
 
 /**
- * Shown right above renderImportCard() wherever it renders (initial page load and both
+ * Shown at the top of the Import section wherever it renders (initial page load and the
  * post-import re-renders), so a missing python3 surfaces proactively instead of only once an
  * import is attempted.
  */
@@ -5767,45 +5751,24 @@ function renderPythonWarning(): string {
         + 'is unavailable.</p>';
 }
 
-function renderImportCard(error?: string): string {
-    return `
-        <section class="card">
-            <h2>Import a starting pack</h2>
-            <p class="info">Fully replaces the games/roms/artwork present in
-            the pack and adds its games to MAME's favorites (existing favorites are kept). Other
-            games, players and scores are left untouched.</p>
-            <p class="info">A ZIP can also contain only ${IMPORTABLE_MAME_DIRECTORIES
-                .map(d => escapeHtml(d.zipFolder)).join(', ')} folders (copied as-is into the
-            current mame configuration) - in that case, no manifest.json is needed.</p>
-            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <form method="post" action="/import" enctype="multipart/form-data" data-stream>
-                <label for="pack">ZIP file</label>
-                <input type="file" id="pack" name="pack" accept=".zip" required>
-                <button type="submit">Import</button>
-            </form>
-        </section>
-    `;
-}
-
 /**
- * The configuration pack (see ConfPack.ts): the category files the carousel needs, downloaded
- * from the pack repository. Shown outside Advanced configuration too - without it the carousel
- * has no genres - but installing it needs the repository configured (Advanced configuration,
- * Games > Repository); it can also be imported by hand with the form below it, being a plain `folders/`
- * ZIP.
+ * The configuration pack (see ConfPack.ts): the category files the carousel needs. Shown outside
+ * Advanced configuration too - without it the carousel has no genres. Downloaded from the pack
+ * repository in ONLINE mode only (see RepositoryAuth.ts). There is no manual import: MAME experts
+ * set the emulator up themselves, everyone else goes ONLINE.
  */
-function renderConfPackCard(config: Config, mameInfo: MameInfo): string {
+function renderConfPackCard(mameInfo: MameInfo): string {
+    const online = isOnlineActive();
     const missing = getMissingConfPackFiles(mameInfo);
+    const locked = online ? ' - the game packs of the repository stay locked until it is installed' : '';
     const status = missing.length
-        ? `<p class="error">${renderFoundIcon(false)}Missing: ${missing.map(escapeHtml).join(', ')} - the game
-            packs of the repository stay locked until it is installed.</p>`
+        ? `<p class="error">${renderFoundIcon(false)}Missing: ${missing.map(escapeHtml).join(', ')}${locked}.</p>`
         : `<p class="info">${renderFoundIcon(true)}Installed (catver.ini, genre.ini, Multiplayer.ini).</p>`;
-    const action = config.repoUrl
+    const action = online
         ? `<form method="post" action="/import/conf-pack" data-stream>
                 <button type="submit">${missing.length ? 'Install' : 'Update'} the configuration pack</button>
             </form>`
-        : `<p class="info"><em>Set the repository (Advanced configuration, Games > Repository) to download it, or import
-            ${escapeHtml(CONF_PACK_FILENAME)} with the form below.</em></p>`;
+        : '<p class="info"><em>Turn ONLINE mode on (MAUI tab) to download it.</em></p>';
     return `
         <section class="card">
             <h2>Configuration pack</h2>
@@ -5815,6 +5778,38 @@ function renderConfPackCard(config: Config, mameInfo: MameInfo): string {
             ${action}
         </section>
     `;
+}
+
+/**
+ * The starter pack (see ConfPack.ts): a few curated games to start with, installed whole from the
+ * repository in ONLINE mode, the configuration pack first (same as every import from there). No
+ * network call to render it: the pack's content is only read on install.
+ */
+function renderStarterPackCard(): string {
+    const action = isOnlineActive()
+        ? `<form method="post" action="/import/starter-pack" data-stream>
+                <button type="submit">Install the starter pack</button>
+            </form>`
+        : '<p class="info"><em>Turn ONLINE mode on (MAUI tab) to download it.</em></p>';
+    return `
+        <section class="card">
+            <h2>Starter pack</h2>
+            <p class="info">A selection of games to start with, downloaded from the repository with the
+            configuration pack. Adds them to the favorites; other games are left untouched.</p>
+            ${action}
+        </section>
+    `;
+}
+
+/**
+ * The MAME tab's Import section, also re-rendered after each import: renderPythonWarning() sits
+ * right above the cards that run the import script. `error`: a failed repository action.
+ */
+function renderImportSection(mameInfo: MameInfo, error?: string): string {
+    return renderPythonWarning()
+        + (error ? `<p class="error flash">${escapeHtml(error)}</p>` : '')
+        + renderConfPackCard(mameInfo)
+        + renderStarterPackCard();
 }
 
 function humanFileSize(bytes: number): string {
@@ -5990,14 +5985,16 @@ function renderDiskSpaceInfo(mameInfo: MameInfo): string {
  * then simply listed without that comparison instead of failing the whole browse.
  */
 async function fetchRepoManifest(
-    repoUrl: string, packFilename: string, authorization: string,
+    repoUrl: string, packFilename: string, headers: Record<string, string>,
 ): Promise<StartingPackManifest | null> {
     if (!/^[\w.-]+\.zip$/.test(packFilename)) {
         return null;
     }
     try {
         const response = await fetch(`${repoUrl}/${packFilename.replace(/\.zip$/, '')}.manifest.json`, {
-            headers: {Authorization: authorization},
+            headers,
+            // The headers carry the cabinet token: never follow a redirect elsewhere.
+            redirect: 'error',
             signal: AbortSignal.timeout(10_000),
         });
         return response.ok ? await response.json() as StartingPackManifest : null;
@@ -6335,42 +6332,31 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
 }
 
 /**
- * Settings form (POST /repo/save) for repo.maui.afronob.com's basic-auth credentials, plus -
- * once repoUrl is set - a button to browse it (GET /import/from-url/packs) and, once packs have
- * been fetched, the picker itself. Advanced configuration only, same gating as renderMameDangerZoneCard() (see
- * renderForm()): downloading and importing an arbitrary pack from a configured repo is no less
- * consequential than the manual upload form right above it.
+ * Browses the pack repository (GET /import/from-url/packs) and, once packs have been fetched, the
+ * picker itself. ONLINE mode only (see RepositoryAuth.ts: the URL and the credentials come from
+ * MAUI-API, nothing to set here), and Advanced configuration only, same gating as
+ * renderMameDangerZoneCard() (see renderForm()): importing an arbitrary pack from the repository
+ * is no less consequential than the manual upload form of the MAME tab. No network call to render
+ * it, so the tab stays instant: the URL is shown once the packs are loaded.
  */
 function renderRepoImportCard(
-    config: Config, mameInfo: MameInfo, packs?: RepoPack[], error?: string, info?: string,
+    mameInfo: MameInfo, packs?: RepoPack[], error?: string, info?: string, url?: string,
 ): string {
     return `
         <section class="card">
             <h2>Starting pack repository</h2>
-            <p class="info">Browses and imports a starting pack directly from a password-protected
-            HTTP repository, without going through the upload
-            (MAME > Import tab) - useful for a pack too large for a browser form.</p>
+            <p class="info">Browses the starting packs of the repository of MAUI-API and imports
+            the games you pick.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
-            <form method="post" action="/repo/save" novalidate>
-                <label for="repoUrl">Repository URL</label>
-                <input type="text" id="repoUrl" name="repoUrl" value="${escapeHtml(config.repoUrl)}"
-                    placeholder="https://repo.maui.domaine.com" autocomplete="off">
-                <label for="repoUser">Username</label>
-                <input type="text" id="repoUser" name="repoUser" value="${escapeHtml(config.repoUser)}" autocomplete="off">
-                <label for="repoPassword">Password</label>
-                <input type="password" id="repoPassword" name="repoPassword" ${renderSavedPasswordAttributes(config.repoPassword)} autocomplete="off">
-                <button type="submit">Save</button>
-            </form>
-            ${config.repoUrl ? `
-                ${renderDiskSpaceInfo(mameInfo)}
-                ${getMissingConfPackFiles(mameInfo).length
-                    ? '<p class="info"><em>Install the configuration pack first (MAME > Import tab) to browse the game packs.</em></p>'
-                    : `<form method="get" action="/import/from-url/packs">
-                        <button type="submit">Browse available packs</button>
-                    </form>
-                    ${packs ? renderRepoPackPicker(packs) : ''}`}
-            ` : ''}
+            ${url ? `<p class="info">Repository: ${escapeHtml(url)}</p>` : ''}
+            ${renderDiskSpaceInfo(mameInfo)}
+            ${getMissingConfPackFiles(mameInfo).length
+                ? '<p class="info"><em>Install the configuration pack first (MAME > Import tab) to browse the game packs.</em></p>'
+                : `<form method="get" action="/import/from-url/packs">
+                    <button type="submit">Browse available packs</button>
+                </form>
+                ${packs ? renderRepoPackPicker(packs) : ''}`}
         </section>
     `;
 }
@@ -6659,17 +6645,9 @@ export function startBoServer(
         }
         res.redirect('/account');
     });
-    // Disk storage, not memory: the import route hands the upload straight to
-    // scripts/import-starting-pack.py by path, which streams it instead of buffering it in RAM -
-    // the whole reason that script exists (see its own docstring). The temp file is removed by
-    // the /import handler once the script finishes.
-    const upload = multer({
-        storage: multer.diskStorage({
-            destination: (_req, _file, cb) => cb(null, os.tmpdir()),
-            filename: (_req, _file, cb) => cb(null, `${randomBytes(8).toString('hex')}.zip`),
-        }),
-        limits: {fileSize: 500 * 1024 * 1024},
-    });
+    // MAUI configuration import (/maui/import), read from req.file.buffer: memory storage (disk
+    // storage has no buffer). An export is the config file and the SQLite database, a few MiB.
+    const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
@@ -6864,14 +6842,15 @@ export function startBoServer(
      * that action's message.
      */
     const renderFavoritesTab = async (
-        req: Request, flash: FavoritesFlash = {}, repository: Omit<RepoSection, 'config' | 'mameInfo'> = {},
+        req: Request, flash: FavoritesFlash = {}, repository: Omit<RepoSection, 'mameInfo'> = {},
     ): Promise<string> => {
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
-        // Repository subtab: Advanced configuration only, like the routes below it.
-        const repositorySection = req.session.boAdvanced
-            ? {config, mameInfo: getMameInfo(config), ...repository}
+        // Repository subtab: Advanced configuration and ONLINE mode only, like the routes below it.
+        // With ONLINE off there is no subtab at all, the Games tab is the favorites alone.
+        const repositorySection = req.session.boAdvanced && isOnlineActive()
+            ? {mameInfo: getMameInfo(config), ...repository}
             : undefined;
 
         if ('error' in context) {
@@ -7353,165 +7332,100 @@ export function startBoServer(
         res.end();
     });
 
-    // Starting packs are MAME-only content, imported from the MAME tab (see renderForm()) -
-    // kept as a redirect rather than a 404 for anyone with the old standalone page bookmarked.
+    // Starting packs come from the repository only (MAME > Import, Games > Repository): kept as a
+    // redirect rather than a 404 for anyone with the old standalone upload page bookmarked.
     app.get('/import', (req, res) => {
         res.redirect('/');
     });
 
-    app.post('/import', upload.single('pack'), async (req, res) => {
-        const config = new Config();
-        config.load();
-        const values: ConfigFormValues = {mamePath: config.mamePath || ''};
-        const isAdvanced = req.session.boAdvanced === true;
-
-        if (!req.file) {
-            res.status(400).send(renderForm(
-                values, getMameInfo(config), isAdvanced, undefined, undefined, undefined, 'No file received.',
-            ));
-            return;
+    // Every route that downloads from the repository: ONLINE mode only (see RepositoryAuth.ts).
+    // Hiding the buttons is not enough, an Advanced session can still post directly. Local check,
+    // no network call; resolveRepository() then asks MAUI-API for the URL.
+    const refuseOffline = (res: Response): boolean => {
+        if (isOnlineActive()) {
+            return false;
         }
+        res.status(403).send('Available in ONLINE mode only.');
+        return true;
+    };
 
-        // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below - macOS
-        // in particular doesn't always ship a working python3 without Xcode CLT installed.
-        if (!isPython3Available()) {
-            rmSync(req.file.path, {force: true});
-            res.status(500).send(renderForm(
-                values, getMameInfo(config), isAdvanced, undefined, undefined, undefined,
-                'python3 not found on this machine - unable to import a starting pack.',
-            ));
-            return;
-        }
-
-        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-        res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame', getViewer(req)));
-
-        // Validation (manifest.json/IMPORTABLE_MAME_DIRECTORIES, MAME config completeness) and
-        // the actual import both happen inside the script now - it mirrors this same logic and
-        // reports failures through its own stdout/stderr lines, same as /import/from-url below.
-        const started = await runImportScript(
-            res, `Import in progress… (${escapeHtml(req.file.originalname)})`, [req.file.path], {...process.env},
-        );
-        rmSync(req.file.path, {force: true});
-        if (!started) {
-            return;
-        }
-
-        streamFavoritesRefreshAfterImport(res, config);
-
-        // Rest of the MAME tab, re-rendered fresh so e.g. the genre.ini/Multiplayer.ini fields
-        // above reflect what the import just installed, instead of a "Retour" link to a
-        // separate page.
-        const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo));
-        res.write(renderMameInfoCard(refreshedMameInfo));
-        // Same gating as renderForm(): import only makes sense once the binary's configured and
-        // validated (see there for why).
-        if (!refreshedMameInfo.error) {
-            res.write(renderPythonWarning());
-            res.write(renderConfPackCard(config, refreshedMameInfo));
-            res.write(renderImportCard());
-        }
-        res.write(renderPageTail());
-        res.end();
-
-        // Back through Init.vue, which re-seeds categories and re-syncs games from the new
-        // favorites.ini/genre.ini - the front would otherwise keep showing the pre-import list.
-        reloadFront();
-    });
-
-    // Same Advanced configuration gating as the Games tab's Repository subtab: configuring where
-    // packs come from, and importing an arbitrary one from there, is no less consequential than
-    // the manual upload right above it.
-    app.post('/repo/save', async (req, res) => {
-        if (!req.session.boAdvanced) {
-            res.status(403).send('Available in Advanced configuration only.');
-            return;
-        }
-        const config = new Config(getSecretsKey(req));
-        config.load();
-        // Trailing slash trimmed once here so every consumer (index.json fetch, pack download
-        // URL) can always join with a bare '/', instead of each guarding against a possible
-        // double slash.
-        config.repoUrl = (req.body.repoUrl || '').trim().replace(/\/+$/, '');
-        config.repoUser = (req.body.repoUser || '').trim();
-        // Never pre-filled (see renderSavedPasswordAttributes()): left empty means unchanged.
-        config.repoPassword = (req.body.repoPassword || '').trim() || config.repoPassword;
-        config.save();
-
-        res.send(await renderFavoritesTab(req, {}, {info: 'Repository configuration saved.'}));
-    });
-
-    // Proxied server-side (rather than the browser fetching index.json directly) so the repo's
-    // basic-auth credentials never need to reach the browser at all.
+    // Proxied server-side (rather than the browser fetching index.json directly) so the cabinet
+    // credentials never reach the browser at all.
     app.get('/import/from-url/packs', async (req, res) => {
         if (!req.session.boAdvanced) {
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
-        const config = new Config(getSecretsKey(req));
+        if (refuseOffline(res)) {
+            return;
+        }
+        const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
 
-        if (!config.repoUrl) {
-            res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Enter the repository URL before browsing it.'}));
-            return;
-        }
         if (getMissingConfPackFiles(mameInfo).length) {
             res.status(422).send(await renderFavoritesTab(req, {}, {
                 error: 'Install the configuration pack first (MAME > Import tab).',
             }));
             return;
         }
+        const repository = await resolveRepository();
+        if (!repository.ok) {
+            res.status(502).send(await renderFavoritesTab(req, {}, {error: describeRepositoryFailure(repository)}));
+            return;
+        }
 
         try {
-            const response = await fetch(`${config.repoUrl}/index.json`, {
-                headers: {
-                    Authorization: 'Basic '
-                        + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64'),
-                },
+            const response = await fetch(`${repository.url}/index.json`, {
+                headers: repository.headers,
+                // The headers carry the cabinet token: never follow a redirect elsewhere.
+                redirect: 'error',
+                signal: AbortSignal.timeout(10_000),
             });
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                throw new Error(await describeRepositoryResponse(response));
             }
             const data = await response.json() as {packs?: RepoPack[]};
             // The configuration pack has its own card (see renderConfPackCard()).
             const packs = (data.packs ?? []).filter(pack => isGamePack(pack.filename));
             const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
-            const authorization = 'Basic '
-                + Buffer.from(`${config.repoUser}:${config.repoPassword}`).toString('base64');
             await Promise.all(packs.map(async pack => {
                 const [manifest, entrySizes] = await Promise.all([
-                    fetchRepoManifest(config.repoUrl, pack.filename, authorization),
+                    fetchRepoManifest(repository.url, pack.filename, repository.headers),
                     // Per-game sizes for the disk bar, from the ZIP's central directory alone
                     // (two small range requests) - null if the server cannot do ranges.
                     /^[\w.-]+\.zip$/.test(pack.filename)
-                        ? fetchRemoteZipEntrySizes(`${config.repoUrl}/${pack.filename}`, {Authorization: authorization})
+                        ? fetchRemoteZipEntrySizes(`${repository.url}/${pack.filename}`, repository.headers)
                         : Promise.resolve(null),
                 ]);
                 pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
                 pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             }));
-            res.send(await renderFavoritesTab(req, {}, {packs}));
+            res.send(await renderFavoritesTab(req, {}, {packs, url: repository.url}));
         } catch (error) {
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(502).send(await renderFavoritesTab(req, {}, {error: `Unable to reach the repository: ${message}`}));
         }
     });
 
-    // Not Advanced-only, unlike the game packs below: the carousel needs this pack to have genres.
-    app.post('/import/conf-pack', async (req, res) => {
+    // Not Advanced-only, unlike the game packs below: the carousel needs the configuration pack to
+    // have genres, and the starter pack is what a new cabinet starts with. The starter pack comes
+    // with the configuration pack, like every game pack from the repository.
+    const importFromRepository = (withStarterPack: boolean) => async (req: Request, res: Response) => {
+        if (refuseOffline(res)) {
+            return;
+        }
         const config = new Config(getSecretsKey(req));
         config.load();
         const values: ConfigFormValues = {mamePath: config.mamePath || ''};
         const isAdvanced = req.session.boAdvanced === true;
         const mameInfo = getMameInfo(config);
 
-        if (!config.repoUrl) {
-            res.status(422).send(renderForm(
-                values, mameInfo, isAdvanced, undefined, undefined, undefined, 'Repository URL not configured.',
+        const repository = await resolveRepository();
+        if (!repository.ok) {
+            res.status(502).send(renderForm(
+                values, mameInfo, isAdvanced, undefined, undefined, undefined, describeRepositoryFailure(repository),
             ));
             return;
         }
@@ -7526,41 +7440,50 @@ export function startBoServer(
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('mame', getViewer(req)));
-        if (!await runConfPackImport(res, config)) {
+        if (!await runConfPackImport(res, repository)) {
             return;
+        }
+        if (withStarterPack) {
+            if (getMissingConfPackFiles(getMameInfo(config)).length) {
+                res.write('<p class="error flash">The configuration pack could not be installed: starter pack not imported.</p>');
+            } else {
+                if (!await runRepositoryPackImport(res, repository, 'Starter pack', STARTER_PACK_FILENAME)) {
+                    return;
+                }
+                streamFavoritesRefreshAfterImport(res, config);
+            }
         }
 
         const refreshedMameInfo = getMameInfo(config);
         res.write(renderConfigCard(values, refreshedMameInfo));
         res.write(renderMameInfoCard(refreshedMameInfo));
         if (!refreshedMameInfo.error) {
-            res.write(renderPythonWarning());
-            res.write(renderConfPackCard(config, refreshedMameInfo));
-            res.write(renderImportCard());
+            res.write(renderImportSection(refreshedMameInfo));
         }
         res.write(renderPageTail());
         res.end();
 
-        // Back through Init.vue, which re-seeds the categories from the new files.
+        // Back through Init.vue, which re-seeds the categories and re-syncs the games.
         reloadFront();
-    });
+    };
+    app.post('/import/conf-pack', importFromRepository(false));
+    app.post('/import/starter-pack', importFromRepository(true));
 
     app.post('/import/from-url', async (req, res) => {
         if (!req.session.boAdvanced) {
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
-        const config = new Config(getSecretsKey(req));
+        if (refuseOffline(res)) {
+            return;
+        }
+        const config = new Config();
         config.load();
         // One "<pack>.zip|<romName>" per ticked game, grouped by pack (a game listed by several
         // packs is kept for the first). urlencoded (extended: false) yields a string for one
         // ticked box, an array for several; anything malformed is refused (see the function).
         const selection = groupSelectedGames(req.body?.game);
 
-        if (!config.repoUrl) {
-            res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Repository URL not configured.'}));
-            return;
-        }
         if (selection && !selection.size) {
             res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Tick at least one game to import.'}));
             return;
@@ -7575,6 +7498,12 @@ export function startBoServer(
             res.status(500).send(await renderFavoritesTab(req, {}, {error: 'python3 not found on this machine - unable to import from the repository.'}));
             return;
         }
+        // Resolved once for the whole import: every pack below comes from the same repository.
+        const repository = await resolveRepository();
+        if (!repository.ok) {
+            res.status(502).send(await renderFavoritesTab(req, {}, {error: describeRepositoryFailure(repository)}));
+            return;
+        }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
@@ -7583,11 +7512,10 @@ export function startBoServer(
         // Packs are imported one after the other (one script run each, one progress card each):
         // the script rewrites favorites.ini and shared category files, so runs must not overlap.
         // Credentials go through env, never argv, so they don't leak via `ps`/
-        // `/proc/<pid>/cmdline` (they already sit in Config's plaintext JSON file at the same
-        // trust level as ssDevPassword).
+        // `/proc/<pid>/cmdline` (see repositoryEnv()).
         // The configuration pack first, every time (see ConfPack.ts): game packs no longer ship
         // the category files, so this keeps them matching the repository's.
-        if (!await runConfPackImport(res, config)) {
+        if (!await runConfPackImport(res, repository)) {
             return;
         }
         if (getMissingConfPackFiles(getMameInfo(config)).length) {
@@ -7608,8 +7536,8 @@ export function startBoServer(
             const started = await runImportScript(
                 res,
                 `${counter}Import from the repository in progress… (${escapeHtml(packFilename)}, ${romNames.length} game(s))`,
-                ['--url', `${config.repoUrl}/${packFilename}`, '--only', romNames.join(',')],
-                {...process.env, MAUI_REPO_USER: config.repoUser, MAUI_REPO_PASSWORD: config.repoPassword},
+                ['--url', `${repository.url}/${packFilename}`, '--only', romNames.join(',')],
+                {...process.env, ...repositoryEnv(repository.headers)},
                 {index, total: selection.size},
                 tabbed,
             );
@@ -7624,7 +7552,7 @@ export function startBoServer(
 
         streamFavoritesRefreshAfterImport(res, config);
 
-        res.write(renderRepoImportCard(config, getMameInfo(config)));
+        res.write(renderRepoImportCard(getMameInfo(config)));
         res.write(renderPageTail());
         res.end();
 
