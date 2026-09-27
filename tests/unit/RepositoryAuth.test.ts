@@ -109,6 +109,12 @@ describe('resolveRepository', () => {
         expect(await resolve(fetchReturning(json(200, {url: null})))).toEqual({ok: false, reason: 'no_repository'});
     });
 
+    it('treats an API without the repository route (older server) as a server without repository', async () => {
+        writeOnlineSettings(settings, path);
+        const notFound = new Response(JSON.stringify({status: 404, code: 'not_found'}), {status: 404});
+        expect(await resolve(fetchReturning(notFound))).toEqual({ok: false, reason: 'no_repository'});
+    });
+
     it('refuses an http repository announced by an https API', async () => {
         writeOnlineSettings(settings, path);
         expect(await resolve(fetchReturning(json(200, {url: 'http://repo.example.org'}))))

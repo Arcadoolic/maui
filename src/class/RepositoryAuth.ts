@@ -66,6 +66,10 @@ export async function resolveRepository(deps: RepositoryDeps = {}): Promise<Repo
 
     const credentials = await buildApiCredentials(settings, path, deps);
     const result = await new MauiApiClient(credentials, {fetchImpl: deps.fetchImpl}).repository();
+    // 404: a MAUI-API older than the repository route, hence a server without repository.
+    if (result.kind === 'rejected' && result.status === 404) {
+        return {ok: false, reason: 'no_repository'};
+    }
     if (result.kind !== 'ok') {
         return {ok: false, reason: 'api_failure', failure: result};
     }
