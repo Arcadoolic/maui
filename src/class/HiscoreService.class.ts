@@ -3,6 +3,7 @@ import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
 import * as Log from 'electron-log';
+import {scorePseudo3} from '@/class/HiscoreSupport';
 
 export default class HiscoreService {
     protected hiExtractor!: MameHiExtractor;
@@ -47,7 +48,7 @@ export default class HiscoreService {
                 const hiscore = hiscoreExtractor.extract(false).scores;
                 const scoreToSave: any[] = [];
                 for (const score of hiscore.default) {
-                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3).toUpperCase());
+                    const user = this.userService.getUserByPseudo3(scorePseudo3(score.name));
                     if (!user) {
                         continue;
                     }
