@@ -34,7 +34,7 @@
 
         <transition name="flyer">
             <div class="flyer-container" v-show="showFlyer">
-                <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+                <div class="flyer" :class="{landscape: flyerLandscape}" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
             </div>
         </transition>
 
@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onMounted} from 'vue';
+import {ref, computed, onMounted, watch} from 'vue';
 import router from '@/router';
 import Categories from '@/components/Categories.vue';
 import Games from '@/components/Games.vue';
@@ -99,6 +99,8 @@ const showHiscores = ref(false);
 const flyersPath = ref('');
 const flyers = ref<string[]>([]);
 const flyer = ref('');
+// A landscape flyer is turned 90 degrees to the left to fill the tall flyer area (see .flyer.landscape)
+const flyerLandscape = ref(false);
 
 const showGames = ref(true);
 const showTitle = ref(true);
@@ -145,6 +147,22 @@ function generateFlyerPath(): string {
     }
     return '';
 }
+
+// Known once the image is loaded: until then the flyer keeps its previous orientation (it is hidden
+// while the game changes anyway, see onGameChange()).
+watch(flyer, (url) => {
+    if (!url) {
+        flyerLandscape.value = false;
+        return;
+    }
+    const image = new Image();
+    image.onload = () => {
+        if (flyer.value === url) {
+            flyerLandscape.value = image.naturalWidth > image.naturalHeight;
+        }
+    };
+    image.src = url;
+});
 
 function onGameChange(previous: boolean) {
     const showFlyerFn = () => {
@@ -512,6 +530,8 @@ if (!getIsInit()) {
         top: -5%;
         bottom: -5%;
         width: 40%;
+        /* Size container: lets .flyer.landscape size itself from the container (cqw/cqh) */
+        container-type: size;
     }
 
     .flyer {
@@ -520,6 +540,17 @@ if (!getIsInit()) {
         transform: rotateZ(-4deg);
         background-repeat: no-repeat;
         background-size: cover;
+    }
+
+    /* Landscape flyer: the element takes the container's height as its width and the other way
+       round, then turns 90 degrees to the left (plus the usual 4 degree tilt) around its center. */
+    .flyer.landscape {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 100cqh;
+        height: 100cqw;
+        transform: translate(-50%, -50%) rotateZ(-94deg);
     }
 
     .flyer-enter-from, .flyer-leave-to {
