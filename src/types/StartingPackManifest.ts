@@ -19,6 +19,11 @@ export interface StartingPackGameEntry {
     // Name of the separate BIOS romset this game needs (mame -lx's `romof` attribute), e.g.
     // "neogeo" - null when the game is self-contained.
     biosName: string | null;
+    // Every other romset the game needs to run, each bundled under roms/: its parent (a merged
+    // clone has no zip of its own), the whole romof chain up to the BIOS, and the devices that
+    // ship ROMs (qsound_hle, namco51...). Added after formatVersion 1 packs were in the wild:
+    // absent from an older pack, where biosName is the only dependency known.
+    requiredRoms?: string[];
     hasRomFile: boolean;
     hasMarquee: boolean;
     hasFlyer: boolean;
@@ -32,7 +37,7 @@ export interface StartingPackManifest {
     formatVersion: 1;
     generatedAt: string;
     games: StartingPackGameEntry[];
-    // Deduplicated BIOS romNames bundled under roms/ (one physical file even when several
-    // games in `games` share the same BIOS).
+    // Deduplicated dependency romNames bundled under roms/ - every game's requiredRoms (or
+    // biosName in an older pack) - one physical file even when several games share one.
     biosRoms: string[];
 }

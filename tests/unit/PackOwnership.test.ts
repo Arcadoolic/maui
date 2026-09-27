@@ -1,6 +1,8 @@
 import {describe, it, expect} from 'vitest';
 import type {StartingPackManifest, StartingPackGameEntry} from '@/types/StartingPackManifest';
-import {computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames} from '@/class/PackOwnership';
+import {
+    computeBiosSizes, computePackOwnership, getRequiredRoms, groupSelectedGames, isPackFullyOwned, listPackGames,
+} from '@/class/PackOwnership';
 
 const game = (romName: string, fullname: string, hasRomFile = true) => ({
     romName, fullname, hasRomFile,
@@ -106,6 +108,24 @@ describe('pack sizes', () => {
     it('sizes the bios sets the pack ships', () => {
         expect(computeBiosSizes(pack, sizes)).toEqual({atarisy1: 400});
         expect(computeBiosSizes(pack, null)).toEqual({});
+    });
+});
+
+describe('getRequiredRoms', () => {
+    it('takes the whole dependency list when the pack has one', () => {
+        expect(getRequiredRoms({biosName: 'mslug', requiredRoms: ['mslug', 'neogeo']})).toEqual(['mslug', 'neogeo']);
+        expect(getRequiredRoms({biosName: null, requiredRoms: ['qsound_hle']})).toEqual(['qsound_hle']);
+    });
+
+    it('falls back to biosName in a pack built before requiredRoms', () => {
+        expect(getRequiredRoms({biosName: 'neogeo'})).toEqual(['neogeo']);
+        expect(getRequiredRoms({biosName: null})).toEqual([]);
+    });
+
+    it('lists them on each pack game', () => {
+        const pack = manifest([{...game('19xx', '19XX'), biosName: null, requiredRoms: ['qsound_hle']}]);
+
+        expect(listPackGames(pack, [])[0].requiredRoms).toEqual(['qsound_hle']);
     });
 });
 

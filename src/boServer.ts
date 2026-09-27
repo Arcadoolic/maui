@@ -38,6 +38,7 @@ import {addFavorite} from '@/class/MameIniParser';
 import {
     FavoritesCacheEntry, FavoritesCache, getFavoritesCachePath, readFavoritesCache,
     writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
+    readRomsInfosCache, saveRomInfos,
 } from '@/class/FavoritesStore';
 import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
@@ -784,7 +785,10 @@ function getDeviceRomNames(xmlContent: string): string[] {
     for (const block of deviceBlocks) {
         const nameMatch = /^<machine\b[^>]*\bname="([^"]*)"/.exec(block);
         if (nameMatch) {
-            hasRomsByName.set(nameMatch[1], /<rom\b/.test(block));
+            // A ROM without a good dump (status="nodump", namco56's 56xx.bin) has no file to
+            // ship: a device with only those needs no zip.
+            hasRomsByName.set(nameMatch[1], [...block.matchAll(/<rom\b[^>]*>/g)]
+                .some(match => !/\bstatus="nodump"/.test(match[0])));
         }
     }
     return refNames.filter(name => hasRomsByName.get(name));
@@ -1092,14 +1096,18 @@ interface DownloadSummary {
     downloaded: number;
     notFound: number;
     noMedia: number;
+    // Games whose publisher/developer were written to roms-infos-cache.json.
+    infosSaved: number;
     errors: string[];
     stoppedForQuota: boolean;
 }
 
 /**
  * Downloads the missing marquee/flyer/logo for every favorite that doesn't already have all
- * three. Never re-fetches a game that already has all of them on disk - the ScreenScraper call
- * is skipped entirely for those, to keep API usage to the minimum needed.
+ * three, and records each game's publisher/developer in roms-infos-cache.json (see
+ * saveRomInfos()) from the same ScreenScraper answer. Never re-fetches a game that already has
+ * all three on disk and its infos cached - the ScreenScraper call is skipped entirely for those,
+ * to keep API usage to the minimum needed.
  */
 async function downloadMissingFavoriteMedia(
     credentials: ScreenScraperCredentials,
@@ -1110,12 +1118,15 @@ async function downloadMissingFavoriteMedia(
     onProgress: (line: string) => void = () => {},
 ): Promise<DownloadSummary> {
     const summary: DownloadSummary = {
-        alreadyComplete: 0, downloaded: 0, notFound: 0, noMedia: 0, errors: [], stoppedForQuota: false,
+        alreadyComplete: 0, downloaded: 0, notFound: 0, noMedia: 0, infosSaved: 0, errors: [],
+        stoppedForQuota: false,
     };
     const client = new ScreenScraperClient(credentials);
+    const cachedInfos = readRomsInfosCache()?.entries ?? {};
 
     for (const row of rows) {
-        if (row.hasMarquee && row.hasFlyer && row.hasLogo) {
+        const mediaComplete = row.hasMarquee && row.hasFlyer && row.hasLogo;
+        if (mediaComplete && cachedInfos[row.romName]) {
             summary.alreadyComplete++;
             onProgress(`${row.romName}: already complete, skipped.`);
             continue;
@@ -1137,6 +1148,15 @@ async function downloadMissingFavoriteMedia(
         if (result.status === 'error') {
             summary.errors.push(`${row.romName}: ${result.message}`);
             onProgress(`${row.romName}: error (${result.message}).`);
+            continue;
+        }
+
+        saveRomInfos(row.romName, result.infos);
+        summary.infosSaved++;
+        if (mediaComplete) {
+            // Called only for the publisher/developer: the artwork was already all on disk.
+            onProgress(`${row.romName}: publisher ${result.infos.publisher ?? 'unknown'} saved, `
+                + 'artwork already complete.');
             continue;
         }
 
@@ -5205,6 +5225,7 @@ function renderDownloadSummary(summary: DownloadSummary): string {
         `${summary.downloaded} file(s) downloaded`,
         `${summary.notFound} not found on ScreenScraper`,
         `${summary.noMedia} without available artwork`,
+        `${summary.infosSaved} publisher/developer info(s) saved`,
         `${summary.errors.length} error(s)`,
     ];
     const errorsHtml = summary.errors.length
@@ -6090,7 +6111,7 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
                     <input type="checkbox" class="game-checkbox" name="game"
                         value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
                         data-rom="${escapeHtml(game.romName)}" data-size="${game.size}"
-                        data-bios="${escapeHtml(game.biosName ?? '')}">
+                        data-bios="${escapeHtml(game.requiredRoms.join(' '))}">
                     <span>${label}</span>
                 </label>
             </li>
@@ -6218,11 +6239,12 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                         seen[box.dataset.rom] = true;
                         games++;
                         bytes += Number(box.dataset.size);
-                        var name = box.dataset.bios;
-                        if (name && !bios[name]) {
-                            bios[name] = true;
-                            bytes += Number(biosSizes[name] || 0);
-                        }
+                        (box.dataset.bios || '').split(' ').forEach(function (name) {
+                            if (name && !bios[name]) {
+                                bios[name] = true;
+                                bytes += Number(biosSizes[name] || 0);
+                            }
+                        });
                     });
                     return {name: row.dataset.pack.replace(/[.]zip$/, ''), color: row.dataset.color, games: games, bytes: bytes};
                 });

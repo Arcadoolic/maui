@@ -2,6 +2,7 @@ import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs';
 import {join, dirname} from 'path';
 import * as os from 'os';
 import {removeFavorite} from '@/class/MameIniParser';
+import type {GameInfos} from '@/class/ScreenScraperClient.class';
 
 /*
  * The favorites files of mame-awesome-ui's own state directory, and the removal of a favorite
@@ -54,6 +55,51 @@ export function writeFavoritesCache(entries: { [romName: string]: FavoritesCache
     const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
     writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
     return cache;
+}
+
+/**
+ * Publisher/developer of the favorites, as ScreenScraper gives them (see GameInfos), filled by the
+ * BO's ScreenScraper download alongside the marquees/flyers/logos. Beside the favorites cache,
+ * and read outside the app too: maui-repository's build-starting-pack.ts builds a pack from the
+ * favorites of one publisher with it. A rom ScreenScraper doesn't know has no entry, so the next
+ * download asks again.
+ */
+export interface RomInfosEntry extends GameInfos {
+    fetchedAt: string;
+}
+
+export interface RomsInfosCache {
+    updatedAt: string;
+    entries: { [romName: string]: RomInfosEntry };
+}
+
+export function getRomsInfosCachePath(): string {
+    return join(dirname(getFavoritesCachePath()), 'roms-infos-cache.json');
+}
+
+export function readRomsInfosCache(): RomsInfosCache | null {
+    const cachePath = getRomsInfosCachePath();
+    if (!existsSync(cachePath)) {
+        return null;
+    }
+    try {
+        return JSON.parse(readFileSync(cachePath, 'utf8'));
+    } catch {
+        // Corrupt/unreadable cache file - treat as absent: the next download fills it again.
+        return null;
+    }
+}
+
+/**
+ * Adds or replaces one rom's entry, keeping the others. Written after each game rather than once
+ * at the end, so a download stopped by the ScreenScraper quota keeps what it already fetched.
+ */
+export function saveRomInfos(romName: string, infos: GameInfos): void {
+    const now = new Date().toISOString();
+    const entries = readRomsInfosCache()?.entries ?? {};
+    entries[romName] = {...infos, fetchedAt: now};
+    const cache: RomsInfosCache = {updatedAt: now, entries};
+    writeFileSync(getRomsInfosCachePath(), JSON.stringify(cache, null, 1));
 }
 
 /**

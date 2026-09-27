@@ -314,17 +314,27 @@ def import_mame_directories(zf, directory_targets, summary, log):
 PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos')
 
 
+def required_roms(game):
+    """The romsets a game needs besides its own zip: `requiredRoms` (parent, romof chain up to
+    the BIOS, devices with ROMs), or just `biosName` in a pack built before requiredRoms."""
+    if isinstance(game.get('requiredRoms'), list):
+        return game['requiredRoms']
+    return [game['biosName']] if game.get('biosName') else []
+
+
 def select_games(manifest, only, summary):
     """Copy of `manifest` restricted to the games named in `only` (romNames), keeping the pack's
     order: the import below then needs no idea of --only at all - games, favorites and database
-    rows all come from this manifest. Only the BIOS/parent sets those games need (`biosName`)
-    stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
+    rows all come from this manifest. Only the sets those games need (`requiredRoms`, or
+    `biosName` in a pack built before it existed) stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
     BO builds the list from the manifest, so it can only differ if the pack changed meanwhile."""
     wanted = set(only)
     games = [game for game in manifest.get('games', []) if game['romName'] in wanted]
     for rom_name in sorted(wanted - {game['romName'] for game in games}):
         summary['warnings'].append(f'{rom_name}: not in this pack, skipped.')
-    needed_bios = {game['biosName'] for game in games if game.get('biosName')}
+    needed_bios = set()
+    for game in games:
+        needed_bios.update(required_roms(game))
     return {
         **manifest,
         'games': games,
