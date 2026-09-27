@@ -6645,14 +6645,9 @@ export function startBoServer(
         }
         res.redirect('/account');
     });
-    // Disk storage for the MAUI configuration import (/maui/import).
-    const upload = multer({
-        storage: multer.diskStorage({
-            destination: (_req, _file, cb) => cb(null, os.tmpdir()),
-            filename: (_req, _file, cb) => cb(null, `${randomBytes(8).toString('hex')}.zip`),
-        }),
-        limits: {fileSize: 500 * 1024 * 1024},
-    });
+    // MAUI configuration import (/maui/import), read from req.file.buffer: memory storage (disk
+    // storage has no buffer). An export is the config file and the SQLite database, a few MiB.
+    const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     // Single connection for the server's lifetime: sequelize-typescript's static model methods
     // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
