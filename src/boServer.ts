@@ -84,7 +84,7 @@ import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
 type Sequelize = SequelizeTS.Sequelize;
 import Category from '@/model/Category.model';
-import {CONF_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
+import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
@@ -1239,10 +1239,17 @@ async function downloadMissingFavoriteMedia(
  * Same result: false when the script could not be launched (response already closed).
  */
 function runConfPackImport(res: Response, repository: Extract<RepositoryAccess, {ok: true}>): Promise<boolean> {
+    return runRepositoryPackImport(res, repository, 'Configuration pack', CONF_PACK_FILENAME);
+}
+
+/** Downloads a whole pack of the repository and imports it, same contract as runConfPackImport(). */
+function runRepositoryPackImport(
+    res: Response, repository: Extract<RepositoryAccess, {ok: true}>, label: string, filename: string,
+): Promise<boolean> {
     return runImportScript(
         res,
-        `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`,
-        ['--url', `${repository.url}/${CONF_PACK_FILENAME}`],
+        `${label} import in progress… (${escapeHtml(filename)})`,
+        ['--url', `${repository.url}/${filename}`],
         {...process.env, ...repositoryEnv(repository.headers)},
     );
 }
@@ -4374,7 +4381,7 @@ function renderForm(
             label: 'Import',
             // renderPythonWarning() is meant to sit right above renderImportCard() (see its own
             // comment) - not a section of its own.
-            html: renderPythonWarning() + renderConfPackCard(mameInfo) + renderImportCard(importError),
+            html: renderImportSection(mameInfo, importError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
         if (isAdvanced) {
@@ -5820,6 +5827,36 @@ function renderConfPackCard(mameInfo: MameInfo): string {
             ${action}
         </section>
     `;
+}
+
+/**
+ * The starter pack (see ConfPack.ts): a few curated games to start with, installed whole from the
+ * repository in ONLINE mode, the configuration pack first (same as every import from there). No
+ * network call to render it: the pack's content is only read on install.
+ */
+function renderStarterPackCard(): string {
+    const action = isOnlineActive()
+        ? `<form method="post" action="/import/starter-pack" data-stream>
+                <button type="submit">Install the starter pack</button>
+            </form>`
+        : `<p class="info"><em>Import ${escapeHtml(STARTER_PACK_FILENAME)} with the form below, or turn ONLINE
+            mode on (MAUI tab) to download it.</em></p>`;
+    return `
+        <section class="card">
+            <h2>Starter pack</h2>
+            <p class="info">A selection of games to start with, downloaded from the repository with the
+            configuration pack. Adds them to the favorites; other games are left untouched.</p>
+            ${action}
+        </section>
+    `;
+}
+
+/**
+ * The MAME tab's Import section, also re-rendered after each import: renderPythonWarning() sits
+ * right above the cards that run the import script.
+ */
+function renderImportSection(mameInfo: MameInfo, importError?: string): string {
+    return renderPythonWarning() + renderConfPackCard(mameInfo) + renderStarterPackCard() + renderImportCard(importError);
 }
 
 function humanFileSize(bytes: number): string {
@@ -7407,9 +7444,7 @@ export function startBoServer(
         // Same gating as renderForm(): import only makes sense once the binary's configured and
         // validated (see there for why).
         if (!refreshedMameInfo.error) {
-            res.write(renderPythonWarning());
-            res.write(renderConfPackCard(refreshedMameInfo));
-            res.write(renderImportCard());
+            res.write(renderImportSection(refreshedMameInfo));
         }
         res.write(renderPageTail());
         res.end();
@@ -7490,8 +7525,10 @@ export function startBoServer(
         }
     });
 
-    // Not Advanced-only, unlike the game packs below: the carousel needs this pack to have genres.
-    app.post('/import/conf-pack', async (req, res) => {
+    // Not Advanced-only, unlike the game packs below: the carousel needs the configuration pack to
+    // have genres, and the starter pack is what a new cabinet starts with. The starter pack comes
+    // with the configuration pack, like every game pack from the repository.
+    const importFromRepository = (withStarterPack: boolean) => async (req: Request, res: Response) => {
         if (refuseOffline(res)) {
             return;
         }
@@ -7522,21 +7559,31 @@ export function startBoServer(
         if (!await runConfPackImport(res, repository)) {
             return;
         }
+        if (withStarterPack) {
+            if (getMissingConfPackFiles(getMameInfo(config)).length) {
+                res.write('<p class="error flash">The configuration pack could not be installed: starter pack not imported.</p>');
+            } else {
+                if (!await runRepositoryPackImport(res, repository, 'Starter pack', STARTER_PACK_FILENAME)) {
+                    return;
+                }
+                streamFavoritesRefreshAfterImport(res, config);
+            }
+        }
 
         const refreshedMameInfo = getMameInfo(config);
         res.write(renderConfigCard(values, refreshedMameInfo));
         res.write(renderMameInfoCard(refreshedMameInfo));
         if (!refreshedMameInfo.error) {
-            res.write(renderPythonWarning());
-            res.write(renderConfPackCard(refreshedMameInfo));
-            res.write(renderImportCard());
+            res.write(renderImportSection(refreshedMameInfo));
         }
         res.write(renderPageTail());
         res.end();
 
-        // Back through Init.vue, which re-seeds the categories from the new files.
+        // Back through Init.vue, which re-seeds the categories and re-syncs the games.
         reloadFront();
-    });
+    };
+    app.post('/import/conf-pack', importFromRepository(false));
+    app.post('/import/starter-pack', importFromRepository(true));
 
     app.post('/import/from-url', async (req, res) => {
         if (!req.session.boAdvanced) {

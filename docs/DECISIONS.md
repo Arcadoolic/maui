@@ -388,9 +388,12 @@ development), and repository requests never follow redirects (`redirect:
 'error'` in Node, a refusing redirect handler in
 `scripts/import-starting-pack.py`, which gets the credentials through its
 environment, never argv). Without ONLINE on, nothing downloads from the
-repository: no Games > Repository subtab, no configuration pack download
-button, and `/import/from-url/packs`, `/import/from-url` and
-`/import/conf-pack` answer 403 (an Advanced session could post directly).
+repository: no Games > Repository subtab, no configuration pack or starter
+pack download button, and `/import/from-url/packs`, `/import/from-url`,
+`/import/conf-pack` and `/import/starter-pack` answer 403 (an Advanced
+session could post directly). The starter pack (`starter-pack.zip`, a few
+curated games) sits next to the configuration pack in MAME > Import, not
+Advanced-only, and installs the configuration pack first.
 Manual ZIP import (MAME > Import) stays available OFFLINE. `repoUrl`,
 `repoUser` and `repoPassword` are gone from `Config`: older files load, and
 the keys disappear at the next save. Cabinets not updated lose repository
