@@ -76,6 +76,11 @@ def config_path():
     return os.path.join(app_data_path(), 'mame-awesome-ui-config.json')
 
 
+def roms_infos_cache_path():
+    """Same file as the app's FavoritesStore.ts getRomsInfosCachePath()."""
+    return os.path.join(app_data_path(), 'roms-infos-cache.json')
+
+
 def database_path():
     return os.path.join(app_data_path(), 'mame-awesome-ui.sqlite')
 
@@ -521,7 +526,7 @@ def js_like_parse_int(value):
 def default_summary():
     return {
         'gamesUpserted': 0, 'romFilesWritten': 0, 'biosFilesWritten': 0, 'marqueesWritten': 0,
-        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0,
+        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0, 'romsInfosAdded': 0,
         'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
         'errors': [],
     }
@@ -539,6 +544,41 @@ def favorite_entry(rom_name, fullname):
     return '\n'.join([
         rom_name, fullname, '', '', '', '0', '', rom_name, '', '', '', '1', '', '', '', '1',
     ]) + '\n'
+
+
+ROM_INFOS_FIELDS = ('publisher', 'publisherId', 'developer', 'developerId')
+
+
+def add_games_to_roms_infos(cache_path, games, generated_at, summary):
+    """Adds the publisher/developer the pack carries to the app's roms-infos-cache.json (same
+    shape as FavoritesStore.ts's RomsInfosCache), for the games it doesn't know yet: the BO's
+    ScreenScraper download then skips a game that came with its artwork and these infos. An entry
+    already there is kept, it may be newer than the pack's. Older packs carry none: nothing added."""
+    cache = {'entries': {}}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            summary['warnings'].append('roms-infos-cache.json unreadable, publishers not recorded.')
+            return
+    entries = cache.setdefault('entries', {})
+    added = 0
+    for game in games:
+        rom_name = game['romName']
+        if rom_name in entries or not any(field in game for field in ROM_INFOS_FIELDS):
+            continue
+        entries[rom_name] = {
+            **{field: game.get(field) for field in ROM_INFOS_FIELDS},
+            'fetchedAt': generated_at,
+        }
+        added += 1
+    if not added:
+        return
+    cache['updatedAt'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=1)
+    summary['romsInfosAdded'] += added
 
 
 def add_games_to_favorites(favorites_path, games, summary):
@@ -640,6 +680,9 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
         conn.close()
 
     add_games_to_favorites(ensure_favorites_path(ini_path), manifest.get('games', []), summary)
+    add_games_to_roms_infos(
+        roms_infos_cache_path(), manifest.get('games', []), manifest.get('generatedAt'), summary,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +898,7 @@ def print_summary(summary):
         f"{summary['flyersWritten']} flyer(s)",
         f"{summary['logosWritten']} logo(s)",
         f"{summary['favoritesAdded']} favorite(s) added",
+        f"{summary['romsInfosAdded']} publisher(s) recorded",
         f"{len(summary['errors'])} error(s)",
     ]
     print()

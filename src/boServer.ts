@@ -6085,7 +6085,9 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
     const isUpdate = !!pack.ownership && pack.ownership.owned > 0 && !fullyOwned;
     const items = pack.games.map(game => {
         const {mark, title} = PACK_GAME_MARKS[game.status];
-        const meta = [game.year, game.manufacturer && decodeXmlEntities(game.manufacturer), game.categoryName]
+        // The publisher when the pack carries it (mame's manufacturer mixes studios and licensees).
+        const studio = game.publisher ?? (game.manufacturer && decodeXmlEntities(game.manufacturer));
+        const meta = [game.year, studio, game.categoryName]
             .filter((part): part is string => !!part).map(escapeHtml).join(' · ');
         const hasHi = hasHiscoreExtraction(game.romName);
         const label = `${escapeHtml(decodeXmlEntities(game.fullname))}${hasHi
@@ -6095,7 +6097,7 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
         // What the search box looks in (folded and matched in the page, see renderRepoPackPicker()).
         const search = escapeHtml([
             decodeXmlEntities(game.fullname), game.romName, game.manufacturer && decodeXmlEntities(game.manufacturer),
-            game.categoryName, game.year,
+            game.publisher, game.categoryName, game.year,
         ].filter(Boolean).join(' '));
         if (game.status === 'installed' || fullyOwned) {
             return `

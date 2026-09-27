@@ -129,6 +129,12 @@ describe('getRequiredRoms', () => {
         expect(listPackGames(pack, [], sizes)[0].size).toBe(900);
     });
 
+    it('carries the ScreenScraper publisher when the pack has one', () => {
+        const pack = manifest([{...game('mslug', 'Metal Slug'), publisher: 'SNK'}, game('pong', 'Pong', false)]);
+
+        expect(listPackGames(pack, []).map(entry => entry.publisher)).toEqual(['SNK', null]);
+    });
+
     it('lists them on each pack game', () => {
         const pack = manifest([{...game('19xx', '19XX'), biosName: null, requiredRoms: ['qsound_hle']}]);
 

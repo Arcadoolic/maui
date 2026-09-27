@@ -11,6 +11,14 @@ export interface StartingPackGameEntry {
     subname: string;
     manufacturer: string | null;
     year: string | null;
+    // Publisher/developer as ScreenScraper names them (the app's roms-infos-cache.json on the
+    // machine that built the pack), which mame's manufacturer doesn't tell apart (mslug: SNK /
+    // Nazca). An import adds them to the cabinet's own cache, so its ScreenScraper download
+    // never asks again for a game that came with its artwork. Absent from older packs.
+    publisher?: string | null;
+    publisherId?: string | null;
+    developer?: string | null;
+    developerId?: string | null;
     // Resolved by category NAME, never by Category.id_category: that numeric id depends on
     // genre.ini's key order at seed time and isn't guaranteed portable across installs.
     categoryName: string | null;

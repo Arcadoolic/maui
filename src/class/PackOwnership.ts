@@ -60,6 +60,8 @@ export interface PackGameDetail {
     fullname: string;
     year: string | null;
     manufacturer: string | null;
+    // ScreenScraper's publisher, when the pack carries it (see StartingPackGameEntry).
+    publisher: string | null;
     categoryName: string | null;
     // Space its files take once extracted (rom zip + marquee/flyer/logo + sample set), see listPackGames().
     size: number;
@@ -107,6 +109,7 @@ export function listPackGames(
             fullname: game.fullname || game.romName,
             year: game.year ?? null,
             manufacturer: game.manufacturer ?? null,
+            publisher: game.publisher ?? null,
             categoryName: game.categoryName ?? null,
             size: sizeOf(game),
             biosName: game.biosName ?? null,
