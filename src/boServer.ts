@@ -47,6 +47,10 @@ import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
+import {
+    describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
+    type StoredScore,
+} from '@/class/HiscoreInspector';
 import {getCategoryDisplayName, getCategoryIconKey} from '@/class/CarouselCategories';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
 import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
@@ -110,7 +114,7 @@ declare module 'express-session' {
     }
 }
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'maui' | 'account';
+type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'hiscores' | 'maui' | 'account';
 // Who a page is rendered for: 'basic' leaves the Advanced configuration tabs/sections out (see
 // POST /advanced), and null (signed out - the login page) gets no nav at all.
 type Viewer = 'advanced' | 'basic' | null;
@@ -2029,6 +2033,20 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .badge-deleted {
             color: var(--text-muted);
         }
+        .badge-warn {
+            color: var(--warn);
+        }
+        /* Hiscores page: raw file content */
+        pre.hex-dump {
+            margin: 0;
+            padding: 8px;
+            max-height: 360px;
+            overflow: auto;
+            background: var(--surface-inset);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            line-height: 1.4;
+        }
         /* Deleted players, listed after the others in the same Players table (Advanced configuration only). */
         table.favorites-table tr.row-deleted td {
             opacity: 0.6;
@@ -2800,6 +2818,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
+            ${viewer === 'advanced' ? renderNavTabLink('/hiscores', 'Hiscores', active === 'hiscores') : ''}
             ${viewer === 'advanced' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
             ${renderNavTabLink('/maui', 'MAUI', active === 'maui')}
             ${renderNavTabLink('/account', 'My account', active === 'account')}
@@ -6499,6 +6518,179 @@ function renderUsersListCard(
     `;
 }
 
+/**
+ * hiscore.dat the hiscore plugin reads (<pluginspath>/hiscore/hiscore.dat): it gives the size each
+ * rom's .hi file should have, so the Hiscores page can flag a file written for another layout.
+ */
+function getHiscoreDatPath(mameHome: string): string | null {
+    const pluginsPath = getMameIniValue(join(mameHome, 'mame.ini'), 'pluginspath');
+    if (!pluginsPath) {
+        return null;
+    }
+    const path = join(resolveDirectoryPath(pluginsPath, mameHome), 'hiscore', 'hiscore.dat');
+    return existsSync(path) ? path : null;
+}
+
+/** Scores stored in the database, by id_game, keyed the way inspectHiscores() matches them. */
+async function getStoredScores(idGame?: number): Promise<Map<number, StoredScore[]>> {
+    const hiscores = await Hiscore.findAll({
+        ...(idGame !== undefined ? {where: {id_game: idGame}} : {}),
+        include: [{model: User, attributes: ['pseudo_3']}],
+    });
+    const byGame = new Map<number, StoredScore[]>();
+    for (const hiscore of hiscores) {
+        if (!hiscore.user) {
+            continue;
+        }
+        const scores = byGame.get(hiscore.id_game) || [];
+        scores.push({pseudo3: hiscore.user.pseudo_3, rank: hiscore.rank, score: hiscore.score});
+        byGame.set(hiscore.id_game, scores);
+    }
+    return byGame;
+}
+
+function formatDateTime(date: Date): string {
+    return date.toISOString().replace('T', ' ').slice(0, 16);
+}
+
+const HISCORE_ROW_STATUS: Record<HiscoreRowStatus, (pseudo3: string) => string> = {
+    saved: () => '<span class="badge-yes">✓ saved</span>',
+    pending: pseudo3 => `<span class="badge-warn" title="Player ${escapeHtml(pseudo3)} exists: MAUI stores this score the next time it reads the file (at start-up, or when a game ends)">… not saved yet</span>`,
+    ignored: pseudo3 => `<span class="badge-deleted" title="Scores are attributed to the player whose nickname is the first 3 letters of the name">no player ${escapeHtml(pseudo3)}</span>`,
+    extra: () => '<span class="badge-deleted" title="MAUI only stores the main table">not stored</span>',
+};
+
+function renderHiscoreFileState(report: HiscoreReport): string {
+    switch (report.state) {
+        case 'no-file':
+            return '<span class="badge-deleted">not played yet</span>';
+        case 'error':
+            return `<span class="badge-no" title="${escapeHtml(report.error || '')}">✗ unreadable</span>`;
+        case 'unsupported':
+            return '<span class="badge-deleted">no extractor</span>';
+        default: {
+            const latest = report.files.reduce((a, b) => (a.modified > b.modified ? a : b));
+            const sizeIssue = report.files.some(f => f.expectedSize !== null && f.expectedSize !== f.size);
+            return `<span class="badge-yes">✓</span> ${escapeHtml(formatDateTime(latest.modified))}`
+            + (sizeIssue ? ' <span class="badge-no" title="The .hi file size does not match hiscore.dat">⚠ size</span>' : '');
+        }
+    }
+}
+
+interface HiscoreListEntry {
+    game: Game;
+    report: HiscoreReport;
+}
+
+/**
+ * Every game with extractable hiscores: whether mame wrote its file yet, and what MAUI makes of
+ * it (rows decoded by mhiex, rows attributed to a player, rows stored in the database).
+ */
+function renderHiscoresListPage(entries: HiscoreListEntry[], viewer: Viewer, mameHome: string, error?: string): string {
+    const played = entries.filter(e => e.report.state !== 'no-file');
+    const rows = entries.map(({game, report}) => {
+        const main = report.tables[0]?.rows || [];
+        const known = main.filter(r => r.status !== 'ignored').length;
+        const saved = main.filter(r => r.status === 'saved').length;
+        const pending = main.filter(r => r.status === 'pending').length;
+        const hasData = report.state === 'ok';
+        return `
+        <tr>
+            <td>${renderGameName(game.fullname || game.romName)}</td>
+            <td><code>${escapeHtml(game.romName)}</code></td>
+            <td>${escapeHtml(describeSources(report.sources))}</td>
+            <td>${renderHiscoreFileState(report)}</td>
+            <td class="center">${hasData ? main.length : ''}</td>
+            <td class="center">${hasData ? known : ''}</td>
+            <td class="center">${hasData ? `${saved}${pending ? ` <span class="badge-warn" title="Not saved yet">+${pending}</span>` : ''}` : ''}</td>
+            <td class="center">${report.state === 'no-file' ? '' : `<a href="/hiscores/${encodeURIComponent(game.romName)}">Details</a>`}</td>
+        </tr>`;
+    }).join('');
+    return renderPage(`
+        <section class="card">
+            <h2>Hiscores (${played.length} played / ${entries.length} games)</h2>
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            <p class="info">Games whose hiscores MAUI can read. Mame writes the scores to
+            <code>${escapeHtml(join(mameHome, 'hiscore'))}</code> (or to the game's nvram), mhiex decodes them, and
+            MAUI stores each row whose name starts with a player's nickname.</p>
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead>
+                        <tr>
+                            <th>Game</th>
+                            <th>Rom</th>
+                            <th title="What mhiex reads the scores from">Source</th>
+                            <th>File</th>
+                            <th class="center" title="Rows of the main table decoded by mhiex">Rows</th>
+                            <th class="center" title="Rows whose name matches a player">Players</th>
+                            <th class="center" title="Rows stored in the database">Saved</th>
+                            <th class="center"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows || '<tr><td colspan="8"><em>No game with extractable hiscores</em></td></tr>'}</tbody>
+                </table>
+            </div>
+        </section>
+    `, 'hiscores', viewer);
+}
+
+/** One game: its files (with a hex dump), then every table mhiex decodes, row by row. */
+function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewer: Viewer): string {
+    const title = game ? (game.fullname || game.romName) : report.romName;
+    const files = report.files.map(file => {
+        const {lines, truncated} = hexDump(readFileSync(file.path));
+        const sizeNote = file.expectedSize === null ? ''
+            : file.expectedSize === file.size ? ' <span class="badge-yes">✓ matches hiscore.dat</span>'
+                : ` <span class="badge-no">⚠ hiscore.dat expects ${file.expectedSize} bytes</span>`;
+        return `
+            <h3><code>${escapeHtml(file.name)}</code></h3>
+            <p>${file.size} bytes${sizeNote} · modified ${escapeHtml(formatDateTime(file.modified))}</p>
+            <pre class="hex-dump">${escapeHtml(lines.join('\n'))}${truncated ? '\n…' : ''}</pre>
+        `;
+    }).join('');
+    const tables = report.tables.map(table => `
+        <h3>${table.id === null ? 'Main table' : `Extra table: ${escapeHtml(table.id)}`}</h3>
+        <div class="table-wrap">
+            <table class="favorites-table">
+                <thead><tr><th class="center">Rank</th><th>Score</th><th>Name</th><th>MAUI</th></tr></thead>
+                <tbody>${table.rows.map(row => `
+                    <tr>
+                        <td class="center">${row.rank}</td>
+                        <td>${escapeHtml(String(row.score))}</td>
+                        <td><code>${escapeHtml(JSON.stringify(row.name))}</code></td>
+                        <td>${HISCORE_ROW_STATUS[row.status](row.pseudo3)}</td>
+                    </tr>`).join('') || '<tr><td colspan="4"><em>Empty</em></td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    `).join('');
+    let decoded: string;
+    if (report.state === 'error') {
+        decoded = `<p class="error flash">mhiex could not decode the file: ${escapeHtml(report.error || '')}</p>`;
+    } else if (report.state === 'no-file') {
+        decoded = '<p class="info">Mame has not written this game\'s hiscores yet: play it once.</p>';
+    } else if (report.state === 'unsupported') {
+        decoded = '<p class="info">mhiex has no extractor for this rom.</p>';
+    } else {
+        decoded = tables;
+    }
+    return renderPage(`
+        <p><a href="/hiscores">← All hiscores</a></p>
+        <section class="card">
+            <h2>${escapeHtml(title)} <code>${escapeHtml(report.romName)}</code></h2>
+            ${report.sources ? `<p>Read from: ${[
+                report.sources.hi ? `<code>hiscore/${escapeHtml(report.romName)}.hi</code>${report.sources.hi === 'optional' ? ' (when it exists)' : ''}` : '',
+                report.sources.nvram ? `<code>${escapeHtml(report.sources.nvram)}</code>` : '',
+            ].filter(Boolean).join(' + ')}</p>` : ''}
+            ${decoded}
+        </section>
+        <section class="card">
+            <h2>Files</h2>
+            ${files || '<p><em>No file</em></p>'}
+        </section>
+    `, 'hiscores', viewer);
+}
+
 function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
     extras: UsersListExtras = {isAdvanced: false, deleted: []},
@@ -7072,6 +7264,60 @@ export function startBoServer(
             res.send(await usersPage(req, [], avatarFilenames, 'Database not found or not initialized yet - '
                 + 'launch the application once before managing players.'));
         }
+    });
+
+    // Advanced configuration only: a diagnostic view (raw files, hex dumps) of what MAUI reads
+    app.get('/hiscores', async (req, res) => {
+        if (!req.session.boAdvanced) {
+            res.redirect('/');
+            return;
+        }
+        const mameHome = getMameHomePath();
+        try {
+            const games = await Game.findAll({where: {hi: true}, order: ['romName']});
+            const players = new Set((await User.findAll()).map(user => user.pseudo_3));
+            const stored = await getStoredScores();
+            const sizes = readHiscoreDatSizes(getHiscoreDatPath(mameHome));
+            const entries: HiscoreListEntry[] = [];
+            for (const game of games) {
+                entries.push({game, report: await inspectHiscores(mameHome, game.romName, players, stored.get(game.id_game) || [], sizes)});
+            }
+            // Played games first, most recent file first
+            const latest = (e: HiscoreListEntry) => Math.max(0, ...e.report.files.map(f => f.modified.getTime()));
+            entries.sort((a, b) => latest(b) - latest(a));
+            res.send(renderHiscoresListPage(entries, getViewer(req), mameHome));
+        } catch {
+            res.send(renderHiscoresListPage([], getViewer(req), mameHome, 'Database not found or not initialized yet - '
+                + 'launch the application once to list the games.'));
+        }
+    });
+
+    app.get('/hiscores/:romName', async (req, res) => {
+        if (!req.session.boAdvanced) {
+            res.redirect('/');
+            return;
+        }
+        const mameHome = getMameHomePath();
+        const romName = String(req.params.romName);
+        // Only a plain rom name: it becomes a path under the mame home directory
+        if (!/^[a-z0-9_]+$/i.test(romName)) {
+            res.status(404).send(renderPage('<section class="card"><p class="error">Unknown rom.</p></section>', 'hiscores', getViewer(req)));
+            return;
+        }
+        let game: Game | null = null;
+        let players = new Set<string>();
+        let stored: StoredScore[] = [];
+        try {
+            game = await Game.findOne({where: {romName}});
+            players = new Set((await User.findAll()).map(user => user.pseudo_3));
+            if (game) {
+                stored = (await getStoredScores(game.id_game)).get(game.id_game) || [];
+            }
+        } catch {
+            // No database yet: the files and mhiex's decoding are still worth showing
+        }
+        const report = await inspectHiscores(mameHome, romName, players, stored, readHiscoreDatSizes(getHiscoreDatPath(mameHome)));
+        res.send(renderHiscoreDetailPage(game, report, getViewer(req)));
     });
 
     app.post('/users/create', async (req, res) => {

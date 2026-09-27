@@ -12,3 +12,11 @@ const extractors = new MameHiExtractor('');
 export function hasHiscoreExtraction(romName: string): boolean {
     return extractors.exist(romName);
 }
+
+/**
+ * Nickname a score row is attributed to: the first 3 characters of its name, upper-cased, matched
+ * against the players' pseudo_3 (HiscoreService.saveHiscores(), and the BO's Hiscores page).
+ */
+export function scorePseudo3(name: string): string {
+    return name.substring(0, 3).toUpperCase();
+}
