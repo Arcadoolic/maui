@@ -48,7 +48,8 @@ import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
 import {
-    hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes, type StoredScore,
+    describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
+    type StoredScore,
 } from '@/class/HiscoreInspector';
 import {getCategoryDisplayName, getCategoryIconKey} from '@/class/CarouselCategories';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
@@ -6597,6 +6598,7 @@ function renderHiscoresListPage(entries: HiscoreListEntry[], viewer: Viewer, mam
         <tr>
             <td>${renderGameName(game.fullname || game.romName)}</td>
             <td><code>${escapeHtml(game.romName)}</code></td>
+            <td>${escapeHtml(describeSources(report.sources))}</td>
             <td>${renderHiscoreFileState(report)}</td>
             <td class="center">${hasData ? main.length : ''}</td>
             <td class="center">${hasData ? known : ''}</td>
@@ -6617,6 +6619,7 @@ function renderHiscoresListPage(entries: HiscoreListEntry[], viewer: Viewer, mam
                         <tr>
                             <th>Game</th>
                             <th>Rom</th>
+                            <th title="What mhiex reads the scores from">Source</th>
                             <th>File</th>
                             <th class="center" title="Rows of the main table decoded by mhiex">Rows</th>
                             <th class="center" title="Rows whose name matches a player">Players</th>
@@ -6624,7 +6627,7 @@ function renderHiscoresListPage(entries: HiscoreListEntry[], viewer: Viewer, mam
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows || '<tr><td colspan="7"><em>No game with extractable hiscores</em></td></tr>'}</tbody>
+                    <tbody>${rows || '<tr><td colspan="8"><em>No game with extractable hiscores</em></td></tr>'}</tbody>
                 </table>
             </div>
         </section>
@@ -6675,6 +6678,10 @@ function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewe
         <p><a href="/hiscores">← All hiscores</a></p>
         <section class="card">
             <h2>${escapeHtml(title)} <code>${escapeHtml(report.romName)}</code></h2>
+            ${report.sources ? `<p>Read from: ${[
+                report.sources.hi ? `<code>hiscore/${escapeHtml(report.romName)}.hi</code>${report.sources.hi === 'optional' ? ' (when it exists)' : ''}` : '',
+                report.sources.nvram ? `<code>${escapeHtml(report.sources.nvram)}</code>` : '',
+            ].filter(Boolean).join(' + ')}</p>` : ''}
             ${decoded}
         </section>
         <section class="card">

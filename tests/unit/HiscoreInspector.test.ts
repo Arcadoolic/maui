@@ -16,6 +16,7 @@ describe('inspectHiscores', () => {
         ]);
 
         expect(report.state).toBe('ok');
+        expect(report.sources).toEqual({hi: true, nvram: null});
         expect(report.files.map(f => [f.name, f.size])).toEqual([['hiscore/dkong.hi', 179]]);
         expect(report.tables).toHaveLength(1);
         expect(report.tables[0].id).toBeNull();
@@ -104,5 +105,16 @@ describe('hexDump', () => {
 
         expect(lines).toHaveLength(2);
         expect(truncated).toBe(true);
+    });
+});
+
+describe('describeSources', () => {
+    it('names what the extractor reads', async () => {
+        const {describeSources} = await import('@/class/HiscoreInspector');
+        expect(describeSources({hi: true, nvram: null})).toBe('.hi');
+        expect(describeSources({hi: false, nvram: 'nvram/qbert/nvram'})).toBe('nvram');
+        expect(describeSources({hi: true, nvram: 'nvram/centiped/earom'})).toBe('.hi + nvram');
+        expect(describeSources({hi: 'optional', nvram: 'nvram/punchout/nvram'})).toBe('.hi (optional) + nvram');
+        expect(describeSources(null)).toBe('');
     });
 });

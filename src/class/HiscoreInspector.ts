@@ -1,6 +1,6 @@
 import {existsSync, readdirSync, readFileSync, statSync} from 'fs';
 import {join} from 'path';
-import {MameHiExtractor} from '@arcadoolic/mhiex';
+import {type ExtractorFiles, MameHiExtractor} from '@arcadoolic/mhiex';
 import {hasHiscoreExtraction, scorePseudo3} from '@/class/HiscoreSupport';
 
 /**
@@ -43,6 +43,8 @@ export type HiscoreState = 'unsupported' | 'no-file' | 'ok' | 'error';
 export interface HiscoreReport {
     romName: string;
     state: HiscoreState;
+    // What the extractor reads: its .hi (required or optional), its nvram, or both; null without one
+    sources: ExtractorFiles | null;
     error?: string;
     files: HiscoreFileInfo[];
     tables: InspectedTable[];
@@ -83,22 +85,23 @@ export async function inspectHiscores(
     expectedSizes: Map<string, number> | null = null,
 ): Promise<HiscoreReport> {
     const files = listHiscoreFiles(mameHome, romName, expectedSizes);
+    const sources = new MameHiExtractor(mameHome).files(romName);
     if (!hasHiscoreExtraction(romName)) {
-        return {romName, state: 'unsupported', files, tables: []};
+        return {romName, state: 'unsupported', sources, files, tables: []};
     }
     let scores;
     try {
         const extractor = await new MameHiExtractor(mameHome).get(romName);
         if (!extractor) {
-            return {romName, state: 'unsupported', files, tables: []};
+            return {romName, state: 'unsupported', sources, files, tables: []};
         }
         scores = extractor.extract(true).scores;
     } catch (error) {
         // Same case HiscoreService.saveHiscores() skips: the game has not written its file yet
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            return {romName, state: 'no-file', files, tables: []};
+            return {romName, state: 'no-file', sources, files, tables: []};
         }
-        return {romName, state: 'error', error: error instanceof Error ? error.message : String(error), files, tables: []};
+        return {romName, state: 'error', error: error instanceof Error ? error.message : String(error), sources, files, tables: []};
     }
 
     const isStored = (pseudo3: string, rank: number, score: number | string) =>
@@ -117,7 +120,16 @@ export async function inspectHiscores(
     for (const [id, rows] of Object.entries(scores.extras || {})) {
         tables.push({id, rows: inspect(rows as InspectedRow[], true)});
     }
-    return {romName, state: 'ok', files, tables};
+    return {romName, state: 'ok', sources, files, tables};
+}
+
+/** Short label of what an extractor reads, for the back office: ".hi", "nvram", ".hi + nvram"... */
+export function describeSources(sources: ExtractorFiles | null): string {
+    if (!sources) {
+        return '';
+    }
+    const hi = sources.hi === true ? '.hi' : sources.hi === 'optional' ? '.hi (optional)' : null;
+    return [hi, sources.nvram ? 'nvram' : null].filter(Boolean).join(' + ');
 }
 
 /** rom -> total size of its hiscore.dat memory ranges, i.e. the size of the .hi file it writes */
