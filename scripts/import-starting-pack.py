@@ -227,6 +227,8 @@ IMPORTABLE_MAME_DIRECTORIES = [
     ('sta', 'state_directory'),
     ('snap', 'snapshot_directory'),
     ('folders', 'categorypath'),
+    # Sample sets of the pack games (manifest sampleSet), one zip per set, filtered by --only.
+    ('samples', 'samplepath'),
 ]
 
 
@@ -259,7 +261,7 @@ def extract_entry_to(zf, entry_name, dest_dir):
     return True
 
 
-def extract_zip_folder(zf, folder, target_dir):
+def extract_zip_folder(zf, folder, target_dir, entry_filter=None):
     """Copies every file entry under `{folder}/` into target_dir, preserving whatever
     subdirectories sit under it (e.g. snapshot_directory's per-game subfolders). Guards against
     zip-slip: an entry whose relative path would resolve outside target_dir (via a `../` segment)
@@ -270,6 +272,8 @@ def extract_zip_folder(zf, folder, target_dir):
     for info in zf.infolist():
         name = info.filename
         if name.endswith('/') or not name.startswith(prefix):
+            continue
+        if entry_filter is not None and name not in entry_filter:
             continue
         relative = name[len(prefix):]
         destination = os.path.realpath(os.path.join(target_dir, relative))
@@ -299,9 +303,12 @@ def resolve_directory_targets(zf, resolved_ini, ini_path, summary):
     return targets
 
 
-def import_mame_directories(zf, directory_targets, summary, log):
+def import_mame_directories(zf, directory_targets, summary, log, entry_filter=None):
+    """entry_filter: with --only, the per-game entries to extract (see wanted_entries()) - a
+    PER_GAME_FOLDERS folder (samples/) then only brings the files of the selected games."""
     for zip_folder, target_dir in directory_targets.items():
-        files_written = extract_zip_folder(zf, zip_folder, target_dir)
+        folder_filter = entry_filter if zip_folder in PER_GAME_FOLDERS else None
+        files_written = extract_zip_folder(zf, zip_folder, target_dir, folder_filter)
         summary['directoriesImported'].append({'zipFolder': zip_folder, 'filesWritten': files_written})
         log(f'{zip_folder}/: {files_written} file(s) copied to {target_dir}.')
 
@@ -311,7 +318,7 @@ def import_mame_directories(zf, directory_targets, summary, log):
 # ---------------------------------------------------------------------------
 
 # Zip folders holding one file per game: what --only narrows down.
-PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos')
+PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos', 'samples')
 
 
 def required_roms(game):
@@ -335,10 +342,12 @@ def select_games(manifest, only, summary):
     needed_bios = set()
     for game in games:
         needed_bios.update(required_roms(game))
+    needed_samples = {game['sampleSet'] for game in games if game.get('sampleSet')}
     return {
         **manifest,
         'games': games,
         'biosRoms': [name for name in manifest.get('biosRoms', []) if name in needed_bios],
+        'sampleSets': [name for name in manifest.get('sampleSets', []) if name in needed_samples],
     }
 
 
@@ -355,6 +364,8 @@ def wanted_entries(manifest):
             entries.add(f'flyers/{rom_name}.png')
         if game.get('hasLogo'):
             entries.add(f'logos/{rom_name}.png')
+        if game.get('sampleSet'):
+            entries.add(f"samples/{game['sampleSet']}.zip")
     entries.update(f'roms/{name}.zip' for name in manifest.get('biosRoms', []))
     return entries
 
@@ -1026,7 +1037,7 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
         # categorypath backup - no need for a second, dedicated read of them here), and writing
         # them early, before import_starting_pack()'s own game-upsert loop, means they've already
         # made it to disk even if that loop fails partway through.
-        import_mame_directories(zf, directory_targets, summary, log)
+        import_mame_directories(zf, directory_targets, summary, log, entry_filter)
         if manifest is not None:
             import_starting_pack(
                 zf, manifest, rom_path, locations['marquee_path'], locations['flyer_path'],

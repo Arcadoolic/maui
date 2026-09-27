@@ -24,6 +24,10 @@ export interface StartingPackGameEntry {
     // ship ROMs (qsound_hle, namco51...). Added after formatVersion 1 packs were in the wild:
     // absent from an older pack, where biosName is the only dependency known.
     requiredRoms?: string[];
+    // Sample set the game plays some sounds from (mame's `sampleof`, e.g. qbert's knocker),
+    // bundled at samples/<name>.zip and installed into the samplepath. null/absent when the game
+    // uses none, or the pack was built without it (mame then runs the game without those sounds).
+    sampleSet?: string | null;
     hasRomFile: boolean;
     hasMarquee: boolean;
     hasFlyer: boolean;
@@ -40,4 +44,6 @@ export interface StartingPackManifest {
     // Deduplicated dependency romNames bundled under roms/ - every game's requiredRoms (or
     // biosName in an older pack) - one physical file even when several games share one.
     biosRoms: string[];
+    // Deduplicated sampleSet names bundled under samples/ - absent from packs built before.
+    sampleSets?: string[];
 }

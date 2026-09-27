@@ -122,6 +122,13 @@ describe('getRequiredRoms', () => {
         expect(getRequiredRoms({biosName: null})).toEqual([]);
     });
 
+    it('counts a game\'s sample set in its size', () => {
+        const pack = manifest([{...game('qbert', 'Q*bert'), sampleSet: 'qbert'}]);
+        const sizes = new Map([['roms/qbert.zip', 100], ['samples/qbert.zip', 800]]);
+
+        expect(listPackGames(pack, [], sizes)[0].size).toBe(900);
+    });
+
     it('lists them on each pack game', () => {
         const pack = manifest([{...game('19xx', '19XX'), biosName: null, requiredRoms: ['qsound_hle']}]);
 

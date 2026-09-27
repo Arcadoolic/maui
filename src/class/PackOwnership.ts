@@ -61,7 +61,7 @@ export interface PackGameDetail {
     year: string | null;
     manufacturer: string | null;
     categoryName: string | null;
-    // Space its files take once extracted (rom zip + marquee/flyer/logo), see listPackGames().
+    // Space its files take once extracted (rom zip + marquee/flyer/logo + sample set), see listPackGames().
     size: number;
     // The BIOS/parent set it needs (also shipped by the pack), if any.
     biosName: string | null;
@@ -98,6 +98,7 @@ export function listPackGames(
             game.hasMarquee ? `marquees/${game.romName}.png` : null,
             game.hasFlyer ? `flyers/${game.romName}.png` : null,
             game.hasLogo ? `logos/${game.romName}.png` : null,
+            game.sampleSet ? `samples/${game.sampleSet}.zip` : null,
         ].reduce((total, entry) => total + (entry ? entrySizes.get(entry) ?? 0 : 0), 0);
     };
     return games
