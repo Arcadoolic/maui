@@ -43,17 +43,32 @@ export function isPackFullyOwned(ownership: PackOwnership | null | undefined): b
     return !!ownership && ownership.missing.length === 0;
 }
 
+/**
+ * The romsets a pack game needs besides its own zip: its manifest's requiredRoms, or its biosName
+ * alone in a pack built before requiredRoms existed.
+ */
+export function getRequiredRoms(game: Pick<StartingPackGameEntry, 'biosName' | 'requiredRoms'>): string[] {
+    if (Array.isArray(game.requiredRoms)) {
+        return game.requiredRoms;
+    }
+    return game.biosName ? [game.biosName] : [];
+}
+
 /** One line of a pack's expandable game list. */
 export interface PackGameDetail {
     romName: string;
     fullname: string;
     year: string | null;
     manufacturer: string | null;
+    // ScreenScraper's publisher, when the pack carries it (see StartingPackGameEntry).
+    publisher: string | null;
     categoryName: string | null;
-    // Space its files take once extracted (rom zip + marquee/flyer/logo), see listPackGames().
+    // Space its files take once extracted (rom zip + marquee/flyer/logo + sample set), see listPackGames().
     size: number;
     // The BIOS/parent set it needs (also shipped by the pack), if any.
     biosName: string | null;
+    // Every set it needs (also shipped by the pack), see getRequiredRoms().
+    requiredRoms: string[];
     // installed: its rom zip is already here; new: it is not; no-rom: the game ships no rom file
     // of its own (nothing to compare).
     status: 'installed' | 'new' | 'no-rom';
@@ -85,6 +100,7 @@ export function listPackGames(
             game.hasMarquee ? `marquees/${game.romName}.png` : null,
             game.hasFlyer ? `flyers/${game.romName}.png` : null,
             game.hasLogo ? `logos/${game.romName}.png` : null,
+            game.sampleSet ? `samples/${game.sampleSet}.zip` : null,
         ].reduce((total, entry) => total + (entry ? entrySizes.get(entry) ?? 0 : 0), 0);
     };
     return games
@@ -93,18 +109,20 @@ export function listPackGames(
             fullname: game.fullname || game.romName,
             year: game.year ?? null,
             manufacturer: game.manufacturer ?? null,
+            publisher: game.publisher ?? null,
             categoryName: game.categoryName ?? null,
             size: sizeOf(game),
             biosName: game.biosName ?? null,
+            requiredRoms: getRequiredRoms(game),
             status: !game.hasRomFile ? 'no-rom' : installed.has(game.romName.toLowerCase()) ? 'installed' : 'new',
         }))
         .sort((a, b) => a.fullname.localeCompare(b.fullname));
 }
 
 /**
- * Size of each BIOS/parent set a pack ships (`biosRoms`), by name; empty when the entry sizes are
- * unknown. A game needs its `biosName` set on top of its own files, but games sharing one only
- * need it once: the UI counts each set once per pack.
+ * Size of each dependency set a pack ships (`biosRoms`), by name; empty when the entry sizes are
+ * unknown. A game needs its required sets (getRequiredRoms()) on top of its own files, but games
+ * sharing one only need it once: the UI counts each set once per pack.
  */
 export function computeBiosSizes(
     manifest: Partial<StartingPackManifest> | null | undefined, entrySizes?: ReadonlyMap<string, number> | null,

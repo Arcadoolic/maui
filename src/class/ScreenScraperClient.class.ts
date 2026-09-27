@@ -16,8 +16,18 @@ export interface GameMediaResult {
     logoUrl: string | null;
 }
 
+// Publisher ("editeur") and developer ("developpeur") of the game, as ScreenScraper names them -
+// the studio a game came out under, which mame's single <manufacturer> field doesn't tell apart
+// (e.g. "Nazca" for mslug, published by SNK). null when ScreenScraper doesn't know it.
+export interface GameInfos {
+    publisher: string | null;
+    publisherId: string | null;
+    developer: string | null;
+    developerId: string | null;
+}
+
 export type FetchGameMediaResult =
-    | {status: 'found'; media: GameMediaResult}
+    | {status: 'found'; media: GameMediaResult; infos: GameInfos}
     | {status: 'not-found'}
     | {status: 'quota-exceeded'; message: string}
     | {status: 'error'; message: string};
@@ -46,6 +56,30 @@ interface RawMedia {
     type?: string;
     region?: string;
     url?: string;
+}
+
+interface RawCompany {
+    id?: string | number;
+    text?: string;
+}
+
+function readCompany(company: RawCompany | undefined): {name: string | null; id: string | null} {
+    const name = company?.text?.trim();
+    return {
+        name: name || null,
+        id: company?.id !== undefined && company.id !== '' ? String(company.id) : null,
+    };
+}
+
+export function readGameInfos(jeu: {editeur?: RawCompany; developpeur?: RawCompany}): GameInfos {
+    const publisher = readCompany(jeu.editeur);
+    const developer = readCompany(jeu.developpeur);
+    return {
+        publisher: publisher.name,
+        publisherId: publisher.id,
+        developer: developer.name,
+        developerId: developer.id,
+    };
 }
 
 function pickBestMediaUrl(medias: RawMedia[], type: string): string | null {
@@ -133,6 +167,7 @@ export default class ScreenScraperClient {
                 flyerUrl: pickBestMediaUrl(medias, MEDIA_TYPE.flyer),
                 logoUrl: pickBestMediaUrl(medias, MEDIA_TYPE.logo),
             },
+            infos: readGameInfos(jeu),
         };
     }
 

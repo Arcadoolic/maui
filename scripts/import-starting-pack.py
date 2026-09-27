@@ -76,6 +76,11 @@ def config_path():
     return os.path.join(app_data_path(), 'mame-awesome-ui-config.json')
 
 
+def roms_infos_cache_path():
+    """Same file as the app's FavoritesStore.ts getRomsInfosCachePath()."""
+    return os.path.join(app_data_path(), 'roms-infos-cache.json')
+
+
 def database_path():
     return os.path.join(app_data_path(), 'mame-awesome-ui.sqlite')
 
@@ -227,6 +232,8 @@ IMPORTABLE_MAME_DIRECTORIES = [
     ('sta', 'state_directory'),
     ('snap', 'snapshot_directory'),
     ('folders', 'categorypath'),
+    # Sample sets of the pack games (manifest sampleSet), one zip per set, filtered by --only.
+    ('samples', 'samplepath'),
 ]
 
 
@@ -259,7 +266,7 @@ def extract_entry_to(zf, entry_name, dest_dir):
     return True
 
 
-def extract_zip_folder(zf, folder, target_dir):
+def extract_zip_folder(zf, folder, target_dir, entry_filter=None):
     """Copies every file entry under `{folder}/` into target_dir, preserving whatever
     subdirectories sit under it (e.g. snapshot_directory's per-game subfolders). Guards against
     zip-slip: an entry whose relative path would resolve outside target_dir (via a `../` segment)
@@ -270,6 +277,8 @@ def extract_zip_folder(zf, folder, target_dir):
     for info in zf.infolist():
         name = info.filename
         if name.endswith('/') or not name.startswith(prefix):
+            continue
+        if entry_filter is not None and name not in entry_filter:
             continue
         relative = name[len(prefix):]
         destination = os.path.realpath(os.path.join(target_dir, relative))
@@ -299,9 +308,12 @@ def resolve_directory_targets(zf, resolved_ini, ini_path, summary):
     return targets
 
 
-def import_mame_directories(zf, directory_targets, summary, log):
+def import_mame_directories(zf, directory_targets, summary, log, entry_filter=None):
+    """entry_filter: with --only, the per-game entries to extract (see wanted_entries()) - a
+    PER_GAME_FOLDERS folder (samples/) then only brings the files of the selected games."""
     for zip_folder, target_dir in directory_targets.items():
-        files_written = extract_zip_folder(zf, zip_folder, target_dir)
+        folder_filter = entry_filter if zip_folder in PER_GAME_FOLDERS else None
+        files_written = extract_zip_folder(zf, zip_folder, target_dir, folder_filter)
         summary['directoriesImported'].append({'zipFolder': zip_folder, 'filesWritten': files_written})
         log(f'{zip_folder}/: {files_written} file(s) copied to {target_dir}.')
 
@@ -311,24 +323,36 @@ def import_mame_directories(zf, directory_targets, summary, log):
 # ---------------------------------------------------------------------------
 
 # Zip folders holding one file per game: what --only narrows down.
-PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos')
+PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos', 'samples')
+
+
+def required_roms(game):
+    """The romsets a game needs besides its own zip: `requiredRoms` (parent, romof chain up to
+    the BIOS, devices with ROMs), or just `biosName` in a pack built before requiredRoms."""
+    if isinstance(game.get('requiredRoms'), list):
+        return game['requiredRoms']
+    return [game['biosName']] if game.get('biosName') else []
 
 
 def select_games(manifest, only, summary):
     """Copy of `manifest` restricted to the games named in `only` (romNames), keeping the pack's
     order: the import below then needs no idea of --only at all - games, favorites and database
-    rows all come from this manifest. Only the BIOS/parent sets those games need (`biosName`)
-    stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
+    rows all come from this manifest. Only the sets those games need (`requiredRoms`, or
+    `biosName` in a pack built before it existed) stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
     BO builds the list from the manifest, so it can only differ if the pack changed meanwhile."""
     wanted = set(only)
     games = [game for game in manifest.get('games', []) if game['romName'] in wanted]
     for rom_name in sorted(wanted - {game['romName'] for game in games}):
         summary['warnings'].append(f'{rom_name}: not in this pack, skipped.')
-    needed_bios = {game['biosName'] for game in games if game.get('biosName')}
+    needed_bios = set()
+    for game in games:
+        needed_bios.update(required_roms(game))
+    needed_samples = {game['sampleSet'] for game in games if game.get('sampleSet')}
     return {
         **manifest,
         'games': games,
         'biosRoms': [name for name in manifest.get('biosRoms', []) if name in needed_bios],
+        'sampleSets': [name for name in manifest.get('sampleSets', []) if name in needed_samples],
     }
 
 
@@ -345,6 +369,8 @@ def wanted_entries(manifest):
             entries.add(f'flyers/{rom_name}.png')
         if game.get('hasLogo'):
             entries.add(f'logos/{rom_name}.png')
+        if game.get('sampleSet'):
+            entries.add(f"samples/{game['sampleSet']}.zip")
     entries.update(f'roms/{name}.zip' for name in manifest.get('biosRoms', []))
     return entries
 
@@ -500,7 +526,7 @@ def js_like_parse_int(value):
 def default_summary():
     return {
         'gamesUpserted': 0, 'romFilesWritten': 0, 'biosFilesWritten': 0, 'marqueesWritten': 0,
-        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0,
+        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0, 'romsInfosAdded': 0,
         'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
         'errors': [],
     }
@@ -518,6 +544,41 @@ def favorite_entry(rom_name, fullname):
     return '\n'.join([
         rom_name, fullname, '', '', '', '0', '', rom_name, '', '', '', '1', '', '', '', '1',
     ]) + '\n'
+
+
+ROM_INFOS_FIELDS = ('publisher', 'publisherId', 'developer', 'developerId')
+
+
+def add_games_to_roms_infos(cache_path, games, generated_at, summary):
+    """Adds the publisher/developer the pack carries to the app's roms-infos-cache.json (same
+    shape as FavoritesStore.ts's RomsInfosCache), for the games it doesn't know yet: the BO's
+    ScreenScraper download then skips a game that came with its artwork and these infos. An entry
+    already there is kept, it may be newer than the pack's. Older packs carry none: nothing added."""
+    cache = {'entries': {}}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            summary['warnings'].append('roms-infos-cache.json unreadable, publishers not recorded.')
+            return
+    entries = cache.setdefault('entries', {})
+    added = 0
+    for game in games:
+        rom_name = game['romName']
+        if rom_name in entries or not any(field in game for field in ROM_INFOS_FIELDS):
+            continue
+        entries[rom_name] = {
+            **{field: game.get(field) for field in ROM_INFOS_FIELDS},
+            'fetchedAt': generated_at,
+        }
+        added += 1
+    if not added:
+        return
+    cache['updatedAt'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=1)
+    summary['romsInfosAdded'] += added
 
 
 def add_games_to_favorites(favorites_path, games, summary):
@@ -619,6 +680,9 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
         conn.close()
 
     add_games_to_favorites(ensure_favorites_path(ini_path), manifest.get('games', []), summary)
+    add_games_to_roms_infos(
+        roms_infos_cache_path(), manifest.get('games', []), manifest.get('generatedAt'), summary,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -834,6 +898,7 @@ def print_summary(summary):
         f"{summary['flyersWritten']} flyer(s)",
         f"{summary['logosWritten']} logo(s)",
         f"{summary['favoritesAdded']} favorite(s) added",
+        f"{summary['romsInfosAdded']} publisher(s) recorded",
         f"{len(summary['errors'])} error(s)",
     ]
     print()
@@ -1016,7 +1081,7 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
         # categorypath backup - no need for a second, dedicated read of them here), and writing
         # them early, before import_starting_pack()'s own game-upsert loop, means they've already
         # made it to disk even if that loop fails partway through.
-        import_mame_directories(zf, directory_targets, summary, log)
+        import_mame_directories(zf, directory_targets, summary, log, entry_filter)
         if manifest is not None:
             import_starting_pack(
                 zf, manifest, rom_path, locations['marquee_path'], locations['flyer_path'],
