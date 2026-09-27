@@ -2817,7 +2817,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
-            ${renderNavTabLink('/hiscores', 'Hiscores', active === 'hiscores')}
+            ${viewer === 'advanced' ? renderNavTabLink('/hiscores', 'Hiscores', active === 'hiscores') : ''}
             ${viewer === 'advanced' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
             ${renderNavTabLink('/maui', 'MAUI', active === 'maui')}
             ${renderNavTabLink('/account', 'My account', active === 'account')}
@@ -7259,7 +7259,12 @@ export function startBoServer(
         }
     });
 
+    // Advanced configuration only: a diagnostic view (raw files, hex dumps) of what MAUI reads
     app.get('/hiscores', async (req, res) => {
+        if (!req.session.boAdvanced) {
+            res.redirect('/');
+            return;
+        }
         const mameHome = getMameHomePath();
         try {
             const games = await Game.findAll({where: {hi: true}, order: ['romName']});
@@ -7281,6 +7286,10 @@ export function startBoServer(
     });
 
     app.get('/hiscores/:romName', async (req, res) => {
+        if (!req.session.boAdvanced) {
+            res.redirect('/');
+            return;
+        }
         const mameHome = getMameHomePath();
         const romName = String(req.params.romName);
         // Only a plain rom name: it becomes a path under the mame home directory
