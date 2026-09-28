@@ -78,6 +78,8 @@ import {
 } from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {renderOnlineCard} from '@/class/OnlineBoCard';
+import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
+import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
@@ -1575,6 +1577,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
 <html lang="en">
 <head>
     <meta charset="utf-8">
+    <!-- Without it a phone lays the page out at a ~980px desktop width and zooms out, so none
+         of the max-width media queries below ever match. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>mame-awesome-ui - Configuration</title>
     <style>
         /* Design tokens (Phase 0 of docs/BO-UX-REVAMP.md): every color/spacing/radius below is
@@ -1831,7 +1836,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         form > button[type="submit"]:last-child {
             margin-top: 24px;
         }
-        .error, .info {
+        .error, .info, .warn {
             padding: 10px 14px;
             margin: 12px 0 0;
             border-radius: var(--radius-md);
@@ -1844,6 +1849,10 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .info {
             color: var(--accent);
             background-color: rgba(138, 180, 248, 0.12);
+        }
+        .warn {
+            color: var(--warn);
+            background-color: rgba(255, 209, 102, 0.12);
         }
         /* Numbered steps in an info box: keeps room for the markers the .info padding would eat. */
         ol.info {
@@ -1874,6 +1883,12 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .path-row input {
             margin-top: 0;
+            /* An input's intrinsic width (~20 characters) is its flex min-width by default: on a
+               phone it pushed the Browse button past the card's edge. */
+            min-width: 0;
+        }
+        .path-row button {
+            flex: 0 0 auto;
         }
         .plugins-path-field {
             transition: opacity 0.15s ease;
@@ -1915,6 +1930,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             align-items: center;
             gap: 8px;
+        }
+        .launch-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        button.button-attention {
+            color: #000000;
+            background-color: var(--warn);
+        }
+        button.button-attention:hover:not(:disabled) {
+            background-color: #ffe199;
         }
         .launch-logo {
             height: 20px;
@@ -2818,6 +2845,67 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .subtab-panel.active {
             display: block;
+        }
+        /* Phones and small tablets (the BO is reachable from any device on the LAN). Kept last so
+           it overrides the desktop rules above without raising their specificity. */
+        @media (max-width: 600px) {
+            body {
+                max-width: none;
+                padding: 8px 8px 32px;
+            }
+            header {
+                padding: 8px 0 16px;
+            }
+            .card {
+                padding: 16px 12px;
+                margin-bottom: 16px;
+            }
+            /* Wrapped onto several rows, a 999px radius turns the capsules into lozenges with
+               pinched ends: a plain rounded box reads better. */
+            .tabs, .subtabs, .player-tabs {
+                border-radius: var(--radius-lg);
+            }
+            .tabs {
+                display: flex;
+            }
+            .tabs a {
+                padding: 8px 12px;
+            }
+            .subtabs-bar {
+                margin: 0 0 16px;
+            }
+            /* Paths, rom names, MAME sequences... have no natural break point and would widen
+               the page past the screen. */
+            code, .card p, .card li {
+                overflow-wrap: anywhere;
+            }
+            .pack-details {
+                margin-left: 24px;
+            }
+            .binding-icon {
+                width: 48px;
+                height: 48px;
+            }
+            .progress-log {
+                max-height: 240px;
+            }
+        }
+        /* Touch screens, whatever their width: finger-sized targets for the dense controls sized
+           for a mouse above (see the .icon-button note). */
+        @media (pointer: coarse) {
+            form > button.icon-button[type="submit"]:last-child,
+            form.vote-buttons > button.icon-button[type="submit"] {
+                min-width: 40px;
+                min-height: 40px;
+            }
+            .checkbox-row input, .pack-game-label input {
+                width: 20px;
+                height: 20px;
+                margin-top: 0;
+            }
+            .table-pager button {
+                padding: 8px 14px;
+            }
         }
     </style>
 </head>
@@ -3748,16 +3836,35 @@ interface RemapState {
     releasedFrom?: string[];
 }
 
-interface MameConfigSession {
-    child: ChildProcess;
+/**
+ * A running MAME the BO can capture presses through: its capture-daemon.lua directory, the game it
+ * runs and what the BO changed meanwhile. Either the BO's own config session or a game launched
+ * from MAUI (see AdoptedMame).
+ */
+interface CaptureTarget {
     dir: string;
     nonceCounter: number;
     // The rom MAME was launched with - the per-game remap card is only valid for that one game
     // (its fields dump, game-fields.txt, describes it and nothing else).
     romName: string;
-    // Every cfg edit made while this session runs, replayed in order once MAME exits - see
+    // Every cfg edit made while this MAME runs, replayed in order once it exits - see
     // applyCfgEdit().
     cfgEdits: (() => void)[];
+    // A saved edit this MAME doesn't use yet (see hasPendingCfgEdits()).
+    needsRelaunch: boolean;
+}
+
+interface MameConfigSession extends CaptureTarget {
+    child: ChildProcess;
+}
+
+/**
+ * A game launched from MAUI, which runs capture-daemon.lua too (MameService.startGame()): found
+ * through its process arguments (findOtherMameTarget()) rather than started here, and watched
+ * until it exits to replay the edits made meanwhile, like the BO's own session.
+ */
+interface AdoptedMame extends CaptureTarget {
+    pid: number;
 }
 
 // Module-scope: at most one config session at a time, explicitly started/stopped by a BO user from
@@ -3770,6 +3877,64 @@ function isMameConfigSessionAlive(): boolean {
     return !!mameConfigSession && mameConfigSession.child.exitCode === null && !mameConfigSession.child.killed;
 }
 
+let adoptedMame: AdoptedMame | undefined;
+
+/**
+ * Picks up the capture-ready game MAUI is running, if any. Called wherever the Gamepads cards are
+ * rendered or act, so the per-game card works on it without a launch from here.
+ */
+function refreshAdoptedMame(config: Config, romNames: string[]): void {
+    if (isMameConfigSessionAlive() || (adoptedMame && isProcessAlive(adoptedMame.pid))) {
+        return;
+    }
+    const known = new Set(romNames);
+    for (const pid of findOtherMameProcesses(config)) {
+        const args = readProcessArgs(pid);
+        const dir = captureDirFromArgs(args);
+        const romName = args.find(arg => known.has(arg));
+        if (!dir || !romName) {
+            continue;
+        }
+        const adopted: AdoptedMame = {pid, dir, romName, nonceCounter: 0, cfgEdits: [], needsRelaunch: false};
+        const watch = setInterval(() => {
+            if (isProcessAlive(pid)) {
+                return;
+            }
+            clearInterval(watch);
+            if (adoptedMame === adopted) {
+                adoptedMame = undefined;
+            }
+            replayCfgEdits(adopted);
+        }, 1000);
+        adoptedMame = adopted;
+        return;
+    }
+}
+
+/** The MAME presses are captured through: the BO's own session first, else MAUI's game. */
+function getCaptureTarget(): CaptureTarget | undefined {
+    if (isMameConfigSessionAlive()) {
+        return mameConfigSession;
+    }
+    return adoptedMame && isProcessAlive(adoptedMame.pid) ? adoptedMame : undefined;
+}
+
+// MAME has finished writing its own cfg files by now - see applyCfgEdit().
+function replayCfgEdits(target: CaptureTarget): void {
+    for (const edit of target.cfgEdits) {
+        try {
+            edit();
+        } catch (error) {
+            console.error('[boServer] Failed to replay a cfg edit after MAME exited:', error);
+        }
+    }
+}
+
+// Unique across BO restarts: a daemon still running from before would ignore a nonce it has seen.
+function nextNonce(target: CaptureTarget): string {
+    return `${Date.now()}-${++target.nonceCounter}`;
+}
+
 /**
  * Runs a cfg edit (default.cfg or cfg/<rom>.cfg) and, while a config session is running, records it
  * so it's replayed once that MAME exits. MAME keeps the input settings it loaded at startup in
@@ -3780,11 +3945,45 @@ function isMameConfigSessionAlive(): boolean {
  * than the files restored wholesale, so whatever else MAME saves on exit (mixer, counters, settings
  * changed from its own menus) is kept.
  */
-function applyCfgEdit(edit: () => void): void {
+function applyCfgEdit(edit: () => void, appliedLive = false): void {
     edit();
-    if (isMameConfigSessionAlive()) {
-        mameConfigSession?.cfgEdits.push(edit);
+    const target = getCaptureTarget();
+    if (target) {
+        target.cfgEdits.push(edit);
+        // Not applied live (see applyGameFieldLive()): the running MAME only picks it up at its
+        // next start.
+        target.needsRelaunch ||= !appliedLive;
     }
+}
+
+/**
+ * Rebinds one of the running game's fields right away (capture-daemon.lua's apply.txt), so a
+ * per-game capture/reset is usable without relaunching MAME - which then also keeps it when it
+ * saves the game's cfg on exit. `seq` empty: back to the field's default. False when the daemon
+ * didn't confirm in time or failed (logged): the edit then waits for MAME's next start.
+ */
+function applyGameFieldLive(field: GameField, seq: string): boolean {
+    const target = getCaptureTarget();
+    if (!target) {
+        return false;
+    }
+    const nonce = nextNonce(target);
+    writeFileSync(join(target.dir, 'apply.txt'), `${nonce}|${field.tag}|${field.mask}|${seq}`, 'utf8');
+    const appliedPath = join(target.dir, 'applied.txt');
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && getCaptureTarget() === target) {
+        if (existsSync(appliedPath)) {
+            const [appliedNonce, result] = readFileSync(appliedPath, 'utf8').split('|');
+            if (appliedNonce === nonce) {
+                if (result?.trim() !== 'ok') {
+                    console.error(`[boServer] Live rebind of ${field.tag}/${field.mask} failed: ${result}`);
+                }
+                return result?.trim() === 'ok';
+            }
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+    return false;
 }
 
 /**
@@ -3815,23 +4014,17 @@ function startMameConfigSession(
         stopMameConfigSession();
     }
 
-    const dir = mkdtempSync(join(os.tmpdir(), 'maui-capture-'));
-    const scriptTemplate = readFileSync(join(getStaticPath(), 'lua', 'capture-daemon.lua'), 'utf8');
-    const scriptPath = join(dir, 'capture-daemon.lua');
-    writeFileSync(scriptPath, scriptTemplate.replace('__CAPTURE_DIR__', dir), 'utf8');
+    const {dir, scriptPath} = prepareCaptureDir(getStaticPath());
 
     const child = spawn(
         mameBinary,
         [
             romName,
             '-skip_gameinfo',
-            '-autoboot_delay', '0',
-            '-autoboot_script', scriptPath,
-            // Without it MAME ignores the gamepad while its window isn't the focused one - which is
-            // always the case when the BO is driven from a browser on the very same machine (the
-            // click on "Capture a press" gives the focus to the browser). Checked with a virtual
-            // uinput pad against 0.289: no press seen unfocused without it, captured with it.
-            '-background_input',
+            // -background_input among them: checked with a virtual uinput pad against 0.289, no
+            // press seen unfocused without it (the click on "Capture a press" gives the focus to
+            // the browser when the BO runs on the same machine).
+            ...captureLaunchArgs(scriptPath),
             '-inipath', iniPath,
             '-homepath', iniPath,
         ],
@@ -3840,23 +4033,87 @@ function startMameConfigSession(
     child.stderr?.on('data', (chunk: Buffer) => {
         console.error('[boServer] mame config session stderr:', chunk.toString('utf8').trim());
     });
-    const session: MameConfigSession = {child, dir, nonceCounter: 0, romName, cfgEdits: []};
+    const session: MameConfigSession = {child, dir, nonceCounter: 0, romName, cfgEdits: [], needsRelaunch: false};
     child.on('exit', () => {
         if (mameConfigSession === session) {
             mameConfigSession = undefined;
         }
-        // MAME has finished writing its own cfg files by now - see applyCfgEdit().
-        for (const edit of session.cfgEdits) {
-            try {
-                edit();
-            } catch (error) {
-                console.error('[boServer] Failed to replay a cfg edit after MAME exited:', error);
-            }
-        }
+        replayCfgEdits(session);
         rmSync(dir, {recursive: true, force: true});
     });
 
     mameConfigSession = session;
+}
+
+/**
+ * MAME processes running the configured binary that aren't the BO's own config session: a game
+ * launched from the MAUI front end or by hand. The launch button shows "Close MAME" for them too,
+ * instead of offering to open a second MAME next to the one already on screen.
+ */
+function findOtherMameProcesses(config: Config): number[] {
+    const sessionPid = isMameConfigSessionAlive() ? mameConfigSession?.child.pid : undefined;
+    return findMameProcesses(config.mamePath ? join(config.mamePath, config.mameBinaryName) : '')
+        .filter(pid => pid !== sessionPid);
+}
+
+function isAnyMameRunning(config: Config): boolean {
+    return isMameConfigSessionAlive() || findOtherMameProcesses(config).length > 0;
+}
+
+/**
+ * The game a MAME the BO didn't start is running (MAUI passes the rom name as a bare argument),
+ * so the per-game card can open on it: the usual reason to go there is fixing the controls of the
+ * game just played.
+ */
+function findOtherMameRom(config: Config, romNames: string[]): string | undefined {
+    const known = new Set(romNames);
+    for (const pid of findOtherMameProcesses(config)) {
+        const rom = readProcessArgs(pid).find(arg => known.has(arg));
+        if (rom) {
+            return rom;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Cfg edits made during the running config session that it doesn't use yet: MAME reads its input
+ * bindings once, at startup, and capture-daemon.lua only reports presses - it applies nothing.
+ */
+function hasPendingCfgEdits(): boolean {
+    return !!getCaptureTarget()?.needsRelaunch;
+}
+
+/**
+ * Warning shown on the Gamepads cards once a capture/reset is saved but not yet in effect in the
+ * running MAME - the relaunch button itself sits at the top of the page (see renderForm()).
+ */
+function renderPendingRelaunchNotice(): string {
+    if (!hasPendingCfgEdits()) {
+        return '';
+    }
+    // MAUI's game isn't relaunched from here (that would end the player's game for a BO session):
+    // the change is simply there next time it's played.
+    return isMameConfigSessionAlive()
+        ? `<p class="warn flash"><strong>Saved, not active yet:</strong> the running MAME keeps the
+            controls it started with. Click <strong>Relaunch MAME</strong> at the top of the page to
+            try the new ones.</p>`
+        : `<p class="warn flash"><strong>Saved, not active yet:</strong> the game being played keeps
+            the controls it started with - the change applies the next time it's launched.</p>`;
+}
+
+/**
+ * Kills whatever MAME is running - the BO's own config session and any MAME it didn't start - and
+ * waits until it's gone, so a session started right after doesn't run next to it (and reads the
+ * cfg files once the killed session's edits are replayed, see applyCfgEdit()).
+ */
+async function stopEveryMame(config: Config): Promise<void> {
+    const session = isMameConfigSessionAlive() ? mameConfigSession : undefined;
+    const sessionExited = session
+        ? new Promise<void>(resolve => session.child.once('exit', () => resolve()))
+        : Promise.resolve();
+    stopMameConfigSession();
+    await Promise.all([sessionExited, stopMameProcesses(findOtherMameProcesses(config))]);
 }
 
 function stopMameConfigSession(): void {
@@ -3877,18 +4134,18 @@ function stopMameConfigSession(): void {
  * if no session is running or nothing was captured in time.
  */
 function captureOnePress(): string | null {
-    if (!isMameConfigSessionAlive() || !mameConfigSession) {
+    const session = getCaptureTarget();
+    if (!session) {
         return null;
     }
-    const session = mameConfigSession;
-    const nonce = String(++session.nonceCounter);
+    const nonce = nextNonce(session);
     writeFileSync(join(session.dir, 'request.txt'), nonce, 'utf8');
 
     const CAPTURE_WAIT_MS = 30000;
     const resultPath = join(session.dir, 'result.txt');
     const deadline = Date.now() + CAPTURE_WAIT_MS;
     while (Date.now() < deadline) {
-        if (!isMameConfigSessionAlive()) {
+        if (getCaptureTarget() !== session) {
             return null;
         }
         if (existsSync(resultPath)) {
@@ -3924,10 +4181,11 @@ const UI_PORT_LABELS: Record<string, string> = {
  * Returns the ports it changed.
  */
 function releaseTokenFromInGameUiPorts(cfgPath: string, portType: string, token: string): string[] {
-    if (!mameConfigSession) {
+    const target = getCaptureTarget();
+    if (!target) {
         return [];
     }
-    const seqsPath = join(mameConfigSession.dir, 'ui-seqs.txt');
+    const seqsPath = join(target.dir, 'ui-seqs.txt');
     const sessionSeqs = existsSync(seqsPath) ? parseUiSeqs(readFileSync(seqsPath, 'utf8')) : new Map<string, string>();
     const overrides = readDefaultCfgUiInputs(cfgPath);
 
@@ -4094,6 +4352,7 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
             the file, so MAME's own default binding applies again. Both buttons stay disabled
             until MAME is launched.</p>
+            ${renderPendingRelaunchNotice()}
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
@@ -4150,10 +4409,11 @@ function getGameCfgPath(iniPath: string, romName: string): string {
  * booting and hasn't written the dump yet.
  */
 function readSessionGameFields(): GameField[] | undefined {
-    if (!isMameConfigSessionAlive() || !mameConfigSession) {
+    const target = getCaptureTarget();
+    if (!target) {
         return undefined;
     }
-    const fieldsPath = join(mameConfigSession.dir, 'game-fields.txt');
+    const fieldsPath = join(target.dir, 'game-fields.txt');
     return existsSync(fieldsPath)
         ? parseGameFields(readFileSync(fieldsPath, 'utf8')).sort(compareGameFields)
         : undefined;
@@ -4202,13 +4462,17 @@ function removeGameCfgOverride(cfgPath: string, field: GameField): void {
  */
 function renderGameRemapCard(
     romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, iniPath: string, state?: GameRemapState,
+    // A game running in a MAME the BO didn't start (launched from MAUI): picked by default.
+    otherRom?: string,
 ): string {
     if (!romNames.length) {
         return '';
     }
-    const sessionRunning = isMameConfigSessionAlive();
-    const sessionRom = sessionRunning ? mameConfigSession?.romName : undefined;
-    const selectedRom = state?.romName ?? sessionRom
+    // The game MAME is running with the capture daemon - the BO's own session or MAUI's game
+    // (see getCaptureTarget()): its commands are listed and rebound live.
+    const targetRom = getCaptureTarget()?.romName;
+    const fromMaui = !!targetRom && !isMameConfigSessionAlive();
+    const selectedRom = state?.romName ?? targetRom ?? otherRom
         ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
     const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
 
@@ -4267,7 +4531,7 @@ function renderGameRemapCard(
             <p class="info">Changes which gamepad button does what in <strong>one game only</strong>
             (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
             configuration above.</p>
-            ${sessionRom && sessionRom === selectedRom ? `
+            ${targetRom && targetRom === selectedRom ? `
                 <ol class="info">
                     <li>Below, each row is a command of this game. <strong>This game</strong> reads
                     <em>global</em> as long as you haven't changed it.</li>
@@ -4275,11 +4539,17 @@ function renderGameRemapCard(
                     waits up to 30 seconds.</li>
                     <li><strong>Press the button</strong> (or push the direction) wanted on the gamepad -
                     MAME picks it up even when its window is not the one in front. The result shows
-                    here and is saved at once.</li>
-                    <li><strong>Reset</strong> gives a command back its global binding. When you are
-                    done, close MAME with the button at the top of the page or from its own window:
-                    either way keeps the changes.</li>
+                    here, is saved and works in the running game at once.</li>
+                    <li><strong>Reset</strong> gives a command back its global binding. ${fromMaui
+                        ? 'Keep playing when you are done: the changes are kept.'
+                        : `When you are done, close MAME with the button at the top of the page or
+                        from its own window: either way keeps the changes.`}</li>
                 </ol>
+            ` : otherRom && otherRom === selectedRom ? `
+                <p class="warn"><strong>${escapeHtml(romLabels.get(otherRom) ?? otherRom)}</strong> is
+                running, launched from MAUI. Its controls can only be changed from a MAME started
+                here: <strong>Relaunch MAME with this game</strong> closes the running game and
+                reopens it ready for configuration. Relaunch it from MAUI once done.</p>
             ` : `
                 <ol class="info">
                     <li>Search and pick the game below, then click <strong>Launch MAME with this
@@ -4289,13 +4559,14 @@ function renderGameRemapCard(
             `}
             <form method="post" action="/input-probe/game/start">
                 ${picker}
-                <button type="submit">${sessionRom === selectedRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
+                <button type="submit">${selectedRom === targetRom || selectedRom === otherRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
             </form>
-            ${sessionRunning ? `
-                <p><strong>MAME:</strong> running (${escapeHtml(sessionRom ? (romLabels.get(sessionRom) ?? sessionRom) : '')})</p>
+            ${targetRom === selectedRom ? renderPendingRelaunchNotice() : ''}
+            ${targetRom ? `
+                <p><strong>MAME:</strong> running ${escapeHtml(romLabels.get(targetRom) ?? targetRom)}${fromMaui ? ', launched from MAUI' : ''}</p>
             ` : ''}
             ${state?.error && !state.fieldId ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
-            ${sessionRom && sessionRom === selectedRom ? renderTable(sessionRom) : ''}
+            ${targetRom && targetRom === selectedRom ? renderTable(targetRom) : ''}
         </section>
     `;
 }
@@ -4378,6 +4649,7 @@ function renderForm(
             ? getRomLabels(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romNames)
             : new Map<string, string>();
         const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
+        refreshAdoptedMame(config, romNames);
         sections.push({
             id: 'gamepads',
             label: 'Gamepads',
@@ -4386,7 +4658,8 @@ function renderForm(
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
                 remapState,
             )
-                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
+                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
+                    findOtherMameRom(config, romNames))
                 + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
         });
         sections.push({
@@ -4418,16 +4691,30 @@ function renderForm(
     // launches/closes the shared MAME config session the Gamepads cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Gamepads tab itself.
     // data-mame-session lets the page notice MAME being closed from its own window (see
-    // renderPageTail()).
-    const sessionRunning = isMameConfigSessionAlive();
-    const launchButton = `
-        <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}"
-            ${sessionRunning ? 'data-mame-session="running"' : ''}>
-            <button type="submit" class="launch-button">
+    // renderPageTail()). A MAME the BO didn't start (a game launched from MAUI...) counts too:
+    // closing it is what the button then offers.
+    // Once a capture/reset is saved during the session, "Relaunch MAME" comes first and stands
+    // out: MAME only picks the change up at its next start (see hasPendingCfgEdits()).
+    const mameRunning = isAnyMameRunning(config);
+    const relaunchButton = isMameConfigSessionAlive() && hasPendingCfgEdits() ? `
+        <form method="post" action="/input-probe/mame/restart">
+            <button type="submit" class="launch-button button-attention">
                 <img src="/mame-logo.svg" alt="" class="launch-logo">
-                ${sessionRunning ? 'Close MAME' : 'Launch MAME'}
+                Relaunch MAME
             </button>
         </form>
+    ` : '';
+    const launchButton = `
+        <div class="launch-buttons">
+            ${relaunchButton}
+            <form method="post" action="/input-probe/mame/${mameRunning ? 'stop' : 'start'}"
+                ${mameRunning ? 'data-mame-session="running"' : ''}>
+                <button type="submit" class="launch-button">
+                    <img src="/mame-logo.svg" alt="" class="launch-logo">
+                    ${mameRunning ? 'Close MAME' : 'Launch MAME'}
+                </button>
+            </form>
+        </div>
     `;
     return renderSubtabbedPage('mame', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab, launchButton);
 }
@@ -8399,25 +8686,51 @@ export function startBoServer(
             return;
         }
 
-        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        // A stale page (MAME launched from MAUI since it was rendered): re-rendered with "Close
+        // MAME" rather than opening a second MAME.
+        if (findOtherMameProcesses(config).length === 0) {
+            startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        }
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
     });
 
     // Polled by the page while a config session runs (see renderPageTail()), so it notices MAME
     // being closed from its own window.
     app.get('/input-probe/mame/status', (req, res) => {
-        res.json({running: isMameConfigSessionAlive()});
+        const config = new Config();
+        config.load();
+        res.json({running: isAnyMameRunning(config)});
     });
 
-    app.post('/input-probe/mame/stop', (req, res) => {
+    app.post('/input-probe/mame/stop', async (req, res) => {
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
         const isAdvanced = req.session.boAdvanced === true;
 
-        stopMameConfigSession();
+        // Awaited so the page below no longer finds them and shows "Launch MAME". A game launched
+        // from MAUI gets the same SIGQUIT as its own stopGame(), so MAUI still saves its hiscores.
+        await stopEveryMame(config);
 
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
+    });
+
+    // "Relaunch MAME" (see renderForm()): same game, fresh start, so the saved bindings apply.
+    app.post('/input-probe/mame/restart', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+
+        const romName = isMameConfigSessionAlive() ? mameConfigSession?.romName : undefined;
+        if (!romName || mameInfo.error) {
+            res.send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        await stopEveryMame(config);
+        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        waitForSessionGameFields(10000);
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
     });
 
     app.post('/input-probe/remap', (req, res) => {
@@ -8534,7 +8847,7 @@ export function startBoServer(
             gameRemapState,
         );
 
-    app.post('/input-probe/game/start', (req, res) => {
+    app.post('/input-probe/game/start', async (req, res) => {
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
@@ -8549,6 +8862,10 @@ export function startBoServer(
             return;
         }
 
+        // Always a fresh start, even on the game already running: that's how a capture made in it
+        // takes effect (see hasPendingCfgEdits()), and a game launched from MAUI has no capture
+        // script to talk to.
+        await stopEveryMame(config);
         startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName, true);
         waitForSessionGameFields(10000);
         res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
@@ -8573,7 +8890,8 @@ export function startBoServer(
 
         // The field is looked up in what MAME itself dumped for the running game: its tag/mask/
         // defvalue are what the cfg entry needs to be applied, and none of it comes from the client.
-        const field = isMameConfigSessionAlive() && mameConfigSession?.romName === romName
+        refreshAdoptedMame(config, romNames);
+        const field = getCaptureTarget()?.romName === romName
             ? readSessionGameFields()?.find(candidate => gameFieldId(candidate) === fieldId)
             : undefined;
         if (!field) {
@@ -8587,7 +8905,8 @@ export function startBoServer(
         try {
             const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
             if (action === 'reset') {
-                applyCfgEdit(() => removeGameCfgOverride(cfgPath, field));
+                const live = applyGameFieldLive(field, '');
+                applyCfgEdit(() => removeGameCfgOverride(cfgPath, field), live);
                 res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }
@@ -8598,7 +8917,8 @@ export function startBoServer(
                 : {romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
                     '(is the gamepad connected, and MAME still open?).'};
             if (token) {
-                applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, token));
+                const live = applyGameFieldLive(field, token);
+                applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, token), live);
                 const released = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token);
                 if (released.length) {
                     gameRemapState.releasedFrom = released;
