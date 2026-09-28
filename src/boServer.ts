@@ -78,6 +78,7 @@ import {
 } from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {renderOnlineCard} from '@/class/OnlineBoCard';
+import {findMameProcesses, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath, getScriptsPath} from '@/staticPath';
@@ -1831,7 +1832,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         form > button[type="submit"]:last-child {
             margin-top: 24px;
         }
-        .error, .info {
+        .error, .info, .warn {
             padding: 10px 14px;
             margin: 12px 0 0;
             border-radius: var(--radius-md);
@@ -1844,6 +1845,10 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .info {
             color: var(--accent);
             background-color: rgba(138, 180, 248, 0.12);
+        }
+        .warn {
+            color: var(--warn);
+            background-color: rgba(255, 209, 102, 0.12);
         }
         /* Numbered steps in an info box: keeps room for the markers the .info padding would eat. */
         ol.info {
@@ -1915,6 +1920,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             align-items: center;
             gap: 8px;
+        }
+        .launch-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        button.button-attention {
+            color: #000000;
+            background-color: var(--warn);
+        }
+        button.button-attention:hover:not(:disabled) {
+            background-color: #ffe199;
         }
         .launch-logo {
             height: 20px;
@@ -3859,6 +3876,71 @@ function startMameConfigSession(
     mameConfigSession = session;
 }
 
+/**
+ * MAME processes running the configured binary that aren't the BO's own config session: a game
+ * launched from the MAUI front end or by hand. The launch button shows "Close MAME" for them too,
+ * instead of offering to open a second MAME next to the one already on screen.
+ */
+function findOtherMameProcesses(config: Config): number[] {
+    const sessionPid = isMameConfigSessionAlive() ? mameConfigSession?.child.pid : undefined;
+    return findMameProcesses(config.mamePath ? join(config.mamePath, config.mameBinaryName) : '')
+        .filter(pid => pid !== sessionPid);
+}
+
+function isAnyMameRunning(config: Config): boolean {
+    return isMameConfigSessionAlive() || findOtherMameProcesses(config).length > 0;
+}
+
+/**
+ * The game a MAME the BO didn't start is running (MAUI passes the rom name as a bare argument),
+ * so the per-game card can open on it: the usual reason to go there is fixing the controls of the
+ * game just played.
+ */
+function findOtherMameRom(config: Config, romNames: string[]): string | undefined {
+    const known = new Set(romNames);
+    for (const pid of findOtherMameProcesses(config)) {
+        const rom = readProcessArgs(pid).find(arg => known.has(arg));
+        if (rom) {
+            return rom;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Cfg edits made during the running config session that it doesn't use yet: MAME reads its input
+ * bindings once, at startup, and capture-daemon.lua only reports presses - it applies nothing.
+ */
+function hasPendingCfgEdits(): boolean {
+    return isMameConfigSessionAlive() && !!mameConfigSession?.cfgEdits.length;
+}
+
+/**
+ * Warning shown on the Gamepads cards once a capture/reset is saved but not yet in effect in the
+ * running MAME - the relaunch button itself sits at the top of the page (see renderForm()).
+ */
+function renderPendingRelaunchNotice(): string {
+    return hasPendingCfgEdits()
+        ? `<p class="warn flash"><strong>Saved, not active yet:</strong> the running MAME keeps the
+            controls it started with. Click <strong>Relaunch MAME</strong> at the top of the page to
+            try the new ones.</p>`
+        : '';
+}
+
+/**
+ * Kills whatever MAME is running - the BO's own config session and any MAME it didn't start - and
+ * waits until it's gone, so a session started right after doesn't run next to it (and reads the
+ * cfg files once the killed session's edits are replayed, see applyCfgEdit()).
+ */
+async function stopEveryMame(config: Config): Promise<void> {
+    const session = isMameConfigSessionAlive() ? mameConfigSession : undefined;
+    const sessionExited = session
+        ? new Promise<void>(resolve => session.child.once('exit', () => resolve()))
+        : Promise.resolve();
+    stopMameConfigSession();
+    await Promise.all([sessionExited, stopMameProcesses(findOtherMameProcesses(config))]);
+}
+
 function stopMameConfigSession(): void {
     if (isMameConfigSessionAlive()) {
         // SIGKILL, not the default SIGTERM - confirmed by hand that a real windowed MAME process
@@ -4094,6 +4176,7 @@ function renderRemapCard(romNames: string[], persisted: Map<string, string>, sta
             in the file, not just the last capture; <strong>Reset</strong> removes a command from
             the file, so MAME's own default binding applies again. Both buttons stay disabled
             until MAME is launched.</p>
+            ${renderPendingRelaunchNotice()}
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
@@ -4202,13 +4285,15 @@ function removeGameCfgOverride(cfgPath: string, field: GameField): void {
  */
 function renderGameRemapCard(
     romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, iniPath: string, state?: GameRemapState,
+    // A game running in a MAME the BO didn't start (launched from MAUI): picked by default.
+    otherRom?: string,
 ): string {
     if (!romNames.length) {
         return '';
     }
     const sessionRunning = isMameConfigSessionAlive();
     const sessionRom = sessionRunning ? mameConfigSession?.romName : undefined;
-    const selectedRom = state?.romName ?? sessionRom
+    const selectedRom = state?.romName ?? sessionRom ?? otherRom
         ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
     const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
 
@@ -4280,6 +4365,11 @@ function renderGameRemapCard(
                     done, close MAME with the button at the top of the page or from its own window:
                     either way keeps the changes.</li>
                 </ol>
+            ` : otherRom && otherRom === selectedRom ? `
+                <p class="warn"><strong>${escapeHtml(romLabels.get(otherRom) ?? otherRom)}</strong> is
+                running, launched from MAUI. Its controls can only be changed from a MAME started
+                here: <strong>Relaunch MAME with this game</strong> closes the running game and
+                reopens it ready for configuration. Relaunch it from MAUI once done.</p>
             ` : `
                 <ol class="info">
                     <li>Search and pick the game below, then click <strong>Launch MAME with this
@@ -4289,8 +4379,9 @@ function renderGameRemapCard(
             `}
             <form method="post" action="/input-probe/game/start">
                 ${picker}
-                <button type="submit">${sessionRom === selectedRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
+                <button type="submit">${selectedRom === sessionRom || selectedRom === otherRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
             </form>
+            ${sessionRom === selectedRom ? renderPendingRelaunchNotice() : ''}
             ${sessionRunning ? `
                 <p><strong>MAME:</strong> running (${escapeHtml(sessionRom ? (romLabels.get(sessionRom) ?? sessionRom) : '')})</p>
             ` : ''}
@@ -4386,7 +4477,8 @@ function renderForm(
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
                 remapState,
             )
-                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState)
+                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
+                    findOtherMameRom(config, romNames))
                 + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
         });
         sections.push({
@@ -4418,16 +4510,30 @@ function renderForm(
     // launches/closes the shared MAME config session the Gamepads cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Gamepads tab itself.
     // data-mame-session lets the page notice MAME being closed from its own window (see
-    // renderPageTail()).
-    const sessionRunning = isMameConfigSessionAlive();
-    const launchButton = `
-        <form method="post" action="/input-probe/mame/${sessionRunning ? 'stop' : 'start'}"
-            ${sessionRunning ? 'data-mame-session="running"' : ''}>
-            <button type="submit" class="launch-button">
+    // renderPageTail()). A MAME the BO didn't start (a game launched from MAUI...) counts too:
+    // closing it is what the button then offers.
+    // Once a capture/reset is saved during the session, "Relaunch MAME" comes first and stands
+    // out: MAME only picks the change up at its next start (see hasPendingCfgEdits()).
+    const mameRunning = isAnyMameRunning(config);
+    const relaunchButton = hasPendingCfgEdits() ? `
+        <form method="post" action="/input-probe/mame/restart">
+            <button type="submit" class="launch-button button-attention">
                 <img src="/mame-logo.svg" alt="" class="launch-logo">
-                ${sessionRunning ? 'Close MAME' : 'Launch MAME'}
+                Relaunch MAME
             </button>
         </form>
+    ` : '';
+    const launchButton = `
+        <div class="launch-buttons">
+            ${relaunchButton}
+            <form method="post" action="/input-probe/mame/${mameRunning ? 'stop' : 'start'}"
+                ${mameRunning ? 'data-mame-session="running"' : ''}>
+                <button type="submit" class="launch-button">
+                    <img src="/mame-logo.svg" alt="" class="launch-logo">
+                    ${mameRunning ? 'Close MAME' : 'Launch MAME'}
+                </button>
+            </form>
+        </div>
     `;
     return renderSubtabbedPage('mame', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab, launchButton);
 }
@@ -8399,25 +8505,51 @@ export function startBoServer(
             return;
         }
 
-        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        // A stale page (MAME launched from MAUI since it was rendered): re-rendered with "Close
+        // MAME" rather than opening a second MAME.
+        if (findOtherMameProcesses(config).length === 0) {
+            startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        }
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
     });
 
     // Polled by the page while a config session runs (see renderPageTail()), so it notices MAME
     // being closed from its own window.
     app.get('/input-probe/mame/status', (req, res) => {
-        res.json({running: isMameConfigSessionAlive()});
+        const config = new Config();
+        config.load();
+        res.json({running: isAnyMameRunning(config)});
     });
 
-    app.post('/input-probe/mame/stop', (req, res) => {
+    app.post('/input-probe/mame/stop', async (req, res) => {
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
         const isAdvanced = req.session.boAdvanced === true;
 
-        stopMameConfigSession();
+        // Awaited so the page below no longer finds them and shows "Launch MAME". A game launched
+        // from MAUI gets the same SIGQUIT as its own stopGame(), so MAUI still saves its hiscores.
+        await stopEveryMame(config);
 
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
+    });
+
+    // "Relaunch MAME" (see renderForm()): same game, fresh start, so the saved bindings apply.
+    app.post('/input-probe/mame/restart', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+
+        const romName = isMameConfigSessionAlive() ? mameConfigSession?.romName : undefined;
+        if (!romName || mameInfo.error) {
+            res.send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        await stopEveryMame(config);
+        startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+        waitForSessionGameFields(10000);
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
     });
 
     app.post('/input-probe/remap', (req, res) => {
@@ -8534,7 +8666,7 @@ export function startBoServer(
             gameRemapState,
         );
 
-    app.post('/input-probe/game/start', (req, res) => {
+    app.post('/input-probe/game/start', async (req, res) => {
         const config = new Config();
         config.load();
         const mameInfo = getMameInfo(config);
@@ -8549,6 +8681,10 @@ export function startBoServer(
             return;
         }
 
+        // Always a fresh start, even on the game already running: that's how a capture made in it
+        // takes effect (see hasPendingCfgEdits()), and a game launched from MAUI has no capture
+        // script to talk to.
+        await stopEveryMame(config);
         startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName, true);
         waitForSessionGameFields(10000);
         res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
