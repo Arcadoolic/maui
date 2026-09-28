@@ -1,7 +1,9 @@
 /**
- * The configuration pack: a game-free zip published at the root of the pack repository, holding
- * only a `folders/` directory with the category datasets the carousel is built from (catver.ini,
- * genre.ini, Multiplayer.ini - see GameService). Game packs no longer ship these files: the BO
+ * The configuration pack: a game-free zip published at the root of the pack repository, holding a
+ * `folders/` directory with the category datasets the carousel is built from (catver.ini,
+ * genre.ini, Multiplayer.ini - see GameService), and a corrected hiscore.dat at its root, installed
+ * in the mame home where mame runs from (its hiscore plugin reads it before its own; see
+ * import-starting-pack.py's IMPORTABLE_ROOT_FILES). Game packs no longer ship these files: the BO
  * installs this pack before any game pack import from the repository, and keeps the game pack
  * list locked until it is installed.
  */

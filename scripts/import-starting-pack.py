@@ -237,6 +237,19 @@ IMPORTABLE_MAME_DIRECTORIES = [
 ]
 
 
+# Loose files at the root of the ZIP, installed in the mame home (~/.mame): mame runs from there (see
+# MameService.class.ts), and its hiscore plugin reads a hiscore.dat from its current directory before
+# its own copy. The configuration pack ships a corrected hiscore.dat this way.
+IMPORTABLE_ROOT_FILES = ['hiscore.dat']
+
+
+def import_root_files(zf, ini_path, summary, log):
+    for name in IMPORTABLE_ROOT_FILES:
+        if extract_entry_to(zf, name, ini_path):
+            summary['directoriesImported'].append({'zipFolder': name, 'filesWritten': 1})
+            log(f'{name}: copied to {ini_path}.')
+
+
 def zip_has_folder(zf, folder):
     prefix = folder + '/'
     return any(not name.endswith('/') and name.startswith(prefix) for name in zf.namelist())
@@ -1019,7 +1032,9 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
             if only:
                 fail('--only needs a pack with a manifest.json.')
             folders = ', '.join(folder for folder, _ in IMPORTABLE_MAME_DIRECTORIES)
-            if not any(zip_has_folder(zf, folder) for folder, _ in IMPORTABLE_MAME_DIRECTORIES):
+            names = set(zf.namelist())
+            if not any(zip_has_folder(zf, folder) for folder, _ in IMPORTABLE_MAME_DIRECTORIES) \
+                    and not any(name in names for name in IMPORTABLE_ROOT_FILES):
                 fail(f'Invalid ZIP: manifest.json missing, and no recognized folder ({folders}) in the ZIP.')
 
         locations = get_mame_locations(ini_path)
@@ -1082,6 +1097,7 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
         # them early, before import_starting_pack()'s own game-upsert loop, means they've already
         # made it to disk even if that loop fails partway through.
         import_mame_directories(zf, directory_targets, summary, log, entry_filter)
+        import_root_files(zf, ini_path, summary, log)
         if manifest is not None:
             import_starting_pack(
                 zf, manifest, rom_path, locations['marquee_path'], locations['flyer_path'],
