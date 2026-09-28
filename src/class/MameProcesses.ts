@@ -93,7 +93,7 @@ function signal(pids: number[], name: NodeJS.Signals): void {
     }
 }
 
-function isAlive(pid: number): boolean {
+export function isProcessAlive(pid: number): boolean {
     try {
         process.kill(pid, 0);
         return true;
@@ -105,7 +105,7 @@ function isAlive(pid: number): boolean {
 
 async function waitForExit(pids: number[], timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
-    while (pids.some(isAlive)) {
+    while (pids.some(isProcessAlive)) {
         if (Date.now() >= deadline) {
             return false;
         }
