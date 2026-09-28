@@ -1576,6 +1576,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
 <html lang="en">
 <head>
     <meta charset="utf-8">
+    <!-- Without it a phone lays the page out at a ~980px desktop width and zooms out, so none
+         of the max-width media queries below ever match. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>mame-awesome-ui - Configuration</title>
     <style>
         /* Design tokens (Phase 0 of docs/BO-UX-REVAMP.md): every color/spacing/radius below is
@@ -1879,6 +1882,12 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .path-row input {
             margin-top: 0;
+            /* An input's intrinsic width (~20 characters) is its flex min-width by default: on a
+               phone it pushed the Browse button past the card's edge. */
+            min-width: 0;
+        }
+        .path-row button {
+            flex: 0 0 auto;
         }
         .plugins-path-field {
             transition: opacity 0.15s ease;
@@ -2835,6 +2844,67 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .subtab-panel.active {
             display: block;
+        }
+        /* Phones and small tablets (the BO is reachable from any device on the LAN). Kept last so
+           it overrides the desktop rules above without raising their specificity. */
+        @media (max-width: 600px) {
+            body {
+                max-width: none;
+                padding: 8px 8px 32px;
+            }
+            header {
+                padding: 8px 0 16px;
+            }
+            .card {
+                padding: 16px 12px;
+                margin-bottom: 16px;
+            }
+            /* Wrapped onto several rows, a 999px radius turns the capsules into lozenges with
+               pinched ends: a plain rounded box reads better. */
+            .tabs, .subtabs, .player-tabs {
+                border-radius: var(--radius-lg);
+            }
+            .tabs {
+                display: flex;
+            }
+            .tabs a {
+                padding: 8px 12px;
+            }
+            .subtabs-bar {
+                margin: 0 0 16px;
+            }
+            /* Paths, rom names, MAME sequences... have no natural break point and would widen
+               the page past the screen. */
+            code, .card p, .card li {
+                overflow-wrap: anywhere;
+            }
+            .pack-details {
+                margin-left: 24px;
+            }
+            .binding-icon {
+                width: 48px;
+                height: 48px;
+            }
+            .progress-log {
+                max-height: 240px;
+            }
+        }
+        /* Touch screens, whatever their width: finger-sized targets for the dense controls sized
+           for a mouse above (see the .icon-button note). */
+        @media (pointer: coarse) {
+            form > button.icon-button[type="submit"]:last-child,
+            form.vote-buttons > button.icon-button[type="submit"] {
+                min-width: 40px;
+                min-height: 40px;
+            }
+            .checkbox-row input, .pack-game-label input {
+                width: 20px;
+                height: 20px;
+                margin-top: 0;
+            }
+            .table-pager button {
+                padding: 8px 14px;
+            }
         }
     </style>
 </head>
