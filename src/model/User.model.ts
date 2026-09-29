@@ -1,5 +1,6 @@
 import {Column, CreatedAt, DataType, DeletedAt, HasMany, Model, Table, UpdatedAt} from 'sequelize-typescript';
 import Hiscore from '@/model/Hiscore.model';
+import {PSEUDO3_PATTERN, PSEUDO3_RULE} from '@/class/Pseudo3';
 
 @Table({
     timestamps: true,
@@ -31,7 +32,7 @@ export default class User extends Model<User> {
         allowNull: false,
         unique: true,
         validate: {
-            len: [1, 3],
+            is: {args: PSEUDO3_PATTERN, msg: PSEUDO3_RULE},
             notNull: true,
         },
     })

@@ -58,6 +58,7 @@ import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
 import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
 } from '@/class/UserReservation';
+import {PSEUDO3_RULE, isValidPseudo3} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
 import {runMigrations} from '@/class/Migrations';
@@ -6415,7 +6416,8 @@ function renderCreateUserCard(error?: string): string {
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/users/create">
                 <label for="pseudo_3">Nickname, 3 letters (required, unique)</label>
-                <input type="text" id="pseudo_3" name="pseudo_3" maxlength="3" required>
+                <input type="text" id="pseudo_3" name="pseudo_3" maxlength="3" required
+                       pattern="[A-Za-z]{3}" title="3 letters, A to Z" style="text-transform: uppercase">
                 <label for="realname">Name</label>
                 <input type="text" id="realname" name="realname">
                 <label for="email">Email</label>
@@ -7352,6 +7354,13 @@ export function startBoServer(
         const config = new Config();
 
         try {
+            if (!isValidPseudo3(pseudo3)) {
+                const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+                res.status(422).send(await usersPage(
+                    req, users, getAvatarFilenames(config), undefined, undefined, PSEUDO3_RULE,
+                ));
+                return;
+            }
             // A deleted player's nickname stays reserved (see UserReservation.ts), whoever asks.
             if (await findDeletedUser(pseudo3)) {
                 const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
