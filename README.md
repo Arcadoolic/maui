@@ -24,6 +24,7 @@ Mame Awesome UI is an Electron + Vue 3 (TypeScript) front-end for the [MAME](htt
 - **Local persistence** — game, category, user and hiscore data is synced into a SQLite database via Sequelize, with migrations run automatically on startup
 - **User profiles & hiscores** — per-user avatars and high-score tracking
 - **Starting pack export** — bundle favorites, ROMs and artwork from a local MAME install into a distributable ZIP
+- **Pack repository (ONLINE mode)**: game and configuration packs downloaded from the pack repository, authorized by MAUI-API (see [`docs/REPOSITORY.md`](docs/REPOSITORY.md))
 
 ## Platform Support
 
@@ -93,3 +94,4 @@ npx sequelize-cli migration:generate --name=<name>
 - [Database & migrations](docs/DATABASE.md)
 - [Raspberry Pi performance tracking](docs/RASPBERRY-PI-LAG.md)
 - [Architecture decisions](docs/DECISIONS.md)
+- [Pack repository flow](docs/REPOSITORY.md)
