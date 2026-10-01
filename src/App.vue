@@ -74,6 +74,15 @@ onMounted(() => {
         height: 100%;
         width: 100%;
     }
+    /* Windowed mode (Home.vue): the window is frameless, so the whole UI acts as its title bar
+       and drags it around. The front is driven by joystick/keyboard; the few mouse targets opt out. */
+    html.window-draggable #app {
+        -webkit-app-region: drag;
+    }
+    html.window-draggable a, html.window-draggable button, html.window-draggable input,
+    html.window-draggable select, html.window-draggable textarea {
+        -webkit-app-region: no-drag;
+    }
 
     /******************************************/
     /*/////////////// POLICES ////////////////*/

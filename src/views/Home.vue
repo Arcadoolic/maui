@@ -379,6 +379,8 @@ function registerKeyMapping() {
 if (!getIsInit()) {
     router.push({name: 'init'});
 } else {
+    // The window is frameless: in windowed mode, dragging anywhere moves it (App.vue).
+    document.documentElement.classList.toggle('window-draggable', !getConfiguration().fullscreen);
     if (getConfiguration().fullscreen) {
         remote.getCurrentWindow().setFullScreen(true);
     } else {
