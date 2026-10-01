@@ -5,6 +5,7 @@ import {tmpdir} from 'os';
 import {
     describeRejection,
     describeOnlineStatus,
+    onlineIndicator,
     getOnlineView,
     resetOnlineSettings,
     saveConfigurationString,
@@ -312,5 +313,42 @@ describe('describeRejection', () => {
 
     it('names an unknown code', () => {
         expect(describeRejection('something_new')).toContain('something_new');
+    });
+});
+
+describe('onlineIndicator', () => {
+    const base: OnlineStatus = {state: 'running', startupId: null, lastSuccessAt: null, lastFailure: null};
+    const failure = (at: string) => ({at, result: {kind: 'unavailable' as const, reason: 'network' as const}});
+
+    it('shows nothing when ONLINE is off', () => {
+        expect(onlineIndicator(undefined)).toBeNull();
+        expect(onlineIndicator({...base, state: 'disabled'})).toBeNull();
+        expect(onlineIndicator({...base, state: 'not_configured'})).toBeNull();
+    });
+
+    it('is online after a successful contact', () => {
+        expect(onlineIndicator({...base, lastSuccessAt: '2026-10-02T10:01:00.000Z'})).toBe('online');
+    });
+
+    it('stays online when a failure was followed by a success', () => {
+        expect(onlineIndicator({
+            ...base, lastSuccessAt: '2026-10-02T10:02:00.000Z', lastFailure: failure('2026-10-02T10:01:00.000Z'),
+        })).toBe('online');
+    });
+
+    it('is offline when the last call failed', () => {
+        expect(onlineIndicator({
+            ...base, lastSuccessAt: '2026-10-02T10:01:00.000Z', lastFailure: failure('2026-10-02T10:02:00.000Z'),
+        })).toBe('offline');
+    });
+
+    it('is offline before any successful contact', () => {
+        expect(onlineIndicator(base)).toBe('offline');
+    });
+
+    it('is offline when stopped or unreadable', () => {
+        const lastSuccessAt = '2026-10-02T10:01:00.000Z';
+        expect(onlineIndicator({...base, state: 'stopped', lastSuccessAt})).toBe('offline');
+        expect(onlineIndicator({...base, state: 'unreadable'})).toBe('offline');
     });
 });

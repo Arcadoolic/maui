@@ -168,6 +168,24 @@ export function describeOnlineStatus(status: OnlineStatus, url: string): BoMessa
     return {level: 'info', message: running};
 }
 
+export type OnlineIndicator = 'online' | 'offline';
+
+/**
+ * Header badge of the BO: 'online' while the session runs and its last contact with MAUI-API
+ * succeeded, 'offline' when ONLINE is on but not reaching the API (no contact yet, last call
+ * failed, stopped, unreadable settings). Null when ONLINE is off: a LOCAL cabinet is not offline.
+ */
+export function onlineIndicator(status: OnlineStatus | undefined): OnlineIndicator | null {
+    if (!status || status.state === 'disabled' || status.state === 'not_configured') {
+        return null;
+    }
+    const {state, lastSuccessAt, lastFailure} = status;
+    // ISO timestamps from the same clock compare as strings.
+    const reachable = state === 'running' && lastSuccessAt !== null
+        && (!lastFailure || lastFailure.at <= lastSuccessAt);
+    return reachable ? 'online' : 'offline';
+}
+
 function describeUnavailable(result: Extract<ApiResult<never>, {kind: 'unavailable'}>, url: string): string {
     switch (result.reason) {
         case 'network':

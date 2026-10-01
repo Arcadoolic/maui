@@ -70,7 +70,8 @@ import {
 } from '@/class/MauiControls';
 import {escapeHtml} from '@/class/EscapeHtml';
 import {
-    describeOnlineStatus, getOnlineView, resetOnlineSettings, saveConfigurationString, setOnlineEnabled, testConnection,
+    describeOnlineStatus, getOnlineView, onlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
+    testConnection,
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
 import {
@@ -1698,6 +1699,42 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             font-size: 0.8em;
             font-weight: bold;
         }
+        /* ONLINE / OFFLINE next to the version: a dot, haloed green while MAUI-API answers. */
+        .online-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-decoration: none;
+        }
+        .online-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+        }
+        .online-badge.online {
+            color: var(--success);
+        }
+        .online-badge.online::before {
+            box-shadow: 0 0 4px 2px rgba(107, 255, 138, 0.6);
+            animation: online-halo 2s ease-in-out infinite;
+        }
+        .online-badge.offline {
+            color: var(--danger);
+        }
+        @keyframes online-halo {
+            50% {
+                box-shadow: 0 0 8px 4px rgba(107, 255, 138, 0.25);
+            }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .online-badge.online::before {
+                animation: none;
+            }
+        }
         /* Segmented-control look: a capsule holding every tab, the active one its own solid pill
            instead of an underline - same black/white/accent palette as everywhere else, just
            more depth (background + shadow) than a flat line ever gave it. */
@@ -2919,6 +2956,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
                 Advanced configuration: ${viewer === 'advanced' ? 'on' : 'off'}
             </button>
         </form>` : ''}
+        ${viewer ? renderOnlineBadge() : ''}
         <span class="app-version" title="Running version">v${escapeHtml(getRunningVersion())}</span>
     </div>
     <header>
@@ -5187,6 +5225,22 @@ function renderMauiControlsCard(): string {
 
 // Set once by startBoServer(); read by the MAUI page renderer, which runs outside its closure.
 let onlineSession: OnlineSession | null = null;
+
+/**
+ * ONLINE / OFFLINE next to the version, linking to the MAUI > Online tab; nothing while ONLINE is
+ * off. State as of the page render: it does not refresh by itself.
+ */
+function renderOnlineBadge(): string {
+    const status = onlineSession?.getStatus();
+    const indicator = onlineIndicator(status);
+    if (!indicator || !status) {
+        return '';
+    }
+    const view = getOnlineView();
+    const title = view.state === 'configured' ? describeOnlineStatus(status, view.url).message : 'ONLINE settings unreadable.';
+    return `<a class="online-badge ${indicator}" href="/maui#online" title="${escapeHtml(title)}">`
+        + `${indicator === 'online' ? 'ONLINE' : 'OFFLINE'}</a>`;
+}
 
 function renderOnlineSection(messages: MauiPageMessages): string {
     const view = getOnlineView();
