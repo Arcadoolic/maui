@@ -74,6 +74,14 @@ import {
     testConnection,
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
+import {syncPlayers} from '@/class/PlayerSync';
+import {createOnlineClient} from '@/class/OnlineClient';
+import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
+import {
+    describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
+} from '@/class/OnlinePlayersBo';
+import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
+import {canActivateLocally, playersBlockingOnline} from '@/class/OnlineReconciliation';
 import {
     describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, repositoryEnv, resolveRepository,
     type RepositoryAccess,
@@ -2142,6 +2150,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .row-actions {
             display: inline-flex;
             gap: 8px;
+        }
+        .online-actions {
+            display: inline-flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .online-actions .inline-form {
+            display: inline-flex;
+            gap: 4px;
+        }
+        .online-actions input[name="pin"] {
+            width: 5em;
         }
         .asset-icons {
             display: inline-flex;
@@ -6750,7 +6770,7 @@ function renderUserStatusBadge(active: boolean): string {
     return active ? '<span class="badge-yes">✓ active</span>' : '<span class="badge-no">✗ inactive</span>';
 }
 
-function renderCreateUserCard(error?: string): string {
+function renderCreateUserCard(error?: string, online: boolean = false): string {
     return `
         <section class="card">
             <h2>Add a player</h2>
@@ -6767,6 +6787,7 @@ function renderCreateUserCard(error?: string): string {
                     <input type="checkbox" name="active" checked>
                     Active
                 </label>
+                ${online ? renderCreateOnlineFields() : ''}
                 <button type="submit">Create</button>
             </form>
         </section>
@@ -6776,6 +6797,11 @@ function renderCreateUserCard(error?: string): string {
 interface UsersListExtras {
     isAdvanced: boolean;
     deleted: DeletedUserRow[];
+    // ONLINE on: new players go through MAUI-API (OnlinePlayersBo.ts).
+    online?: boolean;
+    // ONLINE configured, on or not: MAUI-API column and actions, to get the players ready before
+    // turning it on (OnlineReconciliation.ts).
+    onlineColumn?: boolean;
 }
 
 /**
@@ -6811,6 +6837,8 @@ function renderUsersListCard(
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
             <td class="center">${renderUserStatusBadge(user.active)}</td>
+            ${extras.onlineColumn ? `<td class="center">${renderOnlinePlayerStatus(user)}
+                <div class="online-actions">${renderOnlinePlayerActions(user)}</div></td>` : ''}
             <td class="center">
                 <div class="row-actions">
                     <form method="post" action="/users/${user.id_user}/toggle-active">
@@ -6841,6 +6869,7 @@ function renderUsersListCard(
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
+            ${extras.onlineColumn ? '<td></td>' : ''}
             <td class="center"><span class="badge-deleted" title="Deleted on ${escapeHtml(deletedOn)}, ${scoreCount} score(s) kept">🗑 deleted ${escapeHtml(deletedOn)} · ${scoreCount} score(s)</span></td>
             <td class="center">
                 <div class="row-actions">
@@ -6875,10 +6904,11 @@ function renderUsersListCard(
                             <th>Nickname</th>
                             <th>Name</th>
                             <th class="center">Status</th>
+                            ${extras.onlineColumn ? '<th class="center">MAUI-API</th>' : ''}
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows + deletedRows || '<tr><td colspan="5"><em>No players</em></td></tr>'}</tbody>
+                    <tbody>${rows + deletedRows || `<tr><td colspan="${extras.onlineColumn ? 6 : 5}"><em>No players</em></td></tr>`}</tbody>
                 </table>
             </div>
         </section>
@@ -7065,10 +7095,15 @@ function renderUsersPage(
     // One page, no subtabs: the add form, then every player (deleted ones included, see
     // renderUsersListCard()) in a single list.
     return renderPage(
-        renderCreateUserCard(createError) + renderUsersListCard(users, avatarFilenames, error, info, extras),
+        renderCreateUserCard(createError, extras.online) + renderUsersListCard(users, avatarFilenames, error, info, extras),
         'users',
         extras.isAdvanced ? 'advanced' : 'basic',
     );
+}
+
+/** The local columns of an API player (see PlayerSync.ts). */
+function onlineUserFields(player: OnlinePlayer): Pick<User, 'remote_id' | 'is_public' | 'online_status'> {
+    return {remote_id: player.id, is_public: player.isPublic, online_status: player.status};
 }
 
 /**
@@ -7172,6 +7207,7 @@ export function startBoServer(
                 ? join(config.mamePath, config.mameBinaryName)
                 : '');
         },
+        syncPlayers,
     });
     onlineSession = online;
     const app = express();
@@ -7619,7 +7655,9 @@ export function startBoServer(
     ): Promise<string> => {
         const isAdvanced = req.session.boAdvanced === true;
         const deleted = isAdvanced ? await listDeletedUsers().catch(() => []) : [];
-        return renderUsersPage(users, avatarFilenames, error, info, createError, {isAdvanced, deleted});
+        return renderUsersPage(users, avatarFilenames, error, info, createError, {
+            isAdvanced, deleted, online: isOnlineActive(), onlineColumn: getOnlineView().state === 'configured',
+        });
     };
 
     app.get('/users', async (req, res) => {
@@ -7712,12 +7750,38 @@ export function startBoServer(
                 ));
                 return;
             }
-            await User.create({
+            const fields = {
                 pseudo_3: pseudo3,
                 ...(realname ? {realname} : {}),
                 ...(email ? {email} : {}),
                 active,
-            } as User);
+            };
+            // ONLINE: the initials are reserved in MAUI-API first, or the player who has them
+            // elsewhere is linked with their PIN (maui-api D4, D48); the local player only exists
+            // once the API said yes. Checked locally first, so the API never reserves initials
+            // this cabinet cannot store.
+            const client = await createOnlineClient();
+            let onlineMessage: {info?: string; error?: string} | undefined;
+            if (client) {
+                if (await User.findOne({where: {pseudo_3: pseudo3}})) {
+                    throw new Error('A player with this nickname already exists.');
+                }
+                const pin = String(req.body.pin || '').trim();
+                const save = (player: OnlinePlayer) => User.create({...fields, ...onlineUserFields(player)} as User);
+                const outcome: RegistrationOutcome = pin
+                    ? await linkWithPin(client, pseudo3, pin, save)
+                    : await registerOnline(client, pseudo3, save, req.body.is_public === 'on');
+                onlineMessage = describeOutcomeForBo(pseudo3, outcome);
+                if (outcome.kind !== 'created' && outcome.kind !== 'linked') {
+                    const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+                    res.status(422).send(await usersPage(
+                        req, users, getAvatarFilenames(config), undefined, undefined, onlineMessage.error,
+                    ));
+                    return;
+                }
+            } else {
+                await User.create(fields as User);
+            }
             // Every new player starts with a generated default avatar (see DefaultAvatar.ts); the
             // list below is read after this so it shows it. An avatar failing to write must not
             // turn a successful creation into an error page.
@@ -7728,7 +7792,7 @@ export function startBoServer(
             }
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
             res.send(await usersPage(req, 
-                users, getAvatarFilenames(config), undefined, `Player "${pseudo3}" created.`,
+                users, getAvatarFilenames(config), undefined, onlineMessage?.info ?? `Player "${pseudo3}" created.`,
             ));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
@@ -7738,16 +7802,76 @@ export function startBoServer(
         }
     });
 
+    // ONLINE actions on one player (OnlinePlayersBo.ts). Same-origin only: they act on MAUI-API
+    // with the cabinet's credentials, and the BO has no CSRF token (see SameOrigin.ts).
+    type OnlinePlayerHandler = (user: User, client: MauiApiClient, req: Request) => Promise<{info?: string; error?: string}>;
+    const onlinePlayerAction = (handler: OnlinePlayerHandler) => async (req: Request, res: Response) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const user = await User.findByPk(String(req.params.id));
+        const client = await createOnlineClient({requireEnabled: false});
+        const message = !user
+            ? {error: 'Unknown player.'}
+            : !client
+                ? {error: 'ONLINE is not configured.'}
+                : await handler(user, client, req).catch((error: unknown) => ({
+                    error: error instanceof Error ? error.message : String(error),
+                }));
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.status(message.error ? 422 : 200).send(await usersPage(
+            req, users, getAvatarFilenames(new Config()), message.error, message.info,
+        ));
+    };
+
+    // Reserves a local-only player's initials, or links the player who has them elsewhere (PIN).
+    app.post('/users/:id/online/link', onlinePlayerAction(async (user, client, req) => {
+        const pin = String(req.body.pin || '').trim();
+        const save = (player: OnlinePlayer) => user.update(onlineUserFields(player));
+        return describeOutcomeForBo(user.pseudo_3, pin
+            ? await linkWithPin(client, user.pseudo_3, pin, save)
+            : await registerOnline(client, user.pseudo_3, save, !!user.is_public));
+    }));
+
+    app.post('/users/:id/online/public', onlinePlayerAction(async (user, client) => {
+        if (!user.remote_id) {
+            return {error: `"${user.pseudo_3}" is not in MAUI-API yet.`};
+        }
+        const result = await client.updatePlayer(user.remote_id, !user.is_public);
+        if (result.kind !== 'ok') {
+            return {error: `MAUI-API refused the change (${result.kind === 'rejected' ? result.code : result.kind}).`};
+        }
+        await user.update(onlineUserFields(result.value));
+        return {info: `"${user.pseudo_3}" is now ${result.value.isPublic ? 'public' : 'private'}.`};
+    }));
+
+    app.post('/users/:id/online/pin', onlinePlayerAction(async (user, client) => {
+        if (!user.remote_id) {
+            return {error: `"${user.pseudo_3}" is not in MAUI-API yet.`};
+        }
+        const result = await client.regeneratePin(user.remote_id);
+        if (result.kind !== 'ok') {
+            return {error: `MAUI-API refused the new PIN (${result.kind === 'rejected' ? result.code : result.kind}).`};
+        }
+        await user.update({online_status: 'active'});
+        return {info: `New PIN for "${user.pseudo_3}": ${result.value}. Give it to the player.`};
+    }));
+
     app.post('/users/:id/toggle-active', async (req, res) => {
         const user = await User.findByPk(req.params.id);
-        if (user) {
+        // While ONLINE is on, initials not reserved in MAUI-API may belong to someone else
+        // (OnlineReconciliation.ts): the player goes ONLINE first, then can be activated.
+        const refused = !!user && !user.active && !canActivateLocally(user, isOnlineActive());
+        if (user && !refused) {
             user.active = !user.active;
             await user.save();
         }
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(req, 
-            users, getAvatarFilenames(new Config()), undefined,
-            user ? `Player "${user.pseudo_3}" updated.` : undefined,
+            users, getAvatarFilenames(new Config()),
+            refused ? `"${user?.pseudo_3}" is not in MAUI-API: use "Go ONLINE" first, then activate them.` : undefined,
+            user && !refused ? `Player "${user.pseudo_3}" updated.` : undefined,
         ));
     });
 
@@ -8222,7 +8346,10 @@ export function startBoServer(
         if (refuseOnlineRequest(req, res)) {
             return;
         }
-        const result = setOnlineEnabled(req.body.enabled === 'on');
+        const enabling = req.body.enabled === 'on';
+        // Every active player must be in MAUI-API before ONLINE turns on (OnlineReconciliation.ts).
+        const blocking = enabling ? playersBlockingOnline(await User.findAll()) : null;
+        const result = blocking ? {level: 'error' as const, message: blocking} : setOnlineEnabled(enabling);
         if (result.level === 'info') {
             await online.restart();
         }

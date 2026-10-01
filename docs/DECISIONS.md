@@ -401,3 +401,44 @@ local ZIP when run by hand. `repoUrl`,
 `repoUser` and `repoPassword` are gone from `Config`: older files load, and
 the keys disappear at the next save. Cabinets not updated lose repository
 access when the old Basic Auth domain is removed.
+
+**Players, 2026-10-02: global, reserved in MAUI-API (maui-api D4, D48, D49).**
+In ONLINE mode a new player exists locally only once MAUI-API reserved the
+initials (`src/class/OnlineRegistration.ts`), from the cabinet
+(`userRegistration.vue`) or the BO (Players tab): an unreachable API means
+no new player. Taken initials lead to the PIN of the player who owns them
+(4 digits, joystick on the cabinet), which links that player here. The PIN
+is shown once, never stored on the cabinet; MAUI-API admins can read it
+back. Only `pseudo_3` and the visibility leave the cabinet: `realname`,
+`email` stay local, and `pseudo_2` is a leftover nothing reads. Players are
+private by default (scores kept out of the shared leaderboards); the BO
+makes them public. Local columns (`user.remote_id`, `is_public`,
+`online_status`, migration `20261002090000`) are kept in line by
+`src/class/PlayerSync.ts`, run by `OnlineSession` after the startup report
+and every 10 heartbeats. The sync never touches `active`, the BO's own
+switch: a player disabled or locked upstream is told by `online_status`,
+so lifting it upstream is enough.
+
+**Switching to ONLINE, 2026-10-02: every active player in MAUI-API first.**
+Players created while LOCAL may hold initials someone else owns elsewhere.
+ONLINE only turns on once every active player is reserved, linked with a
+PIN, or deactivated (`src/class/OnlineReconciliation.ts`); the Players tab
+shows the MAUI-API column and its "Go ONLINE" action as soon as ONLINE is
+configured, before it is on. While ONLINE is on, a local-only player cannot
+be activated again before going ONLINE. Unlike the first plan, no minimum
+number of players: a new cabinet has none, and creates them through the API.
+
+**Scores, 2026-10-02: only for players allowed to receive them.**
+`HiscoreService.saveHiscores()` reloads the players before each save (the
+BO and the ONLINE sync change them in the main process, which the renderer's
+cache never saw) and attributes a score only to an active player, and in
+ONLINE mode only to one linked in MAUI-API and not disabled there. A PIN
+lock does not stop scores: it only blocks linking to another cabinet.
+Before, `active` was ignored and players created from the BO got no score
+until the app restarted.
+
+**`fetch` in the renderer, 2026-10-02: never called as a method.** Chromium's
+`window.fetch` throws "Illegal invocation" when called with another `this`;
+Node's does not care. `MauiApiClient` stored it as `this.fetchImpl` and the
+error looked like an unreachable API, from the cabinet UI only. It now wraps
+the global in an arrow function (test in `MauiApiClient.test.ts`).

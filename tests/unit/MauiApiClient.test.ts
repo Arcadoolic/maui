@@ -307,3 +307,112 @@ describe('repository', () => {
         expect(await client.repository()).toEqual({kind: 'rejected', status: 403, code: 'insufficient_ability'});
     });
 });
+
+describe('players', () => {
+    const uuid = '01a0f983-773f-71b7-b4c5-66c848306e1b';
+    const apiPlayer = {id: uuid, pseudo_3: 'ACE', is_public: true, status: 'active'};
+    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active'};
+
+    it('lists the players of the cabinet', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {players: [apiPlayer]}));
+        expect(await client.listPlayers()).toEqual({kind: 'ok', value: [player]});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/players');
+        expect(init.method).toBe('GET');
+    });
+
+    it('treats a player list that does not match the contract as invalid', async () => {
+        for (const body of [{}, {players: [{...apiPlayer, status: 'banned'}]}, {players: [{...apiPlayer, id: 42}]}]) {
+            const {client} = clientReturning(json(200, body));
+            expect((await client.listPlayers()).kind).toBe('unavailable');
+        }
+    });
+
+    it('checks the availability of initials', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {pseudo_3: 'ACE', availability: 'taken'}));
+        expect(await client.playerAvailability('ACE')).toEqual({kind: 'ok', value: 'taken'});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/players/availability?pseudo_3=ACE');
+    });
+
+    it('creates a player and returns its PIN', async () => {
+        const {client, fetchImpl} = clientReturning(json(201, {player: apiPlayer, pin: '0042'}));
+        expect(await client.createPlayer('ACE', true)).toEqual({kind: 'ok', value: {player, pin: '0042'}});
+        const {init} = requestOf(fetchImpl);
+        expect(init.method).toBe('POST');
+        expect(JSON.parse(init.body as string)).toEqual({pseudo_3: 'ACE', is_public: true});
+    });
+
+    it('maps initials_taken', async () => {
+        const {client} = clientReturning(problem({type: 'about:blank', title: 'Conflict', status: 409, code: 'initials_taken'}));
+        expect(await client.createPlayer('ACE', false)).toEqual({kind: 'rejected', status: 409, code: 'initials_taken'});
+    });
+
+    it('links a player with its PIN', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {player: apiPlayer}));
+        expect(await client.linkPlayer('ACE', '1234')).toEqual({kind: 'ok', value: player});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/players/link');
+        expect(JSON.parse(init.body as string)).toEqual({pseudo_3: 'ACE', pin: '1234'});
+    });
+
+    it('keeps the attempts left of pin_invalid', async () => {
+        const {client} = clientReturning(problem({type: 'about:blank', title: 'Forbidden', status: 403, code: 'pin_invalid', attempts_left: 3}));
+        expect(await client.linkPlayer('ACE', '0000')).toEqual({kind: 'rejected', status: 403, code: 'pin_invalid', attemptsLeft: 3});
+    });
+
+    it('maps player_locked (423) as a rejection', async () => {
+        const {client} = clientReturning(problem({type: 'about:blank', title: 'Locked', status: 423, code: 'player_locked'}));
+        expect(await client.linkPlayer('ACE', '1234')).toEqual({kind: 'rejected', status: 423, code: 'player_locked'});
+    });
+
+    it('changes the visibility of a player', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {player: {...apiPlayer, is_public: false}}));
+        expect(await client.updatePlayer(uuid, false)).toEqual({kind: 'ok', value: {...player, isPublic: false}});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe(`https://api.example.org/api/v1/players/${uuid}`);
+        expect(init.method).toBe('PATCH');
+        expect(JSON.parse(init.body as string)).toEqual({is_public: false});
+    });
+
+    it('issues a new PIN', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {pin: '9876'}));
+        expect(await client.regeneratePin(uuid)).toEqual({kind: 'ok', value: '9876'});
+        expect(requestOf(fetchImpl).url).toBe(`https://api.example.org/api/v1/players/${uuid}/pin`);
+    });
+
+    it('rejects a PIN that is not 4 digits', async () => {
+        const {client} = clientReturning(json(200, {pin: '12345'}));
+        expect((await client.regeneratePin(uuid)).kind).toBe('unavailable');
+    });
+
+    it('unlinks a player', async () => {
+        const {client, fetchImpl} = clientReturning(new Response(null, {status: 204}));
+        expect(await client.unlinkPlayer(uuid)).toEqual({kind: 'ok', value: undefined});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe(`https://api.example.org/api/v1/players/${uuid}/link`);
+        expect(init.method).toBe('DELETE');
+    });
+
+    it('escapes the player id in the path', async () => {
+        const {client, fetchImpl} = clientReturning(new Response(null, {status: 204}));
+        await client.unlinkPlayer('../ping');
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/players/..%2Fping/link');
+    });
+});
+
+describe('default fetch', () => {
+    it('calls the global fetch unbound, as the browser fetch of the renderer requires', async () => {
+        // Chromium's window.fetch throws "Illegal invocation" when called with another `this`.
+        vi.stubGlobal('fetch', function (this: unknown) {
+            if (this !== undefined && this !== globalThis) {
+                throw new TypeError('Illegal invocation');
+            }
+            return Promise.resolve(json(200, pingBody));
+        });
+        try {
+            expect((await new MauiApiClient(credentials).ping()).kind).toBe('ok');
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});

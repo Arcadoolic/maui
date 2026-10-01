@@ -134,3 +134,83 @@ describe('UserService.registerUser default avatar', () => {
         expect(service.getAvatars()).toEqual(['NEW.png']);
     });
 });
+
+describe('UserService ONLINE players', () => {
+    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const};
+    let service: UserService;
+
+    beforeEach(() => {
+        service = new UserService({} as Config);
+        stubFindOne(null);
+    });
+
+    it('creates the local player of an API player with its remote fields', async () => {
+        let options: {where?: unknown; defaults?: Record<string, unknown>} = {};
+        (User as unknown as {findOrCreate: (opts: typeof options) => Promise<unknown>}).findOrCreate = (opts) => {
+            options = opts;
+            return Promise.resolve([{pseudo_3: 'ONL'}, true]);
+        };
+
+        const {created} = await service.saveOnlineUser(online);
+
+        expect(created).toBe(true);
+        expect(options.where).toEqual({pseudo_3: 'ONL'});
+        expect(options.defaults).toEqual({active: true, remote_id: online.id, is_public: true, online_status: 'locked'});
+        expect(service.getUserByPseudo3('ONL')).toEqual({pseudo_3: 'ONL'});
+    });
+
+    it('links an existing local player to the API player', async () => {
+        const updates: unknown[] = [];
+        const existing = {pseudo_3: 'ONL', update: (fields: unknown) => {
+            updates.push(fields);
+            return Promise.resolve();
+        }};
+        stubFindOrCreate([existing as unknown as FakeUser, false]);
+
+        await service.saveOnlineUser(online);
+
+        expect(updates).toEqual([{remote_id: online.id, is_public: true, online_status: 'locked'}]);
+    });
+
+    it('tells whether initials are used by a local player, live or deleted', async () => {
+        stubFindOne({pseudo_3: 'DEL', deletionDate: new Date()});
+        expect(await service.isPseudoUsedLocally('DEL')).toBe(true);
+
+        stubFindOne(null);
+        expect(await service.isPseudoUsedLocally('NEW')).toBe(false);
+
+        stubFindOne({pseudo_3: 'LIV', deletionDate: null});
+        expect(await service.isPseudoUsedLocally('LIV')).toBe(true);
+    });
+});
+
+describe('UserService scorers', () => {
+    type Statics = {findAll: () => Promise<unknown[]>};
+    const statics = User as unknown as Statics;
+
+    it('reloads the players from the database, dropping the ones gone since', async () => {
+        const service = new UserService({} as Config);
+        statics.findAll = () => Promise.resolve([{pseudo_3: 'OLD', active: true}]);
+        await service.loadUsers();
+        statics.findAll = () => Promise.resolve([{pseudo_3: 'NEW', active: true}]);
+        await service.loadUsers();
+
+        expect(service.getUserByPseudo3('OLD')).toBeUndefined();
+        expect(service.getUserByPseudo3('NEW')).toEqual({pseudo_3: 'NEW', active: true});
+    });
+
+    it('only hands scores to the players allowed to receive them', async () => {
+        const service = new UserService({} as Config);
+        statics.findAll = () => Promise.resolve([
+            {pseudo_3: 'ONL', active: true, remote_id: 'id-1', online_status: 'active'},
+            {pseudo_3: 'LOC', active: true, remote_id: null, online_status: null},
+            {pseudo_3: 'OFF', active: false, remote_id: 'id-2', online_status: 'active'},
+        ]);
+        await service.loadUsers();
+
+        expect(service.getScorer('ONL', true)?.pseudo_3).toBe('ONL');
+        expect(service.getScorer('LOC', true)).toBeUndefined();
+        expect(service.getScorer('LOC', false)?.pseudo_3).toBe('LOC');
+        expect(service.getScorer('OFF', false)).toBeUndefined();
+    });
+});

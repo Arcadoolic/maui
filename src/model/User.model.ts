@@ -1,6 +1,7 @@
 import {Column, CreatedAt, DataType, DeletedAt, HasMany, Model, Table, UpdatedAt} from 'sequelize-typescript';
 import Hiscore from '@/model/Hiscore.model';
 import {PSEUDO3_PATTERN, PSEUDO3_RULE} from '@/class/Pseudo3';
+import type {OnlinePlayerStatus} from '@/class/MauiApiClient';
 
 @Table({
     timestamps: true,
@@ -54,6 +55,30 @@ export default class User extends Model<User> {
         defaultValue: 0,
     })
     public active!: boolean;
+
+    // ONLINE (MAUI-API, see migrations/20261002090000-user-online-player.js): the player's id in
+    // the API, null while local only.
+    @Column({
+        type: DataType.TEXT,
+        allowNull: true,
+        unique: true,
+    })
+    public remote_id!: string | null;
+
+    // Shown in the shared leaderboards. Private by default.
+    @Column({
+        type: DataType.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+    })
+    public is_public!: boolean;
+
+    // Last status reported by MAUI-API: 'active', 'disabled' or 'locked'; null when not linked.
+    @Column({
+        type: DataType.TEXT,
+        allowNull: true,
+    })
+    public online_status!: OnlinePlayerStatus | null;
 
     @HasMany(() => Hiscore)
     public hiscores!: InstanceType<typeof Hiscore>[];
