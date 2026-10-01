@@ -310,3 +310,64 @@ describe('stop and restart', () => {
         expect(unref).toHaveBeenCalled();
     });
 });
+
+describe('player sync', () => {
+    it('syncs the players after the startup report, then every 10 heartbeats', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const syncPlayers = vi.fn(async () => ({kind: 'ok' as const, value: 0}));
+        const {instance} = session(fetchImpl, {syncPlayers});
+
+        await instance.start();
+        expect(syncPlayers).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 9);
+        expect(syncPlayers).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL);
+        expect(syncPlayers).toHaveBeenCalledTimes(2);
+        instance.stop();
+    });
+
+    it('does not sync when the startup report fails', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api(() => problem(503, 'server_error'));
+        const syncPlayers = vi.fn(async () => ({kind: 'ok' as const, value: 0}));
+        const {instance} = session(fetchImpl, {syncPlayers});
+
+        await instance.start();
+        expect(syncPlayers).not.toHaveBeenCalled();
+        instance.stop();
+    });
+
+    it('logs a failed sync and keeps the heartbeat going', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl, calls} = api();
+        const syncPlayers = vi.fn(async () => ({kind: 'rejected' as const, status: 403, code: 'insufficient_ability'}));
+        const {instance, log} = session(fetchImpl, {syncPlayers});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(INTERVAL);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('insufficient_ability'));
+        expect(instance.getStatus().state).toBe('running');
+        expect(paths(calls)).toEqual(['/startups', '/heartbeat']);
+        instance.stop();
+    });
+
+    it('survives a sync that throws', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const syncPlayers = vi.fn(async () => {
+            throw new Error('SQLITE_BUSY');
+        });
+        const {instance, log} = session(fetchImpl, {syncPlayers});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('SQLITE_BUSY'));
+        expect(instance.getStatus().state).toBe('running');
+        instance.stop();
+    });
+});

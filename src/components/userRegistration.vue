@@ -1,6 +1,42 @@
 <template>
     <modal>
-        <div class="user-registration-success" v-if="success">Player created</div>
+        <div class="user-registration-success" v-if="step === 'success'">{{successMessage}}</div>
+        <div class="user-registration" v-else-if="step === 'pin_shown'">
+            <p>Player <strong>{{usernameString}}</strong> created. Their PIN:</p>
+            <div class="letters pin">
+                <div v-for="(digit, index) in shownPin" :key="index"><span>{{digit}}</span></div>
+            </div>
+            <p>Write it down: it is needed to play as {{usernameString}} on another cabinet.
+                If lost, a MAUI-API administrator can find it.</p>
+            <div class="validate">
+                Press
+                <span class="arcadeButton">
+                    <i class="fas fa-male"></i>
+                </span>
+                when done
+            </div>
+        </div>
+        <div class="user-registration" v-else-if="step === 'pin'">
+            <p>{{usernameString}} already plays on another cabinet. Enter their PIN to play with them here.</p>
+            <div class="letters pin">
+                <div v-for="(digit, index) in pin" :key="index" :class="{selected: selectedDigit === index}">
+                    <span>{{digit}}</span>
+                </div>
+            </div>
+            <div class="error" v-if="errorMessage">{{errorMessage}}</div>
+            <div class="validate">
+                Press
+                <span class="arcadeButton">
+                    <i class="fas fa-male"></i>
+                </span>
+                to validate
+            </div>
+            <div class="cancel">
+                Press
+                <span class="arcadeButton rectangle"></span>
+                to cancel
+            </div>
+        </div>
         <div class="user-registration" v-else>
             <p>Please select a player name. It will be used to extract and display your hiscores.</p>
             <div class="letters">
@@ -14,7 +50,7 @@
                     <span>{{username[2]}}</span>
                 </div>
             </div>
-            <div class="error" v-if="error">Player name already used</div>
+            <div class="error" v-if="errorMessage">{{errorMessage}}</div>
             <div class="validate">
                 Press
                 <span class="arcadeButton">
@@ -32,96 +68,168 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed} from 'vue';
-import {useControllable} from '@/composables/useControllable';
-import {MAUI_KEYS} from '@/class/MauiControls';
-import {getUserService} from '@/services';
-import Modal from '@/components/Modal.vue';
+    import {ref, computed} from 'vue';
+    import {useControllable} from '@/composables/useControllable';
+    import {MAUI_KEYS} from '@/class/MauiControls';
+    import {getUserService} from '@/services';
+    import {createOnlineClient} from '@/class/OnlineClient';
+    import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
+    import type {OnlinePlayer} from '@/class/MauiApiClient';
+    import Modal from '@/components/Modal.vue';
 
-const emit = defineEmits<{quit: []}>();
+    // In ONLINE mode the initials are reserved in MAUI-API first (OnlineRegistration.ts): free ones
+    // show the new player's PIN once, taken ones ask for that player's PIN to link them here.
+    type Step = 'letters' | 'pin' | 'pin_shown' | 'success';
 
-const username = ref<{[key: number]: string}>({0: 'A', 1: 'A', 2: 'A'});
-const selectedLetter = ref(0);
-const success = ref(false);
-const error = ref(false);
-const loading = ref(false);
-const pristine = ref(true);
+    const emit = defineEmits<{quit: []}>();
 
-const usernameString = computed(() => username.value[0] + username.value[1] + username.value[2]);
+    const username = ref<{[key: number]: string}>({0: 'A', 1: 'A', 2: 'A'});
+    const selectedLetter = ref(0);
+    const step = ref<Step>('letters');
+    const successMessage = ref('Player created');
+    const errorMessage = ref('');
+    const loading = ref(false);
+    const pristine = ref(true);
+    const pin = ref([0, 0, 0, 0]);
+    const selectedDigit = ref(0);
+    const shownPin = ref('');
 
-function nextLetter() {
-    if (!loading.value) {
-        username.value[selectedLetter.value] = username.value[selectedLetter.value] === 'Z' ? 'A' :
-            String.fromCharCode(username.value[selectedLetter.value].charCodeAt(0) + 1);
+    const usernameString = computed(() => username.value[0] + username.value[1] + username.value[2]);
+
+    function cycle(value: number, delta: number, size: number): number {
+        return (value + delta + size) % size;
     }
-}
 
-function previousLetter() {
-    if (!loading.value) {
-        username.value[selectedLetter.value] = username.value[selectedLetter.value] === 'A' ? 'Z' :
-            String.fromCharCode(username.value[selectedLetter.value].charCodeAt(0) - 1);
+    function changeCharacter(delta: number) {
+        if (loading.value) {
+            return;
+        }
+        if (step.value === 'pin') {
+            pin.value[selectedDigit.value] = cycle(pin.value[selectedDigit.value], delta, 10);
+        } else if (step.value === 'letters') {
+            const code = username.value[selectedLetter.value].charCodeAt(0) - 65;
+            username.value[selectedLetter.value] = String.fromCharCode(65 + cycle(code, delta, 26));
+        }
     }
-}
 
-function nextSelectedLetter() {
-    if (!loading.value) {
-        selectedLetter.value = selectedLetter.value === 2 ? 0 : selectedLetter.value + 1;
+    function moveSelection(delta: number) {
+        if (loading.value) {
+            return;
+        }
+        if (step.value === 'pin') {
+            selectedDigit.value = cycle(selectedDigit.value, delta, 4);
+        } else if (step.value === 'letters') {
+            selectedLetter.value = cycle(selectedLetter.value, delta, 3);
+        }
     }
-}
 
-function previousSelectedLetter() {
-    if (!loading.value) {
-        selectedLetter.value = selectedLetter.value === 0 ? 2 : selectedLetter.value - 1;
-    }
-}
+    const saveOnlineUser = (player: OnlinePlayer) => getUserService().saveOnlineUser(player);
 
-function addUser() {
-    if (loading.value || pristine.value) {
-        return;
+    function apply(outcome: RegistrationOutcome) {
+        switch (outcome.kind) {
+        case 'created':
+            shownPin.value = outcome.pin;
+            step.value = 'pin_shown';
+            break;
+        case 'pin_required':
+            pin.value = [0, 0, 0, 0];
+            selectedDigit.value = 0;
+            step.value = 'pin';
+            break;
+        case 'linked':
+            successMessage.value = `${usernameString.value} can now play on this cabinet`;
+            step.value = 'success';
+            break;
+        case 'error':
+            errorMessage.value = outcome.message;
+            break;
+        }
     }
-    error.value = false;
-    loading.value = true;
-    getUserService().registerUser(usernameString.value)
-        .then(({created}) => {
+
+    async function addUser() {
+        const userService = getUserService();
+        if (await userService.isPseudoUsedLocally(usernameString.value)) {
+            errorMessage.value = 'Player name already used';
+            return;
+        }
+        const client = await createOnlineClient();
+        if (!client) {
+            const {created} = await userService.registerUser(usernameString.value);
             if (created) {
-                success.value = true;
+                step.value = 'success';
             } else {
-                error.value = true;
+                errorMessage.value = 'Player name already used';
             }
-            loading.value = false;
-        });
-}
-
-const {onKeydown, onKeyup} = useControllable();
-
-onKeydown((e, isGamepad) => {
-    const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
-    switch (key) {
-    case MAUI_KEYS.up:
-        previousLetter();
-        break;
-    case MAUI_KEYS.down:
-        nextLetter();
-        break;
-    case MAUI_KEYS.left:
-        previousSelectedLetter();
-        break;
-    case MAUI_KEYS.right:
-        nextSelectedLetter();
-        break;
-    case MAUI_KEYS.p:
-        addUser();
-        break;
-    case MAUI_KEYS.space:
-        emit('quit');
-        break;
+            return;
+        }
+        apply(await registerOnline(client, usernameString.value, saveOnlineUser));
     }
-    pristine.value = false;
-});
 
-onKeyup(() => {
+    async function submitPin() {
+        const client = await createOnlineClient();
+        if (!client) {
+            errorMessage.value = 'ONLINE is off: the PIN cannot be checked.';
+            return;
+        }
+        apply(await linkWithPin(client, usernameString.value, pin.value.join(''), saveOnlineUser));
+    }
+
+    async function validate() {
+        if (loading.value || pristine.value) {
+            return;
+        }
+        if (step.value === 'pin_shown') {
+            successMessage.value = 'Player created';
+            step.value = 'success';
+            return;
+        }
+        if (step.value === 'success') {
+            return;
+        }
+        errorMessage.value = '';
+        loading.value = true;
+        try {
+            await (step.value === 'pin' ? submitPin() : addUser());
+        } catch (error) {
+            errorMessage.value = error instanceof Error ? error.message : String(error);
+        } finally {
+            loading.value = false;
+        }
+    }
+
+    const {onKeydown, onKeyup} = useControllable();
+
+    onKeydown((e, isGamepad) => {
+        const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        switch (key) {
+        case MAUI_KEYS.up:
+            changeCharacter(-1);
+            break;
+        case MAUI_KEYS.down:
+            changeCharacter(1);
+            break;
+        case MAUI_KEYS.left:
+            moveSelection(-1);
+            break;
+        case MAUI_KEYS.right:
+            moveSelection(1);
+            break;
+        case MAUI_KEYS.p:
+            void validate();
+            break;
+        case MAUI_KEYS.space:
+            // The PIN must have been seen: no leaving its screen by the cancel button.
+            if (step.value !== 'pin_shown') {
+                emit('quit');
+            }
+            break;
+        }
+        pristine.value = false;
+    });
+
+    onKeyup(() => {
     // No-op: keyup is handled by the keydown listener above.
-});
+    });
 </script>
 
 <style scoped>
@@ -163,6 +271,13 @@ onKeyup(() => {
             margin-bottom: 20px;
             text-align: center;
         }
+
+        .letters.pin {
+            width: 50%;
+        }
+            .letters.pin > div {
+                width: 25%;
+            }
 
         .validate, .cancel {
             font-size: 1.5em;

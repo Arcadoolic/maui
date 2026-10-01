@@ -36,15 +36,22 @@ export interface OnlineSessionDeps {
     osRelease?: () => string;
     heartbeatIntervalMs?: number;
     log?: (message: string) => void;
+    // Players of this cabinet (PlayerSync.ts), after the startup report and every
+    // PLAYER_SYNC_EVERY heartbeats. None: no sync (tests, or a caller without database).
+    syncPlayers?: (client: MauiApiClient) => Promise<ApiResult<number>>;
 }
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
+// Every 10 minutes with the default interval: a player disabled or locked upstream is caught soon
+// enough, without a second request every minute.
+const PLAYER_SYNC_EVERY = 10;
 
 const idle = (state: OnlineState): OnlineStatus => ({state, startupId: null, lastSuccessAt: null, lastFailure: null});
 
 export class OnlineSession {
     private status: OnlineStatus = idle('disabled');
     private timer: ReturnType<typeof setTimeout> | null = null;
+    private heartbeats = 0;
     // Bumped by every start/stop: a call still in flight from an older run must not reschedule.
     private generation = 0;
     private readonly settingsPath: string;
@@ -102,6 +109,8 @@ export class OnlineSession {
         }
         if (startup.kind === 'ok') {
             this.status = {...this.status, startupId: startup.value.id};
+            this.heartbeats = 0;
+            this.syncPlayers(client);
         }
         this.handle(startup, client, generation);
     }
@@ -155,10 +164,29 @@ export class OnlineSession {
         this.schedule(delay, client, generation);
     }
 
+    /** Not awaited, never throws: a failed sync is logged and retried at the next turn. */
+    private syncPlayers(client: MauiApiClient): void {
+        if (!this.deps.syncPlayers) {
+            return;
+        }
+        this.deps.syncPlayers(client).then(
+            result => {
+                if (result.kind !== 'ok') {
+                    const reason = result.kind === 'rejected' ? `HTTP ${result.status}, ${result.code}` : result.kind;
+                    this.log(`[online] Player sync failed (${reason}).`);
+                }
+            },
+            (error: unknown) => this.log(`[online] Player sync failed: ${error instanceof Error ? error.message : String(error)}`),
+        );
+    }
+
     private schedule(delayMs: number, client: MauiApiClient, generation: number): void {
         const timer = setTimeout(async () => {
             const result = await client.heartbeat();
             if (generation === this.generation) {
+                if (result.kind === 'ok' && ++this.heartbeats % PLAYER_SYNC_EVERY === 0) {
+                    this.syncPlayers(client);
+                }
                 this.handle(result, client, generation);
             }
         }, delayMs);

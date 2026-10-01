@@ -42,10 +42,30 @@ export interface RepositoryInfo {
     url: string | null;
 }
 
+// Players (maui-api D48): only the initials and the visibility ever reach the API.
+export type OnlinePlayerStatus = 'active' | 'disabled' | 'locked';
+
+export interface OnlinePlayer {
+    // UUID, the only id the API knows the player by.
+    id: string;
+    pseudo3: string;
+    isPublic: boolean;
+    status: OnlinePlayerStatus;
+}
+
+export type PlayerAvailability = 'free' | 'taken' | 'disabled';
+
+export interface CreatedPlayer {
+    player: OnlinePlayer;
+    // Shown once to the player, never stored.
+    pin: string;
+}
+
 export type ApiResult<T> =
     | {kind: 'ok'; value: T}
-    // Definitive: retrying with the same credentials gives the same answer.
-    | {kind: 'rejected'; status: number; code: string; errors?: Record<string, string[]>}
+    // Definitive: retrying with the same credentials gives the same answer. `attemptsLeft` comes
+    // with `pin_invalid` only.
+    | {kind: 'rejected'; status: number; code: string; errors?: Record<string, string[]>; attemptsLeft?: number}
     | {kind: 'rate_limited'; retryAfterSeconds: number}
     // Transient: worth retrying at the next heartbeat.
     | {kind: 'unavailable'; reason: 'network' | 'timeout' | 'server_error' | 'invalid_response'; status?: number};
@@ -86,6 +106,9 @@ async function toFailure(response: Response): Promise<ApiResult<never>> {
     const body = await readJson(response);
     const code = isObject(body) && typeof body.code === 'string' ? body.code : 'http_error';
     const rejected: ApiResult<never> = {kind: 'rejected', status: response.status, code};
+    if (isObject(body) && Number.isInteger(body.attempts_left)) {
+        return {...rejected, attemptsLeft: body.attempts_left as number};
+    }
     return isObject(body) && isObject(body.errors)
         ? {...rejected, errors: body.errors as Record<string, string[]>}
         : rejected;
@@ -122,6 +145,47 @@ function parseRepository(body: unknown): RepositoryInfo | null {
     return {url: body.url};
 }
 
+const PLAYER_STATUSES: readonly string[] = ['active', 'disabled', 'locked'];
+const AVAILABILITIES: readonly string[] = ['free', 'taken', 'disabled'];
+const PIN = /^\d{4}$/;
+
+function parsePlayer(body: unknown): OnlinePlayer | null {
+    if (!isObject(body) || typeof body.id !== 'string' || typeof body.pseudo_3 !== 'string'
+        || typeof body.is_public !== 'boolean' || typeof body.status !== 'string'
+        || !PLAYER_STATUSES.includes(body.status)) {
+        return null;
+    }
+    return {id: body.id, pseudo3: body.pseudo_3, isPublic: body.is_public, status: body.status as OnlinePlayerStatus};
+}
+
+function parsePlayerResponse(body: unknown): OnlinePlayer | null {
+    return isObject(body) ? parsePlayer(body.player) : null;
+}
+
+function parsePlayerList(body: unknown): OnlinePlayer[] | null {
+    if (!isObject(body) || !Array.isArray(body.players)) {
+        return null;
+    }
+    const players = body.players.map(parsePlayer);
+    return players.every(player => player !== null) ? players as OnlinePlayer[] : null;
+}
+
+function parseAvailability(body: unknown): PlayerAvailability | null {
+    return isObject(body) && typeof body.availability === 'string' && AVAILABILITIES.includes(body.availability)
+        ? body.availability as PlayerAvailability
+        : null;
+}
+
+function parsePin(body: unknown): string | null {
+    return isObject(body) && typeof body.pin === 'string' && PIN.test(body.pin) ? body.pin : null;
+}
+
+function parseCreatedPlayer(body: unknown): CreatedPlayer | null {
+    const player = parsePlayerResponse(body);
+    const pin = parsePin(body);
+    return player && pin ? {player, pin} : null;
+}
+
 function isTimeout(error: unknown): boolean {
     return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
 }
@@ -131,7 +195,9 @@ export class MauiApiClient {
     private readonly timeoutMs: number;
 
     public constructor(private readonly credentials: MauiApiCredentials, options: MauiApiClientOptions = {}) {
-        this.fetchImpl = options.fetchImpl ?? fetch;
+        // Never the bare global stored as a property: called as `this.fetchImpl()`, the renderer's
+        // browser fetch throws "Illegal invocation" (Node's does not care), seen as a network error.
+        this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
         this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     }
 
@@ -159,6 +225,46 @@ export class MauiApiClient {
         return this.call('GET', '/repository', 200, async response => parseRepository(await readJson(response)));
     }
 
+    public listPlayers(): Promise<ApiResult<OnlinePlayer[]>> {
+        return this.call('GET', '/players', 200, async response => parsePlayerList(await readJson(response)));
+    }
+
+    public playerAvailability(pseudo3: string): Promise<ApiResult<PlayerAvailability>> {
+        return this.call(
+            'GET', `/players/availability?pseudo_3=${encodeURIComponent(pseudo3)}`, 200,
+            async response => parseAvailability(await readJson(response)),
+        );
+    }
+
+    public createPlayer(pseudo3: string, isPublic: boolean): Promise<ApiResult<CreatedPlayer>> {
+        return this.call(
+            'POST', '/players', 201, async response => parseCreatedPlayer(await readJson(response)),
+            {pseudo_3: pseudo3, is_public: isPublic},
+        );
+    }
+
+    public linkPlayer(pseudo3: string, pin: string): Promise<ApiResult<OnlinePlayer>> {
+        return this.call(
+            'POST', '/players/link', 200, async response => parsePlayerResponse(await readJson(response)),
+            {pseudo_3: pseudo3, pin},
+        );
+    }
+
+    public updatePlayer(id: string, isPublic: boolean): Promise<ApiResult<OnlinePlayer>> {
+        return this.call(
+            'PATCH', `/players/${encodeURIComponent(id)}`, 200, async response => parsePlayerResponse(await readJson(response)),
+            {is_public: isPublic},
+        );
+    }
+
+    public regeneratePin(id: string): Promise<ApiResult<string>> {
+        return this.call('POST', `/players/${encodeURIComponent(id)}/pin`, 200, async response => parsePin(await readJson(response)));
+    }
+
+    public unlinkPlayer(id: string): Promise<ApiResult<void>> {
+        return this.call('DELETE', `/players/${encodeURIComponent(id)}/link`, 204, async () => undefined);
+    }
+
     private headers(hasBody: boolean): Record<string, string> {
         const headers: Record<string, string> = {
             'X-Maui-Key': this.credentials.key,
@@ -170,7 +276,7 @@ export class MauiApiClient {
     }
 
     private async call<T>(
-        method: 'GET' | 'POST',
+        method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
         path: string,
         expectedStatus: number,
         parse: (response: Response) => Promise<T | null>,
