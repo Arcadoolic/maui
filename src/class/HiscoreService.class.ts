@@ -45,6 +45,11 @@ export default class HiscoreService {
         await this.userService.loadUsers();
         const onlineEnabled = isOnlineActive();
         for (const game of games) {
+            // No extractor in mhiex for this game: nothing to read. get() would throw "is not a
+            // constructor" instead of answering undefined (issue #100).
+            if (!this.hiExtractor.exist(game.romName)) {
+                continue;
+            }
             try {
                 const hiscoreExtractor = await this.hiExtractor.get(game.romName);
                 if (!hiscoreExtractor) {
