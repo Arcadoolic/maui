@@ -74,6 +74,7 @@
     import {getUserService} from '@/services';
     import {createOnlineClient} from '@/class/OnlineClient';
     import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
+    import {newPseudo3Error} from '@/class/Pseudo3';
     import type {OnlinePlayer} from '@/class/MauiApiClient';
     import Modal from '@/components/Modal.vue';
 
@@ -148,6 +149,11 @@
 
     async function addUser() {
         const userService = getUserService();
+        const pseudo3Error = newPseudo3Error(usernameString.value);
+        if (pseudo3Error) {
+            errorMessage.value = pseudo3Error;
+            return;
+        }
         if (await userService.isPseudoUsedLocally(usernameString.value)) {
             errorMessage.value = 'Player name already used';
             return;
