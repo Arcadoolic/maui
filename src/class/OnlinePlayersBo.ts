@@ -1,3 +1,4 @@
+import {renderIconButton} from '@/class/BoIconButton';
 import {escapeHtml} from '@/class/EscapeHtml';
 import type {OnlinePlayerStatus} from '@/class/MauiApiClient';
 import type {RegistrationOutcome} from '@/class/OnlineRegistration';
@@ -26,9 +27,15 @@ export function renderOnlinePlayerStatus(user: OnlineUserView): string {
         default:
             return user.is_public
                 ? '<span class="badge-yes" title="Scores in the shared leaderboards">✓ public</span>'
-                : '<span class="badge-yes" title="Linked, scores kept out of the shared leaderboards">✓ private</span>';
+                : '<span class="badge-warn" title="Linked, scores kept out of the shared leaderboards">✓ private</span>';
     }
 }
+
+// Same colors as the status badge each one leads to: green for public, amber for private.
+const EYE_ICON_PATHS = '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>';
+const EYE_OFF_ICON_PATHS = `${EYE_ICON_PATHS}<path d="M2.5 13.5l11-11"/>`;
+const KEY_ICON_PATHS = '<circle cx="5" cy="11" r="3"/><path d="M7.2 8.8L14 2M11 5l2 2M12.5 3.5l1.5 1.5"/>';
+const CLOUD_ICON_PATHS = '<path d="M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.7-.9 3.2 3.2 0 0 1 .2 6.9z"/>';
 
 export function renderOnlinePlayerActions(user: OnlineUserView): string {
     const action = (path: string) => `/users/${user.id_user}/online/${path}`;
@@ -38,7 +45,7 @@ export function renderOnlinePlayerActions(user: OnlineUserView): string {
                 title="Reserves these initials in MAUI-API, or links the player who has them elsewhere (PIN)">
                 <input type="text" name="pin" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" size="4"
                     placeholder="PIN" aria-label="PIN, if these initials play on another cabinet">
-                <button type="submit">Go ONLINE</button>
+                ${renderIconButton('Go ONLINE', CLOUD_ICON_PATHS, 'ok')}
             </form>`;
     }
     if (user.online_status === 'disabled') {
@@ -47,11 +54,13 @@ export function renderOnlinePlayerActions(user: OnlineUserView): string {
     const pseudo = escapeHtml(user.pseudo_3);
     return `
         <form method="post" action="${action('public')}">
-            <button type="submit">${user.is_public ? 'Make private' : 'Make public'}</button>
+            ${user.is_public
+                ? renderIconButton('Make private', EYE_OFF_ICON_PATHS, 'warn')
+                : renderIconButton('Make public', EYE_ICON_PATHS, 'ok')}
         </form>
         <form method="post" action="${action('pin')}"
             onsubmit="return confirm('Issue a new PIN for ${pseudo}? The current one stops working.')">
-            <button type="submit">New PIN</button>
+            ${renderIconButton('New PIN', KEY_ICON_PATHS, 'accent')}
         </form>`;
 }
 

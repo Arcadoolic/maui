@@ -168,22 +168,32 @@ export function describeOnlineStatus(status: OnlineStatus, url: string): BoMessa
     return {level: 'info', message: running};
 }
 
-export type OnlineIndicator = 'online' | 'offline';
+export type OnlineIndicator = 'online' | 'unstable' | 'offline' | 'off';
 
 /**
- * Header badge of the BO: 'online' while the session runs and its last contact with MAUI-API
- * succeeded, 'offline' when ONLINE is on but not reaching the API (no contact yet, last call
- * failed, stopped, unreadable settings). Null when ONLINE is off: a LOCAL cabinet is not offline.
+ * Header badge of the BO:
+ * - 'online': the session runs and its last contact with MAUI-API succeeded;
+ * - 'unstable': the session runs, but its last call failed or none answered yet: heartbeats go on,
+ *   and the next successful one brings it back to 'online';
+ * - 'offline': the session stopped (MAUI-API rejected the cabinet) or the settings are unreadable;
+ * - 'off': ONLINE is turned off, the cabinet plays LOCAL.
+ * Null when ONLINE was never configured: nothing to show.
  */
 export function onlineIndicator(status: OnlineStatus | undefined): OnlineIndicator | null {
-    if (!status || status.state === 'disabled' || status.state === 'not_configured') {
+    if (!status || status.state === 'not_configured') {
         return null;
     }
-    const {state, lastSuccessAt, lastFailure} = status;
+    switch (status.state) {
+        case 'disabled':
+            return 'off';
+        case 'stopped':
+        case 'unreadable':
+            return 'offline';
+    }
+    const {lastSuccessAt, lastFailure} = status;
     // ISO timestamps from the same clock compare as strings.
-    const reachable = state === 'running' && lastSuccessAt !== null
-        && (!lastFailure || lastFailure.at <= lastSuccessAt);
-    return reachable ? 'online' : 'offline';
+    const reachable = lastSuccessAt !== null && (!lastFailure || lastFailure.at <= lastSuccessAt);
+    return reachable ? 'online' : 'unstable';
 }
 
 function describeUnavailable(result: Extract<ApiResult<never>, {kind: 'unavailable'}>, url: string): string {
