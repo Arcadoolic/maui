@@ -8,6 +8,8 @@ import {Server} from 'http';
 import {startBoServer} from '@/boServer';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
+import {onlineIndicator} from '@/class/OnlineSetup';
+import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
 import Config from '@/class/Config.class';
 import {exitWhenParentGone} from '@/devParentWatch';
 
@@ -20,6 +22,10 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 let win: BrowserWindow | null;
 let boServer: Server | undefined;
 let onlineSession: OnlineSession | undefined;
+
+// Read by the front's ONLINE badge (OnlineBadge.vue) through @electron/remote.
+const readOnlineIndicator: OnlineIndicatorReader = () => onlineIndicator(onlineSession?.getStatus());
+(global as Record<string, unknown>)[ONLINE_INDICATOR_GLOBAL] = readOnlineIndicator;
 
 function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.ELECTRON_RENDERER_URL) {

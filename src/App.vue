@@ -1,6 +1,7 @@
 <template>
     <div id="app">
         <router-view :focused="focused"></router-view>
+        <OnlineBadge/>
     </div>
 </template>
 
@@ -8,6 +9,7 @@
 import {ref, onMounted} from 'vue';
 import * as remote from '@electron/remote';
 import Gamepads from '@/class/Gamepads.class';
+import OnlineBadge from '@/components/OnlineBadge.vue';
 
 const focused = ref(true);
 
