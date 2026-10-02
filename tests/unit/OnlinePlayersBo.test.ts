@@ -11,7 +11,9 @@ describe('renderOnlinePlayerStatus', () => {
     it('tells local-only, private, public, locked and disabled players apart', () => {
         expect(renderOnlinePlayerStatus(local)).toContain('local only');
         expect(renderOnlinePlayerStatus(linked)).toContain('private');
+        expect(renderOnlinePlayerStatus(linked)).toContain('badge-warn');
         expect(renderOnlinePlayerStatus({...linked, is_public: true})).toContain('public');
+        expect(renderOnlinePlayerStatus({...linked, is_public: true})).toContain('badge-yes');
         expect(renderOnlinePlayerStatus({...linked, online_status: 'locked'})).toContain('PIN locked');
         expect(renderOnlinePlayerStatus({...linked, online_status: 'disabled'})).toContain('disabled');
     });
@@ -30,6 +32,12 @@ describe('renderOnlinePlayerActions', () => {
         expect(html).toContain('Make public');
         expect(html).toContain('action="/users/3/online/pin"');
         expect(renderOnlinePlayerActions({...linked, is_public: true})).toContain('Make private');
+    });
+
+    it('colors the visibility button like the status it leads to', () => {
+        expect(renderOnlinePlayerActions(linked)).toContain('icon-button icon-button-ok');
+        expect(renderOnlinePlayerActions({...linked, is_public: true})).toContain('icon-button icon-button-warn');
+        expect(renderOnlinePlayerActions(linked)).toContain('icon-button icon-button-accent');
     });
 
     it('offers nothing for a player disabled in MAUI-API', () => {

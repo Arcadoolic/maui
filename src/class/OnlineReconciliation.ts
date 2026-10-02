@@ -28,6 +28,14 @@ export function canActivateLocally(player: ReconciledPlayer, onlineEnabled: bool
     return !onlineEnabled || player.remote_id !== null;
 }
 
+/**
+ * A player MAUI-API's admins disabled, while ONLINE is on: only they can enable them again, so the
+ * BO neither activates nor deactivates them locally. In LOCAL mode, MAUI-API has no say.
+ */
+export function isDisabledUpstream(player: {online_status: string | null}, onlineEnabled: boolean): boolean {
+    return onlineEnabled && player.online_status === 'disabled';
+}
+
 export interface Scorer {
     active: boolean;
     remote_id: string | null;

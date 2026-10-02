@@ -320,30 +320,34 @@ describe('onlineIndicator', () => {
     const base: OnlineStatus = {state: 'running', startupId: null, lastSuccessAt: null, lastFailure: null};
     const failure = (at: string) => ({at, result: {kind: 'unavailable' as const, reason: 'network' as const}});
 
-    it('shows nothing when ONLINE is off', () => {
+    it('shows nothing when ONLINE was never configured', () => {
         expect(onlineIndicator(undefined)).toBeNull();
-        expect(onlineIndicator({...base, state: 'disabled'})).toBeNull();
         expect(onlineIndicator({...base, state: 'not_configured'})).toBeNull();
+    });
+
+    it('is off when ONLINE is turned off', () => {
+        expect(onlineIndicator({...base, state: 'disabled'})).toBe('off');
     });
 
     it('is online after a successful contact', () => {
         expect(onlineIndicator({...base, lastSuccessAt: '2026-10-02T10:01:00.000Z'})).toBe('online');
     });
 
-    it('stays online when a failure was followed by a success', () => {
+    it('is back online when a failure was followed by a success', () => {
         expect(onlineIndicator({
             ...base, lastSuccessAt: '2026-10-02T10:02:00.000Z', lastFailure: failure('2026-10-02T10:01:00.000Z'),
         })).toBe('online');
     });
 
-    it('is offline when the last call failed', () => {
+    it('is unstable while the last call failed', () => {
         expect(onlineIndicator({
             ...base, lastSuccessAt: '2026-10-02T10:01:00.000Z', lastFailure: failure('2026-10-02T10:02:00.000Z'),
-        })).toBe('offline');
+        })).toBe('unstable');
+        expect(onlineIndicator({...base, lastFailure: failure('2026-10-02T10:02:00.000Z')})).toBe('unstable');
     });
 
-    it('is offline before any successful contact', () => {
-        expect(onlineIndicator(base)).toBe('offline');
+    it('is unstable before any answer', () => {
+        expect(onlineIndicator(base)).toBe('unstable');
     });
 
     it('is offline when stopped or unreadable', () => {

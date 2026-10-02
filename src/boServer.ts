@@ -69,8 +69,9 @@ import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
 import {escapeHtml} from '@/class/EscapeHtml';
+import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import {
-    describeOnlineStatus, getOnlineView, onlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
+    describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
     testConnection,
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
@@ -81,7 +82,7 @@ import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
 } from '@/class/OnlinePlayersBo';
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
-import {canActivateLocally, playersBlockingOnline} from '@/class/OnlineReconciliation';
+import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
 import {
     describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, repositoryEnv, resolveRepository,
     type RepositoryAccess,
@@ -1733,13 +1734,32 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .online-badge.offline {
             color: var(--danger);
         }
+        /* Last heartbeat failed: amber and blinking until the next one gets through. */
+        .online-badge.unstable {
+            color: var(--warn);
+            animation: online-blink 1s ease-in-out infinite;
+        }
+        /* ONLINE turned off: a hollow grey dot, nothing alarming. */
+        .online-badge.off {
+            color: var(--text-muted);
+        }
+        .online-badge.off::before {
+            background-color: transparent;
+            border: 1.5px solid currentColor;
+            box-sizing: border-box;
+        }
+        @keyframes online-blink {
+            50% {
+                opacity: 0.25;
+            }
+        }
         @keyframes online-halo {
             50% {
                 box-shadow: 0 0 8px 4px rgba(107, 255, 138, 0.25);
             }
         }
         @media (prefers-reduced-motion: reduce) {
-            .online-badge.online::before {
+            .online-badge.online::before, .online-badge.unstable {
                 animation: none;
             }
         }
@@ -2151,17 +2171,25 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             gap: 8px;
         }
-        .online-actions {
-            display: inline-flex;
-            flex-wrap: wrap;
-            gap: 6px;
+        .card-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-2);
         }
-        .online-actions .inline-form {
+        .row-actions .inline-form {
             display: inline-flex;
+            align-items: center;
             gap: 4px;
         }
-        .online-actions input[name="pin"] {
-            width: 5em;
+        /* Same height as the icon buttons beside it: the generic input padding and top margin
+           made the row taller than the others. */
+        .row-actions input[name="pin"] {
+            width: 4.5em;
+            height: 32px;
+            margin-top: 0;
+            padding: 4px 6px;
+            text-align: center;
         }
         .asset-icons {
             display: inline-flex;
@@ -2216,6 +2244,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         form > button.icon-button.icon-button-warn[type="submit"]:last-child {
             color: var(--warn);
+        }
+        form > button.icon-button.icon-button-accent[type="submit"]:last-child {
+            color: var(--accent);
         }
         button.icon-button:hover:not(:disabled) {
             background-color: rgba(255, 255, 255, 0.12);
@@ -5246,21 +5277,59 @@ function renderMauiControlsCard(): string {
 // Set once by startBoServer(); read by the MAUI page renderer, which runs outside its closure.
 let onlineSession: OnlineSession | null = null;
 
-/**
- * ONLINE / OFFLINE next to the version, linking to the MAUI > Online tab; nothing while ONLINE is
- * off. State as of the page render: it does not refresh by itself.
- */
-function renderOnlineBadge(): string {
+interface OnlineBadge {
+    indicator: OnlineIndicator;
+    label: string;
+    title: string;
+}
+
+/** The header badge's content (OnlineSetup.ts onlineIndicator()), null when ONLINE was never set up. */
+function getOnlineBadge(): OnlineBadge | null {
     const status = onlineSession?.getStatus();
     const indicator = onlineIndicator(status);
     if (!indicator || !status) {
-        return '';
+        return null;
+    }
+    if (indicator === 'off') {
+        return {indicator, label: 'OFFLINE', title: 'ONLINE is turned off: this cabinet plays LOCAL.'};
     }
     const view = getOnlineView();
-    const title = view.state === 'configured' ? describeOnlineStatus(status, view.url).message : 'ONLINE settings unreadable.';
-    return `<a class="online-badge ${indicator}" href="/maui#online" title="${escapeHtml(title)}">`
-        + `${indicator === 'online' ? 'ONLINE' : 'OFFLINE'}</a>`;
+    const message = view.state === 'configured' ? describeOnlineStatus(status, view.url).message : 'ONLINE settings unreadable.';
+    return {
+        indicator,
+        label: indicator === 'offline' ? 'OFFLINE' : 'ONLINE',
+        title: indicator === 'unstable' ? `MAUI-API not answering, retrying. ${message}` : message,
+    };
 }
+
+/**
+ * ONLINE / OFFLINE next to the version, linking to the MAUI > Online tab. Always rendered, hidden
+ * when there is nothing to show, so that ONLINE_BADGE_SCRIPT can update it as the session goes.
+ */
+function renderOnlineBadge(): string {
+    const badge = getOnlineBadge();
+    return `<a class="online-badge ${badge?.indicator ?? ''}" href="/maui#online" title="${escapeHtml(badge?.title ?? '')}"`
+        + `${badge ? '' : ' hidden'}>${badge?.label ?? ''}</a>`
+        + ONLINE_BADGE_SCRIPT;
+}
+
+// The session changes behind the page (a heartbeat every minute): the badge asks for it again
+// every few seconds instead of waiting for the next page load.
+const ONLINE_BADGE_SCRIPT = `<script>(function () {
+    var badge = document.currentScript.previousElementSibling;
+    setInterval(function () {
+        fetch('/maui/online/badge', {credentials: 'same-origin'})
+            .then(function (response) { return response.ok ? response.json() : null; })
+            .then(function (data) {
+                if (!data) { return; }
+                badge.hidden = !data.indicator;
+                badge.className = 'online-badge ' + (data.indicator || '');
+                badge.textContent = data.label || '';
+                badge.title = data.title || '';
+            })
+            .catch(function () {});
+    }, 5000);
+})();</script>`;
 
 function renderOnlineSection(messages: MauiPageMessages): string {
     const view = getOnlineView();
@@ -5420,8 +5489,6 @@ const ASSET_ICON_PATHS: { [kind: string]: string } = {
     Logo: '<path d="M8 1.8l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.1l-3.7 2 .8-4.1L2 6.1l4.2-.5z"/>',
 };
 
-const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
-    + 'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
 
 /**
  * One asset (marquee/flyer/logo) presence icon: green when the file exists, red when it doesn't.
@@ -5490,15 +5557,6 @@ const ASSET_PREVIEW_SCRIPT = `<img class="asset-preview" id="assetPreview" alt="
                 });
             })();</script>`;
 
-/** Icon-only submit button; `label` is its tooltip and accessible name. */
-function renderIconButton(label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' = 'danger'): string {
-    // danger (red) is the default: removing/deleting; ok (green): restoring/enabling; warn
-    // (amber): switching something off without losing it.
-    const toneClass = tone === 'danger' ? '' : ` icon-button-${tone}`;
-    return `<button type="submit" class="icon-button${toneClass}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
-        <svg ${ICON_SVG_ATTRS}>${svgPaths}</svg>
-    </button>`;
-}
 
 const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
 const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
@@ -5509,6 +5567,7 @@ const NEUTRAL_ICON_PATHS = '<circle cx="8" cy="8" r="6"/><path d="M5.5 10h5"/><p
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
 const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
 const PAUSE_ICON_PATHS = '<path d="M5.5 3v10M10.5 3v10"/>';
+const SYNC_ICON_PATHS = '<path d="M13 8a5 5 0 0 1-8.5 3.5M3 8a5 5 0 0 1 8.5-3.5"/><path d="M11.5 1.5v3h-3M4.5 14.5v-3h3"/>';
 
 /**
  * Splits a MAME description ("Ghosts'n Goblins (World? set 1)", sometimes with several
@@ -6819,6 +6878,7 @@ function renderUsersListCard(
     const rows = users.map(user => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const hasAvatar = avatarFilename !== undefined;
+        const disabledUpstream = isDisabledUpstream({online_status: user.online_status ?? null}, !!extras.online);
         return `
         <tr>
             <td class="center">
@@ -6836,16 +6896,18 @@ function renderUsersListCard(
             </td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
-            <td class="center">${renderUserStatusBadge(user.active)}</td>
-            ${extras.onlineColumn ? `<td class="center">${renderOnlinePlayerStatus(user)}
-                <div class="online-actions">${renderOnlinePlayerActions(user)}</div></td>` : ''}
+            <td class="center">${disabledUpstream
+                ? '<span class="badge-no" title="Disabled by a MAUI-API administrator: only they can enable this player again">✗ disabled in MAUI-API</span>'
+                : renderUserStatusBadge(user.active)}</td>
+            ${extras.onlineColumn ? `<td class="center">${renderOnlinePlayerStatus(user)}</td>` : ''}
             <td class="center">
                 <div class="row-actions">
-                    <form method="post" action="/users/${user.id_user}/toggle-active">
+                    ${extras.onlineColumn ? renderOnlinePlayerActions(user) : ''}
+                    ${disabledUpstream ? '' : `<form method="post" action="/users/${user.id_user}/toggle-active">
                         ${user.active
                             ? renderIconButton('Deactivate', PAUSE_ICON_PATHS, 'warn')
                             : renderIconButton('Activate', PLAY_ICON_PATHS, 'ok')}
-                    </form>
+                    </form>`}
                     <form method="post" action="/users/${user.id_user}/delete"
                         onsubmit="return confirm('Delete ${escapeHtml(user.pseudo_3)}? The nickname stays reserved; the player can be restored later in Advanced configuration.')">
                         ${renderIconButton('Delete player', TRASH_ICON_PATHS)}
@@ -6869,8 +6931,8 @@ function renderUsersListCard(
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
-            ${extras.onlineColumn ? '<td></td>' : ''}
             <td class="center"><span class="badge-deleted" title="Deleted on ${escapeHtml(deletedOn)}, ${scoreCount} score(s) kept">🗑 deleted ${escapeHtml(deletedOn)} · ${scoreCount} score(s)</span></td>
+            ${extras.onlineColumn ? '<td></td>' : ''}
             <td class="center">
                 <div class="row-actions">
                     <form method="post" action="/users/${user.id_user}/restore"
@@ -6888,7 +6950,12 @@ function renderUsersListCard(
 
     return `
         <section class="card">
-            <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
+            <div class="card-heading">
+                <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
+                ${extras.online ? `<form method="post" action="/users/online/sync">
+                    ${renderIconButton('Sync with MAUI-API now', SYNC_ICON_PATHS, 'accent')}
+                </form>` : ''}
+            </div>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             ${deleted.length ? `<p class="info">A deleted player's nickname stays reserved: nobody can
@@ -7662,6 +7729,8 @@ export function startBoServer(
 
     app.get('/users', async (req, res) => {
         const avatarFilenames = getAvatarFilenames(new Config());
+        // Players as MAUI-API has them now (disabled, locked...), not as of the last periodic sync.
+        await online.syncPlayersNow();
         try {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
             res.send(await usersPage(req, users, avatarFilenames));
@@ -7858,11 +7927,23 @@ export function startBoServer(
         return {info: `New PIN for "${user.pseudo_3}": ${result.value}. Give it to the player.`};
     }));
 
+    // Same sync as opening the tab (GET /users), on demand, with its outcome.
+    app.post('/users/online/sync', async (req, res) => {
+        const outcome = await online.syncPlayersNow();
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(await usersPage(req, users, getAvatarFilenames(new Config()),
+            outcome === 'ok' ? undefined : 'MAUI-API could not be reached: players shown as of the last sync.',
+            outcome === 'ok' ? 'Players synced with MAUI-API.' : undefined));
+    });
+
     app.post('/users/:id/toggle-active', async (req, res) => {
         const user = await User.findByPk(req.params.id);
         // While ONLINE is on, initials not reserved in MAUI-API may belong to someone else
         // (OnlineReconciliation.ts): the player goes ONLINE first, then can be activated.
-        const refused = !!user && !user.active && !canActivateLocally(user, isOnlineActive());
+        // A player disabled in MAUI-API is enabled again there only, by its admins.
+        const onlineEnabled = isOnlineActive();
+        const disabledUpstream = !!user && isDisabledUpstream({online_status: user.online_status ?? null}, onlineEnabled);
+        const refused = disabledUpstream || (!!user && !user.active && !canActivateLocally(user, onlineEnabled));
         if (user && !refused) {
             user.active = !user.active;
             await user.save();
@@ -7870,7 +7951,9 @@ export function startBoServer(
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.send(await usersPage(req, 
             users, getAvatarFilenames(new Config()),
-            refused ? `"${user?.pseudo_3}" is not in MAUI-API: use "Go ONLINE" first, then activate them.` : undefined,
+            disabledUpstream
+                ? `"${user?.pseudo_3}" is disabled in MAUI-API: only its administrators can enable them again.`
+                : refused ? `"${user?.pseudo_3}" is not in MAUI-API: use "Go ONLINE" first, then activate them.` : undefined,
             user && !refused ? `Player "${user.pseudo_3}" updated.` : undefined,
         ));
     });
@@ -8340,6 +8423,10 @@ export function startBoServer(
         await sendMauiPage(req, res, config, outcome.ok
             ? {onlineInfo: 'Configuration saved. Use "Test connection" to check it.'}
             : {onlineError: outcome.error});
+    });
+
+    app.get('/maui/online/badge', (req, res) => {
+        res.set('Cache-Control', 'no-store').json(getOnlineBadge() ?? {indicator: null});
     });
 
     app.post('/maui/online/enabled', async (req, res) => {

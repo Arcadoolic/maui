@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {canActivateLocally, canReceiveScores, playersBlockingOnline} from '@/class/OnlineReconciliation';
+import {canActivateLocally, canReceiveScores, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
 
 const player = (pseudo3: string, active: boolean, remoteId: string | null) =>
     ({pseudo_3: pseudo3, active, remote_id: remoteId});
@@ -44,5 +44,17 @@ describe('canReceiveScores', () => {
         expect(canReceiveScores(scorer({remote_id: null, online_status: null}), true)).toBe(false);
         expect(canReceiveScores(scorer({online_status: 'disabled'}), true)).toBe(false);
         expect(canReceiveScores(scorer({online_status: 'locked'}), true)).toBe(true);
+    });
+});
+
+describe('isDisabledUpstream', () => {
+    it('leaves a player disabled in MAUI-API to its admins while ONLINE is on', () => {
+        expect(isDisabledUpstream({online_status: 'disabled'}, true)).toBe(true);
+        expect(isDisabledUpstream({online_status: 'locked'}, true)).toBe(false);
+        expect(isDisabledUpstream({online_status: null}, true)).toBe(false);
+    });
+
+    it('has no say in LOCAL mode', () => {
+        expect(isDisabledUpstream({online_status: 'disabled'}, false)).toBe(false);
     });
 });
