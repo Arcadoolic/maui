@@ -71,10 +71,11 @@ import {
 import {escapeHtml} from '@/class/EscapeHtml';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import {
-    describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
+    describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
     testConnection,
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
+import {describeBackfill, readCabinetTables, selectBackfillScores, sendScores} from '@/class/HiscoreBackfill';
 import {syncPlayers} from '@/class/PlayerSync';
 import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
@@ -5204,6 +5205,8 @@ interface MauiPageMessages {
     updateInfoError?: string;
     onlineInfo?: string;
     onlineError?: string;
+    backfillInfo?: string;
+    backfillError?: string;
 }
 
 /**
@@ -5337,7 +5340,25 @@ function renderOnlineSection(messages: MauiPageMessages): string {
     const session = view.state === 'configured' && status
         ? {stopped: status.state === 'stopped', status: describeOnlineStatus(status, view.url)}
         : undefined;
-    return renderOnlineCard(view, {error: messages.onlineError, info: messages.onlineInfo}, session);
+    return renderOnlineCard(view, {error: messages.onlineError, info: messages.onlineInfo}, session)
+        + (process.env.NODE_ENV === 'development' && onlineSession?.currentClient() ? renderScoresBackfillCard(messages) : '');
+}
+
+/** Development only (HiscoreBackfill.ts): fills MAUI-API with this cabinet's hiscores. */
+function renderScoresBackfillCard(messages: MauiPageMessages): string {
+    return `
+        <section class="card">
+            <h2>Send this cabinet's hiscores (development)</h2>
+            ${messages.backfillError ? `<p class="error flash">${escapeHtml(messages.backfillError)}</p>` : ''}
+            ${messages.backfillInfo ? `<p class="info flash">${escapeHtml(messages.backfillInfo)}</p>` : ''}
+            <p>Reads every hiscore table of this cabinet (hiscore and nvram files) and sends the best score of
+            each public player on each game to MAUI-API, as Lot 2.3 will do after each game. MAUI-API only
+            keeps personal bests: sending again changes nothing. To start over, run
+            <code>php artisan dev:reset-scores</code> on MAUI-API.</p>
+            <form method="post" action="/maui/online/backfill-scores">
+                <button type="submit">Send the hiscores</button>
+            </form>
+        </section>`;
 }
 
 function renderMauiPage(
@@ -5374,7 +5395,7 @@ function renderMauiPage(
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
     const defaultSubtab = messages.dangerZoneInfo !== undefined ? 'danger'
-        : (messages.onlineError !== undefined || messages.onlineInfo !== undefined) ? 'online'
+        : (messages.onlineError ?? messages.onlineInfo ?? messages.backfillError ?? messages.backfillInfo) !== undefined ? 'online'
             : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
                 : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                     : messages.mauiInfo !== undefined ? 'general'
@@ -8424,6 +8445,31 @@ export function startBoServer(
         await sendMauiPage(req, res, config, outcome.ok
             ? {onlineInfo: 'Configuration saved. Use "Test connection" to check it.'}
             : {onlineError: outcome.error});
+    });
+
+    // Development only: renderScoresBackfillCard().
+    app.post('/maui/online/backfill-scores', async (req, res) => {
+        if (process.env.NODE_ENV !== 'development') {
+            res.sendStatus(404);
+            return;
+        }
+        if (refuseOnlineRequest(req, res)) {
+            return;
+        }
+        const client = online.currentClient();
+        const config = new Config();
+        config.load();
+        if (!client) {
+            await sendMauiPage(req, res, config, {backfillError: 'ONLINE is not running.'});
+            return;
+        }
+        const scores = selectBackfillScores(await readCabinetTables(getMameHomePath()), await User.findAll());
+        const summary = await sendScores(client, scores);
+        const view = getOnlineView();
+        await sendMauiPage(req, res, config, summary.failure
+            ? {backfillError: `${describeBackfill(scores.length, summary)} Stopped: ${
+                describeFailure(summary.failure, view.state === 'configured' ? view.url : '')}`}
+            : {backfillInfo: describeBackfill(scores.length, summary)});
     });
 
     app.get('/maui/online/badge', (req, res) => {
