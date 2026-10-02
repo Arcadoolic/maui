@@ -7,8 +7,8 @@ import {join, relative} from 'path';
 // "DOUBLE PRECISION": the module is then a SyntaxError ("Missing initializer in const declaration")
 // and the window stays black, with nothing else in the logs than an unhandled rejection. The
 // renderer uses sequelize through sequelize-typescript; only the main process (boServer.ts and
-// the Express controllers) may import 'sequelize' itself.
-const MAIN_PROCESS_ONLY = new Set(['boServer.ts', 'background.ts']);
+// the Express controllers, SqliteScoreStore.ts used by boServer.ts only) may import 'sequelize' itself.
+const MAIN_PROCESS_ONLY = new Set(['boServer.ts', 'background.ts', 'class/SqliteScoreStore.ts']);
 
 function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {

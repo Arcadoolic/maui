@@ -1,57 +1,17 @@
-import {randomUUID} from 'crypto';
 import {existsSync, readdirSync, statSync} from 'fs';
 import {join} from 'path';
 import {MameHiExtractor} from '@arcadoolic/mhiex';
-import type {ApiFailure, MauiApiClient, ScoreSubmission} from '@/class/MauiApiClient';
-import {scorePseudo3} from '@/class/HiscoreSupport';
+import type {TableRow} from '@/class/ScoreDiff';
 
-// Development only: sends the hiscores already on this cabinet (<mame home>/hiscore, nvram) to
-// MAUI-API, to fill it with realistic data. Only the players active, public, linked and not
-// disabled there: the same scores Lot 2.3 will send as they are made. maui-api's
-// `php artisan dev:reset-scores` empties them again.
-
-export const SCORE_BATCH_SIZE = 100;
+// Development only: the hiscores already on this cabinet (<mame home>/hiscore, nvram), to fill
+// MAUI-API with realistic data through the score outbox (ScoreOutbox.ts, BO MAUI > Online).
+// maui-api's `php artisan dev:reset-scores` empties them again.
 
 export interface CabinetTable {
     romname: string;
     // When the file was written: the best guess of when its scores were made.
     achievedAt: string;
-    rows: {rank: number; score: number; name: string}[];
-}
-
-export interface PublishablePlayer {
-    pseudo_3: string;
-    active: boolean;
-    remote_id: string | null;
-    is_public: boolean;
-    online_status: string | null;
-}
-
-/** A player whose scores go to the shared leaderboards. */
-export function isPublishable(player: PublishablePlayer): boolean {
-    return player.active && player.remote_id !== null && player.is_public && player.online_status !== 'disabled';
-}
-
-/** The best score of each publishable player on each game, ready to send. */
-export function selectBackfillScores(
-    tables: CabinetTable[], players: PublishablePlayer[], newId: () => string = randomUUID,
-): ScoreSubmission[] {
-    const remoteIds = new Map(players.filter(isPublishable).map(player => [player.pseudo_3, player.remote_id as string]));
-    const best = new Map<string, ScoreSubmission>();
-    for (const table of tables) {
-        for (const row of table.rows) {
-            const playerId = remoteIds.get(scorePseudo3(row.name));
-            const key = `${playerId}/${table.romname}`;
-            if (!playerId || row.score <= (best.get(key)?.score ?? -1)) {
-                continue;
-            }
-            best.set(key, {
-                id: newId(), playerId, romname: table.romname, score: row.score,
-                rankOnCabinet: row.rank, achievedAt: table.achievedAt,
-            });
-        }
-    }
-    return [...best.values()];
+    rows: TableRow[];
 }
 
 /** The default table of every game mhiex reads among the cabinet's .hi and nvram files. */
@@ -89,42 +49,4 @@ export async function readCabinetTables(mameHome: string): Promise<CabinetTable[
         }
     }
     return tables;
-}
-
-export interface BackfillSummary {
-    sent: number;
-    accepted: number;
-    notImproved: number;
-    rejected: Record<string, number>;
-    // The batch that failed, and why: the rest was not sent.
-    failure?: ApiFailure;
-}
-
-export async function sendScores(client: MauiApiClient, scores: ScoreSubmission[]): Promise<BackfillSummary> {
-    const summary: BackfillSummary = {sent: 0, accepted: 0, notImproved: 0, rejected: {}};
-    for (let start = 0; start < scores.length; start += SCORE_BATCH_SIZE) {
-        const result = await client.postScores(scores.slice(start, start + SCORE_BATCH_SIZE));
-        if (result.kind !== 'ok') {
-            return {...summary, failure: result};
-        }
-        for (const outcome of result.value) {
-            summary.sent++;
-            if (outcome.status === 'accepted') {
-                summary.accepted++;
-            } else if (outcome.status === 'not_improved') {
-                summary.notImproved++;
-            } else {
-                const code = outcome.code ?? 'unknown';
-                summary.rejected[code] = (summary.rejected[code] ?? 0) + 1;
-            }
-        }
-    }
-    return summary;
-}
-
-/** One line for the BO: what MAUI-API did with the scores. */
-export function describeBackfill(found: number, summary: BackfillSummary): string {
-    const rejected = Object.entries(summary.rejected).map(([code, count]) => `${count} ${code}`).join(', ');
-    return `${found} best score(s) of public players found, ${summary.sent} sent: ${summary.accepted} accepted, `
-        + `${summary.notImproved} not improved${rejected ? `, rejected: ${rejected}` : ''}.`;
 }

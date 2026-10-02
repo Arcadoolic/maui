@@ -75,7 +75,10 @@ import {
     testConnection,
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
-import {describeBackfill, readCabinetTables, selectBackfillScores, sendScores} from '@/class/HiscoreBackfill';
+import {readCabinetTables} from '@/class/HiscoreBackfill';
+import {describeFlush, flushOutbox, queueScores} from '@/class/ScoreOutbox';
+import {ScoreCapture} from '@/class/ScoreCapture';
+import {SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {syncPlayers} from '@/class/PlayerSync';
 import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
@@ -5352,9 +5355,9 @@ function renderScoresBackfillCard(messages: MauiPageMessages): string {
             ${messages.backfillError ? `<p class="error flash">${escapeHtml(messages.backfillError)}</p>` : ''}
             ${messages.backfillInfo ? `<p class="info flash">${escapeHtml(messages.backfillInfo)}</p>` : ''}
             <p>Reads every hiscore table of this cabinet (hiscore and nvram files) and sends the best score of
-            each public player on each game to MAUI-API, as Lot 2.3 will do after each game. MAUI-API only
-            keeps personal bests: sending again changes nothing. To start over, run
-            <code>php artisan dev:reset-scores</code> on MAUI-API.</p>
+            each public player on each game to MAUI-API, through the same outbox as the scores of a game.
+            MAUI-API only keeps personal bests: sending again changes nothing. To start over, run
+            <code>php artisan dev:reset-scores</code> on MAUI-API, then send again.</p>
             <form method="post" action="/maui/online/backfill-scores">
                 <button type="submit">Send the hiscores</button>
             </form>
@@ -7284,7 +7287,7 @@ function refuseOnlineRequest(req: Request, res: Response): boolean {
 
 export function startBoServer(
     port: number, reloadFront: () => void, onReset: () => void,
-): {server: Server; databaseReady: Promise<void>; online: OnlineSession} {
+): {server: Server; databaseReady: Promise<void>; online: OnlineSession; scores: ScoreCapture} {
     // Created here so the Online routes can restart it; started and stopped by background.ts.
     const online = new OnlineSession({
         mauiVersion: getRunningVersion(),
@@ -7296,6 +7299,9 @@ export function startBoServer(
                 : '');
         },
         syncPlayers,
+        // scoreStore is set below, before the session is started (background.ts, once the
+        // database is ready).
+        flushScores: client => flushOutbox(scoreStore, client),
     });
     onlineSession = online;
     const app = express();
@@ -7337,6 +7343,17 @@ export function startBoServer(
     // this must not be recreated per-request.
     const sequelize = createSequelize();
     const databaseReady = bootstrapDatabase(sequelize);
+    // Lot 2.3: the scores of the games played, queued then sent to MAUI-API (ScoreCapture.ts).
+    const scoreStore = new SqliteScoreStore(sequelize);
+    const scores = new ScoreCapture({
+        mameHome: getMameHomePath,
+        enabled: isOnlineActive,
+        players: () => User.findAll(),
+        store: scoreStore,
+        startupId: () => online.getStatus().startupId,
+        flush: () => void online.flushScoresNow(),
+        log: message => console.warn(message),
+    });
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -8447,7 +8464,8 @@ export function startBoServer(
             : {onlineError: outcome.error});
     });
 
-    // Development only: renderScoresBackfillCard().
+    // Development only: renderScoresBackfillCard(). Same path as the scores of a game
+    // (ScoreOutbox.ts): queued, then sent, which also fills the best cache.
     app.post('/maui/online/backfill-scores', async (req, res) => {
         if (process.env.NODE_ENV !== 'development') {
             res.sendStatus(404);
@@ -8456,20 +8474,29 @@ export function startBoServer(
         if (refuseOnlineRequest(req, res)) {
             return;
         }
-        const client = online.currentClient();
         const config = new Config();
         config.load();
-        if (!client) {
+        if (!online.currentClient()) {
             await sendMauiPage(req, res, config, {backfillError: 'ONLINE is not running.'});
             return;
         }
-        const scores = selectBackfillScores(await readCabinetTables(getMameHomePath()), await User.findAll());
-        const summary = await sendScores(client, scores);
+        // MAUI-API may have been emptied (dev:reset-scores): let it decide again.
+        await scoreStore.clearBests();
+        const players = await User.findAll();
+        let queued = 0;
+        for (const table of await readCabinetTables(getMameHomePath())) {
+            queued += (await queueScores(scoreStore, players, table.rows, {
+                romname: table.romname, achievedAt: table.achievedAt, startupId: online.getStatus().startupId,
+            })).length;
+        }
+        const summary = await online.flushScoresNow();
+        const found = `${queued} score(s) of public players queued, `;
         const view = getOnlineView();
-        await sendMauiPage(req, res, config, summary.failure
-            ? {backfillError: `${describeBackfill(scores.length, summary)} Stopped: ${
-                describeFailure(summary.failure, view.state === 'configured' ? view.url : '')}`}
-            : {backfillInfo: describeBackfill(scores.length, summary)});
+        await sendMauiPage(req, res, config, !summary || summary.failure
+            ? {backfillError: `${found}not sent yet${summary?.failure
+                ? `: ${describeFailure(summary.failure, view.state === 'configured' ? view.url : '')}` : ''}. `
+                + 'They stay in the outbox for the next heartbeat.'}
+            : {backfillInfo: found + describeFlush(summary)});
     });
 
     app.get('/maui/online/badge', (req, res) => {
@@ -9415,5 +9442,5 @@ export function startBoServer(
     const server = app.listen(port, () => {
         console.log(`BO server listening on http://localhost:${port}`);
     });
-    return {server, databaseReady, online};
+    return {server, databaseReady, online, scores};
 }

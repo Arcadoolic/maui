@@ -9,6 +9,7 @@ import {
 } from '@/class/OnlineSettings';
 import {buildApiCredentials, isOnlineConfigured} from '@/class/OnlineCredentials';
 import {readOsName} from '@/class/OsName';
+import type {FlushSummary} from '@/class/ScoreOutbox';
 
 // ONLINE mode for one run of MAUI: a startup report, then a heartbeat at a fixed interval (no
 // backoff: MAUI-API shows a cabinet offline after 3 minutes without one, see docs/DECISIONS.md).
@@ -39,6 +40,9 @@ export interface OnlineSessionDeps {
     // Players of this cabinet (PlayerSync.ts), after the startup report and every
     // PLAYER_SYNC_EVERY heartbeats. None: no sync (tests, or a caller without database).
     syncPlayers?: (client: MauiApiClient) => Promise<ApiResult<number>>;
+    // Sends the score outbox (ScoreOutbox.ts), after the startup report, after every successful
+    // heartbeat and on demand (flushScoresNow()). None: no scores (tests).
+    flushScores?: (client: MauiApiClient) => Promise<FlushSummary>;
 }
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -54,6 +58,8 @@ export class OnlineSession {
     private heartbeats = 0;
     // Client of the running session, for syncPlayersNow(); null when stopped.
     private client: MauiApiClient | null = null;
+    // The flush in progress: a second one waits for it instead of sending the same scores again.
+    private flushing: Promise<FlushSummary | null> | null = null;
     // Bumped by every start/stop: a call still in flight from an older run must not reschedule.
     private generation = 0;
     private readonly settingsPath: string;
@@ -119,6 +125,7 @@ export class OnlineSession {
             this.status = {...this.status, startupId: startup.value.id};
             this.heartbeats = 0;
             void this.syncPlayers(client);
+            void this.flushScores(client);
         }
         this.handle(startup, client, generation);
     }
@@ -185,6 +192,40 @@ export class OnlineSession {
         return await this.syncPlayers(this.client) ? 'ok' : 'failed';
     }
 
+    /**
+     * Sends the score outbox now, e.g. right after a game found a score. Null while the session
+     * is not running (the scores wait for it). Never throws.
+     */
+    public flushScoresNow(): Promise<FlushSummary | null> {
+        return this.client && this.status.state === 'running' ? this.flushScores(this.client) : Promise.resolve(null);
+    }
+
+    /** One flush at a time. Never throws: a failure is logged, the outbox keeps the scores. */
+    private flushScores(client: MauiApiClient): Promise<FlushSummary | null> {
+        if (!this.deps.flushScores) {
+            return Promise.resolve(null);
+        }
+        if (this.flushing) {
+            return this.flushing;
+        }
+        const flush = this.deps.flushScores;
+        this.flushing = flush(client)
+            .then(summary => {
+                if (summary.failure) {
+                    this.log(`[online] Scores not sent (${summary.failure.kind}): kept for the next try.`);
+                }
+                return summary;
+            })
+            .catch((error: unknown) => {
+                this.log(`[online] Scores not sent: ${error instanceof Error ? error.message : String(error)}`);
+                return null;
+            })
+            .finally(() => {
+                this.flushing = null;
+            });
+        return this.flushing;
+    }
+
     /** Never throws: a failed sync is logged and retried at the next turn. Resolves to its success. */
     private syncPlayers(client: MauiApiClient): Promise<boolean> {
         if (!this.deps.syncPlayers) {
@@ -211,6 +252,9 @@ export class OnlineSession {
             if (generation === this.generation) {
                 if (result.kind === 'ok' && ++this.heartbeats % PLAYER_SYNC_EVERY === 0) {
                     void this.syncPlayers(client);
+                }
+                if (result.kind === 'ok') {
+                    void this.flushScores(client);
                 }
                 this.handle(result, client, generation);
             }

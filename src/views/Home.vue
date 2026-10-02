@@ -74,6 +74,7 @@ import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
 import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
+import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
 
 let gameService: GameService;
 
@@ -220,6 +221,16 @@ function onCategoryChange(previous: boolean) {
         ((selectedCategoryIndex.value >= categories.value.length) ? 0 : selectedCategoryIndex.value + 1);
 }
 
+/** Never throws: ONLINE must never keep a game from starting. */
+async function notifyScoreCapture(name: string, romName: string): Promise<void> {
+    try {
+        const notify = remote.getGlobal(name) as PlayNotifier | undefined;
+        await notify?.(romName);
+    } catch (err) {
+        Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
 function startGame() {
     const mameService = getMameService();
     const hiService = getHiscoreService();
@@ -227,13 +238,15 @@ function startGame() {
     if (!game) {
         return;
     }
-    mameService.startGame(game.romName).then(
+    // ONLINE: the table as it is before the game, so that only its new scores are sent.
+    void notifyScoreCapture(PLAY_STARTED_GLOBAL, game.romName).then(() => mameService.startGame(game.romName)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
             gameProcess.on('close', () => {
+                void notifyScoreCapture(PLAY_ENDED_GLOBAL, game.romName);
                 hiService.saveHiscores(game).then(() => {
                     emitter.emit('game-quit');
                     return askVote(game);
