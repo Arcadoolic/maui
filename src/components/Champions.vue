@@ -1,8 +1,8 @@
 <template>
     <div class="champions">
         <div class="championsContainer" v-if="champions.length">
-            <div v-for="(champion, index) of champions" :key="champion.id_hiscore" class="champion" :style="{right: (index * 10) + '%'}">
-                <img v-if="getAvatar(champion.user)" :src="getAvatar(champion.user)" alt="">
+            <div v-for="(champion, index) of champions" :key="champion.key" class="champion" :style="{right: (index * 10) + '%'}">
+                <img v-if="champion.avatar" :src="champion.avatar" alt="">
                 <img v-else src="../assets/defaultPlayer.png" alt="">
             </div>
         </div>
@@ -13,60 +13,30 @@
 <script setup lang="ts">
 import {ref, watch, onMounted, onUnmounted} from 'vue';
 import Game from '@/model/Game.model';
-import User from '@/model/User.model';
-import Hiscore from '@/model/Hiscore.model';
-import {join} from 'path';
-import {format} from 'url';
 import {emitter} from '@/emitter';
-import {findAvatarFile} from '@/class/AvatarFiles';
-import {getConfiguration, getUserService} from '@/services';
-import * as SequelizeTS from 'sequelize-typescript';
-
-const Sequelize = SequelizeTS.Sequelize;
+import {loadChampions, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
 
 const props = defineProps<{game: Game}>();
 
-const champions = ref<Hiscore[]>([]);
+// The best 3 players (LeaderboardSource.ts), drawn from the 3rd to the 1st.
+const champions = ref<BoardRow[]>([]);
 const loading = ref(true);
-const avatars = ref<string[]>([]);
+let stopListening: (() => void) | null = null;
 
 async function onGameChange() {
     loading.value = true;
-    const result = await props.game.$get(
-        'hiscores',
-        {
-            // required: a deleted player's scores stay in the database but are not shown
-            include: [{model: User, required: true}],
-            attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]},
-            limit: 3,
-            order: [['score', 'DESC']],
-            group: ['user.id_user'],
-        },
-    ) as Hiscore[] || [];
-    champions.value = result.reverse();
+    champions.value = (await loadChampions(props.game)).reverse();
     loading.value = false;
-}
-
-function getAvatar(user: User) {
-    const avatarFile = findAvatarFile(avatars.value, user.pseudo_3);
-    if (avatarFile) {
-        return format({
-            pathname: join(getConfiguration().avatarsPath, avatarFile),
-            protocol: 'file',
-            slashes: true,
-        });
-    }
-    return false;
 }
 
 watch(() => props.game, onGameChange);
 
 onMounted(async () => {
-    avatars.value = getUserService().getAvatars();
     await onGameChange();
 
     emitter.on('game-quit', onGameChange);
     emitter.on('hiscores-loaded', onGameChange);
+    stopListening = onLeaderboardsChanged(onGameChange);
 });
 
 // `emitter` is a module-level mitt singleton, so it outlives every component instance that
@@ -77,6 +47,7 @@ onMounted(async () => {
 onUnmounted(() => {
     emitter.off('game-quit', onGameChange);
     emitter.off('hiscores-loaded', onGameChange);
+    stopListening?.();
 });
 </script>
 

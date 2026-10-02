@@ -1,5 +1,5 @@
-import {describe, it, expect} from 'vitest';
-import {planPlayerSync, syncPlayers, type LocalPlayer} from '@/class/PlayerSync';
+import {describe, it, expect, vi} from 'vitest';
+import {planPlayerSync, syncPlayers, uploadAvatars, type LocalPlayer} from '@/class/PlayerSync';
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 import User from '@/model/User.model';
 
@@ -10,7 +10,7 @@ const local = (overrides: Partial<LocalPlayer>): LocalPlayer => ({
     id_user: 1, pseudo_3: 'ACE', remote_id: null, is_public: false, online_status: null, ...overrides,
 });
 const remote = (overrides: Partial<OnlinePlayer>): OnlinePlayer => ({
-    id: ID_A, pseudo3: 'ACE', isPublic: false, status: 'active', ...overrides,
+    id: ID_A, pseudo3: 'ACE', isPublic: false, status: 'active', avatar: null, ...overrides,
 });
 
 describe('planPlayerSync', () => {
@@ -77,5 +77,34 @@ describe('syncPlayers', () => {
         const client = {listPlayers: async () => failure} as unknown as MauiApiClient;
 
         expect(await syncPlayers(client)).toEqual(failure);
+    });
+});
+
+describe('uploadAvatars', () => {
+    const png = new Uint8Array([1, 2, 3]);
+    const reader = (hash: string) => () => ({png, hash});
+
+    it('sends the avatar of a linked player when MAUI-API has another one', async () => {
+        const uploadAvatar = vi.fn(async () => ({kind: 'ok' as const, value: 'new'}));
+        const client = {uploadAvatar} as unknown as MauiApiClient;
+
+        const sent = await uploadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'old'})], reader('new'), new Set());
+
+        expect(sent).toBe(1);
+        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, png);
+    });
+
+    it('skips the same avatar, local-only players, and a PNG already refused', async () => {
+        const uploadAvatar = vi.fn(async () => ({kind: 'rejected' as const, status: 422, code: 'validation_failed'}));
+        const client = {uploadAvatar} as unknown as MauiApiClient;
+        const refused = new Set<string>();
+
+        await uploadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'same'})], reader('same'), refused);
+        await uploadAvatars(client, [local({remote_id: null})], [remote({})], reader('x'), refused);
+        await uploadAvatars(client, [local({remote_id: ID_A})], [remote({})], reader('big'), refused);
+        await uploadAvatars(client, [local({remote_id: ID_A})], [remote({})], reader('big'), refused);
+
+        expect(uploadAvatar).toHaveBeenCalledTimes(1);
+        expect(refused.has('big')).toBe(true);
     });
 });

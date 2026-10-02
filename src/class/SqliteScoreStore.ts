@@ -2,6 +2,8 @@ import * as SequelizeTS from 'sequelize-typescript';
 import {QueryTypes} from 'sequelize';
 import type {ScoreSubmission} from '@/class/MauiApiClient';
 import type {OutboxEntry, ScoreStore} from '@/class/ScoreOutbox';
+import type {Leaderboard} from '@/class/MauiApiClient';
+import type {LeaderboardStore} from '@/class/LeaderboardSync';
 
 type Sequelize = SequelizeTS.Sequelize;
 
@@ -71,5 +73,21 @@ export class SqliteScoreStore implements ScoreStore {
             'SELECT COUNT(*) AS count FROM score_outbox', {type: QueryTypes.SELECT},
         );
         return Number(rows[0]?.count ?? 0);
+    }
+}
+
+/** LeaderboardStore on table online_leaderboard (migrations/20261002150000-online-leaderboard.js). */
+export class SqliteLeaderboardStore implements LeaderboardStore {
+    public constructor(private readonly sequelize: Sequelize) {}
+
+    public async save(leaderboards: Leaderboard[]): Promise<void> {
+        const now = new Date().toISOString();
+        for (const leaderboard of leaderboards) {
+            await this.sequelize.query(
+                'INSERT INTO online_leaderboard (romname, table_name, entries, updated_at) VALUES (?, ?, ?, ?) '
+                + 'ON CONFLICT (romname, table_name) DO UPDATE SET entries = excluded.entries, updated_at = excluded.updated_at',
+                {replacements: [leaderboard.romname, leaderboard.table, JSON.stringify(leaderboard.entries), now]},
+            );
+        }
     }
 }

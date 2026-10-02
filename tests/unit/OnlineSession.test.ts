@@ -439,3 +439,30 @@ describe('score flush', () => {
         instance.stop();
     });
 });
+
+describe('leaderboard refresh', () => {
+    const empty = {sent: 0, accepted: 0, notImproved: 0, rejected: {}};
+
+    it('refreshes after the startup report, with the player sync, and after scores were accepted', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const refreshLeaderboards = vi.fn(async () => undefined);
+        let accepted = 0;
+        const flushScores = vi.fn(async () => ({...empty, accepted}));
+        const {instance} = session(fetchImpl, {refreshLeaderboards, flushScores});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refreshLeaderboards).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(refreshLeaderboards).toHaveBeenCalledTimes(2);
+
+        accepted = 1;
+        await instance.flushScoresNow();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refreshLeaderboards).toHaveBeenCalledTimes(3);
+        instance.stop();
+    });
+});
+

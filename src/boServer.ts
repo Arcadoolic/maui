@@ -7,7 +7,7 @@ import {
 } from 'fs';
 import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
-import {randomBytes} from 'crypto';
+import {createHash, randomBytes} from 'crypto';
 import {ChildProcess, execFileSync, spawn} from 'child_process';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
@@ -78,7 +78,9 @@ import {OnlineSession} from '@/class/OnlineSession';
 import {readCabinetTables} from '@/class/HiscoreBackfill';
 import {describeFlush, flushOutbox, queueScores} from '@/class/ScoreOutbox';
 import {ScoreCapture} from '@/class/ScoreCapture';
-import {SqliteScoreStore} from '@/class/SqliteScoreStore';
+import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
+import {LeaderboardSync} from '@/class/LeaderboardSync';
+import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {syncPlayers} from '@/class/PlayerSync';
 import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
@@ -262,6 +264,16 @@ async function bootstrapDatabase(sequelize: Sequelize): Promise<void> {
  * created eagerly by Config's constructor). Matches the "<pseudo_3>.png" lookup
  * UserService.class.ts/Champions.vue/Hiscores.vue use in the Electron app itself.
  */
+/** The PNG avatar of a local player and its SHA-256, for MAUI-API (PlayerSync.ts); null without one. */
+function readLocalAvatar(pseudo3: string): {png: Uint8Array; hash: string} | null {
+    const file = join(new Config().avatarsPath, `${pseudo3}.png`);
+    if (!existsSync(file)) {
+        return null;
+    }
+    const png = readFileSync(file);
+    return {png, hash: createHash('sha256').update(png).digest('hex')};
+}
+
 function getAvatarFilenames(config: Config): string[] {
     return readdirSync(config.avatarsPath);
 }
@@ -7287,7 +7299,7 @@ function refuseOnlineRequest(req: Request, res: Response): boolean {
 
 export function startBoServer(
     port: number, reloadFront: () => void, onReset: () => void,
-): {server: Server; databaseReady: Promise<void>; online: OnlineSession; scores: ScoreCapture} {
+): {server: Server; databaseReady: Promise<void>; online: OnlineSession; scores: ScoreCapture; leaderboards: LeaderboardSync} {
     // Created here so the Online routes can restart it; started and stopped by background.ts.
     const online = new OnlineSession({
         mauiVersion: getRunningVersion(),
@@ -7298,11 +7310,15 @@ export function startBoServer(
                 ? join(config.mamePath, config.mameBinaryName)
                 : '');
         },
-        syncPlayers,
-        // scoreStore is set below, before the session is started (background.ts, once the
+        // Also sends the avatars MAUI-API does not have (maui-api D53).
+        syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars),
+        // leaderboards and scoreStore are set below, before the session is started (background.ts, once the
         // database is ready).
         flushScores: client => flushOutbox(scoreStore, client),
+        refreshLeaderboards: client => leaderboards.refresh(client),
     });
+    // PNGs MAUI-API refused (too big...): not sent again during this run.
+    const refusedAvatars = new Set<string>();
     onlineSession = online;
     const app = express();
     app.use(express.urlencoded({extended: false}));
@@ -7345,6 +7361,21 @@ export function startBoServer(
     const databaseReady = bootstrapDatabase(sequelize);
     // Lot 2.3: the scores of the games played, queued then sent to MAUI-API (ScoreCapture.ts).
     const scoreStore = new SqliteScoreStore(sequelize);
+    // Lot 2.4: the shared leaderboards of the games with hiscores, for the front in ONLINE mode.
+    const leaderboards = new LeaderboardSync({
+        store: new SqliteLeaderboardStore(sequelize),
+        avatars: {
+            has: hash => existsSync(onlineAvatarFile(hash) ?? ''),
+            save: (hash, png) => {
+                const file = onlineAvatarFile(hash);
+                if (file) {
+                    mkdirSync(getOnlineAvatarsPath(), {recursive: true});
+                    writeFileSync(file, png);
+                }
+            },
+        },
+        romnames: async () => (await Game.findAll({where: {hi: true}, attributes: ['romName']})).map(game => game.romName),
+    });
     const scores = new ScoreCapture({
         mameHome: getMameHomePath,
         enabled: isOnlineActive,
@@ -9442,5 +9473,5 @@ export function startBoServer(
     const server = app.listen(port, () => {
         console.log(`BO server listening on http://localhost:${port}`);
     });
-    return {server, databaseReady, online, scores};
+    return {server, databaseReady, online, scores, leaderboards};
 }
