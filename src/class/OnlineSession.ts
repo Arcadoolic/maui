@@ -70,6 +70,11 @@ export class OnlineSession {
         return this.status;
     }
 
+    /** The client of the running session, null when it is not running. */
+    public currentClient(): MauiApiClient | null {
+        return this.status.state === 'running' ? this.client : null;
+    }
+
     public async start(): Promise<void> {
         this.stop();
         const generation = this.generation;

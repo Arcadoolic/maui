@@ -416,3 +416,34 @@ describe('default fetch', () => {
         }
     });
 });
+
+describe('scores', () => {
+    const submission = {
+        id: '0b9e2f1c-6f1d-4c4e-9a54-3d2f0e1a7b10', playerId: '01a0f983-773f-71b7-b4c5-66c848306e1b',
+        romname: 'dkong', score: 12300, rankOnCabinet: 1, achievedAt: '2026-10-02T10:00:00.000Z',
+    };
+
+    it('sends a batch in the API field names and reads one result per score', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {results: [
+            {id: submission.id, status: 'accepted', best: 12300},
+            {id: 'other', status: 'rejected', code: 'player_not_found'},
+        ]}));
+        expect(await client.postScores([submission])).toEqual({kind: 'ok', value: [
+            {id: submission.id, status: 'accepted', best: 12300},
+            {id: 'other', status: 'rejected', code: 'player_not_found'},
+        ]});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/scores');
+        expect(JSON.parse(init.body as string)).toEqual({scores: [{
+            id: submission.id, player_id: submission.playerId, romname: 'dkong', score: 12300,
+            rank_on_cabinet: 1, achieved_at: submission.achievedAt, startup_id: null,
+        }]});
+    });
+
+    it('treats results that do not match the contract as invalid', async () => {
+        for (const body of [{}, {results: [{id: 'x', status: 'kept'}]}]) {
+            const {client} = clientReturning(json(200, body));
+            expect((await client.postScores([submission])).kind).toBe('unavailable');
+        }
+    });
+});
