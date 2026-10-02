@@ -10,6 +10,7 @@ import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
 import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
+import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
 import Config from '@/class/Config.class';
 import {exitWhenParentGone} from '@/devParentWatch';
 
@@ -100,6 +101,11 @@ app.on('ready', async () => {
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
     onlineSession = bo.online;
+    // Games started and ended by the front (Home.vue): their new scores go to MAUI-API.
+    const playStarted: PlayNotifier = romName => bo.scores.started(romName);
+    const playEnded: PlayNotifier = romName => bo.scores.ended(romName);
+    (global as Record<string, unknown>)[PLAY_STARTED_GLOBAL] = playStarted;
+    (global as Record<string, unknown>)[PLAY_ENDED_GLOBAL] = playEnded;
     // Not awaited: ONLINE must never delay the window (start() never throws, see OnlineSession.ts).
     void onlineSession.start();
     win = createSplashWin();

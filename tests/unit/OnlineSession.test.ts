@@ -389,3 +389,53 @@ describe('player sync', () => {
         instance.stop();
     });
 });
+
+describe('score flush', () => {
+    const empty = {sent: 0, accepted: 0, notImproved: 0, rejected: {}};
+
+    it('flushes the scores after the startup report and after every heartbeat', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const flushScores = vi.fn(async () => empty);
+        const {instance} = session(fetchImpl, {flushScores});
+
+        await instance.start();
+        expect(flushScores).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+        expect(flushScores).toHaveBeenCalledTimes(3);
+        instance.stop();
+    });
+
+    it('flushes on demand while running, one flush at a time', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        let release: () => void = () => undefined;
+        const flushScores = vi.fn(() => new Promise<typeof empty>(resolve => { release = () => resolve(empty); }));
+        const {instance} = session(fetchImpl, {flushScores});
+
+        expect(await instance.flushScoresNow()).toBeNull();
+        await instance.start();
+        const first = instance.flushScoresNow();
+        const second = instance.flushScoresNow();
+        release();
+
+        expect(await first).toEqual(empty);
+        expect(await second).toEqual(empty);
+        expect(flushScores).toHaveBeenCalledTimes(1);
+        instance.stop();
+    });
+
+    it('logs a failed flush and keeps going', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const flushScores = vi.fn(async () => ({...empty, failure: {kind: 'unavailable' as const, reason: 'network' as const}}));
+        const {instance, log} = session(fetchImpl, {flushScores});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('Scores not sent (unavailable)'));
+        instance.stop();
+    });
+});
