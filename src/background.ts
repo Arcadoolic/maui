@@ -10,7 +10,7 @@ import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
 import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
-import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
+import {LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
 import Config from '@/class/Config.class';
 import {exitWhenParentGone} from '@/devParentWatch';
 
@@ -106,6 +106,8 @@ app.on('ready', async () => {
     const playEnded: PlayNotifier = romName => bo.scores.ended(romName);
     (global as Record<string, unknown>)[PLAY_STARTED_GLOBAL] = playStarted;
     (global as Record<string, unknown>)[PLAY_ENDED_GLOBAL] = playEnded;
+    // New shared leaderboards (LeaderboardSync.ts): the front reads them again (LeaderboardSource.ts).
+    bo.leaderboards.onChange(() => win?.webContents.send(LEADERBOARDS_CHANGED_CHANNEL));
     // Not awaited: ONLINE must never delay the window (start() never throws, see OnlineSession.ts).
     void onlineSession.start();
     win = createSplashWin();

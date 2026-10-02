@@ -51,6 +51,8 @@ export interface OnlinePlayer {
     pseudo3: string;
     isPublic: boolean;
     status: OnlinePlayerStatus;
+    // SHA-256 of the avatar MAUI-API has (maui-api D53), null without one.
+    avatar: string | null;
 }
 
 export type PlayerAvailability = 'free' | 'taken' | 'disabled';
@@ -85,6 +87,27 @@ export interface ScoreResult {
     // The player's best on the game and table, unless rejected.
     best?: number | null;
 }
+
+// Shared leaderboards (maui-api D52): the best visible score of each player, top 9.
+export interface LeaderboardEntry {
+    rank: number;
+    playerId: string;
+    pseudo3: string;
+    // SHA-256 of the player's avatar (maui-api D53), null without one.
+    avatar: string | null;
+    score: number;
+    achievedAt: string;
+    cabinet: string;
+}
+
+export interface Leaderboard {
+    romname: string;
+    table: string;
+    entries: LeaderboardEntry[];
+}
+
+// A conditional GET: `notModified` when the ETag sent still matches.
+export type Conditional<T> = {notModified: true} | {notModified: false; etag: string | null; value: T};
 
 export type ApiResult<T> =
     | {kind: 'ok'; value: T}
@@ -180,7 +203,10 @@ function parsePlayer(body: unknown): OnlinePlayer | null {
         || !PLAYER_STATUSES.includes(body.status)) {
         return null;
     }
-    return {id: body.id, pseudo3: body.pseudo_3, isPublic: body.is_public, status: body.status as OnlinePlayerStatus};
+    return {
+        id: body.id, pseudo3: body.pseudo_3, isPublic: body.is_public, status: body.status as OnlinePlayerStatus,
+        avatar: typeof body.avatar === 'string' ? body.avatar : null,
+    };
 }
 
 function parsePlayerResponse(body: unknown): OnlinePlayer | null {
@@ -209,6 +235,37 @@ function parseCreatedPlayer(body: unknown): CreatedPlayer | null {
     const player = parsePlayerResponse(body);
     const pin = parsePin(body);
     return player && pin ? {player, pin} : null;
+}
+
+function parseLeaderboardEntry(body: unknown): LeaderboardEntry | null {
+    if (!isObject(body) || typeof body.rank !== 'number' || !isObject(body.player) || typeof body.score !== 'number'
+        || typeof body.player.id !== 'string' || typeof body.player.pseudo_3 !== 'string'
+        || typeof body.achieved_at !== 'string' || typeof body.cabinet !== 'string') {
+        return null;
+    }
+    return {
+        rank: body.rank, playerId: body.player.id, pseudo3: body.player.pseudo_3,
+        avatar: typeof body.player.avatar === 'string' ? body.player.avatar : null,
+        score: body.score, achievedAt: body.achieved_at, cabinet: body.cabinet,
+    };
+}
+
+function parseLeaderboard(body: unknown): Leaderboard | null {
+    if (!isObject(body) || typeof body.romname !== 'string' || typeof body.table !== 'string' || !Array.isArray(body.entries)) {
+        return null;
+    }
+    const entries = body.entries.map(parseLeaderboardEntry);
+    return entries.every(entry => entry !== null)
+        ? {romname: body.romname, table: body.table, entries: entries as LeaderboardEntry[]}
+        : null;
+}
+
+function parseLeaderboards(body: unknown): Leaderboard[] | null {
+    if (!isObject(body) || !Array.isArray(body.leaderboards)) {
+        return null;
+    }
+    const leaderboards = body.leaderboards.map(parseLeaderboard);
+    return leaderboards.every(leaderboard => leaderboard !== null) ? leaderboards as Leaderboard[] : null;
 }
 
 const SCORE_STATUSES: readonly string[] = ['accepted', 'not_improved', 'rejected'];
@@ -330,6 +387,53 @@ export class MauiApiClient {
         );
     }
 
+    /** At most 100 games (maui-api D52); `etag` from the last answer for the same games. */
+    public async getLeaderboards(romnames: string[], etag: string | null = null): Promise<ApiResult<Conditional<Leaderboard[]>>> {
+        const response = await this.send(
+            'GET', `/leaderboards?romnames=${romnames.map(encodeURIComponent).join(',')}`,
+            etag ? {'If-None-Match': etag} : {},
+        );
+        if (!(response instanceof Response)) {
+            return response;
+        }
+        if (response.status === 304) {
+            return {kind: 'ok', value: {notModified: true}};
+        }
+        if (!response.ok) {
+            return toFailure(response);
+        }
+        const leaderboards = response.status === 200 ? parseLeaderboards(await readJson(response)) : null;
+        return leaderboards === null
+            ? {kind: 'unavailable', reason: 'invalid_response', status: response.status}
+            : {kind: 'ok', value: {notModified: false, etag: response.headers.get('ETag'), value: leaderboards}};
+    }
+
+    /** The PNG of a public player (maui-api D53). */
+    public async getAvatar(playerId: string): Promise<ApiResult<Uint8Array>> {
+        const response = await this.send('GET', `/players/${encodeURIComponent(playerId)}/avatar`, {Accept: 'image/png'});
+        if (!(response instanceof Response)) {
+            return response;
+        }
+        if (!response.ok) {
+            return toFailure(response);
+        }
+        return {kind: 'ok', value: new Uint8Array(await response.arrayBuffer())};
+    }
+
+    /** Sends the PNG of a player of this cabinet; answers its hash as MAUI-API stored it. */
+    public uploadAvatar(playerId: string, png: Uint8Array): Promise<ApiResult<string>> {
+        const form = new FormData();
+        form.append('avatar', new Blob([new Uint8Array(png)], {type: 'image/png'}), 'avatar.png');
+        return this.call(
+            'POST', `/players/${encodeURIComponent(playerId)}/avatar`, 200,
+            async response => {
+                const body = await readJson(response);
+                return isObject(body) && typeof body.avatar === 'string' ? body.avatar : null;
+            },
+            form,
+        );
+    }
+
     private headers(hasBody: boolean): Record<string, string> {
         const headers: Record<string, string> = {
             'X-Maui-Key': this.credentials.key,
@@ -345,22 +449,12 @@ export class MauiApiClient {
         path: string,
         expectedStatus: number,
         parse: (response: Response) => Promise<T | null>,
-        body?: Json,
+        body?: Json | FormData,
     ): Promise<ApiResult<T>> {
-        let response: Response;
-        try {
-            response = await this.fetchImpl(this.credentials.baseUrl.replace(/\/+$/, '') + path, {
-                method,
-                headers: this.headers(body !== undefined),
-                body: body === undefined ? undefined : JSON.stringify(body),
-                // The API never redirects: following one could hand the token to another host.
-                redirect: 'error',
-                signal: AbortSignal.timeout(this.timeoutMs),
-            });
-        } catch (error) {
-            return {kind: 'unavailable', reason: isTimeout(error) ? 'timeout' : 'network'};
+        const response = await this.send(method, path, {}, body);
+        if (!(response instanceof Response)) {
+            return response;
         }
-
         if (!response.ok) {
             return toFailure(response);
         }
@@ -368,5 +462,25 @@ export class MauiApiClient {
         return value === null
             ? {kind: 'unavailable', reason: 'invalid_response', status: response.status}
             : {kind: 'ok', value};
+    }
+
+    /** The response, whatever its status, or why there is none. */
+    private async send(
+        method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, extraHeaders: Record<string, string>, body?: Json | FormData,
+    ): Promise<Response | ApiResult<never>> {
+        const isForm = body instanceof FormData;
+        try {
+            return await this.fetchImpl(this.credentials.baseUrl.replace(/\/+$/, '') + path, {
+                method,
+                // multipart: fetch sets the Content-Type, with its boundary.
+                headers: {...this.headers(body !== undefined && !isForm), ...extraHeaders},
+                body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
+                // The API never redirects: following one could hand the token to another host.
+                redirect: 'error',
+                signal: AbortSignal.timeout(this.timeoutMs),
+            });
+        } catch (error) {
+            return {kind: 'unavailable', reason: isTimeout(error) ? 'timeout' : 'network'};
+        }
     }
 }

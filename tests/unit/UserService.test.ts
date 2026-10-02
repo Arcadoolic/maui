@@ -136,7 +136,7 @@ describe('UserService.registerUser default avatar', () => {
 });
 
 describe('UserService ONLINE players', () => {
-    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const};
+    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const, avatar: null};
     let service: UserService;
 
     beforeEach(() => {

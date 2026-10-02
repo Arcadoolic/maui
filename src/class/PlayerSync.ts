@@ -55,8 +55,41 @@ export function planPlayerSync(local: LocalPlayer[], remote: OnlinePlayer[]): Pl
     return changes;
 }
 
+/**
+ * The avatar of a local player, as a PNG and its SHA-256; null without one. Given by the BO
+ * (boServer.ts), which knows where avatars are.
+ */
+export type LocalAvatarReader = (pseudo3: string) => {png: Uint8Array; hash: string} | null;
+
+/**
+ * Sends the avatar of each linked player whose PNG differs from the one MAUI-API has (maui-api D53):
+ * created or changed since. A PNG MAUI-API refused is not sent again during this run.
+ */
+export async function uploadAvatars(
+    client: MauiApiClient, local: LocalPlayer[], remote: OnlinePlayer[], readAvatar: LocalAvatarReader, refused: Set<string>,
+): Promise<number> {
+    const byId = new Map(remote.map(player => [player.id, player]));
+    let sent = 0;
+    for (const player of local) {
+        const online = player.remote_id !== null ? byId.get(player.remote_id) : undefined;
+        const avatar = online ? readAvatar(player.pseudo_3) : null;
+        if (!online || !avatar || avatar.hash === online.avatar || refused.has(avatar.hash)) {
+            continue;
+        }
+        const result = await client.uploadAvatar(online.id, avatar.png);
+        if (result.kind === 'ok') {
+            sent++;
+        } else if (result.kind === 'rejected') {
+            refused.add(avatar.hash);
+        }
+    }
+    return sent;
+}
+
 /** Fetches the players of this cabinet and applies planPlayerSync(). Returns the rows changed. */
-export async function syncPlayers(client: MauiApiClient): Promise<ApiResult<number>> {
+export async function syncPlayers(
+    client: MauiApiClient, readAvatar?: LocalAvatarReader, refusedAvatars: Set<string> = new Set(),
+): Promise<ApiResult<number>> {
     const remote = await client.listPlayers();
     if (remote.kind !== 'ok') {
         return remote;
@@ -71,6 +104,10 @@ export async function syncPlayers(client: MauiApiClient): Promise<ApiResult<numb
     const changes = planPlayerSync(local, remote.value);
     for (const {id_user: idUser, ...fields} of changes) {
         await User.update(fields, {where: {id_user: idUser}});
+    }
+    if (readAvatar) {
+        const synced = local.map(player => ({...player, ...changes.find(change => change.id_user === player.id_user)}));
+        await uploadAvatars(client, synced, remote.value, readAvatar, refusedAvatars);
     }
     return {kind: 'ok', value: changes.length};
 }

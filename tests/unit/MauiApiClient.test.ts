@@ -311,7 +311,7 @@ describe('repository', () => {
 describe('players', () => {
     const uuid = '01a0f983-773f-71b7-b4c5-66c848306e1b';
     const apiPlayer = {id: uuid, pseudo_3: 'ACE', is_public: true, status: 'active'};
-    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active'};
+    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active', avatar: null};
 
     it('lists the players of the cabinet', async () => {
         const {client, fetchImpl} = clientReturning(json(200, {players: [apiPlayer]}));
@@ -445,5 +445,62 @@ describe('scores', () => {
             const {client} = clientReturning(json(200, body));
             expect((await client.postScores([submission])).kind).toBe('unavailable');
         }
+    });
+});
+
+describe('leaderboards', () => {
+    const apiEntry = {
+        rank: 1, player: {id: 'p1', pseudo_3: 'NOB', avatar: 'abc'}, score: 19200,
+        achieved_at: '2026-10-01T10:00:00+00:00', cabinet: 'blue_cabinet',
+    };
+
+    it('reads the leaderboards of several games and keeps the ETag', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {leaderboards: [{romname: 'dkong', table: 'default', entries: [apiEntry]}]}, {ETag: '"v1"'}));
+
+        expect(await client.getLeaderboards(['dkong', 'galaga'])).toEqual({kind: 'ok', value: {notModified: false, etag: '"v1"', value: [
+            {romname: 'dkong', table: 'default', entries: [{
+                rank: 1, playerId: 'p1', pseudo3: 'NOB', avatar: 'abc', score: 19200,
+                achievedAt: '2026-10-01T10:00:00+00:00', cabinet: 'blue_cabinet',
+            }]},
+        ]}});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/leaderboards?romnames=dkong,galaga');
+    });
+
+    it('sends the ETag back and reads 304 as unchanged', async () => {
+        const {client, fetchImpl} = clientReturning(new Response(null, {status: 304}));
+
+        expect(await client.getLeaderboards(['dkong'], '"v1"')).toEqual({kind: 'ok', value: {notModified: true}});
+        expect((requestOf(fetchImpl).init.headers as Record<string, string>)['If-None-Match']).toBe('"v1"');
+    });
+
+    it('treats leaderboards that do not match the contract as invalid', async () => {
+        const {client} = clientReturning(json(200, {leaderboards: [{romname: 'dkong', table: 'default', entries: [{rank: 1}]}]}));
+        expect((await client.getLeaderboards(['dkong'])).kind).toBe('unavailable');
+    });
+});
+
+describe('avatars', () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+    it('downloads the PNG of a player', async () => {
+        const {client, fetchImpl} = clientReturning(new Response(png, {status: 200, headers: {'Content-Type': 'image/png'}}));
+
+        expect(await client.getAvatar('p1')).toEqual({kind: 'ok', value: png});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/players/p1/avatar');
+    });
+
+    it('uploads the PNG as multipart and reads the hash back', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {player: {}, avatar: 'hash'}));
+
+        expect(await client.uploadAvatar('p1', png)).toEqual({kind: 'ok', value: 'hash'});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/players/p1/avatar');
+        expect(init.body).toBeInstanceOf(FormData);
+        expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    });
+
+    it('maps avatar_not_found', async () => {
+        const {client} = clientReturning(problem({type: 'about:blank', title: 'Not Found', status: 404, code: 'avatar_not_found'}));
+        expect(await client.getAvatar('p1')).toEqual({kind: 'rejected', status: 404, code: 'avatar_not_found'});
     });
 });
