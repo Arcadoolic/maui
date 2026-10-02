@@ -329,6 +329,24 @@ describe('player sync', () => {
         instance.stop();
     });
 
+    it('syncs on demand while running, and tells how it went', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const syncPlayers = vi.fn(async () => ({kind: 'ok' as const, value: 0}));
+        const {instance} = session(fetchImpl, {syncPlayers});
+
+        expect(await instance.syncPlayersNow()).toBe('skipped');
+        await instance.start();
+        expect(await instance.syncPlayersNow()).toBe('ok');
+        expect(syncPlayers).toHaveBeenCalledTimes(2);
+
+        syncPlayers.mockRejectedValueOnce(new Error('boom'));
+        expect(await instance.syncPlayersNow()).toBe('failed');
+
+        instance.stop();
+        expect(await instance.syncPlayersNow()).toBe('skipped');
+    });
+
     it('does not sync when the startup report fails', async () => {
         writeOnlineSettings(configured, path);
         const {fetchImpl} = api(() => problem(503, 'server_error'));

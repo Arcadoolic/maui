@@ -2171,6 +2171,12 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             gap: 8px;
         }
+        .card-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-2);
+        }
         .row-actions .inline-form {
             display: inline-flex;
             align-items: center;
@@ -5561,6 +5567,7 @@ const NEUTRAL_ICON_PATHS = '<circle cx="8" cy="8" r="6"/><path d="M5.5 10h5"/><p
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
 const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
 const PAUSE_ICON_PATHS = '<path d="M5.5 3v10M10.5 3v10"/>';
+const SYNC_ICON_PATHS = '<path d="M13 8a5 5 0 0 1-8.5 3.5M3 8a5 5 0 0 1 8.5-3.5"/><path d="M11.5 1.5v3h-3M4.5 14.5v-3h3"/>';
 
 /**
  * Splits a MAME description ("Ghosts'n Goblins (World? set 1)", sometimes with several
@@ -6943,7 +6950,12 @@ function renderUsersListCard(
 
     return `
         <section class="card">
-            <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
+            <div class="card-heading">
+                <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
+                ${extras.online ? `<form method="post" action="/users/online/sync">
+                    ${renderIconButton('Sync with MAUI-API now', SYNC_ICON_PATHS, 'accent')}
+                </form>` : ''}
+            </div>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             ${deleted.length ? `<p class="info">A deleted player's nickname stays reserved: nobody can
@@ -7717,6 +7729,8 @@ export function startBoServer(
 
     app.get('/users', async (req, res) => {
         const avatarFilenames = getAvatarFilenames(new Config());
+        // Players as MAUI-API has them now (disabled, locked...), not as of the last periodic sync.
+        await online.syncPlayersNow();
         try {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
             res.send(await usersPage(req, users, avatarFilenames));
@@ -7912,6 +7926,15 @@ export function startBoServer(
         await user.update({online_status: 'active'});
         return {info: `New PIN for "${user.pseudo_3}": ${result.value}. Give it to the player.`};
     }));
+
+    // Same sync as opening the tab (GET /users), on demand, with its outcome.
+    app.post('/users/online/sync', async (req, res) => {
+        const outcome = await online.syncPlayersNow();
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
+        res.send(await usersPage(req, users, getAvatarFilenames(new Config()),
+            outcome === 'ok' ? undefined : 'MAUI-API could not be reached: players shown as of the last sync.',
+            outcome === 'ok' ? 'Players synced with MAUI-API.' : undefined));
+    });
 
     app.post('/users/:id/toggle-active', async (req, res) => {
         const user = await User.findByPk(req.params.id);

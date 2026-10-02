@@ -52,6 +52,8 @@ export class OnlineSession {
     private status: OnlineStatus = idle('disabled');
     private timer: ReturnType<typeof setTimeout> | null = null;
     private heartbeats = 0;
+    // Client of the running session, for syncPlayersNow(); null when stopped.
+    private client: MauiApiClient | null = null;
     // Bumped by every start/stop: a call still in flight from an older run must not reschedule.
     private generation = 0;
     private readonly settingsPath: string;
@@ -103,6 +105,7 @@ export class OnlineSession {
 
         this.status = idle('running');
         const client = await this.createClient(settings);
+        this.client = client;
         const startup = await client.reportStartup(await this.startupReport());
         if (generation !== this.generation) {
             return;
@@ -110,13 +113,14 @@ export class OnlineSession {
         if (startup.kind === 'ok') {
             this.status = {...this.status, startupId: startup.value.id};
             this.heartbeats = 0;
-            this.syncPlayers(client);
+            void this.syncPlayers(client);
         }
         this.handle(startup, client, generation);
     }
 
     public stop(): void {
         this.generation++;
+        this.client = null;
         if (this.timer) {
             clearTimeout(this.timer);
             this.timer = null;
@@ -164,19 +168,35 @@ export class OnlineSession {
         this.schedule(delay, client, generation);
     }
 
-    /** Not awaited, never throws: a failed sync is logged and retried at the next turn. */
-    private syncPlayers(client: MauiApiClient): void {
-        if (!this.deps.syncPlayers) {
-            return;
+    /**
+     * An extra sync, awaited, for the BO's Players tab: an admin's change in MAUI-API shows at once
+     * instead of at the next PLAYER_SYNC_EVERY heartbeats. 'skipped' while the session is not
+     * running. Never throws.
+     */
+    public async syncPlayersNow(): Promise<'ok' | 'failed' | 'skipped'> {
+        if (!this.client || this.status.state !== 'running') {
+            return 'skipped';
         }
-        this.deps.syncPlayers(client).then(
+        return await this.syncPlayers(this.client) ? 'ok' : 'failed';
+    }
+
+    /** Never throws: a failed sync is logged and retried at the next turn. Resolves to its success. */
+    private syncPlayers(client: MauiApiClient): Promise<boolean> {
+        if (!this.deps.syncPlayers) {
+            return Promise.resolve(false);
+        }
+        return this.deps.syncPlayers(client).then(
             result => {
                 if (result.kind !== 'ok') {
                     const reason = result.kind === 'rejected' ? `HTTP ${result.status}, ${result.code}` : result.kind;
                     this.log(`[online] Player sync failed (${reason}).`);
                 }
+                return result.kind === 'ok';
             },
-            (error: unknown) => this.log(`[online] Player sync failed: ${error instanceof Error ? error.message : String(error)}`),
+            (error: unknown) => {
+                this.log(`[online] Player sync failed: ${error instanceof Error ? error.message : String(error)}`);
+                return false;
+            },
         );
     }
 
@@ -185,7 +205,7 @@ export class OnlineSession {
             const result = await client.heartbeat();
             if (generation === this.generation) {
                 if (result.kind === 'ok' && ++this.heartbeats % PLAYER_SYNC_EVERY === 0) {
-                    this.syncPlayers(client);
+                    void this.syncPlayers(client);
                 }
                 this.handle(result, client, generation);
             }
