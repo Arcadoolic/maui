@@ -2,7 +2,7 @@ import {describe, it, expect, vi} from 'vitest';
 import {linkWithPin, registerOnline} from '@/class/OnlineRegistration';
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 
-const player: OnlinePlayer = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ACE', isPublic: false, status: 'active', avatar: null};
+const player: OnlinePlayer = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ACE', isPublic: false, status: 'active', isOrigin: true, avatar: null};
 const rejected = (status: number, code: string, attemptsLeft?: number) =>
     ({kind: 'rejected' as const, status, code, ...(attemptsLeft === undefined ? {} : {attemptsLeft})});
 

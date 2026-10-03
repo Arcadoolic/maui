@@ -80,6 +80,15 @@ export default class User extends Model<User> {
     })
     public online_status!: OnlinePlayerStatus | null;
 
+    // MAUI-API says the player was created on this cabinet: the only one that may issue a new PIN
+    // (maui-api D54).
+    @Column({
+        type: DataType.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+    })
+    public is_origin!: boolean;
+
     @HasMany(() => Hiscore)
     public hiscores!: InstanceType<typeof Hiscore>[];
 

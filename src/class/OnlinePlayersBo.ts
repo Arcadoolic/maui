@@ -3,9 +3,10 @@ import {escapeHtml} from '@/class/EscapeHtml';
 import type {OnlinePlayerStatus} from '@/class/MauiApiClient';
 import type {RegistrationOutcome} from '@/class/OnlineRegistration';
 
-// The ONLINE side of the BO's Players tab (maui-api docs/DECISIONS.md D48, D49), shown while ONLINE
-// is on: each player's MAUI-API status, and the actions on it. A PIN is shown in the flash message
-// of the action that produced it and never stored here; MAUI-API admins can read it back.
+// The ONLINE side of the BO's Players tab (maui-api docs/DECISIONS.md D48, D49, D54), shown while
+// ONLINE is on: each player's MAUI-API status, and the actions on it. A PIN is shown in the flash
+// message of the action that produced it and never stored here; MAUI-API admins can read it back.
+// A new PIN is only offered on the cabinet the player was created on: MAUI-API refuses it elsewhere.
 
 export interface OnlineUserView {
     id_user: number;
@@ -13,6 +14,8 @@ export interface OnlineUserView {
     remote_id: string | null;
     is_public: boolean;
     online_status: OnlinePlayerStatus | null;
+    // Created on this cabinet: the only one that may issue a new PIN (maui-api D54).
+    is_origin: boolean;
 }
 
 export function renderOnlinePlayerStatus(user: OnlineUserView): string {
@@ -23,7 +26,9 @@ export function renderOnlinePlayerStatus(user: OnlineUserView): string {
         case 'disabled':
             return '<span class="badge-no" title="Disabled by a MAUI-API administrator">✗ disabled</span>';
         case 'locked':
-            return '<span class="badge-no" title="Too many wrong PINs: issue a new PIN">🔒 PIN locked</span>';
+            return `<span class="badge-no" title="Too many wrong PINs: ${user.is_origin
+                ? 'issue a new PIN'
+                : 'a new PIN must be issued from the cabinet this player was created on, or by a MAUI-API administrator'}">🔒 PIN locked</span>`;
         default:
             return user.is_public
                 ? '<span class="badge-yes" title="Scores in the shared leaderboards">✓ public</span>'
@@ -58,10 +63,10 @@ export function renderOnlinePlayerActions(user: OnlineUserView): string {
                 ? renderIconButton('Make private', EYE_OFF_ICON_PATHS, 'warn')
                 : renderIconButton('Make public', EYE_ICON_PATHS, 'ok')}
         </form>
-        <form method="post" action="${action('pin')}"
+        ${user.is_origin ? `<form method="post" action="${action('pin')}"
             onsubmit="return confirm('Issue a new PIN for ${pseudo}? The current one stops working.')">
             ${renderIconButton('New PIN', KEY_ICON_PATHS, 'accent')}
-        </form>`;
+        </form>` : ''}`;
 }
 
 /** Fields added to the "Add a player" form while ONLINE is on. */

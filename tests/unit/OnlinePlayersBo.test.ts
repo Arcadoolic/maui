@@ -4,8 +4,8 @@ import {
     type OnlineUserView,
 } from '@/class/OnlinePlayersBo';
 
-const local: OnlineUserView = {id_user: 3, pseudo_3: 'SAJ', remote_id: null, is_public: false, online_status: null};
-const linked: OnlineUserView = {...local, remote_id: '01a0f983-0000-7000-8000-00000000000a', online_status: 'active'};
+const local: OnlineUserView = {id_user: 3, pseudo_3: 'SAJ', remote_id: null, is_public: false, online_status: null, is_origin: false};
+const linked: OnlineUserView = {...local, remote_id: '01a0f983-0000-7000-8000-00000000000a', online_status: 'active', is_origin: true};
 
 describe('renderOnlinePlayerStatus', () => {
     it('tells local-only, private, public, locked and disabled players apart', () => {
@@ -38,6 +38,14 @@ describe('renderOnlinePlayerActions', () => {
         expect(renderOnlinePlayerActions(linked)).toContain('icon-button icon-button-ok');
         expect(renderOnlinePlayerActions({...linked, is_public: true})).toContain('icon-button icon-button-warn');
         expect(renderOnlinePlayerActions(linked)).toContain('icon-button icon-button-accent');
+    });
+
+    it('offers a new PIN only on the cabinet the player was created on', () => {
+        const elsewhere = renderOnlinePlayerActions({...linked, is_origin: false});
+        expect(elsewhere).not.toContain('action="/users/3/online/pin"');
+        expect(elsewhere).toContain('action="/users/3/online/public"');
+        expect(renderOnlinePlayerStatus({...linked, is_origin: false, online_status: 'locked'})).toContain('created on');
+        expect(renderOnlinePlayerStatus({...linked, online_status: 'locked'})).toContain('issue a new PIN');
     });
 
     it('offers nothing for a player disabled in MAUI-API', () => {
