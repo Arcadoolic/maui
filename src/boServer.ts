@@ -7,11 +7,11 @@ import {
 } from 'fs';
 import {join, dirname, sep, basename, isAbsolute} from 'path';
 import * as os from 'os';
-import {createHash, randomBytes} from 'crypto';
+import {randomBytes} from 'crypto';
 import {ChildProcess, execFileSync, spawn} from 'child_process';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
-import {app as electronApp} from 'electron';
+import {app as electronApp, nativeImage} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
 // Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
@@ -81,6 +81,7 @@ import {ScoreCapture} from '@/class/ScoreCapture';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
+import {avatarForUpload} from '@/class/AvatarForUpload';
 import {syncPlayers} from '@/class/PlayerSync';
 import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
@@ -270,8 +271,11 @@ function readLocalAvatar(pseudo3: string): {png: Uint8Array; hash: string} | nul
     if (!existsSync(file)) {
         return null;
     }
-    const png = readFileSync(file);
-    return {png, hash: createHash('sha256').update(png).digest('hex')};
+    // A photo of several megabytes is scaled down first (AvatarForUpload.ts).
+    return avatarForUpload(readFileSync(file), (png, width, height) => nativeImage
+        .createFromBuffer(Buffer.from(png))
+        .resize({width, height, quality: 'best'})
+        .toPNG());
 }
 
 function getAvatarFilenames(config: Config): string[] {
