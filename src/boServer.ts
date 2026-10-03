@@ -7993,9 +7993,16 @@ export function startBoServer(
         if (!user.remote_id) {
             return {error: `"${user.pseudo_3}" is not in MAUI-API yet.`};
         }
+        const notOrigin = `"${user.pseudo_3}" was not created on this cabinet: a new PIN can only be issued from `
+            + 'the cabinet they were created on, or by a MAUI-API administrator.';
+        if (!user.is_origin) {
+            return {error: notOrigin};
+        }
         const result = await client.regeneratePin(user.remote_id);
         if (result.kind !== 'ok') {
-            return {error: `MAUI-API refused the new PIN (${result.kind === 'rejected' ? result.code : result.kind}).`};
+            return {error: result.kind === 'rejected' && result.code === 'not_origin_cabinet'
+                ? notOrigin
+                : `MAUI-API refused the new PIN (${result.kind === 'rejected' ? result.code : result.kind}).`};
         }
         await user.update({online_status: 'active'});
         return {info: `New PIN for "${user.pseudo_3}": ${result.value}. Give it to the player.`};

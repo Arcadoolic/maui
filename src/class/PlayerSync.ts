@@ -13,13 +13,14 @@ export interface LocalPlayer {
     remote_id: string | null;
     is_public: boolean;
     online_status: OnlinePlayerStatus | null;
+    is_origin: boolean;
 }
 
-export type PlayerSyncChange = Pick<LocalPlayer, 'id_user' | 'remote_id' | 'is_public' | 'online_status'>;
+export type PlayerSyncChange = Pick<LocalPlayer, 'id_user' | 'remote_id' | 'is_public' | 'online_status' | 'is_origin'>;
 
 /**
  * The changes that bring `local` in line with `remote` (the players linked to this cabinet):
- * - a linked player takes the visibility and status of the API;
+ * - a linked player takes the visibility, status and origin (maui-api D54) of the API;
  * - a player the API no longer links to this cabinet becomes local only again;
  * - a local player without remote id gets the one of the API player with the same initials, the
  *   API being the reference (a link made before the id could be saved locally).
@@ -40,15 +41,18 @@ export function planPlayerSync(local: LocalPlayer[], remote: OnlinePlayer[]): Pl
 
         if (match) {
             claimed.add(match.id);
-            target = {id_user: player.id_user, remote_id: match.id, is_public: match.isPublic, online_status: match.status};
+            target = {
+                id_user: player.id_user, remote_id: match.id, is_public: match.isPublic, online_status: match.status,
+                is_origin: match.isOrigin,
+            };
         } else if (player.remote_id !== null) {
-            target = {id_user: player.id_user, remote_id: null, is_public: player.is_public, online_status: null};
+            target = {id_user: player.id_user, remote_id: null, is_public: player.is_public, online_status: null, is_origin: false};
         } else {
             continue;
         }
 
         if (target.remote_id !== player.remote_id || target.is_public !== player.is_public
-            || target.online_status !== player.online_status) {
+            || target.online_status !== player.online_status || target.is_origin !== player.is_origin) {
             changes.push(target);
         }
     }
@@ -100,6 +104,7 @@ export async function syncPlayers(
         remote_id: user.remote_id ?? null,
         is_public: !!user.is_public,
         online_status: user.online_status ?? null,
+        is_origin: !!user.is_origin,
     }));
     const changes = planPlayerSync(local, remote.value);
     for (const {id_user: idUser, ...fields} of changes) {

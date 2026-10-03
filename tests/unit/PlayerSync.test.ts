@@ -7,10 +7,10 @@ const ID_A = '01a0f983-0000-7000-8000-00000000000a';
 const ID_B = '01a0f983-0000-7000-8000-00000000000b';
 
 const local = (overrides: Partial<LocalPlayer>): LocalPlayer => ({
-    id_user: 1, pseudo_3: 'ACE', remote_id: null, is_public: false, online_status: null, ...overrides,
+    id_user: 1, pseudo_3: 'ACE', remote_id: null, is_public: false, online_status: null, is_origin: false, ...overrides,
 });
 const remote = (overrides: Partial<OnlinePlayer>): OnlinePlayer => ({
-    id: ID_A, pseudo3: 'ACE', isPublic: false, status: 'active', avatar: null, ...overrides,
+    id: ID_A, pseudo3: 'ACE', isPublic: false, status: 'active', isOrigin: false, avatar: null, ...overrides,
 });
 
 describe('planPlayerSync', () => {
@@ -18,7 +18,7 @@ describe('planPlayerSync', () => {
         expect(planPlayerSync(
             [local({remote_id: ID_A, online_status: 'active'})],
             [remote({isPublic: true, status: 'locked'})],
-        )).toEqual([{id_user: 1, remote_id: ID_A, is_public: true, online_status: 'locked'}]);
+        )).toEqual([{id_user: 1, remote_id: ID_A, is_public: true, online_status: 'locked', is_origin: false}]);
     });
 
     it('changes nothing when both sides agree', () => {
@@ -32,12 +32,12 @@ describe('planPlayerSync', () => {
         expect(planPlayerSync(
             [local({remote_id: ID_A, is_public: true, online_status: 'active'})],
             [],
-        )).toEqual([{id_user: 1, remote_id: null, is_public: true, online_status: null}]);
+        )).toEqual([{id_user: 1, remote_id: null, is_public: true, online_status: null, is_origin: false}]);
     });
 
     it('adopts the API id of a local player with the same initials', () => {
         expect(planPlayerSync([local({})], [remote({status: 'disabled'})]))
-            .toEqual([{id_user: 1, remote_id: ID_A, is_public: false, online_status: 'disabled'}]);
+            .toEqual([{id_user: 1, remote_id: ID_A, is_public: false, online_status: 'disabled', is_origin: false}]);
     });
 
     it('never adopts an API player another local player is already linked to', () => {
@@ -58,7 +58,7 @@ describe('syncPlayers', () => {
 
     it('applies the changes to the local players', async () => {
         const updates: unknown[] = [];
-        user.findAll = () => Promise.resolve([{id_user: 7, pseudo_3: 'ACE', remote_id: null, is_public: false, online_status: null}]);
+        user.findAll = () => Promise.resolve([{id_user: 7, pseudo_3: 'ACE', remote_id: null, is_public: false, online_status: null, is_origin: false}]);
         user.update = (fields, options) => {
             updates.push([fields, options]);
             return Promise.resolve([1]);
@@ -66,7 +66,7 @@ describe('syncPlayers', () => {
         const client = {listPlayers: async () => ({kind: 'ok', value: [remote({isPublic: true})]})} as unknown as MauiApiClient;
 
         expect(await syncPlayers(client)).toEqual({kind: 'ok', value: 1});
-        expect(updates).toEqual([[{remote_id: ID_A, is_public: true, online_status: 'active'}, {where: {id_user: 7}}]]);
+        expect(updates).toEqual([[{remote_id: ID_A, is_public: true, online_status: 'active', is_origin: false}, {where: {id_user: 7}}]]);
     });
 
     it('passes an API failure through without touching anything', async () => {
@@ -77,6 +77,15 @@ describe('syncPlayers', () => {
         const client = {listPlayers: async () => failure} as unknown as MauiApiClient;
 
         expect(await syncPlayers(client)).toEqual(failure);
+    });
+});
+
+describe('origin cabinet', () => {
+    it('takes from the API whether the player was created on this cabinet', () => {
+        expect(planPlayerSync(
+            [local({remote_id: ID_A, online_status: 'active'})],
+            [remote({isOrigin: true})],
+        )).toEqual([{id_user: 1, remote_id: ID_A, is_public: false, online_status: 'active', is_origin: true}]);
     });
 });
 

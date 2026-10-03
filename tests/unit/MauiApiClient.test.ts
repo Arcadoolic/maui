@@ -311,7 +311,7 @@ describe('repository', () => {
 describe('players', () => {
     const uuid = '01a0f983-773f-71b7-b4c5-66c848306e1b';
     const apiPlayer = {id: uuid, pseudo_3: 'ACE', is_public: true, status: 'active'};
-    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active', avatar: null};
+    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active', isOrigin: false, avatar: null};
 
     it('lists the players of the cabinet', async () => {
         const {client, fetchImpl} = clientReturning(json(200, {players: [apiPlayer]}));

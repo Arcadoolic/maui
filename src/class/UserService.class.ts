@@ -95,6 +95,6 @@ export default class UserService {
     }
 }
 
-function onlineFields(player: OnlinePlayer): Pick<User, 'remote_id' | 'is_public' | 'online_status'> {
-    return {remote_id: player.id, is_public: player.isPublic, online_status: player.status};
+function onlineFields(player: OnlinePlayer): Pick<User, 'remote_id' | 'is_public' | 'online_status' | 'is_origin'> {
+    return {remote_id: player.id, is_public: player.isPublic, online_status: player.status, is_origin: player.isOrigin};
 }

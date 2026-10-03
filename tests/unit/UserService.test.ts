@@ -136,7 +136,7 @@ describe('UserService.registerUser default avatar', () => {
 });
 
 describe('UserService ONLINE players', () => {
-    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const, avatar: null};
+    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const, isOrigin: true, avatar: null};
     let service: UserService;
 
     beforeEach(() => {
@@ -155,7 +155,7 @@ describe('UserService ONLINE players', () => {
 
         expect(created).toBe(true);
         expect(options.where).toEqual({pseudo_3: 'ONL'});
-        expect(options.defaults).toEqual({active: true, remote_id: online.id, is_public: true, online_status: 'locked'});
+        expect(options.defaults).toEqual({active: true, remote_id: online.id, is_public: true, online_status: 'locked', is_origin: true});
         expect(service.getUserByPseudo3('ONL')).toEqual({pseudo_3: 'ONL'});
     });
 
@@ -169,7 +169,7 @@ describe('UserService ONLINE players', () => {
 
         await service.saveOnlineUser(online);
 
-        expect(updates).toEqual([{remote_id: online.id, is_public: true, online_status: 'locked'}]);
+        expect(updates).toEqual([{remote_id: online.id, is_public: true, online_status: 'locked', is_origin: true}]);
     });
 
     it('tells whether initials are used by a local player, live or deleted', async () => {

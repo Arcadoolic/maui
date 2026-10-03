@@ -51,6 +51,8 @@ export interface OnlinePlayer {
     pseudo3: string;
     isPublic: boolean;
     status: OnlinePlayerStatus;
+    // Created on this cabinet: the only one that may issue a new PIN (maui-api D54).
+    isOrigin: boolean;
     // SHA-256 of the avatar MAUI-API has (maui-api D53), null without one.
     avatar: string | null;
 }
@@ -205,6 +207,7 @@ function parsePlayer(body: unknown): OnlinePlayer | null {
     }
     return {
         id: body.id, pseudo3: body.pseudo_3, isPublic: body.is_public, status: body.status as OnlinePlayerStatus,
+        isOrigin: body.is_origin === true,
         avatar: typeof body.avatar === 'string' ? body.avatar : null,
     };
 }
