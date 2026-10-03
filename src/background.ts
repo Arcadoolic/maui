@@ -13,6 +13,7 @@ import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/Onlin
 import {LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
 import Config from '@/class/Config.class';
 import {exitWhenParentGone} from '@/devParentWatch';
+import {getAppIconPath} from '@/staticPath';
 
 remoteMain.initialize();
 
@@ -154,5 +155,7 @@ function createSplashWin() {
         },
         backgroundColor: '#000000',
         frame: false,
+        // Linux only: see getAppIconPath().
+        ...(process.platform === 'linux' ? {icon: getAppIconPath()} : {}),
     }, 'init');
 }
