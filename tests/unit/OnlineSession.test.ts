@@ -347,6 +347,28 @@ describe('player sync', () => {
         expect(await instance.syncPlayersNow()).toBe('skipped');
     });
 
+    it('catches up at the first heartbeat that gets through when MAUI-API was down at startup', async () => {
+        writeOnlineSettings(configured, path);
+        let down = true;
+        const {fetchImpl} = api(() => problem(503, 'server_error'), () => down ? problem(503, 'server_error') : noContent());
+        const syncPlayers = vi.fn(async () => ({kind: 'ok' as const, value: 0}));
+        const refreshLeaderboards = vi.fn(async () => undefined);
+        const {instance} = session(fetchImpl, {syncPlayers, refreshLeaderboards});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(INTERVAL);
+        expect(syncPlayers).not.toHaveBeenCalled();
+
+        down = false;
+        await vi.advanceTimersByTimeAsync(INTERVAL);
+        expect(syncPlayers).toHaveBeenCalledTimes(1);
+        expect(refreshLeaderboards).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL);
+        expect(syncPlayers).toHaveBeenCalledTimes(1);
+        instance.stop();
+    });
+
     it('does not sync when the startup report fails', async () => {
         writeOnlineSettings(configured, path);
         const {fetchImpl} = api(() => problem(503, 'server_error'));

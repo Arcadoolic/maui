@@ -64,6 +64,10 @@ export class OnlineSession {
     // The flush in progress: a second one waits for it instead of sending the same scores again.
     private flushing: Promise<FlushSummary | null> | null = null;
     private refreshing: Promise<void> | null = null;
+    // False until the players and the leaderboards were asked once in this run: when MAUI-API
+    // is down at startup, the first heartbeat that gets through does it, without waiting for
+    // the PLAYER_SYNC_EVERY cycle.
+    private caughtUp = false;
     // Bumped by every start/stop: a call still in flight from an older run must not reschedule.
     private generation = 0;
     private readonly settingsPath: string;
@@ -128,6 +132,7 @@ export class OnlineSession {
         if (startup.kind === 'ok') {
             this.status = {...this.status, startupId: startup.value.id};
             this.heartbeats = 0;
+            this.caughtUp = true;
             void this.syncPlayers(client);
             void this.flushScores(client).then(() => this.refreshLeaderboards(client));
         }
@@ -137,6 +142,7 @@ export class OnlineSession {
     public stop(): void {
         this.generation++;
         this.client = null;
+        this.caughtUp = false;
         if (this.timer) {
             clearTimeout(this.timer);
             this.timer = null;
@@ -278,7 +284,8 @@ export class OnlineSession {
         const timer = setTimeout(async () => {
             const result = await client.heartbeat();
             if (generation === this.generation) {
-                if (result.kind === 'ok' && ++this.heartbeats % PLAYER_SYNC_EVERY === 0) {
+                if (result.kind === 'ok' && (++this.heartbeats % PLAYER_SYNC_EVERY === 0 || !this.caughtUp)) {
+                    this.caughtUp = true;
                     void this.syncPlayers(client);
                     void this.refreshLeaderboards(client);
                 }
