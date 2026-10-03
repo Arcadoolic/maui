@@ -41,3 +41,18 @@ export function getScriptsPath(): string {
     }
     return join(process.resourcesPath, 'scripts');
 }
+
+/**
+ * The application icon (build/icon.png, also what electron-builder packages), for the windows on
+ * Linux: an AppImage is run without being installed, so the desktop has no .desktop file to find
+ * the icon in and shows a generic one in the taskbar and the window switcher. Shipped next to
+ * public/ (electron-builder.yml's extraResources). macOS and Windows take the icon from the
+ * bundle and the executable.
+ */
+export function getAppIconPath(): string {
+    if (!app.isPackaged) {
+        return join(__dirname, '..', '..', 'build', 'icon.png');
+    }
+    return join(process.resourcesPath, 'icon.png');
+}
+
