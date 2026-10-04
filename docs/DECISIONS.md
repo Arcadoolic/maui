@@ -466,3 +466,18 @@ and the repository is not split by version. Only the sets of the pack are
 looked at, not those already on the cabinet. `mame -verifyroms` after the
 import stays as the safety net, and is the only check for a manifest without
 `romsets`.
+
+**Windows, 2026-10-04: an installer, updated from the BO's Update card.**
+The Windows build is an NSIS installer instead of a portable `.exe`
+(per-user, no administrator rights). To update, the Update card does on
+Windows what it does on the Linux cabinet, with the same list of releases
+and development builds: it downloads the installer of the version picked and
+runs it silently (`--updated /S --force-run`), which closes the application,
+replaces it and starts it again (`src/class/WindowsUpdate.ts`).
+`electron-updater` was left out: it brings its own list of versions
+(`latest.yml`, semver only, so no development builds) next to the one the BO
+already has. Only an application put there by the installer can update
+itself - recognized by the uninstaller next to its `.exe`. The file fetched
+is the one GitHub lists for the version, never an address the form sent,
+on Linux too. Not code-signed, and its checksum is not verified: both rest
+on GitHub's HTTPS download. Never run on a real Windows machine yet.

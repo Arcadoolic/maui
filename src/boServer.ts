@@ -46,6 +46,7 @@ import {
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
+import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
@@ -4901,6 +4902,9 @@ interface UpdateReleaseEntry {
 
 interface UpdateInfo {
     capable: boolean;
+    // The dedicated Linux layout only: there the new version waits for a restart of the session.
+    // On Windows the installer restarts the application itself.
+    canRestart: boolean;
     currentVersion: string;
     releases: UpdateReleaseEntry[];
     devBuilds: UpdateReleaseEntry[];
@@ -4932,9 +4936,19 @@ function getSquashfsRootPath(): string {
 // AppImage extracted once into a fixed ~/squashfs-root, referenced by path from ~/.xinitrc. Ruled
 // out in development (app.isPackaged) so this never fires from a repo checkout that happens to also
 // have a stray ~/squashfs-root from a real install on the same machine.
-function isSelfUpdateCapable(): boolean {
+function isKioskLayout(): boolean {
     return process.platform === 'linux' && electronApp.isPackaged
         && existsSync(join(getSquashfsRootPath(), 'AppRun'));
+}
+
+// On Windows, an application put there by its installer (WindowsUpdate.ts): the portable .exe of
+// the earlier versions has nothing an installer could replace.
+function isWindowsInstall(): boolean {
+    return process.platform === 'win32' && electronApp.isPackaged && isInstalledByInstaller(process.execPath);
+}
+
+function isSelfUpdateCapable(): boolean {
+    return isKioskLayout() || isWindowsInstall();
 }
 
 let releasesCache: {fetchedAt: number; releases: GithubRelease[]} | null = null;
@@ -4970,6 +4984,7 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
 async function getUpdateInfo(): Promise<UpdateInfo> {
     const info: UpdateInfo = {
         capable: isSelfUpdateCapable(),
+        canRestart: isKioskLayout(),
         currentVersion: getRunningVersion(),
         releases: [],
         devBuilds: [],
@@ -4979,9 +4994,13 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
         const releases = await fetchGithubReleases();
         const arch = currentLinuxArch();
         const entries = releases.map((release): UpdateReleaseEntry => {
-            const asset = arch
-                ? release.assets.find(a => new RegExp(`-linux-${arch}\\.AppImage$`).test(a.name))
-                : undefined;
+            let asset: GithubReleaseAsset | undefined;
+            if (process.platform === 'win32') {
+                const installer = findWindowsInstaller(release.assets.map(a => a.name), process.arch);
+                asset = release.assets.find(a => a.name === installer);
+            } else if (arch) {
+                asset = release.assets.find(a => new RegExp(`-linux-${arch}\\.AppImage$`).test(a.name));
+            }
             return {
                 tagName: release.tag_name,
                 name: release.name || release.tag_name,
@@ -4999,6 +5018,63 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
     }
 
     return info;
+}
+
+/** Downloads a release asset to `destination`, a line of progress per megabyte. */
+async function downloadUpdateAsset(downloadUrl: string, destination: string, writeLine: (line: string) => void): Promise<void> {
+    writeLine('Downloading…');
+    const response = await fetch(downloadUrl);
+    if (!response.ok || !response.body) {
+        throw new Error(`Download failed (HTTP ${response.status}).`);
+    }
+    const totalBytes = Number(response.headers.get('content-length')) || 0;
+    let downloadedBytes = 0;
+    let lastLoggedMb = 0;
+    await pipeline(
+        // Node's fetch typings (undici) and DOM's lib.dom ReadableStream diverge slightly -
+        // both are the real web ReadableStream at runtime, fromWeb() just wants any of them.
+        Readable.fromWeb(response.body as import('stream/web').ReadableStream<Uint8Array>),
+        new Transform({
+            transform(chunk, _enc, callback) {
+                downloadedBytes += chunk.length;
+                const mb = Math.floor(downloadedBytes / (1024 * 1024));
+                if (mb > lastLoggedMb) {
+                    lastLoggedMb = mb;
+                    const totalMb = totalBytes ? Math.round(totalBytes / (1024 * 1024)) : undefined;
+                    writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
+                }
+                callback(null, chunk);
+            },
+        }),
+        createWriteStream(destination),
+    );
+}
+
+/**
+ * Windows: downloads the installer of the version picked and returns its path, or null after a
+ * failure (reported in the block). The caller runs it once the page is sent: the installer closes
+ * this very process. Kept in a folder of its own under the temporary directory, emptied first -
+ * the installer cannot delete itself while it runs.
+ */
+async function downloadWindowsInstaller(res: Response, title: string, downloadUrl: string): Promise<string | null> {
+    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
+    const writeLine = (line: string): void => {
+        res.write(`<li>${escapeHtml(line)}</li>`);
+    };
+    let installerPath: string | null = null;
+    try {
+        const workDir = join(os.tmpdir(), 'mame-awesome-ui-update');
+        rmSync(workDir, {recursive: true, force: true});
+        mkdirSync(workDir, {recursive: true});
+        const destination = join(workDir, 'mame-awesome-ui-setup.exe');
+        await downloadUpdateAsset(downloadUrl, destination, writeLine);
+        installerPath = destination;
+        writeLine('Starting the installer: the application closes, updates and reopens on the new version.');
+    } catch (error) {
+        writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
+    }
+    res.write('</ul></section>');
+    return installerPath;
 }
 
 /**
@@ -5022,33 +5098,8 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
     // current install had already been moved to .old, leaving no ~/squashfs-root at all.
     const workDir = mkdtempSync(join(dirname(squashfsRoot), '.mame-awesome-ui-update-'));
     try {
-        writeLine('Downloading…');
-        const response = await fetch(downloadUrl);
-        if (!response.ok || !response.body) {
-            throw new Error(`Download failed (HTTP ${response.status}).`);
-        }
-        const totalBytes = Number(response.headers.get('content-length')) || 0;
         const appImagePath = join(workDir, 'download.AppImage');
-        let downloadedBytes = 0;
-        let lastLoggedMb = 0;
-        await pipeline(
-            // Node's fetch typings (undici) and DOM's lib.dom ReadableStream diverge slightly -
-            // both are the real web ReadableStream at runtime, fromWeb() just wants any of them.
-            Readable.fromWeb(response.body as import('stream/web').ReadableStream<Uint8Array>),
-            new Transform({
-                transform(chunk, _enc, callback) {
-                    downloadedBytes += chunk.length;
-                    const mb = Math.floor(downloadedBytes / (1024 * 1024));
-                    if (mb > lastLoggedMb) {
-                        lastLoggedMb = mb;
-                        const totalMb = totalBytes ? Math.round(totalBytes / (1024 * 1024)) : undefined;
-                        writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
-                    }
-                    callback(null, chunk);
-                },
-            }),
-            createWriteStream(appImagePath),
-        );
+        await downloadUpdateAsset(downloadUrl, appImagePath, writeLine);
 
         chmodSync(appImagePath, 0o755);
 
@@ -5135,7 +5186,6 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
                     <form method="post" action="/maui/update/install" data-stream
                         onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
                         <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
-                        <input type="hidden" name="assetUrl" value="${escapeHtml(release.assetUrl)}">
                         <button type="submit" ${capable ? '' : 'disabled'}>Install</button>
                     </form>
                 ` : release.isCurrent ? '' : '<em>No artifact for this platform</em>'}
@@ -5147,13 +5197,16 @@ function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, c
 function renderUpdateCard(
     updateInfo: UpdateInfo, isAdvanced: boolean, installMessage?: string, installError?: string,
 ): string {
-    const confirmRelease = 'Install version {tag}? The Pi will then need to be restarted.';
+    // Windows: the installer closes the application and starts it again by itself.
+    const afterInstall = updateInfo.canRestart
+        ? 'The Pi will then need to be restarted.'
+        : 'The application closes and reopens on that version.';
+    const confirmRelease = `Install version {tag}? ${afterInstall}`;
     const releaseRows = updateInfo.releases
         .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmRelease))
         .join('');
 
-    const confirmDevBuild = 'Install the development build {tag} (not promoted to main)? '
-        + 'The Pi will then need to be restarted.';
+    const confirmDevBuild = `Install the development build {tag} (not promoted to main)? ${afterInstall}`;
     const devBuildRows = updateInfo.devBuilds
         .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmDevBuild))
         .join('');
@@ -5162,7 +5215,7 @@ function renderUpdateCard(
         <section class="card">
             <h2>Update</h2>
             <p class="info">Currently installed version: <strong>${escapeHtml(updateInfo.currentVersion)}</strong></p>
-            ${updateInfo.capable ? `
+            ${updateInfo.canRestart ? `
                 <form method="post" action="/maui/update/restart"
                     onsubmit="return confirm('Restart the application now? The screen goes blank for a moment, then it reopens on the version installed in ~/squashfs-root.')">
                     <button type="submit">Restart the application</button>
@@ -5171,9 +5224,10 @@ function renderUpdateCard(
                 new version). Any game in progress is closed.</p>
             ` : ''}
             ${!updateInfo.capable ? `
-                <p class="error">Automatic installation is unavailable on this machine (expected:
-                Linux, not in development, AppImage extracted in ~/squashfs-root - see
-                docs/RASPBERRY-PI-DEPLOY.md). Releases can still be browsed below.</p>
+                <p class="error">Automatic installation is unavailable on this machine (expected, not in
+                development: on Linux, the AppImage extracted in ~/squashfs-root - see
+                docs/RASPBERRY-PI-DEPLOY.md; on Windows, the application installed by its installer, not
+                the portable .exe of the earlier versions). Releases can still be browsed below.</p>
             ` : ''}
             ${installError ? `<p class="error flash">${escapeHtml(installError)}</p>` : ''}
             ${installMessage ? `<p class="info flash">${escapeHtml(installMessage)}</p>` : ''}
@@ -8765,10 +8819,9 @@ export function startBoServer(
         const config = new Config();
         config.load();
         const tagName = typeof req.body.tagName === 'string' ? req.body.tagName : '';
-        const assetUrl = typeof req.body.assetUrl === 'string' ? req.body.assetUrl : '';
         const isAdvanced = req.session.boAdvanced === true;
 
-        if (!isSelfUpdateCapable() || !assetUrl) {
+        if (!isSelfUpdateCapable()) {
             await sendMauiPage(req, res, config, {updateInfoError: 'Installation unavailable on this machine.'});
             return;
         }
@@ -8778,11 +8831,36 @@ export function startBoServer(
             res.status(403).send('Available in Advanced configuration only.');
             return;
         }
+        // The file to fetch is the one GitHub lists for that version, not an address the form
+        // sent: it is run on this machine.
+        const assetUrl = [...preUpdateInfo.releases, ...preUpdateInfo.devBuilds]
+            .find(release => release.tagName === tagName)?.assetUrl;
+        if (!assetUrl) {
+            await sendMauiPage(req, res, config, {updateInfoError: `Version ${tagName || '?'} has nothing to install on this machine.`});
+            return;
+        }
 
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('maui', getViewer(req)));
-        await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
+        if (isWindowsInstall()) {
+            const installerPath = await downloadWindowsInstaller(res, `Installing version ${tagName}…`, assetUrl);
+            if (installerPath) {
+                res.write('<section class="card"><p id="restart-wait-message" class="info">Waiting for the application '
+                    + 'to come back… this page will automatically take you back to the MAUI tab as soon as the new '
+                    + `version is running.</p>${renderRestartWaitScript('/maui')}</section>`);
+                res.write(renderPageTail());
+                res.end();
+                // Delayed so this response finishes flushing: the installer closes this process.
+                setTimeout(() => {
+                    spawn(installerPath, [...WINDOWS_INSTALLER_ARGS], {detached: true, stdio: 'ignore'}).unref();
+                    onReset();
+                }, 500);
+                return;
+            }
+        } else {
+            await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
+        }
 
         const updateInfo = await getUpdateInfo();
         res.write(renderMauiCard(config, isAdvanced));
@@ -8804,7 +8882,7 @@ export function startBoServer(
         const config = new Config();
         config.load();
 
-        if (!isSelfUpdateCapable()) {
+        if (!isKioskLayout()) {
             await sendMauiPage(req, res, config, {updateInfoError: 'Restart unavailable on this machine.'});
             return;
         }
