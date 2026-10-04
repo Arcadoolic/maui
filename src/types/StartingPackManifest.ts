@@ -1,5 +1,5 @@
-// Type-only contract for the manifest of a starting pack, as read by src/boServer.ts and
-// scripts/import-starting-pack.py. The packs are built by tooling that lives outside this
+// Type-only contract for the manifest of a starting pack, as read by src/boServer.ts,
+// src/class/PackImport.ts and scripts/import-starting-pack.py. The packs are built by tooling that lives outside this
 // repository and carries its own copy of this file: this one is the reference for what the app
 // accepts, so a change to the manifest shape must be mirrored there (and bump formatVersion
 // when older packs would no longer import).

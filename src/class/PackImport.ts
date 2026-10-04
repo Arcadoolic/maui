@@ -7,17 +7,17 @@ import type {StartingPackFileEntry, StartingPackGameEntry, StartingPackManifest}
 import {getRequiredRoms} from '@/class/PackOwnership';
 
 /**
- * Import of a pack of the repository, in the app: the in-process counterpart of
- * scripts/import-starting-pack.py --url. The pack's companion manifest says where each of its
- * files sits in the ZIP (`files`, written by the repository), so the files wanted are fetched
- * with HTTP Range requests and inflated here - no python3, no ZIP library, and nothing of the
- * ZIP read beyond those files.
+ * Import of a pack of the repository. The pack's companion manifest says where each of its files
+ * sits in the ZIP (`files`, written by the repository), so the files wanted are fetched with
+ * HTTP Range requests and inflated here - no ZIP library, and nothing of the ZIP read beyond
+ * those files. scripts/import-starting-pack.py does the same from a local ZIP, by hand, on a
+ * machine with python3: the app neither ships nor runs it, and the two must be kept alike.
  *
  * Electron-free and without a database of its own: where the files go (PackImportTargets) and
  * how a game is saved (PackGameStore) come from the caller, src/boServer.ts.
  */
 
-// Same fixed table as the script's IMPORTABLE_MAME_DIRECTORIES: each zip top-level folder maps to
+// Each zip top-level folder maps to
 // the mame.ini/ui.ini key that resolves its real destination on this mame home.
 const IMPORTABLE_MAME_DIRECTORIES: ReadonlyArray<readonly [string, string]> = [
     ['cfg', 'cfg_directory'],

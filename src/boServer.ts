@@ -44,8 +44,7 @@ import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
-import {describePack, importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
-import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
+import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
@@ -92,7 +91,7 @@ import {
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
 import {
-    describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, repositoryEnv, resolveRepository,
+    describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, resolveRepository,
     type RepositoryAccess,
 } from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
@@ -101,7 +100,7 @@ import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} f
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import ControllerMappings from '@/assets/controllers.json';
-import {getStaticPath, getScriptsPath} from '@/staticPath';
+import {getStaticPath} from '@/staticPath';
 // Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
 // as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
 // -> Helpers.class.ts's @electron/remote import at module scope, which would break this
@@ -384,7 +383,7 @@ function ensureFirstDirectory(paths: string[] | undefined, parentPath: string): 
  * the categorypath folder (created if missing, see ensureFirstDirectory) - and favorites.ini /
  * genre.ini / Multiplayer.ini within it (never created themselves: mame itself writes
  * favorites.ini the first time a favorite is added, and genre.ini/Multiplayer.ini are only ever
- * written by a starting pack import (see scripts/import-starting-pack.py), which every pack
+ * written by a starting pack import (see PackImport.ts), which every pack
  * bundles a copy of both).
  */
 interface MameLocations {
@@ -1257,10 +1256,8 @@ async function downloadMissingFavoriteMedia(
 interface ImportBlock {
     writeLine(line: string): void;
     progress(phase: 'download' | 'import', done: number, total: number): void;
-    // Closes the block. `ok` paints the bar; left out after a failure that already said so.
+    // Closes the block; `ok` paints the bar.
     close(ok: boolean): void;
-    // Closes the block on an import that could not even start, and ends the response.
-    abort(message: string): void;
 }
 
 /**
@@ -1301,11 +1298,6 @@ function openImportBlock(
             if (tab !== null) {
                 res.write(`<script>mauiImportTabs.finish(${tab},${ok})</script>`);
             }
-        },
-        abort: (message) => {
-            res.write(`</ul><p class="error">${escapeHtml(message)}</p>${closeBlock}`);
-            res.write(renderPageTail());
-            res.end();
         },
     };
 }
@@ -1364,13 +1356,12 @@ function getPackImportTargets(config: Config): PackImportTargets {
 }
 
 /**
- * Downloads and imports the repository's configuration pack (a plain `folders/` ZIP, so the
- * whole file) into an already-headed streamed response. false when the import could not be
- * launched (response already closed).
+ * Imports the repository's configuration pack (a plain `folders/` ZIP, so the whole file) into
+ * an already-headed streamed response.
  */
 function runConfPackImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>,
-): Promise<boolean> {
+): Promise<void> {
     return runRepositoryImport(
         res, config, repository, `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
     );
@@ -1379,39 +1370,23 @@ function runConfPackImport(
 /**
  * Imports a pack of the repository, whole or only the games named in `only`, into an
  * already-headed streamed response - caller must have written the page head (renderPageHead()).
+ * Whatever happens ends as lines in the import's own block, which this closes: the rest of the
+ * page (and res.end()) is left to the caller.
  *
- * In the app (PackImport.ts) when the pack's manifest says where its files are. A manifest
- * written before the repository did leaves scripts/import-starting-pack.py, which needs python3.
- *
- * Resolves false when the import could not be launched: the error is written and the response
- * closed (renderPageTail() + res.end()), so the caller skips its own post-import render. On a
- * normal end it only closes the block, leaving the rest of the page (and res.end()) to the caller.
+ * The import runs in the app (PackImport.ts) and needs the pack's manifest to say where its
+ * files are, which the repository writes (maui-repository's generate-repo-manifests.py).
  */
 async function runRepositoryImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, title: string, filename: string,
     only?: string[], overall?: {index: number; total: number}, tabbed = false,
-): Promise<boolean> {
-    const url = `${repository.url}/${filename}`;
-    const companion = await fetchRepoManifest(repository.url, filename, repository.headers);
-    let described: boolean;
-    try {
-        described = describePack(companion) !== null;
-    } catch {
-        // A pack the repository could not read: importRepositoryPack() says why, in the block.
-        described = true;
-    }
-    if (!described) {
-        const scriptArgs = ['--url', url, ...(only ? ['--only', only.join(',')] : [])];
-        return runImportScript(res, title, scriptArgs, {...process.env, ...repositoryEnv(repository.headers)}, overall, tabbed);
-    }
-
+): Promise<void> {
     const block = openImportBlock(res, title, true, overall, tabbed);
     let ok = false;
     try {
         ok = await importRepositoryPack({
-            url,
+            url: `${repository.url}/${filename}`,
             headers: repository.headers,
-            companion,
+            companion: await fetchRepoManifest(repository.url, filename, repository.headers),
             only,
             targets: getPackImportTargets(config),
             store: packGameStore,
@@ -1421,84 +1396,6 @@ async function runRepositoryImport(
         block.writeLine(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
     block.close(ok);
-    return true;
-}
-
-/**
- * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs -y`, streaming its stdout/stderr
- * line-by-line into the import's block as a live progress log. Only for a pack whose manifest
- * does not describe its files (see runRepositoryImport(), same contract).
- */
-function runImportScript(
-    res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
-    overall?: {index: number; total: number}, tabbed = false,
-): Promise<boolean> {
-    const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
-    // A pack downloaded whole (--url alone) spends its first half downloading; a pack read
-    // partially (--url with --only) has no such phase.
-    const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
-    const block = openImportBlock(res, title, hasDownload, overall, tabbed);
-    // A clear error instead of a raw ENOENT from spawn() below - macOS in particular doesn't
-    // always ship a working python3 without Xcode CLT installed.
-    if (!isPython3Available()) {
-        block.writeLine('This pack cannot be imported: the repository does not say where its files are, '
-            + 'and python3 is not on this machine.');
-        block.close(false);
-        return Promise.resolve(true);
-    }
-
-    return new Promise(resolve => {
-        // -y always: nobody can answer the script's confirmation prompt from here. stdin ignored
-        // too, so a prompt that slips through anyway ends on EOF instead of waiting forever on
-        // an open pipe.
-        const child = spawn('python3', [scriptPath, ...scriptArgs, '-y'], {
-            env: {...env, MAUI_PROGRESS: '1'},
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        const writeLine = (line: string): void => {
-            const progress = /^@@PROGRESS (download|import) (\d+) (\d+)$/.exec(line.trim());
-            if (progress) {
-                block.progress(progress[1] as 'download' | 'import', Number(progress[2]), Number(progress[3]));
-            } else {
-                block.writeLine(line);
-            }
-        };
-        // child.stdout/stderr 'data' chunks don't align to line boundaries - buffer each stream
-        // separately and only flush complete lines, same as tailing a log file.
-        const makeLineSplitter = (onLine: (line: string) => void) => {
-            let buffer = '';
-            return {
-                push: (chunk: Buffer) => {
-                    buffer += chunk.toString('utf8');
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop() ?? '';
-                    lines.forEach(onLine);
-                },
-                flush: () => {
-                    if (buffer.trim()) {
-                        onLine(buffer);
-                    }
-                },
-            };
-        };
-        const stdoutSplitter = makeLineSplitter(writeLine);
-        const stderrSplitter = makeLineSplitter(writeLine);
-        child.stdout.on('data', stdoutSplitter.push);
-        child.stderr.on('data', stderrSplitter.push);
-
-        child.on('error', (error) => {
-            block.abort(`Launch failed: ${error.message}`);
-            resolve(false);
-        });
-
-        child.on('close', (code) => {
-            stdoutSplitter.flush();
-            stderrSplitter.flush();
-            block.close(code === 0);
-            resolve(true);
-        });
-    });
 }
 
 let importProgressCounter = 0;
@@ -1668,7 +1565,7 @@ interface Subsection {
  * defaultSectionId: which section a response is "about", set by the caller from whichever of
  * its own message params is actually filled in (see renderForm()'s own defaultSubtab logic for
  * the reasoning) - not inferred client-side from scanning for .flash content. A section with a
- * standing warning unrelated to what was just submitted (missing plugins, no python3...) can
+ * standing warning unrelated to what was just submitted (missing plugins...) can
  * carry a .flash of its own at the same time; without this, whichever of those happens to come
  * first in `sections` always wins over the section the just-submitted form actually belongs to.
  */
@@ -3326,8 +3223,8 @@ function renderPageTail(): string {
         // order: the URL hash (so a subtab is linkable and survives a reload), else the section
         // the server says this response is about (data-default-subtab, set from whichever of
         // renderForm()'s own message params is actually filled in for this request - not every
-        // section with a .flash: a standing warning elsewhere, e.g. "plugin.ini incomplete" or
-        // "python3 not found", also carries one and would otherwise wrongly outrank the
+        // section with a .flash: a standing warning elsewhere, e.g. "plugin.ini incomplete",
+        // also carries one and would otherwise wrongly outrank the
         // section a just-submitted form actually belongs to, since it's earlier in the list),
         // else whichever panel has a .flash message anyway (only reached when the server didn't
         // say - e.g. an unrelated standing warning on first load), else the first panel.
@@ -4920,7 +4817,7 @@ function renderForm(
     // Which of the params above is actually filled in tells us which section this specific
     // response is about - e.g. a POST to /reset only ever sets dangerZoneInfo, nothing
     // else, regardless of what other sections might separately have a standing .flash warning
-    // of their own (missing plugins, no python3...) that would otherwise wrongly win just for
+    // of their own (missing plugins...) that would otherwise wrongly win just for
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : importError !== undefined ? 'import'
@@ -6356,34 +6253,6 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer, repos
 }
 
 /**
- * Both import routes (manual upload and repo-url) shell out to
- * scripts/import-starting-pack.py - a fast, local `--version` probe, same synchronous-external-
- * process convention as getMameInfo()'s own execFileSync calls above, rather than an async
- * execFile callback.
- */
-function isPython3Available(): boolean {
-    try {
-        execFileSync('python3', ['--version'], {stdio: 'ignore'});
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Shown at the top of the Import section wherever it renders (initial page load and the
- * post-import re-renders), so a missing python3 surfaces proactively instead of only once an
- * import is attempted.
- */
-function renderPythonWarning(): string {
-    if (isPython3Available()) {
-        return '';
-    }
-    return '<p class="error flash">python3 not found on this machine - starting pack import '
-        + 'is unavailable.</p>';
-}
-
-/**
  * The configuration pack (see ConfPack.ts): the category files the carousel needs. Shown outside
  * Advanced configuration too - without it the carousel has no genres. Downloaded from the pack
  * repository in ONLINE mode only (see RepositoryAuth.ts). There is no manual import: MAME experts
@@ -6434,12 +6303,11 @@ function renderStarterPackCard(): string {
 }
 
 /**
- * The MAME tab's Import section, also re-rendered after each import: renderPythonWarning() sits
- * right above the cards that run the import script. `error`: a failed repository action.
+ * The MAME tab's Import section, also re-rendered after each import. `error`: a failed
+ * repository action.
  */
 function renderImportSection(mameInfo: MameInfo, error?: string): string {
-    return renderPythonWarning()
-        + (error ? `<p class="error flash">${escapeHtml(error)}</p>` : '')
+    return (error ? `<p class="error flash">${escapeHtml(error)}</p>` : '')
         + renderConfPackCard(mameInfo)
         + renderStarterPackCard();
 }
@@ -8430,13 +8298,8 @@ export function startBoServer(
             const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
             await Promise.all(packs.map(async pack => {
                 const manifest = await fetchRepoManifest(repository.url, pack.filename, repository.headers);
-                // Per-game sizes for the disk bar: the manifest lists them. One written before the
-                // repository did (or out of date) leaves the ZIP's central directory to read, with
-                // two small range requests - null if the server cannot do ranges.
-                const entrySizes = manifestEntrySizes(manifest, pack.size)
-                    ?? (/^[\w.-]+\.zip$/.test(pack.filename)
-                        ? await fetchRemoteZipEntrySizes(`${repository.url}/${pack.filename}`, repository.headers)
-                        : null);
+                // Per-game sizes for the disk bar: the manifest lists them, unless it is out of date.
+                const entrySizes = manifestEntrySizes(manifest, pack.size);
                 pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
                 pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
@@ -8471,17 +8334,13 @@ export function startBoServer(
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('mame', getViewer(req)));
-        if (!await runConfPackImport(res, config, repository)) {
-            return;
-        }
+        await runConfPackImport(res, config, repository);
         if (withStarterPack) {
             if (getMissingConfPackFiles(getMameInfo(config)).length) {
                 res.write('<p class="error flash">The configuration pack could not be installed: starter pack not imported.</p>');
             } else {
                 const title = `Starter pack import in progress… (${escapeHtml(STARTER_PACK_FILENAME)})`;
-                if (!await runRepositoryImport(res, config, repository, title, STARTER_PACK_FILENAME)) {
-                    return;
-                }
+                await runRepositoryImport(res, config, repository, title, STARTER_PACK_FILENAME);
                 streamFavoritesRefreshAfterImport(res, config);
             }
         }
@@ -8539,9 +8398,7 @@ export function startBoServer(
         // favorites.ini and shared category files, so they must not overlap.
         // The configuration pack first, every time (see ConfPack.ts): game packs no longer ship
         // the category files, so this keeps them matching the repository's.
-        if (!await runConfPackImport(res, config, repository)) {
-            return;
-        }
+        await runConfPackImport(res, config, repository);
         if (getMissingConfPackFiles(getMameInfo(config)).length) {
             res.write('<p class="error flash">The configuration pack could not be installed: game packs not imported.</p>');
             res.write(renderPageTail());
@@ -8557,7 +8414,7 @@ export function startBoServer(
         for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
             const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
             // Just these games are read from the pack (HTTP Range requests, no full download).
-            const started = await runRepositoryImport(
+            await runRepositoryImport(
                 res,
                 config,
                 repository,
@@ -8567,10 +8424,6 @@ export function startBoServer(
                 {index, total: selection.size},
                 tabbed,
             );
-            // false = launch failure, the response is already closed.
-            if (!started) {
-                return;
-            }
         }
         if (tabbed) {
             res.write('</div></section>');

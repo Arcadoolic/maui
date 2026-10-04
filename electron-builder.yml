@@ -10,8 +10,6 @@ files:
 extraResources:
   - from: public/
     to: public/
-  - from: scripts/import-starting-pack.py
-    to: scripts/import-starting-pack.py
   # The window icon on Linux (background.ts): an AppImage is not installed, so the desktop does
   # not know the icon electron-builder puts in it.
   - from: build/icon.png

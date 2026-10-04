@@ -3,7 +3,7 @@ import {mkdtempSync, rmSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import {tmpdir} from 'os';
 import {
-    describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, repositoryEnv, resolveRepository,
+    describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, resolveRepository,
 } from '@/class/RepositoryAuth';
 import {writeOnlineSettings, type OnlineSettings} from '@/class/OnlineSettings';
 import {computeMachineFingerprint, type MachineIdSources} from '@/class/MachineFingerprint';
@@ -143,12 +143,6 @@ describe('resolveRepository', () => {
     });
 });
 
-describe('repositoryEnv', () => {
-    it('hands the credentials to the import script through its environment', () => {
-        expect(repositoryEnv({'X-Maui-Key': 'mk_x', 'Authorization': 'Bearer 12|secret', 'X-Maui-Machine': 'f'.repeat(64)}))
-            .toEqual({MAUI_REPO_KEY: 'mk_x', MAUI_REPO_TOKEN: '12|secret', MAUI_REPO_MACHINE: 'f'.repeat(64)});
-    });
-});
 
 describe('describeRepositoryFailure', () => {
     it('explains each reason', () => {

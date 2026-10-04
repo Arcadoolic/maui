@@ -29,20 +29,6 @@ export function getStaticPath(): string {
 }
 
 /**
- * Directory holding scripts/ (currently just import-starting-pack.py) - a separate
- * process spawned by boServer.ts's /import/from-url route, so it needs a real file on
- * disk and can't read anything packed into app.asar the way Node's own require() can.
- * Same dev-vs-packaged split as getStaticPath() above, mirroring electron-builder.yml's
- * extraResources entry for scripts/import-starting-pack.py.
- */
-export function getScriptsPath(): string {
-    if (!app.isPackaged) {
-        return join(__dirname, '..', '..', 'scripts');
-    }
-    return join(process.resourcesPath, 'scripts');
-}
-
-/**
  * The application icon (build/icon.png, also what electron-builder packages), for the windows on
  * Linux: an AppImage is run without being installed, so the desktop has no .desktop file to find
  * the icon in and shows a generic one in the taskbar and the window switcher. Shipped next to
