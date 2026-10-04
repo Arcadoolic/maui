@@ -38,12 +38,13 @@ import {addFavorite} from '@/class/MameIniParser';
 import {
     FavoritesCacheEntry, FavoritesCache, getFavoritesCachePath, readFavoritesCache,
     writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
-    readRomsInfosCache, saveRomInfos,
+    readRomsInfosCache, saveRomInfos, getRomsInfosCachePath,
 } from '@/class/FavoritesStore';
 import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
+import {describePack, importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
@@ -1252,50 +1253,26 @@ async function downloadMissingFavoriteMedia(
     return summary;
 }
 
-/**
- * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs -y`, streaming its stdout/stderr
- * line-by-line into an already-`res.writeHead()`'d, already-headed HTML response as a live
- * progress log - shared by /import and /import/from-url, which only differ in the section title,
- * the script args/env, and what they render once the import finishes.
- *
- * Caller must have already written the page head (renderPageHead()) before calling this. On a
- * launch failure (`error` event, e.g. python3 vanishing mid-request), this writes the error
- * block itself, closes out the response (renderPageTail() + res.end()) and resolves false so the
- * caller skips its own post-import render; on a normal close, it only closes the `<section>` and
- * resolves true, leaving the rest of the page (and res.end()) to the caller.
- */
-/**
- * Downloads and imports the repository's configuration pack (a plain `folders/` ZIP, so the
- * whole file, no --only) through runImportScript(), into an already-headed streamed response.
- * Same result: false when the script could not be launched (response already closed).
- */
-function runConfPackImport(res: Response, repository: Extract<RepositoryAccess, {ok: true}>): Promise<boolean> {
-    return runRepositoryPackImport(res, repository, 'Configuration pack', CONF_PACK_FILENAME);
+/** One import's block in a streamed page: its title, progress bar and log. */
+interface ImportBlock {
+    writeLine(line: string): void;
+    progress(phase: 'download' | 'import', done: number, total: number): void;
+    // Closes the block. `ok` paints the bar; left out after a failure that already said so.
+    close(ok: boolean): void;
+    // Closes the block on an import that could not even start, and ends the response.
+    abort(message: string): void;
 }
 
-/** Downloads a whole pack of the repository and imports it, same contract as runConfPackImport(). */
-function runRepositoryPackImport(
-    res: Response, repository: Extract<RepositoryAccess, {ok: true}>, label: string, filename: string,
-): Promise<boolean> {
-    return runImportScript(
-        res,
-        `${label} import in progress… (${escapeHtml(filename)})`,
-        ['--url', `${repository.url}/${filename}`],
-        {...process.env, ...repositoryEnv(repository.headers)},
-    );
-}
-
-function runImportScript(
-    res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
-    overall?: {index: number; total: number}, tabbed = false,
-): Promise<boolean> {
-    const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
+/**
+ * Opens an import's block in an already-`res.writeHead()`'d, already-headed HTML response.
+ * hasDownload: the import has a download phase before its games are imported. Tabbed: one panel
+ * of the tab card opened by renderImportTabsOpen() instead of a card of its own; `overall.index`
+ * is its tab. Panels start hidden, mauiImportTabs.start() shows it.
+ */
+function openImportBlock(
+    res: Response, title: string, hasDownload: boolean, overall?: {index: number; total: number}, tabbed = false,
+): ImportBlock {
     const barId = `import-progress-${++importProgressCounter}`;
-    // A pack downloaded whole (--url alone) spends its first half downloading; a local file, or a
-    // pack read partially (--url with --only), has no such phase.
-    const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
-    // Tabbed: one panel of the tab card opened by renderImportTabsOpen() instead of a card of its
-    // own; `overall.index` is its tab. Panels start hidden, mauiImportTabs.start() shows it.
     const tab = tabbed && overall ? overall.index : null;
     if (tab !== null) {
         res.write(`<div class="import-panel" data-import-panel="${tab}" hidden><h3>${title}</h3>`
@@ -1306,6 +1283,173 @@ function runImportScript(
             + PROGRESS_LOG_OPEN);
     }
     const closeBlock = tab !== null ? '</div>' : '</section>';
+    const updateBar = (call: string): void => {
+        res.write(`<script>mauiImportProgress.${call}</script>`);
+    };
+    // The page is the only place the log shows, and it goes with the tab: keep a copy on the console.
+    console.log(`[boServer] Import: ${title}`);
+    return {
+        writeLine: (line) => {
+            if (line.trim()) {
+                console.log(`[boServer] Import: ${line.trim()}`);
+                res.write(`<li>${escapeHtml(line)}</li>`);
+            }
+        },
+        progress: (phase, done, total) => {
+            updateBar(`update(${JSON.stringify(barId)},${JSON.stringify(phase)},${done},${total})`);
+        },
+        close: (ok) => {
+            updateBar(`finish(${JSON.stringify(barId)},${ok})`);
+            res.write(`</ul>${closeBlock}`);
+            if (tab !== null) {
+                res.write(`<script>mauiImportTabs.finish(${tab},${ok})</script>`);
+            }
+        },
+        abort: (message) => {
+            console.error(`[boServer] Import aborted: ${message}`);
+            res.write(`</ul><p class="error">${escapeHtml(message)}</p>${closeBlock}`);
+            res.write(renderPageTail());
+            res.end();
+        },
+    };
+}
+
+/** How Game/Category rows are written for a pack import (PackImport.ts has no database of its own). */
+const packGameStore: PackGameStore = {
+    async findOrCreateCategory(name) {
+        // The default (paranoid) scope: a soft-deleted category of that name gets a fresh row.
+        const [category, created] = await Category.findOrCreate({where: {name}});
+        return {id: category.id_category, created};
+    },
+    async upsertGame(romName, fields) {
+        // Soft-deleted rows included: the unique constraint still holds their romName.
+        const existing = await Game.findOne({where: {romName}, paranoid: false});
+        if (!existing) {
+            await Game.create({romName, ...fields} as unknown as Game);
+            return;
+        }
+        if (existing.isSoftDeleted()) {
+            await existing.restore();
+        }
+        await existing.update(fields as unknown as Partial<Game>);
+    },
+};
+
+/** Where a pack import writes, resolved from the mame configuration as it is now. */
+function getPackImportTargets(config: Config): PackImportTargets {
+    const mameInfo = getMameInfo(config);
+    const iniPath = mameInfo.iniPath;
+    const {uiIni, categoryDir} = getMameLocations(iniPath);
+    // ui.ini over -showconfig, key by key: the directories ui.ini declares are its own.
+    const resolvedIni: { [key: string]: string[] } = {...(mameInfo.showConfig ?? {}), ...uiIni};
+    return {
+        iniPath,
+        romPath: mameInfo.romPath,
+        marqueePath: mameInfo.marqueePath,
+        flyerPath: mameInfo.flyerPath,
+        logoPath: mameInfo.logoPath,
+        categoryDir,
+        directoryFor: iniKey => ensureFirstDirectory(resolvedIni[iniKey], iniPath),
+        // Unlike MameLocations.favoritesPath, null until mame writes the file: a pack is
+        // importable on a brand new install, which has no favorites.ini at all yet.
+        favoritesPath: () => {
+            const existing = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
+            if (existing) {
+                return existing;
+            }
+            const directory = ensureFirstDirectory(uiIni.ui_path, iniPath);
+            if (!directory) {
+                throw new Error('ui_path not found in ui.ini.');
+            }
+            return join(directory, 'favorites.ini');
+        },
+        romsInfosCachePath: getRomsInfosCachePath(),
+    };
+}
+
+/**
+ * Downloads and imports the repository's configuration pack (a plain `folders/` ZIP, so the
+ * whole file) into an already-headed streamed response. false when the import could not be
+ * launched (response already closed).
+ */
+function runConfPackImport(
+    res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>,
+): Promise<boolean> {
+    return runRepositoryImport(
+        res, config, repository, `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
+    );
+}
+
+/**
+ * Imports a pack of the repository, whole or only the games named in `only`, into an
+ * already-headed streamed response - caller must have written the page head (renderPageHead()).
+ *
+ * In the app (PackImport.ts) when the pack's manifest says where its files are. A manifest
+ * written before the repository did leaves scripts/import-starting-pack.py, which needs python3.
+ *
+ * Resolves false when the import could not be launched: the error is written and the response
+ * closed (renderPageTail() + res.end()), so the caller skips its own post-import render. On a
+ * normal end it only closes the block, leaving the rest of the page (and res.end()) to the caller.
+ */
+async function runRepositoryImport(
+    res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, title: string, filename: string,
+    only?: string[], overall?: {index: number; total: number}, tabbed = false,
+): Promise<boolean> {
+    const url = `${repository.url}/${filename}`;
+    const companion = await fetchRepoManifest(repository.url, filename, repository.headers);
+    let described: boolean;
+    try {
+        described = describePack(companion) !== null;
+    } catch {
+        // A pack the repository could not read: importRepositoryPack() says why, in the block.
+        described = true;
+    }
+    if (!described) {
+        const scriptArgs = ['--url', url, ...(only ? ['--only', only.join(',')] : [])];
+        return runImportScript(res, title, scriptArgs, {...process.env, ...repositoryEnv(repository.headers)}, overall, tabbed);
+    }
+
+    const block = openImportBlock(res, title, true, overall, tabbed);
+    let ok = false;
+    try {
+        ok = await importRepositoryPack({
+            url,
+            headers: repository.headers,
+            companion,
+            only,
+            targets: getPackImportTargets(config),
+            store: packGameStore,
+            reporter: {line: block.writeLine, progress: block.progress},
+        });
+    } catch (error) {
+        block.writeLine(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
+    }
+    block.close(ok);
+    return true;
+}
+
+/**
+ * Spawns `python3 scripts/import-starting-pack.py ...scriptArgs -y`, streaming its stdout/stderr
+ * line-by-line into the import's block as a live progress log. Only for a pack whose manifest
+ * does not describe its files (see runRepositoryImport(), same contract).
+ */
+function runImportScript(
+    res: Response, title: string, scriptArgs: string[], env: NodeJS.ProcessEnv,
+    overall?: {index: number; total: number}, tabbed = false,
+): Promise<boolean> {
+    const scriptPath = join(getScriptsPath(), 'import-starting-pack.py');
+    // A pack downloaded whole (--url alone) spends its first half downloading; a pack read
+    // partially (--url with --only) has no such phase.
+    const hasDownload = scriptArgs.includes('--url') && !scriptArgs.includes('--only');
+    const block = openImportBlock(res, title, hasDownload, overall, tabbed);
+    // A clear error instead of a raw ENOENT from spawn() below - macOS in particular doesn't
+    // always ship a working python3 without Xcode CLT installed.
+    if (!isPython3Available()) {
+        block.writeLine('This pack cannot be imported: the repository does not say where its files are, '
+            + 'and python3 is not on this machine.');
+        block.close(false);
+        return Promise.resolve(true);
+    }
 
     return new Promise(resolve => {
         // -y always: nobody can answer the script's confirmation prompt from here. stdin ignored
@@ -1316,15 +1460,12 @@ function runImportScript(
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
-        const updateBar = (call: string): void => {
-            res.write(`<script>mauiImportProgress.${call}</script>`);
-        };
         const writeLine = (line: string): void => {
             const progress = /^@@PROGRESS (download|import) (\d+) (\d+)$/.exec(line.trim());
             if (progress) {
-                updateBar(`update(${JSON.stringify(barId)},${JSON.stringify(progress[1])},${progress[2]},${progress[3]})`);
-            } else if (line.trim()) {
-                res.write(`<li>${escapeHtml(line)}</li>`);
+                block.progress(progress[1] as 'download' | 'import', Number(progress[2]), Number(progress[3]));
+            } else {
+                block.writeLine(line);
             }
         };
         // child.stdout/stderr 'data' chunks don't align to line boundaries - buffer each stream
@@ -1351,20 +1492,14 @@ function runImportScript(
         child.stderr.on('data', stderrSplitter.push);
 
         child.on('error', (error) => {
-            res.write(`</ul><p class="error">${escapeHtml(`Launch failed: ${error.message}`)}</p>${closeBlock}`);
-            res.write(renderPageTail());
-            res.end();
+            block.abort(`Launch failed: ${error.message}`);
             resolve(false);
         });
 
         child.on('close', (code) => {
             stdoutSplitter.flush();
             stderrSplitter.flush();
-            updateBar(`finish(${JSON.stringify(barId)},${code === 0})`);
-            res.write(`</ul>${closeBlock}`);
-            if (tab !== null) {
-                res.write(`<script>mauiImportTabs.finish(${tab},${code === 0})</script>`);
-            }
+            block.close(code === 0);
             resolve(true);
         });
     });
@@ -8337,25 +8472,18 @@ export function startBoServer(
             ));
             return;
         }
-        if (!isPython3Available()) {
-            res.status(500).send(renderForm(
-                values, mameInfo, isAdvanced, undefined, undefined, undefined,
-                'python3 not found on this machine - unable to import from the repository.',
-            ));
-            return;
-        }
-
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('mame', getViewer(req)));
-        if (!await runConfPackImport(res, repository)) {
+        if (!await runConfPackImport(res, config, repository)) {
             return;
         }
         if (withStarterPack) {
             if (getMissingConfPackFiles(getMameInfo(config)).length) {
                 res.write('<p class="error flash">The configuration pack could not be installed: starter pack not imported.</p>');
             } else {
-                if (!await runRepositoryPackImport(res, repository, 'Starter pack', STARTER_PACK_FILENAME)) {
+                const title = `Starter pack import in progress… (${escapeHtml(STARTER_PACK_FILENAME)})`;
+                if (!await runRepositoryImport(res, config, repository, title, STARTER_PACK_FILENAME)) {
                     return;
                 }
                 streamFavoritesRefreshAfterImport(res, config);
@@ -8400,12 +8528,6 @@ export function startBoServer(
             res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Invalid pack or game name.'}));
             return;
         }
-        // A clear BO-rendered error instead of a raw ENOENT surfacing from spawn() below -
-        // macOS in particular doesn't always ship a working python3 without Xcode CLT installed.
-        if (!isPython3Available()) {
-            res.status(500).send(await renderFavoritesTab(req, {}, {error: 'python3 not found on this machine - unable to import from the repository.'}));
-            return;
-        }
         // Resolved once for the whole import: every pack below comes from the same repository.
         const repository = await resolveRepository();
         if (!repository.ok) {
@@ -8417,13 +8539,11 @@ export function startBoServer(
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('favorites', getViewer(req)));
 
-        // Packs are imported one after the other (one script run each, one progress card each):
-        // the script rewrites favorites.ini and shared category files, so runs must not overlap.
-        // Credentials go through env, never argv, so they don't leak via `ps`/
-        // `/proc/<pid>/cmdline` (see repositoryEnv()).
+        // Packs are imported one after the other (one progress card each): an import rewrites
+        // favorites.ini and shared category files, so they must not overlap.
         // The configuration pack first, every time (see ConfPack.ts): game packs no longer ship
         // the category files, so this keeps them matching the repository's.
-        if (!await runConfPackImport(res, repository)) {
+        if (!await runConfPackImport(res, config, repository)) {
             return;
         }
         if (getMissingConfPackFiles(getMameInfo(config)).length) {
@@ -8440,16 +8560,18 @@ export function startBoServer(
         }
         for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
             const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
-            // --only: just these games are read from the pack (HTTP Range requests, no full download).
-            const started = await runImportScript(
+            // Just these games are read from the pack (HTTP Range requests, no full download).
+            const started = await runRepositoryImport(
                 res,
+                config,
+                repository,
                 `${counter}Import from the repository in progress… (${escapeHtml(packFilename)}, ${romNames.length} game(s))`,
-                ['--url', `${repository.url}/${packFilename}`, '--only', romNames.join(',')],
-                {...process.env, ...repositoryEnv(repository.headers)},
+                packFilename,
+                romNames,
                 {index, total: selection.size},
                 tabbed,
             );
-            // false = launch failure, runImportScript already closed the response.
+            // false = launch failure, the response is already closed.
             if (!started) {
                 return;
             }
