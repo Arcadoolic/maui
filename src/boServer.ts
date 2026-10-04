@@ -1286,9 +1286,12 @@ function openImportBlock(
     const updateBar = (call: string): void => {
         res.write(`<script>mauiImportProgress.${call}</script>`);
     };
+    // The page is the only place the log shows, and it goes with the tab: keep a copy on the console.
+    console.log(`[boServer] Import: ${title}`);
     return {
         writeLine: (line) => {
             if (line.trim()) {
+                console.log(`[boServer] Import: ${line.trim()}`);
                 res.write(`<li>${escapeHtml(line)}</li>`);
             }
         },
@@ -1303,6 +1306,7 @@ function openImportBlock(
             }
         },
         abort: (message) => {
+            console.error(`[boServer] Import aborted: ${message}`);
             res.write(`</ul><p class="error">${escapeHtml(message)}</p>${closeBlock}`);
             res.write(renderPageTail());
             res.end();
