@@ -20,8 +20,8 @@ The project must run on:
   runs it silently to update an installed app, `src/class/WindowsUpdate.ts`) via a
   `windows-latest` job in both `.github/workflows/build.yml` (manual,
   `workflow_dispatch`) and `.github/workflows/release.yml` (attached to
-  every GitHub Release alongside the Linux/macOS artifacts); beyond those
-  jobs passing, this platform is unverified by a real Windows dev environment —
+  every GitHub Release alongside the Linux/macOS artifacts). The packaged `.exe` was confirmed working on a real Windows
+  machine (2026-10-04); the Windows dev environment is still unverified —
   no one has run `just serve`/`just build` there. The sqlite3 native
   rebuild needs the Visual Studio Build Tools (or the deprecated
   `windows-build-tools` npm package — see `docs/COMPILATION.md`); `just
