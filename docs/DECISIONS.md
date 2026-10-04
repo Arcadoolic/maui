@@ -442,3 +442,14 @@ until the app restarted.
 Node's does not care. `MauiApiClient` stored it as `this.fetchImpl` and the
 error looked like an unreachable API, from the cabinet UI only. It now wraps
 the global in an arrow function (test in `MauiApiClient.test.ts`).
+
+**Pack import, 2026-10-04: the installed MAME has the last word on a game.**
+The packs are built from the romset of one MAME version (0.289 today). Checked
+against MAME's own lists, 375 to 377 of their 377 games suit each version from
+0.282 to 0.289: too few differences to keep one repository per version, enough
+to leave a game that will not start in the cabinet's list. Once the files of a
+pack are installed, `mame -verifyroms` checks its games
+(`src/class/MameVerifyRoms.ts`, ~0.05s); a game MAME calls bad or does not know
+is left out of the database, the favorites and the publishers, its own set is
+removed, and the import log says which file is at fault. A MAME that cannot be
+run rejects nothing: the games are imported unchecked, with a warning.

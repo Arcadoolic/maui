@@ -45,6 +45,7 @@ import {
     manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
+import {verifyRoms} from '@/class/MameVerifyRoms';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
@@ -1384,6 +1385,7 @@ async function runRepositoryImport(
     only?: string[], overall?: {index: number; total: number}, tabbed = false,
 ): Promise<void> {
     const block = openImportBlock(res, title, true, overall, tabbed);
+    const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
     let ok = false;
     try {
         ok = await importRepositoryPack({
@@ -1394,6 +1396,9 @@ async function runRepositoryImport(
             targets: getPackImportTargets(config),
             store: packGameStore,
             reporter: {line: block.writeLine, progress: block.progress},
+            verifyRoms: mameBinary && existsSync(mameBinary)
+                ? romNames => verifyRoms(mameBinary, getMameInfo(config).iniPath, romNames)
+                : undefined,
         });
     } catch (error) {
         block.writeLine(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`);

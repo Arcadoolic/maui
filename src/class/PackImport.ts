@@ -5,13 +5,15 @@ import {pipeline} from 'stream/promises';
 import {crc32, createInflateRaw, inflateRawSync} from 'zlib';
 import type {StartingPackFileEntry, StartingPackGameEntry, StartingPackManifest} from '@/types/StartingPackManifest';
 import {getRequiredRoms} from '@/class/PackOwnership';
+import type {RomVerdict} from '@/class/MameVerifyRoms';
 
 /**
  * Import of a pack of the repository. The pack's companion manifest says where each of its files
  * sits in the ZIP (`files`, written by the repository), so the files wanted are fetched with
  * HTTP Range requests and inflated here - no ZIP library, and nothing of the ZIP read beyond
  * those files. scripts/import-starting-pack.py does the same from a local ZIP, by hand, on a
- * machine with python3: the app neither ships nor runs it, and the two must be kept alike.
+ * machine with python3: the app neither ships nor runs it, and the two must be kept alike - but
+ * for the check of the sets by the installed MAME (findIncompatibleGames()), done here only.
  *
  * Electron-free and without a database of its own: where the files go (PackImportTargets) and
  * how a game is saved (PackGameStore) come from the caller, src/boServer.ts.
@@ -63,6 +65,8 @@ export interface PackImportSummary {
     logosWritten: number;
     favoritesAdded: number;
     romsInfosAdded: number;
+    // Games left out: the installed MAME cannot run the set the pack has for them.
+    incompatibleGames: string[];
     categoriesCreated: string[];
     directoriesImported: {zipFolder: string; filesWritten: number}[];
     warnings: string[];
@@ -120,6 +124,9 @@ export interface PackImportOptions {
     targets: PackImportTargets;
     store: PackGameStore;
     reporter: PackImportReporter;
+    // The installed MAME's verdict on sets now in the rompath (MameVerifyRoms.verifyRoms()); null
+    // when it could not be asked. Absent = no check, every game of the pack is imported.
+    verifyRoms?: (romNames: string[]) => Promise<ReadonlyMap<string, RomVerdict> | null>;
     fetchImpl?: typeof fetch;
 }
 
@@ -179,7 +186,7 @@ export function humanSize(bytes: number): string {
 function defaultSummary(): PackImportSummary {
     return {
         gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0, flyersWritten: 0,
-        logosWritten: 0, favoritesAdded: 0, romsInfosAdded: 0, categoriesCreated: [], directoriesImported: [],
+        logosWritten: 0, favoritesAdded: 0, romsInfosAdded: 0, incompatibleGames: [], categoriesCreated: [], directoriesImported: [],
         warnings: [], errors: [],
     };
 }
@@ -569,6 +576,45 @@ export function addGamesToRomsInfos(
     summary.romsInfosAdded += added;
 }
 
+const MAX_PROBLEMS_SHOWN = 3;
+
+/**
+ * The games the installed MAME cannot run with the sets just installed, each with the reason: a
+ * pack is built from the romset of one MAME version, and a set can differ in another. Such a game
+ * is left out of the database, the favorites and the publishers. A set MAME says nothing of is
+ * kept: only a verdict rejects.
+ */
+async function findIncompatibleGames(
+    games: readonly StartingPackGameEntry[], options: PackImportOptions, summary: PackImportSummary,
+): Promise<Map<string, string>> {
+    const rejected = new Map<string, string>();
+    const romNames = games.filter(game => game.hasRomFile).map(game => game.romName);
+    if (!options.verifyRoms || !romNames.length) {
+        return rejected;
+    }
+    let verdicts: ReadonlyMap<string, RomVerdict> | null = null;
+    try {
+        verdicts = await options.verifyRoms(romNames);
+    } catch {
+        // Reported below, like a MAME that could not be run.
+    }
+    if (!verdicts) {
+        summary.warnings.push('The installed MAME could not check the roms: games imported unchecked.');
+        return rejected;
+    }
+    for (const romName of romNames) {
+        const verdict = verdicts.get(romName);
+        if (verdict?.status === 'unknown') {
+            rejected.set(romName, 'it does not know this game');
+        } else if (verdict?.status === 'bad') {
+            const more = verdict.problems.length - MAX_PROBLEMS_SHOWN;
+            rejected.set(romName, verdict.problems.slice(0, MAX_PROBLEMS_SHOWN).join('; ')
+                + (more > 0 ? `; and ${more} more` : '') || 'bad romset');
+        }
+    }
+    return rejected;
+}
+
 async function importGames(
     manifest: StartingPackManifest, results: ReadonlyMap<string, string | null>, options: PackImportOptions,
     summary: PackImportSummary,
@@ -597,9 +643,20 @@ async function importGames(
 
     const categoryIds = new Map<string, number>();
     const games = manifest.games;
+    const incompatible = await findIncompatibleGames(games, options, summary);
     reporter.progress('import', 0, games.length);
     for (const [index, game] of games.entries()) {
         const romName = game.romName;
+        if (incompatible.has(romName)) {
+            // Its set goes too, when this import wrote it: left there, the pack would show the game as owned.
+            if (targets.romPath && results.get(`roms/${romName}.zip`) === null) {
+                rmSync(resolve(targets.romPath, `${romName}.zip`), {force: true});
+            }
+            summary.incompatibleGames.push(romName);
+            reporter.line(`  ${romName}: not imported, the installed MAME cannot run it (${incompatible.get(romName)}).`);
+            reporter.progress('import', index + 1, games.length);
+            continue;
+        }
         try {
             let categoryId: number | null = null;
             if (game.categoryName) {
@@ -652,8 +709,9 @@ async function importGames(
         reporter.progress('import', index + 1, games.length);
     }
 
-    addGamesToFavorites(targets.favoritesPath(), games, summary);
-    addGamesToRomsInfos(targets.romsInfosCachePath, games, manifest.generatedAt, summary);
+    const imported = games.filter(game => !incompatible.has(game.romName));
+    addGamesToFavorites(targets.favoritesPath(), imported, summary);
+    addGamesToRomsInfos(targets.romsInfosCachePath, imported, manifest.generatedAt, summary);
 }
 
 function reportSummary(summary: PackImportSummary, say: (text: string) => void): void {
@@ -667,6 +725,7 @@ function reportSummary(summary: PackImportSummary, say: (text: string) => void):
         `${summary.favoritesAdded} favorite(s) added`,
         `${summary.romsInfosAdded} publisher(s) recorded`,
         `${summary.errors.length} error(s)`,
+        ...(summary.incompatibleGames.length ? [`${summary.incompatibleGames.length} game(s) not compatible with the installed MAME`] : []),
     ].join(' — '));
     if (summary.categoriesCreated.length) {
         say(`Categories created: ${summary.categoriesCreated.join(', ')}`);
