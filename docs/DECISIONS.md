@@ -453,3 +453,16 @@ pack are installed, `mame -verifyroms` checks its games
 is left out of the database, the favorites and the publishers, its own set is
 removed, and the import log says which file is at fault. A MAME that cannot be
 run rejects nothing: the games are imported unchecked, with a warning.
+
+**Pack list, 2026-10-04: a game the installed MAME cannot run is not offered.**
+The repository's manifest says what each rom zip of a pack holds (`romsets`,
+CRC and size per file, written by maui-repository's generator), and
+`mame -listxml` what the installed MAME expects for the pack's games: comparing
+the two (`src/class/RomsetCompatibility.ts`) tells, before anything is
+downloaded, which games suit it. The pack list shows such a game greyed out,
+without a checkbox, with the ROM at fault; the import checks again and does not
+fetch it, whatever the form sent. So no MAME version is required of a cabinet,
+and the repository is not split by version. Only the sets of the pack are
+looked at, not those already on the cabinet. `mame -verifyroms` after the
+import stays as the safety net, and is the only check for a manifest without
+`romsets`.

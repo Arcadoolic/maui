@@ -198,6 +198,38 @@ describe('importRepositoryPack', () => {
         expect(progress.at(-1)).toBe('import 2/2');
     });
 
+    it('does not fetch the game the manifest already tells the installed MAME cannot run', async () => {
+        const pack = starterPack();
+        const log: string[] = [];
+        const verified: string[][] = [];
+
+        const ok = await run(pack, {
+            fetchImpl: rangeServer(pack.file, log),
+            precheckGames: async () => new Map([['alpha', 'the pack lacks alpha/a.bin']]),
+            verifyRoms: async (romNames) => {
+                verified.push(romNames);
+                return new Map();
+            },
+        });
+
+        expect(ok).toBe(true);
+        expect(lines).toContain('  alpha: not fetched, the installed MAME cannot run it (the pack lacks alpha/a.bin).');
+        // Neither its files nor the BIOS and samples only it needed.
+        expect(readdirSync(join(home, 'roms'))).toEqual(['beta.zip']);
+        expect(readdirSync(join(home, 'marquees'))).toEqual(['beta.png']);
+        expect(readdirSync(join(home, 'samples'))).toEqual([]);
+        expect([...games.keys()]).toEqual(['beta']);
+        expect(readFileSync(join(home, 'ui', 'favorites.ini'), 'utf8')).not.toContain('alpha');
+        expect(verified).toEqual([['beta']]);
+        expect(lines.some(line => line.endsWith('1 game(s) not compatible with the installed MAME'))).toBe(true);
+    });
+
+    it('imports every game when the manifest cannot tell', async () => {
+        expect(await run(starterPack(), {precheckGames: async () => null})).toBe(true);
+
+        expect([...games.keys()]).toEqual(['alpha', 'beta']);
+    });
+
     it('leaves out a game the installed MAME does not know', async () => {
         const ok = await run(starterPack(), {verifyRoms: async () => new Map<string, RomVerdict>([['alpha', {status: 'unknown'}]])});
 

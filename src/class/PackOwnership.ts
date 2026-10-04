@@ -72,6 +72,9 @@ export interface PackGameDetail {
     // installed: its rom zip is already here; new: it is not; no-rom: the game ships no rom file
     // of its own (nothing to compare).
     status: 'installed' | 'new' | 'no-rom';
+    // Why the installed MAME cannot run it with the sets of this pack
+    // (RomsetCompatibility.findIncompatibleGames()); absent when it can, or when nothing tells.
+    incompatibility?: string;
 }
 
 /**
