@@ -46,7 +46,8 @@ export default class UserService {
      * otherwise stay invisible to getUserByPseudo3() - and to HiscoreService, which reads
      * that cache to attribute a saved score - until the next app restart.
      * A newly created user also gets a generated default avatar (see DefaultAvatar.ts). A pseudo
-     * held by a deleted player is refused: `created` false and `reserved` true.
+     * held by a deleted player is refused: `created` false and `reserved` true, unless `online`
+     * is the MAUI-API player that deleted player was linked to, who is then restored.
      * A player registered here (from the cabinet itself) is active straight away; an existing
      * player found by findOrCreate keeps whatever status the BO gave them.
      */
@@ -58,7 +59,15 @@ export default class UserService {
         // reads that cache to attribute scores, and a deleted player must not receive any.
         const deleted = await findDeletedUser(pseudo3);
         if (deleted) {
-            return {user: deleted, created: false, reserved: true};
+            // The one way back without an administrator: the same MAUI-API player, whose PIN was
+            // just checked (see isDeletedOnlinePlayer()). They return active, scores included.
+            if (!online || !deleted.remote_id || deleted.remote_id !== online.id) {
+                return {user: deleted, created: false, reserved: true};
+            }
+            await deleted.restore();
+            await deleted.update({active: true, ...onlineFields(online)});
+            this.users3[deleted.pseudo_3] = deleted;
+            return {user: deleted, created: false, reserved: false};
         }
         const remote = online ? onlineFields(online) : {};
         const [user, created] = await User.findOrCreate({where: {pseudo_3: pseudo3}, defaults: {active: true, ...remote}});
@@ -85,6 +94,14 @@ export default class UserService {
     /** Initials held by a local player, live or deleted (a deleted one keeps them reserved). */
     public async isPseudoUsedLocally(pseudo3: string): Promise<boolean> {
         return !!(this.users3[pseudo3] || await User.findOne({where: {pseudo_3: pseudo3}, paranoid: false}));
+    }
+
+    /**
+     * Whether a deleted player linked to MAUI-API holds these initials: their PIN brings them back
+     * from the cabinet (registerUser()). A deleted local-only player stays an administrator's call.
+     */
+    public async isDeletedOnlinePlayer(pseudo3: string): Promise<boolean> {
+        return !!(await findDeletedUser(pseudo3))?.remote_id;
     }
 
     public getAvatars(): string[] {
