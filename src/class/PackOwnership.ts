@@ -75,12 +75,39 @@ export interface PackGameDetail {
 }
 
 /**
+ * Uncompressed size of each entry of a pack's ZIP, from the `files` of its companion manifest:
+ * nothing to ask the ZIP itself. null when the manifest has none (written before the repository
+ * described the ZIP, or for a ZIP it cannot describe), holds an entry that makes no sense, or
+ * describes a ZIP of another size than the one the repository lists (`zipSize`, index.json's): the
+ * pack was re-published and its manifest not regenerated yet.
+ */
+export function manifestEntrySizes(
+    manifest: Partial<StartingPackManifest> | null | undefined, zipSize?: number,
+): Map<string, number> | null {
+    if (!manifest || !Array.isArray(manifest.files)) {
+        return null;
+    }
+    if (zipSize !== undefined && manifest.zip?.size !== zipSize) {
+        return null;
+    }
+    const sizes = new Map<string, number>();
+    for (const file of manifest.files) {
+        if (typeof file?.name !== 'string' || !Number.isSafeInteger(file.size) || file.size < 0) {
+            return null;
+        }
+        sizes.set(file.name, file.size);
+    }
+    return sizes;
+}
+
+/**
  * The games of a pack, sorted by name, each flagged against the installed roms (same rule as
  * computePackOwnership()) and sized. Empty for a manifest that cannot be read.
  *
- * entrySizes: uncompressed size of each entry of the pack's ZIP (ZipCentralDirectory.ts). Without
- * it (server without range support, ZIP64...), `fallbackPackSize` is spread evenly over the
- * games: a rough figure, but better than pretending a game takes no room.
+ * entrySizes: uncompressed size of each entry of the pack's ZIP (manifestEntrySizes(), or
+ * ZipCentralDirectory.ts for a manifest without `files`). Without it (server without range
+ * support, ZIP64...), `fallbackPackSize` is spread evenly over the games: a rough figure, but
+ * better than pretending a game takes no room.
  */
 export function listPackGames(
     manifest: Partial<StartingPackManifest> | null | undefined, installedRomNames: readonly string[],
