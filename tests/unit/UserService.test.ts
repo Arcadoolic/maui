@@ -72,6 +72,39 @@ describe('UserService.registerUser', () => {
         expect(service.getUserByPseudo3('DEL')).toBeUndefined();
     });
 
+    it('restores a deleted player for the MAUI-API player they were linked to', async () => {
+        const calls: string[] = [];
+        const deleted = {
+            pseudo_3: 'DEL', deletionDate: new Date(), remote_id: 'uuid-1',
+            restore: () => { calls.push('restore'); return Promise.resolve(); },
+            update: (values: {active?: boolean; remote_id?: string}) => {
+                calls.push(`update active=${values.active} remote_id=${values.remote_id}`);
+                return Promise.resolve();
+            },
+        };
+        stubFindOne(deleted);
+
+        const result = await service.registerUser('DEL', {
+            id: 'uuid-1', pseudo3: 'DEL', isPublic: false, status: 'active', isOrigin: false, avatar: null,
+        });
+
+        expect(result).toEqual({user: deleted, created: false, reserved: false});
+        expect(calls).toEqual(['restore', 'update active=true remote_id=uuid-1']);
+        expect(service.getUserByPseudo3('DEL')).toBe(deleted);
+    });
+
+    it('keeps a deleted player reserved for another MAUI-API player, or a local-only one', async () => {
+        const online = {id: 'uuid-2', pseudo3: 'DEL', isPublic: false, status: 'active' as const, isOrigin: false, avatar: null};
+
+        stubFindOne({pseudo_3: 'DEL', deletionDate: new Date(), remote_id: 'uuid-1'});
+        expect((await service.registerUser('DEL', online)).reserved).toBe(true);
+
+        stubFindOne({pseudo_3: 'DEL', deletionDate: new Date(), remote_id: null});
+        expect((await service.registerUser('DEL', online)).reserved).toBe(true);
+        expect(await service.isDeletedOnlinePlayer('DEL')).toBe(false);
+        expect(service.getUserByPseudo3('DEL')).toBeUndefined();
+    });
+
     it('does not treat a live player as reserved', async () => {
         stubFindOne({pseudo_3: 'LIV', deletionDate: null});
         const live = {pseudo_3: 'LIV'};

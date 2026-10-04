@@ -17,7 +17,8 @@
             </div>
         </div>
         <div class="user-registration" v-else-if="step === 'pin'">
-            <p>{{usernameString}} already plays on another cabinet. Enter their PIN to play with them here.</p>
+            <p v-if="returning">{{usernameString}} was removed from this cabinet. Enter their PIN to play with them here again.</p>
+            <p v-else>{{usernameString}} already plays on another cabinet. Enter their PIN to play with them here.</p>
             <div class="letters pin">
                 <div v-for="(digit, index) in pin" :key="index" :class="{selected: selectedDigit === index}">
                     <span>{{digit}}</span>
@@ -94,6 +95,8 @@
     const pin = ref([0, 0, 0, 0]);
     const selectedDigit = ref(0);
     const shownPin = ref('');
+    // The PIN is asked for a player deleted from this cabinet, not for one of another cabinet.
+    const returning = ref(false);
 
     const usernameString = computed(() => username.value[0] + username.value[1] + username.value[2]);
 
@@ -124,7 +127,13 @@
         }
     }
 
-    const saveOnlineUser = (player: OnlinePlayer) => getUserService().saveOnlineUser(player);
+    async function saveOnlineUser(player: OnlinePlayer) {
+        const saved = await getUserService().saveOnlineUser(player);
+        if (saved.reserved) {
+            throw new Error('Player name reserved on this cabinet: ask its administrator.');
+        }
+        return saved;
+    }
 
     function apply(outcome: RegistrationOutcome) {
         switch (outcome.kind) {
@@ -154,11 +163,19 @@
             errorMessage.value = pseudo3Error;
             return;
         }
+        const client = await createOnlineClient();
         if (await userService.isPseudoUsedLocally(usernameString.value)) {
-            errorMessage.value = 'Player name already used';
+            // A deleted player of MAUI-API comes back with their PIN; never through createPlayer(),
+            // which would hand their scores to whoever takes initials freed upstream.
+            if (client && await userService.isDeletedOnlinePlayer(usernameString.value)) {
+                returning.value = true;
+                apply({kind: 'pin_required'});
+            } else {
+                errorMessage.value = 'Player name already used';
+            }
             return;
         }
-        const client = await createOnlineClient();
+        returning.value = false;
         if (!client) {
             const {created} = await userService.registerUser(usernameString.value);
             if (created) {
