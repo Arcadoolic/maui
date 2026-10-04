@@ -84,4 +84,9 @@ export interface StartingPackManifest {
     // ZIP holds an entry that cannot be read this way.
     zip?: StartingPackZipInfo;
     files?: StartingPackFileEntry[];
+    // Companion only too: what each roms/<set>.zip of the pack holds, by set name - one
+    // "<crc32, 8 lowercase hex digits>:<size>" per file, sorted. Compared with what the installed
+    // MAME expects (`mame -listxml`), it tells whether a game suits it before anything is
+    // downloaded (RomsetCompatibility.ts). A set that could not be read is absent.
+    romsets?: Record<string, string[]>;
 }

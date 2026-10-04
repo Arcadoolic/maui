@@ -46,6 +46,7 @@ import {
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
+import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
@@ -1396,6 +1397,7 @@ async function runRepositoryImport(
             targets: getPackImportTargets(config),
             store: packGameStore,
             reporter: {line: block.writeLine, progress: block.progress},
+            precheckGames: async manifest => (await findPacksIncompatibleGames(config, [manifest]))[0],
             verifyRoms: mameBinary && existsSync(mameBinary)
                 ? romNames => verifyRoms(mameBinary, getMameInfo(config).iniPath, romNames)
                 : undefined,
@@ -2584,6 +2586,13 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .pack-status-update {
             color: #f8eb48;
+        }
+        .pack-status-incompatible,
+        .pack-game-incompatible .pack-game-mark {
+            color: var(--danger);
+        }
+        .pack-game-incompatible {
+            opacity: 0.6;
         }
         .pack-swatch {
             display: inline-block;
@@ -6511,6 +6520,25 @@ async function fetchRepoManifest(
     }
 }
 
+/**
+ * The games of `manifests` the installed MAME cannot run with the sets of their pack, by game then
+ * reason, one map per manifest; null for a manifest that does not describe its sets, and for all
+ * when MAME cannot be asked. One `mame -listxml` for all the games: nothing is downloaded.
+ */
+async function findPacksIncompatibleGames(
+    config: Config, manifests: readonly (StartingPackManifest | null)[],
+): Promise<(Map<string, string> | null)[]> {
+    const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
+    const described = manifests.filter(manifest => manifest?.romsets && Array.isArray(manifest.games)) as StartingPackManifest[];
+    if (!described.length || !mameBinary || !existsSync(mameBinary)) {
+        return manifests.map(() => null);
+    }
+    const romNames = [...new Set(described.flatMap(manifest => manifest.games.map(game => game.romName)))]
+        .filter(romName => /^[\w.-]+$/.test(romName));
+    const machines = await listMachines(mameBinary, getMameInfo(config).iniPath, romNames);
+    return manifests.map(manifest => (machines ? findIncompatibleGames(manifest, machines) : null));
+}
+
 const MISSING_GAMES_SHOWN = 4;
 
 function renderPackOwnership(ownership: PackOwnership | undefined): string {
@@ -6529,6 +6557,14 @@ function renderPackOwnership(ownership: PackOwnership | undefined): string {
         ? ` and ${ownership.missing.length - MISSING_GAMES_SHOWN} more` : '';
     return `<span class="pack-status pack-status-update">Update available: ${ownership.missing.length} new game(s)
         (${ownership.owned}/${ownership.total} roms installed) - ${shown}${more}</span>`;
+}
+
+/** How many games of a pack are not offered because the installed MAME cannot run them. */
+function renderPackIncompatible(pack: RepoPack): string {
+    const count = (pack.games ?? []).filter(game => game.incompatibility && game.status !== 'installed').length;
+    return count
+        ? `<span class="pack-status pack-status-incompatible">${count} game(s) not compatible with the installed MAME</span>`
+        : '';
 }
 
 const PACK_GAME_MARKS: {[status in PackGameDetail['status']]: {mark: string; title: string}} = {
@@ -6567,6 +6603,16 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
             decodeXmlEntities(game.fullname), game.romName, game.manufacturer && decodeXmlEntities(game.manufacturer),
             game.publisher, game.categoryName, game.year,
         ].filter(Boolean).join(' '));
+        if (game.incompatibility && game.status !== 'installed') {
+            // Not offered at all: the import would refuse it anyway (PackImport's precheckGames).
+            return `
+                <li class="pack-game pack-game-incompatible" data-search="${search}" data-hi="${hasHi ? '1' : '0'}"
+                    title="${escapeHtml(`The installed MAME cannot run it: ${game.incompatibility}.`)}">
+                    <span class="pack-game-mark">✕</span>
+                    <span>${label}<span class="checkbox-row-detail">Not compatible with the installed MAME</span></span>
+                </li>
+            `;
+        }
         if (game.status === 'installed' || fullyOwned) {
             return `
                 <li class="${classes}" data-search="${search}" data-hi="${hasHi ? '1' : '0'}">
@@ -6620,7 +6666,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 <span>${escapeHtml(pack.filename)}<span class="checkbox-row-detail">${escapeHtml(details)}</span>
                     ${unavailable
                         ? '<span class="pack-status">Manifest unavailable - its games cannot be listed</span>'
-                        : renderPackOwnership(pack.ownership)}</span>
+                        : renderPackOwnership(pack.ownership) + renderPackIncompatible(pack)}</span>
             </label>
             ${renderPackGames(pack, owned)}
             </div>
@@ -8304,14 +8350,19 @@ export function startBoServer(
             // The configuration pack has its own card (see renderConfPackCard()).
             const packs = (data.packs ?? []).filter(pack => isGamePack(pack.filename));
             const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
-            await Promise.all(packs.map(async pack => {
-                const manifest = await fetchRepoManifest(repository.url, pack.filename, repository.headers);
+            const manifests = await Promise.all(
+                packs.map(pack => fetchRepoManifest(repository.url, pack.filename, repository.headers)),
+            );
+            const incompatible = await findPacksIncompatibleGames(config, manifests);
+            packs.forEach((pack, index) => {
+                const manifest = manifests[index];
                 // Per-game sizes for the disk bar: the manifest lists them, unless it is out of date.
                 const entrySizes = manifestEntrySizes(manifest, pack.size);
                 pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
-                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
+                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size)
+                    .map(game => ({...game, incompatibility: incompatible[index]?.get(game.romName)}));
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
-            }));
+            });
             res.send(await renderFavoritesTab(req, {}, {packs, url: repository.url}));
         } catch (error) {
             const message = error instanceof Error ? error.message : 'unexpected error';

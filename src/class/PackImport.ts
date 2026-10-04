@@ -127,6 +127,10 @@ export interface PackImportOptions {
     // The installed MAME's verdict on sets now in the rompath (MameVerifyRoms.verifyRoms()); null
     // when it could not be asked. Absent = no check, every game of the pack is imported.
     verifyRoms?: (romNames: string[]) => Promise<ReadonlyMap<string, RomVerdict> | null>;
+    // The games of the pack the installed MAME cannot run with the sets the pack ships, each with
+    // the reason, told from the manifest (RomsetCompatibility.findIncompatibleGames()); null when
+    // it cannot be told. They are not fetched at all. Absent = no such check.
+    precheckGames?: (manifest: StartingPackManifest) => Promise<ReadonlyMap<string, string> | null>;
     fetchImpl?: typeof fetch;
 }
 
@@ -779,6 +783,21 @@ export async function importRepositoryPack(options: PackImportOptions): Promise<
         if (manifest && only) {
             manifest = selectGames(manifest, only, summary);
             entryFilter = wantedEntries(manifest);
+        }
+        if (manifest && options.precheckGames) {
+            // Whatever the page offered: what is ticked is checked again here, before any download.
+            const rejected = await options.precheckGames(manifest).catch(() => null);
+            const refused = manifest.games.filter(game => rejected?.has(game.romName));
+            if (refused.length) {
+                for (const {romName} of refused) {
+                    summary.incompatibleGames.push(romName);
+                    reporter.line(`  ${romName}: not fetched, the installed MAME cannot run it (${rejected?.get(romName)}).`);
+                }
+                manifest = selectGames(
+                    manifest, manifest.games.filter(game => !rejected?.has(game.romName)).map(game => game.romName), summary,
+                );
+                entryFilter = wantedEntries(manifest);
+            }
         }
 
         const plan: PlannedFile[] = [];
