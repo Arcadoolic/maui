@@ -61,7 +61,7 @@ export function parseFavorites(fileContent: string): string[] {
 }
 
 // One machine entry in mame's own favorites.ini layout: 16 lines, the rom name on lines 1 and 8
-// (same layout scripts/import-starting-pack.py's favorite_entry() writes).
+// (same layout PackImport.ts's favoriteEntry() writes).
 const FAVORITE_ENTRY_LINES = 16;
 const FAVORITE_ENTRY_ROM_NAME_OFFSET = 7;
 

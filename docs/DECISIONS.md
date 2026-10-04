@@ -385,9 +385,7 @@ malicious URL would receive the token. The URL is asked for before each
 repository action, without cache, so a change on the server applies at once.
 It must be `https:`, or `http:` only when the API itself is (local
 development), and repository requests never follow redirects (`redirect:
-'error'` in Node, a refusing redirect handler in
-`scripts/import-starting-pack.py`, which gets the credentials through its
-environment, never argv). Without ONLINE on, nothing downloads from the
+'error'`). Without ONLINE on, nothing downloads from the
 repository: no Games > Repository subtab, no configuration pack or starter
 pack download button, and `/import/from-url/packs`, `/import/from-url`,
 `/import/conf-pack` and `/import/starter-pack` answer 403 (an Advanced
@@ -397,7 +395,9 @@ Advanced-only, and installs the configuration pack first.
 There is no manual starting-pack import anymore (2026-09-27): MAME experts
 set the emulator up themselves, everyone else turns ONLINE on; OFFLINE, the
 Import cards only say so. `scripts/import-starting-pack.py` still imports a
-local ZIP when run by hand. `repoUrl`,
+local ZIP when run by hand, on a machine with python3; the app neither ships
+nor runs it since the import moved into the app (`src/class/PackImport.ts`),
+so a cabinet needs no python3. `repoUrl`,
 `repoUser` and `repoPassword` are gone from `Config`: older files load, and
 the keys disappear at the next save. Cabinets not updated lose repository
 access when the old Basic Auth domain is removed.

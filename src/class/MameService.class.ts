@@ -154,7 +154,7 @@ export default class MameService {
     /**
      * Path to genre.ini inside ui.ini's categorypath directory - the game categorization
      * dataset matching the installed mame version. Optional, like marquees/flyers/logos: null
-     * until a starting pack import installs it (see scripts/import-starting-pack.py); callers
+     * until a starting pack import installs it (see PackImport.ts); callers
      * (GameService.getGameCategories()) treat a missing file as "no categories" rather than
      * failing, which is how the UI falls back to a flat game list (see Home.vue).
      */

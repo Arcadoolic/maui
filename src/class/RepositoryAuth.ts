@@ -91,15 +91,6 @@ export async function resolveRepository(deps: RepositoryDeps = {}): Promise<Repo
     };
 }
 
-// For scripts/import-starting-pack.py: through its environment, never argv (`ps` would show it).
-export function repositoryEnv(headers: RepositoryHeaders): Record<string, string> {
-    return {
-        MAUI_REPO_KEY: headers['X-Maui-Key'],
-        MAUI_REPO_TOKEN: headers.Authorization.replace(/^Bearer /, ''),
-        MAUI_REPO_MACHINE: headers['X-Maui-Machine'],
-    };
-}
-
 export function describeRepositoryFailure(
     access: Extract<RepositoryAccess, {ok: false}>, apiUrl: string = readSettings(getOnlineSettingsPath())?.url ?? '',
 ): string {

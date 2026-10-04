@@ -104,10 +104,9 @@ export function manifestEntrySizes(
  * The games of a pack, sorted by name, each flagged against the installed roms (same rule as
  * computePackOwnership()) and sized. Empty for a manifest that cannot be read.
  *
- * entrySizes: uncompressed size of each entry of the pack's ZIP (manifestEntrySizes(), or
- * ZipCentralDirectory.ts for a manifest without `files`). Without it (server without range
- * support, ZIP64...), `fallbackPackSize` is spread evenly over the games: a rough figure, but
- * better than pretending a game takes no room.
+ * entrySizes: uncompressed size of each entry of the pack's ZIP (manifestEntrySizes()). Without
+ * it (a manifest without `files`, or out of date), `fallbackPackSize` is spread evenly over the
+ * games: a rough figure, but better than pretending a game takes no room.
  */
 export function listPackGames(
     manifest: Partial<StartingPackManifest> | null | undefined, installedRomNames: readonly string[],

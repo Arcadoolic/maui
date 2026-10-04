@@ -2,11 +2,10 @@
 """Import a MAUI starting pack ZIP (built by the starting pack tooling, which lives outside this
 repository).
 
-The single implementation for starting-pack import: the BO's repository routes
-(src/boServer.ts: the configuration pack, the starter pack and `/import/from-url`) spawn this
-script rather than importing in-process, and it can also be run standalone on a local ZIP (e.g.
-over SSH, directly on the machine hosting the MAME home) with no BO involved at all - the only
-way left to import a pack without ONLINE mode. Reads the ZIP as a
+A hand tool: run standalone on a local ZIP (e.g. over SSH, directly on the machine hosting the
+MAME home), with no BO involved at all - the only way left to import a pack without ONLINE mode.
+The app neither ships nor runs it: the BO imports the repository's packs in-process
+(src/class/PackImport.ts), which a change to the import here must be mirrored in. Reads the ZIP as a
 stream: `zipfile` only loads the central directory (a few KB) into memory, and every
 rom/marquee/flyer/logo/config file is copied one entry at a time via shutil.copyfileobj - memory
 use stays flat regardless of the pack's total size, and `zipfile` handles ZIP64 archives (>4 GiB
