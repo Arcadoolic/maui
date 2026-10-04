@@ -45,6 +45,30 @@ export interface StartingPackGameEntry {
     hasLogo?: boolean;
 }
 
+// Where one file of the pack sits in the ZIP: enough to pull it out with a single HTTP Range
+// request (`offset` to `offset + compressedSize - 1`) and zlib, without reading the ZIP's
+// central directory.
+export interface StartingPackFileEntry {
+    // Path inside the ZIP, e.g. "roms/sf2.zip".
+    name: string;
+    // Position of the entry's data in the ZIP, past its local header.
+    offset: number;
+    compressedSize: number;
+    size: number;
+    // ZIP compression method: 0 stored, 8 deflate (raw, no zlib header).
+    method: 0 | 8;
+    // CRC-32 of the uncompressed data, to check once extracted.
+    crc32: number;
+}
+
+// The ZIP the `files` positions were read from: a ZIP of another size or date has been
+// re-published since, and its positions can no longer be trusted.
+export interface StartingPackZipInfo {
+    size: number;
+    // Unix seconds, same value as index.json's `mtime`.
+    mtime: number;
+}
+
 export interface StartingPackManifest {
     formatVersion: 1;
     generatedAt: string;
@@ -54,4 +78,10 @@ export interface StartingPackManifest {
     biosRoms: string[];
     // Deduplicated sampleSet names bundled under samples/ - absent from packs built before.
     sampleSets?: string[];
+    // Only in the companion <pack>.manifest.json the repository serves next to the ZIP, added
+    // there by generate-repo-manifests.py - never in the ZIP's own manifest.json, which cannot
+    // know where the ZIP's entries end up. Absent from a companion generated before, or when the
+    // ZIP holds an entry that cannot be read this way.
+    zip?: StartingPackZipInfo;
+    files?: StartingPackFileEntry[];
 }

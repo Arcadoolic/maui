@@ -2,6 +2,7 @@ import {describe, it, expect} from 'vitest';
 import type {StartingPackManifest, StartingPackGameEntry} from '@/types/StartingPackManifest';
 import {
     computeBiosSizes, computePackOwnership, getRequiredRoms, groupSelectedGames, isPackFullyOwned, listPackGames,
+    manifestEntrySizes,
 } from '@/class/PackOwnership';
 
 const game = (romName: string, fullname: string, hasRomFile = true) => ({
@@ -176,5 +177,39 @@ describe('groupSelectedGames', () => {
 
     it('refuses anything that is not a string', () => {
         expect(groupSelectedGames([{pack: 'a-pack.zip'}])).toBeNull();
+    });
+});
+
+describe('manifestEntrySizes', () => {
+    const file = (name: string, size: number) => ({name, offset: 0, compressedSize: size, size, method: 0 as const, crc32: 0});
+    const described = {
+        ...manifest([game('dkong', 'Donkey Kong')]),
+        zip: {size: 5000, mtime: 1790440985},
+        files: [file('roms/dkong.zip', 4000), file('flyers/dkong.png', 900)],
+    };
+
+    it('gives the size of each entry the manifest lists', () => {
+        expect([...(manifestEntrySizes(described, 5000) ?? [])]).toEqual([['roms/dkong.zip', 4000], ['flyers/dkong.png', 900]]);
+    });
+
+    it('feeds the per-game sizes without a look at the ZIP', () => {
+        const pack = {...described, games: [{...game('dkong', 'Donkey Kong'), hasFlyer: true}]};
+
+        expect(listPackGames(pack, [], manifestEntrySizes(pack, 5000))[0]?.size).toBe(4900);
+    });
+
+    it('is null for a manifest written before the repository listed the files', () => {
+        expect(manifestEntrySizes(manifest([]), 5000)).toBeNull();
+        expect(manifestEntrySizes(null, 5000)).toBeNull();
+    });
+
+    it('is null when the pack was re-published since the manifest was written', () => {
+        expect(manifestEntrySizes(described, 6000)).toBeNull();
+        expect(manifestEntrySizes({...described, zip: undefined}, 5000)).toBeNull();
+    });
+
+    it('is null when an entry makes no sense', () => {
+        expect(manifestEntrySizes({...described, files: [file('roms/dkong.zip', -1)]}, 5000)).toBeNull();
+        expect(manifestEntrySizes({...described, files: [{size: 10}] as never}, 5000)).toBeNull();
     });
 });

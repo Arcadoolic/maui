@@ -42,7 +42,7 @@ import {
 } from '@/class/FavoritesStore';
 import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
-    PackOwnership,
+    manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
 import {fetchRemoteZipEntrySizes} from '@/class/ZipCentralDirectory';
 import {decodeXmlEntities} from '@/class/XmlEntities';
@@ -8298,14 +8298,14 @@ export function startBoServer(
             const packs = (data.packs ?? []).filter(pack => isGamePack(pack.filename));
             const installedRoms = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
             await Promise.all(packs.map(async pack => {
-                const [manifest, entrySizes] = await Promise.all([
-                    fetchRepoManifest(repository.url, pack.filename, repository.headers),
-                    // Per-game sizes for the disk bar, from the ZIP's central directory alone
-                    // (two small range requests) - null if the server cannot do ranges.
-                    /^[\w.-]+\.zip$/.test(pack.filename)
-                        ? fetchRemoteZipEntrySizes(`${repository.url}/${pack.filename}`, repository.headers)
-                        : Promise.resolve(null),
-                ]);
+                const manifest = await fetchRepoManifest(repository.url, pack.filename, repository.headers);
+                // Per-game sizes for the disk bar: the manifest lists them. One written before the
+                // repository did (or out of date) leaves the ZIP's central directory to read, with
+                // two small range requests - null if the server cannot do ranges.
+                const entrySizes = manifestEntrySizes(manifest, pack.size)
+                    ?? (/^[\w.-]+\.zip$/.test(pack.filename)
+                        ? await fetchRemoteZipEntrySizes(`${repository.url}/${pack.filename}`, repository.headers)
+                        : null);
                 pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
                 pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size);
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
