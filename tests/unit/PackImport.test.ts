@@ -5,6 +5,7 @@ import {existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, w
 import {tmpdir} from 'os';
 import {join} from 'path';
 import type {StartingPackFileEntry, StartingPackGameEntry} from '@/types/StartingPackManifest';
+import type {RomVerdict} from '@/class/MameVerifyRoms';
 import {
     describePack, importRepositoryPack, PackGameFields, PackGameStore, PackImportOptions, PackImportTargets,
 } from '@/class/PackImport';
@@ -166,6 +167,50 @@ describe('importRepositoryPack', () => {
         expect(log.length).toBeLessThan(3);
         expect(lines.at(-3)).toContain('2 game(s) imported — 2 rom(s) written — 1 bios written — 2 marquee(s)');
         expect(progress.at(-1)).toBe('import 2/2');
+    });
+
+    it('leaves out the game the installed MAME cannot run: no rom, no row, no favorite', async () => {
+        const pack = starterPack();
+        const asked: string[][] = [];
+
+        const ok = await run(pack, {
+            verifyRoms: async (romNames) => {
+                asked.push(romNames);
+                // The sets are in the rompath by the time MAME is asked.
+                expect(existsSync(join(home, 'roms', 'beta.zip'))).toBe(true);
+                return new Map<string, RomVerdict>([
+                    ['alpha', {status: 'good'}],
+                    ['beta', {status: 'bad', problems: ['a.bin (256 bytes) - NOT FOUND', 'b', 'c', 'd']}],
+                ]);
+            },
+        });
+
+        expect(ok).toBe(true);
+        expect(asked).toEqual([['alpha', 'beta']]);
+        expect([...games.keys()]).toEqual(['alpha']);
+        expect(readdirSync(join(home, 'roms')).sort()).toEqual(['alpha.zip', 'neogeo.zip']);
+        const favorites = readFileSync(join(home, 'ui', 'favorites.ini'), 'utf8');
+        expect(favorites).toContain('alpha\nALPHA');
+        expect(favorites).not.toContain('beta');
+        expect(lines).toContain('  beta: not imported, the installed MAME cannot run it '
+            + '(a.bin (256 bytes) - NOT FOUND; b; c; and 1 more).');
+        expect(lines.some(line => line.includes('1 game(s) imported') && line.endsWith('1 game(s) not compatible with the installed MAME'))).toBe(true);
+        expect(progress.at(-1)).toBe('import 2/2');
+    });
+
+    it('leaves out a game the installed MAME does not know', async () => {
+        const ok = await run(starterPack(), {verifyRoms: async () => new Map<string, RomVerdict>([['alpha', {status: 'unknown'}]])});
+
+        expect(ok).toBe(true);
+        expect([...games.keys()]).toEqual(['beta']);
+        expect(lines).toContain('  alpha: not imported, the installed MAME cannot run it (it does not know this game).');
+    });
+
+    it('imports every game when MAME cannot be asked, and says so', async () => {
+        expect(await run(starterPack(), {verifyRoms: async () => null})).toBe(true);
+
+        expect([...games.keys()]).toEqual(['alpha', 'beta']);
+        expect(lines).toContain('[import] WARNING: The installed MAME could not check the roms: games imported unchecked.');
     });
 
     it('installs only the games picked, with the sets they need', async () => {
