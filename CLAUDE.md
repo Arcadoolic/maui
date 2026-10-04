@@ -15,6 +15,19 @@ The project must run on:
   `perf/raspberry-pi-lag` — see `docs/RASPBERRY-PI-LAG.md`).
   `electron-builder.yml` has no arm64 Linux target declared yet, and
   `npm run rebuild` (sqlite3 native rebuild) is unverified on ARM toolchains.
+  The AppImage is run without being installed, so at each start it adds
+  itself to the desktop (`src/class/DesktopIntegration.ts`, called from
+  `background.ts`): a desktop entry in
+  `~/.local/share/applications/mame-awesome-ui.desktop`, a copy of its icon in
+  `~/.local/share/icons/`, and the first time only a shortcut in the user's
+  desktop directory (read from `user-dirs.dirs`; one the user removed does not
+  come back). Files are rewritten only when they differ, so an AppImage that
+  was moved or replaced by another version repairs its entry the next time it
+  is started. Only for a real AppImage (`APPIMAGE` set by its runtime): the
+  cabinet's extracted `~/squashfs-root` is left alone. The entry's name must
+  stay `desktopName` in `package.json` (and the app's name): that is how the
+  desktop matches a running window to the entry and its icon. Verified on
+  Bazzite (KDE, X11) on 2026-10-04; Wayland and GNOME are untested.
 - **Windows** 10 and later (x64). CI packages an installer (NSIS, `…-setup-…-win-x64.exe`: per-user, no
   administrator rights, not code-signed; the BO's Update card downloads and
   runs it silently to update an installed app, `src/class/WindowsUpdate.ts`) via a
