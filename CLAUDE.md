@@ -15,7 +15,8 @@ The project must run on:
   `perf/raspberry-pi-lag` — see `docs/RASPBERRY-PI-LAG.md`).
   `electron-builder.yml` has no arm64 Linux target declared yet, and
   `npm run rebuild` (sqlite3 native rebuild) is unverified on ARM toolchains.
-- **Windows** 10 and later (x64). CI packages a portable `.exe` via a
+- **Windows** 10 and later (x64). CI packages an installer (NSIS, `…-setup-…-win-x64.exe`: per-user, no
+  administrator rights, not code-signed) via a
   `windows-latest` job in both `.github/workflows/build.yml` (manual,
   `workflow_dispatch`) and `.github/workflows/release.yml` (attached to
   every GitHub Release alongside the Linux/macOS artifacts); beyond those

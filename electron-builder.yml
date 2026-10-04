@@ -22,4 +22,13 @@ mac:
   target: zip
   category: public.app-category.games
 win:
-  target: portable
+  target: nsis
+# An installer (Start menu and desktop shortcuts, an entry in Windows' "Installed apps") instead
+# of an .exe that ran the app as it was: installed for the current user, without administrator
+# rights nor questions. Uninstalling keeps the user's data (%APPDATA%). Not signed: Windows
+# SmartScreen warns before running it.
+nsis:
+  oneClick: true
+  perMachine: false
+  # Named apart from the application's own .exe.
+  artifactName: '${productName}-setup-${version}${env.ARTIFACT_SUFFIX}-${os}-${arch}.${ext}'
