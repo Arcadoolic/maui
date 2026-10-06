@@ -46,6 +46,7 @@ import {
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
+import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {decodeXmlEntities} from '@/class/XmlEntities';
@@ -4911,13 +4912,6 @@ interface UpdateInfo {
     releasesError?: string;
 }
 
-// x64/arm64 are the only archs mame-awesome-ui packages for Linux (electron-builder.yml has no
-// arm64 Windows/other Linux arch target) - anything else (e.g. a 32-bit Pi image) has nothing to
-// match against and self-update stays unavailable, same as a non-Linux platform.
-function currentLinuxArch(): 'x64' | 'arm64' | null {
-    return process.arch === 'x64' || process.arch === 'arm64' ? process.arch : null;
-}
-
 /**
  * package.json's version plus, for develop builds, "+dev.<short sha>" (see
  * electron.vite.config.ts) - the same string as that build's GitHub prerelease tag, so it is both
@@ -4992,15 +4986,12 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
 
     try {
         const releases = await fetchGithubReleases();
-        const arch = currentLinuxArch();
         const entries = releases.map((release): UpdateReleaseEntry => {
-            let asset: GithubReleaseAsset | undefined;
-            if (process.platform === 'win32') {
-                const installer = findWindowsInstaller(release.assets.map(a => a.name), process.arch);
-                asset = release.assets.find(a => a.name === installer);
-            } else if (arch) {
-                asset = release.assets.find(a => new RegExp(`-linux-${arch}\\.AppImage$`).test(a.name));
-            }
+            const assetNames = release.assets.map(a => a.name);
+            const assetName = process.platform === 'win32'
+                ? findWindowsInstaller(assetNames, process.arch)
+                : findLinuxAppImage(assetNames, process.arch);
+            const asset = release.assets.find(a => a.name === assetName);
             return {
                 tagName: release.tag_name,
                 name: release.name || release.tag_name,
