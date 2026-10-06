@@ -3,6 +3,8 @@ import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
 import * as Log from 'electron-log';
+import {scorePseudo3} from '@/class/HiscoreSupport';
+import {isOnlineActive} from '@/class/RepositoryAuth';
 
 export default class HiscoreService {
     protected hiExtractor!: MameHiExtractor;
@@ -38,7 +40,16 @@ export default class HiscoreService {
         if (!Array.isArray(games)) {
             games = [games];
         }
+        // Fresh players and ONLINE state for each save: both change behind the renderer's back
+        // (BO, ONLINE sync). Only the players allowed to receive scores get them (getScorer()).
+        await this.userService.loadUsers();
+        const onlineEnabled = isOnlineActive();
         for (const game of games) {
+            // No extractor in mhiex for this game: nothing to read. get() would throw "is not a
+            // constructor" instead of answering undefined (issue #100).
+            if (!this.hiExtractor.exist(game.romName)) {
+                continue;
+            }
             try {
                 const hiscoreExtractor = await this.hiExtractor.get(game.romName);
                 if (!hiscoreExtractor) {
@@ -47,7 +58,7 @@ export default class HiscoreService {
                 const hiscore = hiscoreExtractor.extract(false).scores;
                 const scoreToSave: any[] = [];
                 for (const score of hiscore.default) {
-                    const user = this.userService.getUserByPseudo3(score.name.substr(0, 3).toUpperCase());
+                    const user = this.userService.getScorer(scorePseudo3(score.name), onlineEnabled);
                     if (!user) {
                         continue;
                     }

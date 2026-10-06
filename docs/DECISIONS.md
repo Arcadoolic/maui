@@ -319,3 +319,165 @@ reworked genre/nplayers sourcing), and one already-shipped upstream bug fix
 independent fix of the identical bug. See commit `7134f90` for the full
 repair, and the "findings during execution" `__static` entry above for the
 scope change it caused.
+
+## ONLINE mode (MAUI-API)
+
+Integration handoff: `maui-api` `docs/MAUI-INTEGRATION.md`. Open questions
+from its section 9 are decided here.
+
+**CSRF, 2026-09-25: `Origin` check on the Online routes only.** The BO has no
+CSRF protection and is reachable from the whole LAN, and the Online routes
+decide where the ONLINE token is sent (a forged configuration pointing to
+another server would leak it with the next heartbeat). `POST /maui/online/*`
+therefore require a same-origin request (`src/class/SameOrigin.ts`: `Origin`
+host equal to `Host`, `Referer` as fallback, neither header refused), on top of
+the Advanced configuration switch. The rest of the BO (export, import, reset)
+keeps the same gap: a CSRF token for the whole BO is a separate piece of work,
+not tied to ONLINE. The URL also only changes by pasting a complete `MAUI1.`
+string, never through a field of its own.
+
+Not covered: DNS rebinding. An attacker's domain first resolves to their
+server, then to the cabinet's IP, so their page reaches the BO while looking
+same-origin to the browser (`Origin` and `Host` both carry the attacker's
+domain). The real BO session cookie is not sent, but the default
+`puckman`/`puckman` login lets the page sign in by itself. For ONLINE this
+allows sabotage, not token theft: the token is never shown again, and pasting
+a new string replaces the URL and the token together, so the saved token
+cannot be redirected to another server. The rest of the BO is more exposed
+(export of the config file with the ScreenScraper passwords, reset). The fix,
+a `Host` header allowlist (`localhost`, IP literals, the machine's own name)
+applied to the whole BO, is a separate piece of work, like a BO-wide CSRF
+token. Changing the default password reduces the risk meanwhile.
+
+**Corrupt `online.json`, 2026-09-25: reset from the BO.** A kiosk cabinet
+often has no reachable shell, so "fix the file by hand" is not an option. The
+Online subtab offers "Reset ONLINE settings" only when the file is unreadable:
+the file is renamed to `online.json.corrupt-<timestamp>` (not deleted), and
+`localUuid` is salvaged from the raw text when it is still there, which keeps
+the machine binding valid. Credentials from a damaged file are never reused:
+the configuration string must be pasted again.
+
+**Unknown rejection code, 2026-09-25: stop.** `OnlineSession` stops on any
+`rejected` result, known code or not: every 4xx is definitive per the
+contract, and retrying would only fill MAUI-API's logs. If MAUI-API ever adds
+a transient 4xx code, MAUI needs an update to handle it. The BO shows the
+code, and "Retry" restarts the session once the cause is fixed.
+
+**Heartbeat backoff, 2026-09-25: none, fixed 60 s.** MAUI-API shows a cabinet
+offline after 3 minutes without a heartbeat, and one call a minute is far
+below its rate limit (60 per minute per key). A long outage costs one failed
+call a minute. The only longer wait is a `429`: `Retry-After`, never shorter
+than the interval.
+
+**ONLINE status in the cabinet UI, 2026-09-25: none, BO only.** An icon would
+need a main-to-renderer channel in the Vue front end for a need nobody has
+expressed yet. Players do not see that the cabinet is offline.
+
+**Starting-pack repository, 2026-09-26: through MAUI-API, ONLINE only.**
+(`maui-api` D46.) The repository no longer has a Basic Auth account copied into
+every cabinet: its web server checks each request against MAUI-API, so the
+cabinet sends its usual `X-Maui-Key`, Bearer and `X-Maui-Machine` headers
+(`src/class/RepositoryAuth.ts`). Its URL is announced by MAUI-API
+(`GET /repository`) and never typed in the BO: the repository only accepts
+the cabinets of the API it asks, so a separate field could only produce
+mismatches (a staging API with a production repository), and a wrong or
+malicious URL would receive the token. The URL is asked for before each
+repository action, without cache, so a change on the server applies at once.
+It must be `https:`, or `http:` only when the API itself is (local
+development), and repository requests never follow redirects (`redirect:
+'error'`). Without ONLINE on, nothing downloads from the
+repository: no Games > Repository subtab, no configuration pack or starter
+pack download button, and `/import/from-url/packs`, `/import/from-url`,
+`/import/conf-pack` and `/import/starter-pack` answer 403 (an Advanced
+session could post directly). The starter pack (`starter-pack.zip`, a few
+curated games) sits next to the configuration pack in MAME > Import, not
+Advanced-only, and installs the configuration pack first.
+There is no manual starting-pack import anymore (2026-09-27): MAME experts
+set the emulator up themselves, everyone else turns ONLINE on; OFFLINE, the
+Import cards only say so. `scripts/import-starting-pack.py` still imports a
+local ZIP when run by hand, on a machine with python3; the app neither ships
+nor runs it since the import moved into the app (`src/class/PackImport.ts`),
+so a cabinet needs no python3. `repoUrl`,
+`repoUser` and `repoPassword` are gone from `Config`: older files load, and
+the keys disappear at the next save. Cabinets not updated lose repository
+access when the old Basic Auth domain is removed.
+
+**Players, 2026-10-02: global, reserved in MAUI-API (maui-api D4, D48, D49).**
+In ONLINE mode a new player exists locally only once MAUI-API reserved the
+initials (`src/class/OnlineRegistration.ts`), from the cabinet
+(`userRegistration.vue`) or the BO (Players tab): an unreachable API means
+no new player. Taken initials lead to the PIN of the player who owns them
+(4 digits, joystick on the cabinet), which links that player here. The PIN
+is shown once, never stored on the cabinet; MAUI-API admins can read it
+back. Only `pseudo_3` and the visibility leave the cabinet: `realname`,
+`email` stay local, and `pseudo_2` is a leftover nothing reads. Players are
+private by default (scores kept out of the shared leaderboards); the BO
+makes them public. Local columns (`user.remote_id`, `is_public`,
+`online_status`, migration `20261002090000`) are kept in line by
+`src/class/PlayerSync.ts`, run by `OnlineSession` after the startup report
+and every 10 heartbeats. The sync never touches `active`, the BO's own
+switch: a player disabled or locked upstream is told by `online_status`,
+so lifting it upstream is enough.
+
+**Switching to ONLINE, 2026-10-02: every active player in MAUI-API first.**
+Players created while LOCAL may hold initials someone else owns elsewhere.
+ONLINE only turns on once every active player is reserved, linked with a
+PIN, or deactivated (`src/class/OnlineReconciliation.ts`); the Players tab
+shows the MAUI-API column and its "Go ONLINE" action as soon as ONLINE is
+configured, before it is on. While ONLINE is on, a local-only player cannot
+be activated again before going ONLINE. Unlike the first plan, no minimum
+number of players: a new cabinet has none, and creates them through the API.
+
+**Scores, 2026-10-02: only for players allowed to receive them.**
+`HiscoreService.saveHiscores()` reloads the players before each save (the
+BO and the ONLINE sync change them in the main process, which the renderer's
+cache never saw) and attributes a score only to an active player, and in
+ONLINE mode only to one linked in MAUI-API and not disabled there. A PIN
+lock does not stop scores: it only blocks linking to another cabinet.
+Before, `active` was ignored and players created from the BO got no score
+until the app restarted.
+
+**`fetch` in the renderer, 2026-10-02: never called as a method.** Chromium's
+`window.fetch` throws "Illegal invocation" when called with another `this`;
+Node's does not care. `MauiApiClient` stored it as `this.fetchImpl` and the
+error looked like an unreachable API, from the cabinet UI only. It now wraps
+the global in an arrow function (test in `MauiApiClient.test.ts`).
+
+**Pack import, 2026-10-04: the installed MAME has the last word on a game.**
+The packs are built from the romset of one MAME version (0.289 today). Checked
+against MAME's own lists, 375 to 377 of their 377 games suit each version from
+0.282 to 0.289: too few differences to keep one repository per version, enough
+to leave a game that will not start in the cabinet's list. Once the files of a
+pack are installed, `mame -verifyroms` checks its games
+(`src/class/MameVerifyRoms.ts`, ~0.05s); a game MAME calls bad or does not know
+is left out of the database, the favorites and the publishers, its own set is
+removed, and the import log says which file is at fault. A MAME that cannot be
+run rejects nothing: the games are imported unchecked, with a warning.
+
+**Pack list, 2026-10-04: a game the installed MAME cannot run is not offered.**
+The repository's manifest says what each rom zip of a pack holds (`romsets`,
+CRC and size per file, written by maui-repository's generator), and
+`mame -listxml` what the installed MAME expects for the pack's games: comparing
+the two (`src/class/RomsetCompatibility.ts`) tells, before anything is
+downloaded, which games suit it. The pack list shows such a game greyed out,
+without a checkbox, with the ROM at fault; the import checks again and does not
+fetch it, whatever the form sent. So no MAME version is required of a cabinet,
+and the repository is not split by version. Only the sets of the pack are
+looked at, not those already on the cabinet. `mame -verifyroms` after the
+import stays as the safety net, and is the only check for a manifest without
+`romsets`.
+
+**Windows, 2026-10-04: an installer, updated from the BO's Update card.**
+The Windows build is an NSIS installer instead of a portable `.exe`
+(per-user, no administrator rights). To update, the Update card does on
+Windows what it does on the Linux cabinet, with the same list of releases
+and development builds: it downloads the installer of the version picked and
+runs it silently (`--updated /S --force-run`), which closes the application,
+replaces it and starts it again (`src/class/WindowsUpdate.ts`).
+`electron-updater` was left out: it brings its own list of versions
+(`latest.yml`, semver only, so no development builds) next to the one the BO
+already has. Only an application put there by the installer can update
+itself - recognized by the uninstaller next to its `.exe`. The file fetched
+is the one GitHub lists for the version, never an address the form sent,
+on Linux too. Not code-signed, and its checksum is not verified: both rest
+on GitHub's HTTPS download. Never run on a real Windows machine yet.

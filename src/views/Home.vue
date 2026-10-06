@@ -34,7 +34,7 @@
 
         <transition name="flyer">
             <div class="flyer-container" v-show="showFlyer">
-                <div class="flyer" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+                <div class="flyer" :class="{landscape: flyerLandscape}" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
             </div>
         </transition>
 
@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onMounted} from 'vue';
+import {ref, computed, onMounted, watch} from 'vue';
 import router from '@/router';
 import Categories from '@/components/Categories.vue';
 import Games from '@/components/Games.vue';
@@ -74,6 +74,7 @@ import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
 import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
+import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
 
 let gameService: GameService;
 
@@ -99,6 +100,8 @@ const showHiscores = ref(false);
 const flyersPath = ref('');
 const flyers = ref<string[]>([]);
 const flyer = ref('');
+// A landscape flyer is turned 90 degrees to the left to fill the tall flyer area (see .flyer.landscape)
+const flyerLandscape = ref(false);
 
 const showGames = ref(true);
 const showTitle = ref(true);
@@ -145,6 +148,22 @@ function generateFlyerPath(): string {
     }
     return '';
 }
+
+// Known once the image is loaded: until then the flyer keeps its previous orientation (it is hidden
+// while the game changes anyway, see onGameChange()).
+watch(flyer, (url) => {
+    if (!url) {
+        flyerLandscape.value = false;
+        return;
+    }
+    const image = new Image();
+    image.onload = () => {
+        if (flyer.value === url) {
+            flyerLandscape.value = image.naturalWidth > image.naturalHeight;
+        }
+    };
+    image.src = url;
+});
 
 function onGameChange(previous: boolean) {
     const showFlyerFn = () => {
@@ -202,6 +221,16 @@ function onCategoryChange(previous: boolean) {
         ((selectedCategoryIndex.value >= categories.value.length) ? 0 : selectedCategoryIndex.value + 1);
 }
 
+/** Never throws: ONLINE must never keep a game from starting. */
+async function notifyScoreCapture(name: string, romName: string): Promise<void> {
+    try {
+        const notify = remote.getGlobal(name) as PlayNotifier | undefined;
+        await notify?.(romName);
+    } catch (err) {
+        Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
 function startGame() {
     const mameService = getMameService();
     const hiService = getHiscoreService();
@@ -209,13 +238,15 @@ function startGame() {
     if (!game) {
         return;
     }
-    mameService.startGame(game.romName).then(
+    // ONLINE: the table as it is before the game, so that only its new scores are sent.
+    void notifyScoreCapture(PLAY_STARTED_GLOBAL, game.romName).then(() => mameService.startGame(game.romName)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
             gameProcess.on('close', () => {
+                void notifyScoreCapture(PLAY_ENDED_GLOBAL, game.romName);
                 hiService.saveHiscores(game).then(() => {
                     emitter.emit('game-quit');
                     return askVote(game);
@@ -361,6 +392,8 @@ function registerKeyMapping() {
 if (!getIsInit()) {
     router.push({name: 'init'});
 } else {
+    // The window is frameless: in windowed mode, dragging anywhere moves it (App.vue).
+    document.documentElement.classList.toggle('window-draggable', !getConfiguration().fullscreen);
     if (getConfiguration().fullscreen) {
         remote.getCurrentWindow().setFullScreen(true);
     } else {
@@ -512,6 +545,8 @@ if (!getIsInit()) {
         top: -5%;
         bottom: -5%;
         width: 40%;
+        /* Size container: lets .flyer.landscape size itself from the container (cqw/cqh) */
+        container-type: size;
     }
 
     .flyer {
@@ -520,6 +555,17 @@ if (!getIsInit()) {
         transform: rotateZ(-4deg);
         background-repeat: no-repeat;
         background-size: cover;
+    }
+
+    /* Landscape flyer: the element takes the container's height as its width and the other way
+       round, then turns 90 degrees to the left (plus the usual 4 degree tilt) around its center. */
+    .flyer.landscape {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 100cqh;
+        height: 100cqw;
+        transform: translate(-50%, -50%) rotateZ(-94deg);
     }
 
     .flyer-enter-from, .flyer-leave-to {

@@ -1,5 +1,6 @@
 import type Category from '@/model/Category.model';
 import type {CarouselCategory, MergedCategory} from '@/types/CarouselCategory';
+import {GENRE_ICON_KEYS} from '@/class/CatverGenres';
 
 const TTL_PREFIX = /^TTL \* /;
 
@@ -10,9 +11,14 @@ const TTL_PREFIX = /^TTL \* /;
  * is both the CSS class the Home carousel maps to src/assets/categories/<key>.svg and the icon
  * file name the BO favorites list looks up. The replace() needs /g: without it, only the first
  * run of separators became '_' and any later one (e.g. the second space in "Musical Instrument
- * Accessory") stayed literal, breaking the key.
+ * Accessory") stayed literal, breaking the key. GENRE_ICON_KEYS (CatverGenres.ts) overrides the key
+ * of a MAUI genre whose name doesn't match its icon file ("Fighting" -> "fighter").
  */
 export function getCategoryIconKey(categoryName: string): string {
+    const genreIconKey = GENRE_ICON_KEYS.get(categoryName);
+    if (genreIconKey) {
+        return genreIconKey;
+    }
     return categoryName.replace(TTL_PREFIX, '').replace(/[\s\W]+/g, '_').toLowerCase();
 }
 

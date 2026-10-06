@@ -20,10 +20,23 @@
 --                 its own nonce -> portType bookkeeping).
 --   result.txt  - written by this script as "<nonce>|<token>" the moment the armed press happens;
 --                 captureOnePress() polls for this and deletes it once consumed.
+--   apply.txt   - written by applyGameFieldLive() as "<nonce>|<tag>|<mask>|<sequence>" to rebind one
+--                 of the running game's fields right away (empty sequence: back to its default),
+--                 so a capture works without relaunching MAME - which also saves it to the game's
+--                 cfg on exit, like a change made from its own menu.
+--   applied.txt - "<nonce>|ok" or "<nonce>|<error>", this script's answer to apply.txt.
+--
+-- Also run by every game MAUI launches (MameService.startGame()), so the BO can configure the game
+-- being played: the request files are only read every few frames to keep that cheap.
 
 local CAPTURE_DIR = [[__CAPTURE_DIR__]]
 local REQUEST_PATH = CAPTURE_DIR .. '/request.txt'
 local RESULT_PATH = CAPTURE_DIR .. '/result.txt'
+local APPLY_PATH = CAPTURE_DIR .. '/apply.txt'
+local APPLIED_PATH = CAPTURE_DIR .. '/applied.txt'
+-- The request files are read once every POLL_FRAMES callbacks (~4 times a second at 60 Hz); an
+-- armed capture still checks the gamepad on every one.
+local POLL_FRAMES = 15
 
 local ANALOG_AXIS_TOKENS = {
     XAXIS = true, YAXIS = true, ZAXIS = true,
@@ -142,16 +155,55 @@ end
 
 local last_seen_request = nil
 local armed_nonce = nil
+local last_seen_apply = nil
+local frame = 0
+
+local function apply_field(tag, mask, seq_tokens)
+    local port = manager.machine.ioport.ports[tag]
+    if not port then
+        return 'unknown port ' .. tag
+    end
+    for _, field in pairs(port.fields) do
+        if field.mask == mask then
+            -- Reset: DEFAULT makes the field follow its type's binding (default.cfg's, i.e. the global
+            -- configuration) again, and MAME then leaves it out of the game's cfg on exit.
+            -- field:default_input_seq() would be saved as an override (checked against 0.289).
+            local seq = input:seq_from_tokens(seq_tokens ~= '' and seq_tokens or 'DEFAULT')
+            field:set_input_seq('standard', seq)
+            return 'ok'
+        end
+    end
+    return 'unknown field ' .. tag .. '/' .. mask
+end
+
+local function handle_apply()
+    local request = read_file(APPLY_PATH)
+    if not request or request == last_seen_apply then
+        return
+    end
+    last_seen_apply = request
+    local nonce, tag, mask, seq_tokens = request:match('^([^|]*)|([^|]*)|(%d+)|([^|\n]*)')
+    if not nonce then
+        return
+    end
+    local ok, result = pcall(apply_field, tag, tonumber(mask), seq_tokens)
+    write_file(APPLIED_PATH, nonce .. '|' .. (ok and result or tostring(result)))
+end
 
 -- Wrapped in pcall: a candidate's code can go bad mid-session (e.g. its controller gets
 -- unplugged) - logged to stderr and skipped rather than left to crash the whole callback, which
 -- would otherwise silently stop it from ever running again while MAME itself stays open.
 emu.register_periodic(function()
     local ok, err = pcall(function()
-        local request = read_file(REQUEST_PATH)
-        if request and request ~= last_seen_request then
-            last_seen_request = request
-            armed_nonce = request
+        frame = frame + 1
+        if frame >= POLL_FRAMES then
+            frame = 0
+            local request = read_file(REQUEST_PATH)
+            if request and request ~= last_seen_request then
+                last_seen_request = request
+                armed_nonce = request
+            end
+            handle_apply()
         end
 
         if armed_nonce then

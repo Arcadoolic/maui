@@ -1,8 +1,9 @@
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest';
-import {mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync} from 'fs';
+import {mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync} from 'fs';
 import {join} from 'path';
 import {tmpdir} from 'os';
 import Config from '@/class/Config.class';
+import {encryptSecret, generateDataKey, isEncryptedSecret} from '@/class/SecretBox';
 
 // Config.class.ts fixes its directory at os.homedir()/.mame-awesome-ui, with no
 // NODE_ENV branching (refacto-2026 dropped the old dev-vs-production split, see
@@ -116,7 +117,7 @@ describe('Config.load', () => {
         expect(config.ssUserPassword).toBe('');
     });
 
-    it('reads the starting-pack repo credentials, defaulting to empty strings when absent', () => {
+    it('drops the former starting-pack repository settings (the URL now comes from MAUI-API)', () => {
         new Config();
         writeFileSync(configPath, JSON.stringify({
             mamePath: '/opt/mame',
@@ -127,17 +128,14 @@ describe('Config.load', () => {
         }));
 
         const config = new Config();
-        config.load();
-        expect(config.repoUrl).toBe('https://repo.maui.afronob.com');
-        expect(config.repoUser).toBe('admin');
-        expect(config.repoPassword).toBe('secret');
+        expect(config.load()).toBe(true);
+        expect(config.mamePath).toBe('/opt/mame');
+        config.save();
 
-        const withoutRepo = new Config();
-        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
-        withoutRepo.load();
-        expect(withoutRepo.repoUrl).toBe('');
-        expect(withoutRepo.repoUser).toBe('');
-        expect(withoutRepo.repoPassword).toBe('');
+        const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+        expect(raw).not.toHaveProperty('repoUrl');
+        expect(raw).not.toHaveProperty('repoUser');
+        expect(raw).not.toHaveProperty('repoPassword');
     });
 
     it('defaults bezelAspect to 16:9 unless the file says exactly 4:3', () => {
@@ -213,9 +211,6 @@ describe('Config.save', () => {
         written.mamePath = '/opt/mame';
         written.mameBinaryName = 'mame64';
         written.ssSoftName = 'mame-awesome-ui';
-        written.repoUrl = 'https://repo.maui.afronob.com';
-        written.repoUser = 'admin';
-        written.repoPassword = 'secret';
         written.bezelAspect = '4:3';
         written.openDevTools = true;
         written.fullscreen = true;
@@ -228,9 +223,6 @@ describe('Config.save', () => {
         expect(read.mamePath).toBe('/opt/mame');
         expect(read.mameBinaryName).toBe('mame64');
         expect(read.ssSoftName).toBe('mame-awesome-ui');
-        expect(read.repoUrl).toBe('https://repo.maui.afronob.com');
-        expect(read.repoUser).toBe('admin');
-        expect(read.repoPassword).toBe('secret');
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(true);
@@ -248,9 +240,6 @@ describe('Config.save', () => {
             'mameBinaryName',
             'mamePath',
             'openDevTools',
-            'repoPassword',
-            'repoUrl',
-            'repoUser',
             'ssDevId',
             'ssDevPassword',
             'ssSoftName',
@@ -301,5 +290,76 @@ describe('Config.delete', () => {
     it('does not throw when there is no file to delete', () => {
         const config = new Config();
         expect(() => config.delete()).not.toThrow();
+    });
+});
+
+describe('Config secrets encryption', () => {
+    const plaintextFile = {
+        mamePath: '/mame', mameBinaryName: 'mame',
+        ssDevId: 'dev', ssDevPassword: 'devpass', ssUserId: 'user', ssUserPassword: 'userpass',
+    };
+
+    it('writes the passwords encrypted with a data key, identifiers in the clear', () => {
+        new Config().exist(); // creates the app data directory
+        writeFileSync(configPath, JSON.stringify(plaintextFile));
+        const dataKey = generateDataKey();
+
+        const config = new Config(dataKey);
+        config.load();
+        expect(config.hasPlaintextSecrets()).toBe(true);
+        config.save();
+
+        const saved = JSON.parse(readFileSync(configPath, 'utf8'));
+        expect(saved.ssDevId).toBe('dev');
+        expect(saved.ssUserId).toBe('user');
+        for (const field of ['ssDevPassword', 'ssUserPassword']) {
+            expect(isEncryptedSecret(saved[field])).toBe(true);
+        }
+
+        const reloaded = new Config(dataKey);
+        reloaded.load();
+        expect(reloaded.hasPlaintextSecrets()).toBe(false);
+        expect([reloaded.ssDevPassword, reloaded.ssUserPassword]).toEqual(['devpass', 'userpass']);
+    });
+
+    it('carries encrypted values untouched through a load/save without a data key', () => {
+        new Config().exist();
+        writeFileSync(configPath, JSON.stringify(plaintextFile));
+        const encrypting = new Config(generateDataKey());
+        encrypting.load();
+        encrypting.save();
+        const before = JSON.parse(readFileSync(configPath, 'utf8'));
+
+        const config = new Config();
+        config.load();
+        config.fullscreen = true;
+        config.save();
+
+        const after = JSON.parse(readFileSync(configPath, 'utf8'));
+        expect(after.ssDevPassword).toBe(before.ssDevPassword);
+        expect(after.ssUserPassword).toBe(before.ssUserPassword);
+    });
+
+    it('reads a value encrypted with another key as unset', () => {
+        new Config().exist();
+        writeFileSync(configPath, JSON.stringify({
+            ...plaintextFile, ssUserPassword: encryptSecret(generateDataKey(), 'other cabinet'),
+        }));
+
+        const config = new Config(generateDataKey());
+        config.load();
+
+        expect(config.ssUserPassword).toBe('');
+    });
+
+    it.skipIf(process.platform === 'win32')('writes the file owner-only, even one created wider', () => {
+        new Config().exist();
+        writeFileSync(configPath, JSON.stringify(plaintextFile), {mode: 0o644});
+
+        const config = new Config();
+        config.load();
+        config.save();
+
+        expect(statSync(configPath).mode & 0o777).toBe(0o600);
     });
 });

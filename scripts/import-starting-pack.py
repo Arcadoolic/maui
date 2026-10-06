@@ -2,10 +2,10 @@
 """Import a MAUI starting pack ZIP (built by the starting pack tooling, which lives outside this
 repository).
 
-The single implementation for starting-pack import: both of src/boServer.ts's BO routes
-(`/import`, a manual upload, and `/import/from-url`, browsing repo.maui.afronob.com) spawn this
-script rather than importing in-process, and it can also be run standalone (e.g. over SSH,
-directly on the machine hosting the MAME home) with no BO involved at all. Reads the ZIP as a
+A hand tool: run standalone on a local ZIP (e.g. over SSH, directly on the machine hosting the
+MAME home), with no BO involved at all - the only way left to import a pack without ONLINE mode.
+The app neither ships nor runs it: the BO imports the repository's packs in-process
+(src/class/PackImport.ts), which a change to the import here must be mirrored in. Reads the ZIP as a
 stream: `zipfile` only loads the central directory (a few KB) into memory, and every
 rom/marquee/flyer/logo/config file is copied one entry at a time via shutil.copyfileobj - memory
 use stays flat regardless of the pack's total size, and `zipfile` handles ZIP64 archives (>4 GiB
@@ -20,20 +20,22 @@ Usage (on the machine hosting the MAME home, e.g. the Pi, after scp'ing the pack
     python3 import-starting-pack.py /home/puckman/mega-starting-pack-20260916.zip
     python3 import-starting-pack.py --yes /home/puckman/mega-starting-pack-20260916.zip
 
-Or straight from repo.maui.afronob.com, no local file needed:
-    MAUI_REPO_USER=admin MAUI_REPO_PASSWORD=... \\
-        python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip -y
+Or straight from the starting-pack repository, no local file needed. The repository checks every
+request against MAUI-API, so it takes the headers of a cabinet (key, token, machine fingerprint)
+or of a service account (key and token only), read from the environment - never from the command
+line, where `ps` and the shell history would show the token:
+    MAUI_REPO_KEY=mk_... MAUI_REPO_TOKEN='12|...' MAUI_REPO_MACHINE=<fingerprint> \\
+        python3 import-starting-pack.py --url https://repo.maui.staging.afronob.com/some-pack.zip -y
 
 With --only, just some games of a pack: only those games' roms/artwork (and the BIOS they need)
 are read, and only they are added to the database and favorites. Combined with --url the pack is
 never downloaded whole: its central directory and the needed entries are fetched with HTTP Range
-requests (the repository must support them - nginx does).
-        python3 import-starting-pack.py --url https://repo.maui.afronob.com/some-pack.zip \\
+requests (the repository must support them - Caddy does).
+        python3 import-starting-pack.py --url https://repo.maui.staging.afronob.com/some-pack.zip \\
             --only sf2,ffight -y
 """
 
 import argparse
-import base64
 import io
 import json
 import os
@@ -71,6 +73,11 @@ def app_data_path():
 
 def config_path():
     return os.path.join(app_data_path(), 'mame-awesome-ui-config.json')
+
+
+def roms_infos_cache_path():
+    """Same file as the app's FavoritesStore.ts getRomsInfosCachePath()."""
+    return os.path.join(app_data_path(), 'roms-infos-cache.json')
 
 
 def database_path():
@@ -224,7 +231,22 @@ IMPORTABLE_MAME_DIRECTORIES = [
     ('sta', 'state_directory'),
     ('snap', 'snapshot_directory'),
     ('folders', 'categorypath'),
+    # Sample sets of the pack games (manifest sampleSet), one zip per set, filtered by --only.
+    ('samples', 'samplepath'),
 ]
+
+
+# Loose files at the root of the ZIP, installed in the mame home (~/.mame): mame runs from there (see
+# MameService.class.ts), and its hiscore plugin reads a hiscore.dat from its current directory before
+# its own copy. The configuration pack ships a corrected hiscore.dat this way.
+IMPORTABLE_ROOT_FILES = ['hiscore.dat']
+
+
+def import_root_files(zf, ini_path, summary, log):
+    for name in IMPORTABLE_ROOT_FILES:
+        if extract_entry_to(zf, name, ini_path):
+            summary['directoriesImported'].append({'zipFolder': name, 'filesWritten': 1})
+            log(f'{name}: copied to {ini_path}.')
 
 
 def zip_has_folder(zf, folder):
@@ -256,7 +278,7 @@ def extract_entry_to(zf, entry_name, dest_dir):
     return True
 
 
-def extract_zip_folder(zf, folder, target_dir):
+def extract_zip_folder(zf, folder, target_dir, entry_filter=None):
     """Copies every file entry under `{folder}/` into target_dir, preserving whatever
     subdirectories sit under it (e.g. snapshot_directory's per-game subfolders). Guards against
     zip-slip: an entry whose relative path would resolve outside target_dir (via a `../` segment)
@@ -267,6 +289,8 @@ def extract_zip_folder(zf, folder, target_dir):
     for info in zf.infolist():
         name = info.filename
         if name.endswith('/') or not name.startswith(prefix):
+            continue
+        if entry_filter is not None and name not in entry_filter:
             continue
         relative = name[len(prefix):]
         destination = os.path.realpath(os.path.join(target_dir, relative))
@@ -296,9 +320,12 @@ def resolve_directory_targets(zf, resolved_ini, ini_path, summary):
     return targets
 
 
-def import_mame_directories(zf, directory_targets, summary, log):
+def import_mame_directories(zf, directory_targets, summary, log, entry_filter=None):
+    """entry_filter: with --only, the per-game entries to extract (see wanted_entries()) - a
+    PER_GAME_FOLDERS folder (samples/) then only brings the files of the selected games."""
     for zip_folder, target_dir in directory_targets.items():
-        files_written = extract_zip_folder(zf, zip_folder, target_dir)
+        folder_filter = entry_filter if zip_folder in PER_GAME_FOLDERS else None
+        files_written = extract_zip_folder(zf, zip_folder, target_dir, folder_filter)
         summary['directoriesImported'].append({'zipFolder': zip_folder, 'filesWritten': files_written})
         log(f'{zip_folder}/: {files_written} file(s) copied to {target_dir}.')
 
@@ -308,24 +335,36 @@ def import_mame_directories(zf, directory_targets, summary, log):
 # ---------------------------------------------------------------------------
 
 # Zip folders holding one file per game: what --only narrows down.
-PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos')
+PER_GAME_FOLDERS = ('roms', 'marquees', 'flyers', 'logos', 'samples')
+
+
+def required_roms(game):
+    """The romsets a game needs besides its own zip: `requiredRoms` (parent, romof chain up to
+    the BIOS, devices with ROMs), or just `biosName` in a pack built before requiredRoms."""
+    if isinstance(game.get('requiredRoms'), list):
+        return game['requiredRoms']
+    return [game['biosName']] if game.get('biosName') else []
 
 
 def select_games(manifest, only, summary):
     """Copy of `manifest` restricted to the games named in `only` (romNames), keeping the pack's
     order: the import below then needs no idea of --only at all - games, favorites and database
-    rows all come from this manifest. Only the BIOS/parent sets those games need (`biosName`)
-    stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
+    rows all come from this manifest. Only the sets those games need (`requiredRoms`, or
+    `biosName` in a pack built before it existed) stay in biosRoms. Names the pack does not contain are reported as warnings, not errors: the
     BO builds the list from the manifest, so it can only differ if the pack changed meanwhile."""
     wanted = set(only)
     games = [game for game in manifest.get('games', []) if game['romName'] in wanted]
     for rom_name in sorted(wanted - {game['romName'] for game in games}):
         summary['warnings'].append(f'{rom_name}: not in this pack, skipped.')
-    needed_bios = {game['biosName'] for game in games if game.get('biosName')}
+    needed_bios = set()
+    for game in games:
+        needed_bios.update(required_roms(game))
+    needed_samples = {game['sampleSet'] for game in games if game.get('sampleSet')}
     return {
         **manifest,
         'games': games,
         'biosRoms': [name for name in manifest.get('biosRoms', []) if name in needed_bios],
+        'sampleSets': [name for name in manifest.get('sampleSets', []) if name in needed_samples],
     }
 
 
@@ -342,6 +381,8 @@ def wanted_entries(manifest):
             entries.add(f'flyers/{rom_name}.png')
         if game.get('hasLogo'):
             entries.add(f'logos/{rom_name}.png')
+        if game.get('sampleSet'):
+            entries.add(f"samples/{game['sampleSet']}.zip")
     entries.update(f'roms/{name}.zip' for name in manifest.get('biosRoms', []))
     return entries
 
@@ -497,7 +538,7 @@ def js_like_parse_int(value):
 def default_summary():
     return {
         'gamesUpserted': 0, 'romFilesWritten': 0, 'biosFilesWritten': 0, 'marqueesWritten': 0,
-        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0,
+        'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0, 'romsInfosAdded': 0,
         'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
         'errors': [],
     }
@@ -515,6 +556,41 @@ def favorite_entry(rom_name, fullname):
     return '\n'.join([
         rom_name, fullname, '', '', '', '0', '', rom_name, '', '', '', '1', '', '', '', '1',
     ]) + '\n'
+
+
+ROM_INFOS_FIELDS = ('publisher', 'publisherId', 'developer', 'developerId')
+
+
+def add_games_to_roms_infos(cache_path, games, generated_at, summary):
+    """Adds the publisher/developer the pack carries to the app's roms-infos-cache.json (same
+    shape as FavoritesStore.ts's RomsInfosCache), for the games it doesn't know yet: the BO's
+    ScreenScraper download then skips a game that came with its artwork and these infos. An entry
+    already there is kept, it may be newer than the pack's. Older packs carry none: nothing added."""
+    cache = {'entries': {}}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            summary['warnings'].append('roms-infos-cache.json unreadable, publishers not recorded.')
+            return
+    entries = cache.setdefault('entries', {})
+    added = 0
+    for game in games:
+        rom_name = game['romName']
+        if rom_name in entries or not any(field in game for field in ROM_INFOS_FIELDS):
+            continue
+        entries[rom_name] = {
+            **{field: game.get(field) for field in ROM_INFOS_FIELDS},
+            'fetchedAt': generated_at,
+        }
+        added += 1
+    if not added:
+        return
+    cache['updatedAt'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=1)
+    summary['romsInfosAdded'] += added
 
 
 def add_games_to_favorites(favorites_path, games, summary):
@@ -616,12 +692,59 @@ def import_starting_pack(zf, manifest, rom_path, marquee_path, flyer_path, logo_
         conn.close()
 
     add_games_to_favorites(ensure_favorites_path(ini_path), manifest.get('games', []), summary)
+    add_games_to_roms_infos(
+        roms_infos_cache_path(), manifest.get('games', []), manifest.get('generatedAt'), summary,
+    )
 
 
 # ---------------------------------------------------------------------------
 # --url : download the pack from repo.maui.afronob.com before importing it, so this script can
 # run unattended on a cabinet's BO instead of requiring an scp'd file already on disk.
 # ---------------------------------------------------------------------------
+
+def repository_headers():
+    """Headers for the repository, from MAUI_REPO_KEY / MAUI_REPO_TOKEN / MAUI_REPO_MACHINE (set by
+    the BO). No machine header for a service account. Empty when nothing is set (a repository
+    without access control, e.g. a local test server)."""
+    key = os.environ.get('MAUI_REPO_KEY', '')
+    token = os.environ.get('MAUI_REPO_TOKEN', '')
+    machine = os.environ.get('MAUI_REPO_MACHINE', '')
+    headers = {}
+    if key:
+        headers['X-Maui-Key'] = key
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    if machine:
+        headers['X-Maui-Machine'] = machine
+    return headers
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """The requests carry the cabinet token: a redirect could hand it to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f'redirect to {newurl} refused', headers, fp)
+
+
+_opener = urllib.request.build_opener(_RefuseRedirects)
+
+
+def open_url(request, timeout=None):
+    return _opener.open(request, timeout=timeout)
+
+
+def describe_http_error(error):
+    """The repository relays MAUI-API's refusals as problem+json: show their stable `code`."""
+    if isinstance(error, urllib.error.HTTPError):
+        try:
+            code = json.loads(error.read().decode('utf-8')).get('code')
+        except (ValueError, AttributeError, OSError):
+            code = None
+        if isinstance(code, str):
+            return f'HTTP {error.code}, refused by MAUI-API ({code})'
+        return f'HTTP {error.code} {error.reason}'
+    return str(error)
+
 
 class HttpRangeFile(io.RawIOBase):
     """Read-only, seekable view of a remote file, backed by HTTP Range requests: what
@@ -633,13 +756,10 @@ class HttpRangeFile(io.RawIOBase):
     WINDOW = 4 * 1024 * 1024
     RETRIES = 3
 
-    def __init__(self, url, user='', password=''):
+    def __init__(self, url, headers):
         super().__init__()
         self.url = url
-        self.headers = {}
-        if user or password:
-            credentials = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
-            self.headers['Authorization'] = f'Basic {credentials}'
+        self.headers = headers
         self.position = 0
         self.window_start = 0
         self.window = b''
@@ -656,7 +776,7 @@ class HttpRangeFile(io.RawIOBase):
         last_error = None
         for _ in range(self.RETRIES):
             try:
-                return urllib.request.urlopen(request, timeout=60)
+                return open_url(request, timeout=60)
             except urllib.error.HTTPError:
                 raise
             except (urllib.error.URLError, OSError) as error:
@@ -721,21 +841,18 @@ def emit_progress(phase, done, total):
         print(f'@@PROGRESS {phase} {done} {total}', flush=True)
 
 
-def download_to_tempfile(url, user, password):
+def download_to_tempfile(url, headers):
     """Downloads `url` into a temp .zip file and returns its path. zipfile.ZipFile needs a
     seekable file (it reads the central directory from the end), so true streaming extraction
     straight from an HTTP response isn't possible with the stdlib - download-to-temp-then-open is
     required. Preflights free disk space against Content-Length when the server reports one
     (same 5%-margin convention as check_disk_space()); otherwise lets copyfileobj surface ENOSPC
     cleanly instead of guessing."""
-    request = urllib.request.Request(url)
-    if user or password:
-        credentials = base64.b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
-        request.add_header('Authorization', f'Basic {credentials}')
+    request = urllib.request.Request(url, headers=headers)
 
     fd, temp_path = tempfile.mkstemp(suffix='.zip')
     try:
-        with os.fdopen(fd, 'wb') as dst, urllib.request.urlopen(request) as response:
+        with os.fdopen(fd, 'wb') as dst, open_url(request) as response:
             content_length = response.headers.get('Content-Length')
             if content_length:
                 needed = int(content_length) * 1.05
@@ -793,6 +910,7 @@ def print_summary(summary):
         f"{summary['flyersWritten']} flyer(s)",
         f"{summary['logosWritten']} logo(s)",
         f"{summary['favoritesAdded']} favorite(s) added",
+        f"{summary['romsInfosAdded']} publisher(s) recorded",
         f"{len(summary['errors'])} error(s)",
     ]
     print()
@@ -818,19 +936,14 @@ def main():
         pass
 
     parser = argparse.ArgumentParser(
-        description="Imports a MAUI starting pack directly onto the disk, bypassing "
-                    "the BO form (Multer 500 MiB limit + full RAM double-buffering - "
-                    "unusable for a big pack on a Raspberry Pi).",
+        description="Imports a MAUI starting pack (a local ZIP, or one from the starting-pack "
+                    "repository) into the MAME home, streaming it: memory use stays flat even "
+                    "for a big pack on a Raspberry Pi.",
     )
     parser.add_argument('pack', nargs='?', help='Path of the starting pack ZIP file (local)')
-    parser.add_argument('--url', help='HTTP(S) URL of the pack to download before importing (repo.maui.afronob.com)')
     parser.add_argument(
-        '--user', help='Basic-auth username for --url - manual testing only, visible in '
-                        '`ps`/the shell history; prefer the MAUI_REPO_USER variable',
-    )
-    parser.add_argument(
-        '--password', help='Basic-auth password for --url - manual testing only, visible '
-                            'in `ps`/the shell history; prefer the MAUI_REPO_PASSWORD variable',
+        '--url', help='HTTP(S) URL of the pack to download before importing (starting-pack repository); '
+                      'credentials from MAUI_REPO_KEY, MAUI_REPO_TOKEN and MAUI_REPO_MACHINE',
     )
     parser.add_argument(
         '--only', help='Comma-separated romNames: import only these games of the pack (their roms, '
@@ -855,13 +968,11 @@ def main():
     if args.url and only:
         # Never downloaded whole: zipfile reads the central directory and each wanted entry
         # through HTTP Range requests (see HttpRangeFile).
-        user = args.user or os.environ.get('MAUI_REPO_USER', '')
-        password = args.password or os.environ.get('MAUI_REPO_PASSWORD', '')
         print(f'[import-starting-pack] Reading: {args.url} ({len(only)} game(s) wanted)')
         try:
-            remote = HttpRangeFile(args.url, user, password)
+            remote = HttpRangeFile(args.url, repository_headers())
         except (urllib.error.URLError, OSError, RuntimeError) as error:
-            fail(f'Cannot read the pack: {error}')
+            fail(f'Cannot read the pack: {describe_http_error(error)}')
             return
         try:
             _run_import(remote, args.yes, only, args.url)
@@ -871,13 +982,11 @@ def main():
 
     temp_path = None
     if args.url:
-        user = args.user or os.environ.get('MAUI_REPO_USER', '')
-        password = args.password or os.environ.get('MAUI_REPO_PASSWORD', '')
         print(f'[import-starting-pack] Downloading: {args.url}')
         try:
-            temp_path = download_to_tempfile(args.url, user, password)
+            temp_path = download_to_tempfile(args.url, repository_headers())
         except (urllib.error.URLError, OSError, RuntimeError) as error:
-            fail(f'Download failed: {error}')
+            fail(f'Download failed: {describe_http_error(error)}')
     pack_path = temp_path if args.url else args.pack
 
     try:
@@ -922,7 +1031,9 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
             if only:
                 fail('--only needs a pack with a manifest.json.')
             folders = ', '.join(folder for folder, _ in IMPORTABLE_MAME_DIRECTORIES)
-            if not any(zip_has_folder(zf, folder) for folder, _ in IMPORTABLE_MAME_DIRECTORIES):
+            names = set(zf.namelist())
+            if not any(zip_has_folder(zf, folder) for folder, _ in IMPORTABLE_MAME_DIRECTORIES) \
+                    and not any(name in names for name in IMPORTABLE_ROOT_FILES):
                 fail(f'Invalid ZIP: manifest.json missing, and no recognized folder ({folders}) in the ZIP.')
 
         locations = get_mame_locations(ini_path)
@@ -984,7 +1095,8 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
         # categorypath backup - no need for a second, dedicated read of them here), and writing
         # them early, before import_starting_pack()'s own game-upsert loop, means they've already
         # made it to disk even if that loop fails partway through.
-        import_mame_directories(zf, directory_targets, summary, log)
+        import_mame_directories(zf, directory_targets, summary, log, entry_filter)
+        import_root_files(zf, ini_path, summary, log)
         if manifest is not None:
             import_starting_pack(
                 zf, manifest, rom_path, locations['marquee_path'], locations['flyer_path'],

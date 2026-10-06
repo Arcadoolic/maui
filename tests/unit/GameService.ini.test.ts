@@ -19,6 +19,7 @@ import type MameService from '@/class/MameService.class';
 let dir: string;
 let genreIniPath: string;
 let nplayersIniPath: string;
+let catverIniPath: string;
 
 beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'mame-gameservice-ini-'));
@@ -33,6 +34,15 @@ beforeAll(() => {
         'arkanoid',
         '[Board Game]',
         'academy',
+        '',
+    ].join('\n'));
+
+    catverIniPath = join(dir, 'catver.ini');
+    writeFileSync(catverIniPath, [
+        '[Category]',
+        'sf2=Fighter / Versus',
+        'ffight=Fighter / 2.5D',
+        'arkanoid=Ball & Paddle / Breakout',
         '',
     ].join('\n'));
 
@@ -58,7 +68,11 @@ afterEach(() => {
     (GameService as unknown as {nplayersIni?: unknown}).nplayersIni = undefined;
 });
 
-function serviceWithPaths(paths: {genreIniPath: string | null; nplayersIniPath: string | null}): GameService {
+function serviceWithPaths(paths: {
+    genreIniPath: string | null;
+    nplayersIniPath: string | null;
+    catverIniPath?: string | null;
+}): GameService {
     const fakeMameService = paths as unknown as MameService;
     // Neither method under test touches HiscoreService.
     return new GameService(fakeMameService, null as never);
@@ -121,5 +135,30 @@ describe('GameService ini lookups, genre.ini and Multiplayer.ini absent', () => 
 
     it('returns zeroes for any rom, player count included', () => {
         expect(service.getGameNplayers('arkanoid')).toEqual({sim: 0, alt: 0});
+    });
+});
+
+describe('GameService ini lookups, catver.ini present next to genre.ini', () => {
+    // catver.ini (MameService.catverIniPath) takes precedence over genre.ini: same genres, but
+    // split by subgenre into MAUI genres (see CatverGenres.ts).
+    let service: GameService;
+
+    beforeAll(() => {
+        service = serviceWithPaths({genreIniPath, nplayersIniPath, catverIniPath});
+    });
+
+    it('exposes the MAUI genres, sorted by name, instead of genre.ini\'s', () => {
+        expect(Object.keys(service.getGameCategories())).toEqual(['Ball & Paddle', 'Beat \'em Up', 'Fighting']);
+    });
+
+    it('files a versus fighter and a beat \'em up under different categories', () => {
+        expect(service.getGameCategoryId('arkanoid')).toBe(1);
+        expect(service.getGameCategoryId('ffight')).toBe(2);
+        expect(service.getGameCategoryId('sf2')).toBe(3);
+    });
+
+    it('no longer reads genre.ini for categories', () => {
+        // academy is only in genre.ini.
+        expect(service.getGameCategoryId('academy')).toBeUndefined();
     });
 });

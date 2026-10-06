@@ -1,9 +1,10 @@
-import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {existsSync, readFileSync, rmSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
 import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
+import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
 
 export default class MameService {
     public mameIni: { [key: string]: string[] } = {};
@@ -153,7 +154,7 @@ export default class MameService {
     /**
      * Path to genre.ini inside ui.ini's categorypath directory - the game categorization
      * dataset matching the installed mame version. Optional, like marquees/flyers/logos: null
-     * until a starting pack import installs it (see scripts/import-starting-pack.py); callers
+     * until a starting pack import installs it (see PackImport.ts); callers
      * (GameService.getGameCategories()) treat a missing file as "no categories" rather than
      * failing, which is how the UI falls back to a flat game list (see Home.vue).
      */
@@ -162,6 +163,20 @@ export default class MameService {
             this.uiIni.categorypath,
             this.iniPath,
             'genre.ini',
+        );
+    }
+
+    /**
+     * Path to progettoSNAPS' catver.ini inside ui.ini's categorypath directory - the same
+     * genres as genre.ini plus their subgenres (see CatverGenres.ts). Optional: null unless
+     * installed there; when present, GameService.getGameCategories() reads it instead of
+     * genre.ini.
+     */
+    public get catverIniPath() {
+        return Helpers.getFirstExistingDirectory(
+            this.uiIni.categorypath,
+            this.iniPath,
+            'catver.ini',
         );
     }
 
@@ -186,7 +201,12 @@ export default class MameService {
     public startGame(romName: string): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
-            this.gameProcess = execFile(this.mameBinary, ['-skip_gameinfo', romName, ...this.mameHomeArgs], {
+            // With the BO's capture daemon, so the BO can list and rebind this game's controls
+            // while it's being played (see CaptureDaemon.ts).
+            const capture = this.prepareCapture();
+            this.gameProcess = execFile(this.mameBinary, [
+                '-skip_gameinfo', romName, ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
+            ], {
                 killSignal: 'SIGQUIT',
                 cwd: this.iniPath,
             }, (error, stdout, stderr) => {
@@ -200,9 +220,25 @@ export default class MameService {
             });
             this.gameProcess.on('close', (e) => {
                 this.gameProcess = null;
+                if (capture) {
+                    rmSync(capture.dir, {recursive: true, force: true});
+                }
             });
             resolve(this.gameProcess);
         });
+    }
+
+    /**
+     * The game still launches without it (the BO then can't configure it live) if the script
+     * can't be set up.
+     */
+    protected prepareCapture(): {dir: string; scriptPath: string} | null {
+        try {
+            return prepareCaptureDir(getRendererPublicPath());
+        } catch (error) {
+            console.error('[MameService] Capture daemon unavailable:', error);
+            return null;
+        }
     }
 
     /**

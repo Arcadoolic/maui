@@ -3,15 +3,15 @@
         <p v-if="loading">Loading hiscores...</p>
         <p v-else-if="!scores.length" class="no-hiscores">No Hiscores Yet !</p>
         <template v-else>
-            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores" :key="score.id_hiscore">
+            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores" :key="score.key">
                 <div class="icon">
-                    <img :src="getAvatar(score.user)" v-if="getAvatar(score.user)" alt="">
+                    <img :src="score.avatar" v-if="score.avatar" alt="">
                     <img v-else src="../assets/defaultPlayer.png" alt="">
                 </div>
                 <div class="info">
                     <span class="place">{{index + 1}}</span>
                     <div class="score_name">
-                        <p class="name">{{score.user.pseudo_3}}</p>
+                        <p class="name">{{score.pseudo3}}</p>
                         <p class="score">{{score.score}}</p>
                     </div>
                 </div>
@@ -23,58 +23,37 @@
 <script setup lang="ts">
 import {ref, watch, onMounted, onUnmounted} from 'vue';
 import Game from '@/model/Game.model';
-import Hiscore from '@/model/Hiscore.model';
-import User from '@/model/User.model';
-import {join} from 'path';
-import {format} from 'url';
 import {emitter} from '@/emitter';
-import {findAvatarFile} from '@/class/AvatarFiles';
-import {getConfiguration, getUserService} from '@/services';
+import {loadHiscores, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
 
 const props = defineProps<{game: Game}>();
 
-// How many scores the table shows: the best one is drawn on its own above the box (.first), the
-// rest fill the 3-column grid below it.
-const MAX_HISCORES_DISPLAYED = 9;
-
-const scores = ref<Hiscore[]>([]);
+// 9 rows (LeaderboardSource.ts): the best one is drawn on its own above the box (.first), the rest
+// fill the 3-column grid below it. Local scores in LOCAL mode, MAUI-API's in ONLINE mode.
+const scores = ref<BoardRow[]>([]);
 const loading = ref(true);
-const avatars = ref<string[]>([]);
+let stopListening: (() => void) | null = null;
 
 async function onGameChange() {
     loading.value = true;
-    scores.value = await props.game.$get(
-        'hiscores',
-        {include: [{model: User, required: true}], limit: MAX_HISCORES_DISPLAYED, order: [['score', 'DESC']], group: ['score', 'user.id_user']},
-    ) as Hiscore[] || [];
+    scores.value = await loadHiscores(props.game);
     loading.value = false;
-}
-
-function getAvatar(user: User) {
-    const avatarFile = findAvatarFile(avatars.value, user.pseudo_3);
-    if (avatarFile) {
-        return format({
-            pathname: join(getConfiguration().avatarsPath, avatarFile),
-            protocol: 'file',
-            slashes: true,
-        });
-    }
-    return false;
 }
 
 watch(() => props.game, onGameChange);
 
 onMounted(async () => {
-    avatars.value = getUserService().getAvatars();
     await onGameChange();
 
     emitter.on('game-quit', onGameChange);
+    stopListening = onLeaderboardsChanged(onGameChange);
 });
 
 // See Champions.vue: `emitter` is a module-level mitt singleton and outlives this component, so
 // the handler has to be removed explicitly or every mount leaks one.
 onUnmounted(() => {
     emitter.off('game-quit', onGameChange);
+    stopListening?.();
 });
 </script>
 
