@@ -1,3 +1,9 @@
+## [2.6.1](https://github.com/Arcadoolic/maui/compare/2.6.0...2.6.1) (2026-10-06)
+
+### Bug Fixes
+
+* **update:** find the AppImage of a release on Linux x64 ([6db3ff2](https://github.com/Arcadoolic/maui/commit/6db3ff21d8f2c82ffdb2efa6d2457b7b5451d17e))
+
 ## [2.6.0](https://github.com/Arcadoolic/maui/compare/2.5.0...2.6.0) (2026-10-06)
 
 ### Features
