@@ -1315,6 +1315,7 @@ async function runRepositoryImport(
             store: packGameStore,
             reporter: {line: block.writeLine, progress: block.progress},
             precheckGames: async manifest => (await findPacksIncompatibleGames(config, [manifest]))[0],
+            removedGames: () => new Set(readRemovedFavorites().map(item => item.romName)),
             verifyRoms: mameBinary && existsSync(mameBinary)
                 ? romNames => verifyRoms(mameBinary, getMameInfo(config).iniPath, romNames)
                 : undefined,
