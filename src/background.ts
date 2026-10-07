@@ -5,9 +5,8 @@ import * as remoteMain from '@electron/remote/main';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import {join} from 'path';
 import {homedir} from 'os';
-import {Server} from 'http';
-import {getLanAddress, startCore} from '@/boCore';
-import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
+import {startCore, type StartedCore} from '@/boCore';
+import {BO_URL_GLOBAL, BO_WAKE_GLOBAL, type BoUrlReader, type BoWaker} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
@@ -29,7 +28,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
 let win: BrowserWindow | null;
-let boServer: Server | undefined;
+let core: StartedCore | undefined;
 let onlineSession: OnlineSession | undefined;
 
 // Read by the front's ONLINE badge (OnlineBadge.vue) through @electron/remote.
@@ -151,7 +150,7 @@ app.on('ready', async () => {
         // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
     });
-    boServer = bo.server;
+    core = bo;
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
@@ -171,9 +170,12 @@ app.on('ready', async () => {
             // The URL is still worth showing: the request made to it reports the failure (503).
             console.error('[background] Back office not loaded:', error);
         }
-        return `http://${getLanAddress() ?? 'localhost'}:${BO_SERVER_PORT}`;
+        return bo.getUrl();
     };
     (global as Record<string, unknown>)[BO_WAKE_GLOBAL] = wakeBackOffice;
+    // Read by the first-run screen and the empty game list (useBoUrl.ts).
+    const readBackOfficeUrl: BoUrlReader = () => bo.getUrl();
+    (global as Record<string, unknown>)[BO_URL_GLOBAL] = readBackOfficeUrl;
     // Not awaited: ONLINE must never delay the window (start() never throws, see OnlineSession.ts).
     void bo.online.start();
     win = createSplashWin();
@@ -181,7 +183,7 @@ app.on('ready', async () => {
 
 app.on('will-quit', () => {
     onlineSession?.stop();
-    boServer?.close();
+    core?.close();
 });
 
 // Exit cleanly on request from parent process in development mode.
