@@ -183,6 +183,14 @@ seule et l'image à l'écran. C'est la marge que la résolution peut rendre.
   avant l'ouverture de la fenêtre. « Automatic » plafonne à 1080 lignes, et à
   720 en mode Lite ; MAME suit le mode du bureau. Sur ce Pi 3, le réglage
   automatique passe donc de 1152x864 à 1280x720.
+- **BO à la demande** (`src/boCore.ts`, `src/class/BoOnDemand.ts`) : express et
+  les pages du BO ne sont plus chargés au démarrage. Le port 3131 reste ouvert ;
+  la première requête charge le BO (comme les touches scores + nouveau joueur
+  tenues 2 s sur la borne, qui affichent aussi son adresse), et il est relâché
+  après 15 minutes sans requête (réglage de l'onglet MAUI). Le gain est en
+  mémoire, pas en CPU. À mesurer : RSS du processus principal avant le premier
+  accès au BO, après, puis après le délai. Node ne décharge pas le code d'un
+  module : seul un redémarrage de l'application rend tout.
 
 ### Étude 720p — à faire sur le Pi
 

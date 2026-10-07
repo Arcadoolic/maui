@@ -84,6 +84,10 @@ export default class Config {
     // "auto" keeps it at 1080 lines at most, 720 in Lite mode.
     public displayMode: DisplayModeSetting = 'auto';
 
+    // Minutes without a request before the BO is unloaded from memory (BoOnDemand.ts); its next
+    // request loads it again. 0 keeps it loaded once it has been opened.
+    public boIdleMinutes: number = 15;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
     protected _plaintextSecrets: boolean = false;
@@ -122,6 +126,9 @@ export default class Config {
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
             this.uiMode = parseUiModeSetting(configFile.uiMode);
             this.displayMode = parseDisplayModeSetting(configFile.displayMode);
+            this.boIdleMinutes = Number.isInteger(configFile.boIdleMinutes) && configFile.boIdleMinutes >= 0
+                ? configFile.boIdleMinutes
+                : 15;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
             if (this.dataKey) {
@@ -164,6 +171,7 @@ export default class Config {
                 thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
                 uiMode: this.uiMode,
                 displayMode: this.displayMode,
+                boIdleMinutes: this.boIdleMinutes,
             }),
             {mode: FILE_MODE},
         );

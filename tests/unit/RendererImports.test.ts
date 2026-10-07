@@ -8,7 +8,7 @@ import {join, relative} from 'path';
 // and the window stays black, with nothing else in the logs than an unhandled rejection. The
 // renderer uses sequelize through sequelize-typescript; only the main process (boServer.ts and
 // the Express controllers, SqliteScoreStore.ts used by boServer.ts only) may import 'sequelize' itself.
-const MAIN_PROCESS_ONLY = new Set(['boServer.ts', 'background.ts', 'class/SqliteScoreStore.ts']);
+const MAIN_PROCESS_ONLY = new Set(['boServer.ts', 'boCore.ts', 'background.ts', 'class/SqliteScoreStore.ts']);
 
 function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {
@@ -58,7 +58,9 @@ describe('modules loaded by the main process', () => {
     }
 
     it('do not load electron-log or @electron/remote', () => {
-        const modules = importedModules(join(src, 'boServer.ts'));
+        // boCore.ts is what the main process starts with; it loads boServer.ts with an import() the
+        // walk does not follow, hence both.
+        const modules = importedModules(join(src, 'boCore.ts'), importedModules(join(src, 'boServer.ts')));
         // The walk really follows the imports (Migrations.ts is imported by boServer.ts directly,
         // Config.class.ts too), so an empty result below means clean, not blind.
         expect(modules).toContain(join(src, 'class/Migrations.ts'));

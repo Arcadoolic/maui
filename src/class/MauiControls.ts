@@ -23,6 +23,9 @@ export const LONG_PRESS_MS = {
     quit: 3000,
     // Home.vue: holding the new-player key this long opens the trigram entry screen.
     newPlayer: 2000,
+    // Home.vue: holding the scores and new-player keys together this long loads the BO and shows
+    // its address.
+    backOffice: 2000,
 } as const;
 
 export interface MauiControl {
@@ -51,6 +54,7 @@ export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
             {key: MAUI_KEYS.space, role: 'Show / hide the game scores'},
             {key: MAUI_KEYS.space, longPressMs: LONG_PRESS_MS.quit, role: 'Quitter MAUI'},
             {key: MAUI_KEYS.p, longPressMs: LONG_PRESS_MS.newPlayer, role: 'Create a new player (3-letter tag)'},
+            {key: MAUI_KEYS.space, longPressMs: LONG_PRESS_MS.backOffice, role: 'Held together with the new-player key: show the back office address'},
         ],
     },
     {

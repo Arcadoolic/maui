@@ -6,7 +6,8 @@ import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOption
 import {join} from 'path';
 import {homedir} from 'os';
 import {Server} from 'http';
-import {startBoServer} from '@/boServer';
+import {getLanAddress, startCore} from '@/boCore';
+import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
@@ -131,7 +132,8 @@ app.on('activate', () => {
 app.on('ready', async () => {
     integrateAppImage();
     setCabinetDisplayMode();
-    const bo = startBoServer(BO_SERVER_PORT, () => {
+    // What always runs, and the BO's port: the BO itself is loaded by its first request (boCore.ts).
+    const bo = startCore(BO_SERVER_PORT, () => {
         if (win) {
             loadPath(win, 'init');
         }
@@ -150,7 +152,7 @@ app.on('ready', async () => {
         app.exit(0);
     });
     boServer = bo.server;
-    // The BO creates/migrates the database first (see boServer.ts's bootstrapDatabase()): the
+    // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
     onlineSession = bo.online;
@@ -161,8 +163,19 @@ app.on('ready', async () => {
     (global as Record<string, unknown>)[PLAY_ENDED_GLOBAL] = playEnded;
     // New shared leaderboards (LeaderboardSync.ts): the front reads them again (LeaderboardSource.ts).
     bo.leaderboards.onChange(() => win?.webContents.send(LEADERBOARDS_CHANGED_CHANNEL));
+    // The cabinet's own way to the BO (Home.vue): loads it and tells where it is.
+    const wakeBackOffice: BoWaker = async () => {
+        try {
+            await bo.bo.wake();
+        } catch (error) {
+            // The URL is still worth showing: the request made to it reports the failure (503).
+            console.error('[background] Back office not loaded:', error);
+        }
+        return `http://${getLanAddress() ?? 'localhost'}:${BO_SERVER_PORT}`;
+    };
+    (global as Record<string, unknown>)[BO_WAKE_GLOBAL] = wakeBackOffice;
     // Not awaited: ONLINE must never delay the window (start() never throws, see OnlineSession.ts).
-    void onlineSession.start();
+    void bo.online.start();
     win = createSplashWin();
 });
 
