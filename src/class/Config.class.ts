@@ -3,6 +3,7 @@ import {join} from 'path';
 import * as os from 'os';
 import {decryptSecret, encryptSecret, isEncryptedSecret} from '@/class/SecretBox';
 import {parseUiModeSetting, type UiModeSetting} from '@/class/UiMode';
+import {parseDisplayModeSetting, type DisplayModeSetting} from '@/class/DisplayMode';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
 // the clear: they are shown back in the BO forms, the passwords are not.
@@ -79,6 +80,10 @@ export default class Config {
     // The front with or without its effects (UiMode.ts): "auto" picks Lite on weak hardware.
     public uiMode: UiModeSetting = 'auto';
 
+    // The screen mode of a dedicated cabinet, set when the application starts (DisplayMode.ts):
+    // "auto" keeps it at 1080 lines at most, 720 in Lite mode.
+    public displayMode: DisplayModeSetting = 'auto';
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
     protected _plaintextSecrets: boolean = false;
@@ -116,6 +121,7 @@ export default class Config {
             this.voteEnabled = configFile.voteEnabled !== false;
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
             this.uiMode = parseUiModeSetting(configFile.uiMode);
+            this.displayMode = parseDisplayModeSetting(configFile.displayMode);
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
             if (this.dataKey) {
@@ -157,6 +163,7 @@ export default class Config {
                 voteEnabled: this.voteEnabled,
                 thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
                 uiMode: this.uiMode,
+                displayMode: this.displayMode,
             }),
             {mode: FILE_MODE},
         );

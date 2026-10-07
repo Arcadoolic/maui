@@ -1,4 +1,7 @@
 import {execFile, spawn} from 'child_process';
+import {existsSync} from 'fs';
+import {homedir} from 'os';
+import {join} from 'path';
 
 // The kiosk session of the dedicated Pi (docs/RASPBERRY-PI-DEPLOY.md §5): autologin on tty1 ->
 // startx -> ~/.xinitrc -> the app. Restarting this getty unit is what relaunches the whole thing
@@ -11,6 +14,16 @@ const SYSTEMCTL = '/usr/bin/systemctl';
 const RESTART_COMMAND = [SYSTEMCTL, 'restart', KIOSK_SERVICE];
 // The rule's other command, used as a harmless probe: on a healthy unit it does nothing.
 const PROBE_COMMAND = [SYSTEMCTL, 'reset-failed', KIOSK_SERVICE];
+
+/**
+ * Whether this is the dedicated-system layout of docs/RASPBERRY-PI-DEPLOY.md §5.3/§7: the AppImage
+ * extracted once into a fixed ~/squashfs-root, referenced by path from ~/.xinitrc. `isPackaged` is
+ * Electron's app.isPackaged, which rules out a repository checkout on a machine that also has a
+ * stray ~/squashfs-root from a real install.
+ */
+export function isKioskLayout(isPackaged: boolean, platform: string = process.platform, home: string = homedir()): boolean {
+    return platform === 'linux' && isPackaged && existsSync(join(home, 'squashfs-root', 'AppRun'));
+}
 
 type ExecFile = (
     file: string, args: string[], options: {timeout: number}, callback: (error: Error | null) => void,
