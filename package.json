@@ -46,7 +46,7 @@
         "vue-router": "^5.3.1"
     },
     "devDependencies": {
-        "@arcadoolic/mhiex": "github:Arcadoolic/mhiex#2.2.1",
+        "@arcadoolic/mhiex": "github:Arcadoolic/mhiex#2.2.2",
         "@electron/rebuild": "^4.2.0",
         "@eslint/js": "^10.0.1",
         "@semantic-release/changelog": "^7.0.0",
