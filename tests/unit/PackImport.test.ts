@@ -224,6 +224,24 @@ describe('importRepositoryPack', () => {
         expect(lines.some(line => line.endsWith('1 game(s) not compatible with the installed MAME'))).toBe(true);
     });
 
+    it('never brings back a game removed from the favorites, even ticked on its own', async () => {
+        const pack = starterPack();
+        const removedGames = () => new Set(['alpha']);
+
+        expect(await run(pack, {removedGames})).toBe(true);
+
+        expect(lines).toContain('  alpha: not fetched, it was removed from the favorites (restore it from the Removed tab).');
+        expect(readdirSync(join(home, 'roms'))).toEqual(['beta.zip']);
+        expect(readdirSync(join(home, 'marquees'))).toEqual(['beta.png']);
+        expect([...games.keys()]).toEqual(['beta']);
+        expect(readFileSync(join(home, 'ui', 'favorites.ini'), 'utf8')).not.toContain('alpha');
+        expect(lines.some(line => line.includes('1 game(s) imported') && line.endsWith('1 game(s) skipped, removed from the favorites'))).toBe(true);
+
+        expect(await run(pack, {removedGames, only: ['alpha']})).toBe(true);
+        expect([...games.keys()]).toEqual(['beta']);
+        expect(existsSync(join(home, 'roms', 'alpha.zip'))).toBe(false);
+    });
+
     it('imports every game when the manifest cannot tell', async () => {
         expect(await run(starterPack(), {precheckGames: async () => null})).toBe(true);
 

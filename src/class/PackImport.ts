@@ -67,6 +67,9 @@ export interface PackImportSummary {
     romsInfosAdded: number;
     // Games left out: the installed MAME cannot run the set the pack has for them.
     incompatibleGames: string[];
+    // Games left out: taken out of the favorites on this cabinet (a thumbs down, or the Games
+    // tab's remove button), where only the BO's "Removed" tab puts them back.
+    removedGamesSkipped: string[];
     categoriesCreated: string[];
     directoriesImported: {zipFolder: string; filesWritten: number}[];
     warnings: string[];
@@ -131,6 +134,9 @@ export interface PackImportOptions {
     // the reason, told from the manifest (RomsetCompatibility.findIncompatibleGames()); null when
     // it cannot be told. They are not fetched at all. Absent = no such check.
     precheckGames?: (manifest: StartingPackManifest) => Promise<ReadonlyMap<string, string> | null>;
+    // romNames of the favorites removed on this cabinet (FavoritesStore's removed-favorites.json):
+    // an import never brings them back, even ticked one by one. Absent = nothing is held back.
+    removedGames?: () => ReadonlySet<string>;
     fetchImpl?: typeof fetch;
 }
 
@@ -190,7 +196,7 @@ export function humanSize(bytes: number): string {
 function defaultSummary(): PackImportSummary {
     return {
         gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0, flyersWritten: 0,
-        logosWritten: 0, favoritesAdded: 0, romsInfosAdded: 0, incompatibleGames: [], categoriesCreated: [], directoriesImported: [],
+        logosWritten: 0, favoritesAdded: 0, romsInfosAdded: 0, incompatibleGames: [], removedGamesSkipped: [], categoriesCreated: [], directoriesImported: [],
         warnings: [], errors: [],
     };
 }
@@ -730,6 +736,7 @@ function reportSummary(summary: PackImportSummary, say: (text: string) => void):
         `${summary.romsInfosAdded} publisher(s) recorded`,
         `${summary.errors.length} error(s)`,
         ...(summary.incompatibleGames.length ? [`${summary.incompatibleGames.length} game(s) not compatible with the installed MAME`] : []),
+        ...(summary.removedGamesSkipped.length ? [`${summary.removedGamesSkipped.length} game(s) skipped, removed from the favorites`] : []),
     ].join(' — '));
     if (summary.categoriesCreated.length) {
         say(`Categories created: ${summary.categoriesCreated.join(', ')}`);
@@ -783,6 +790,20 @@ export async function importRepositoryPack(options: PackImportOptions): Promise<
         if (manifest && only) {
             manifest = selectGames(manifest, only, summary);
             entryFilter = wantedEntries(manifest);
+        }
+        if (manifest && options.removedGames) {
+            const removed = options.removedGames();
+            const skipped = manifest.games.filter(game => removed.has(game.romName));
+            if (skipped.length) {
+                for (const {romName} of skipped) {
+                    summary.removedGamesSkipped.push(romName);
+                    reporter.line(`  ${romName}: not fetched, it was removed from the favorites (restore it from the Removed tab).`);
+                }
+                manifest = selectGames(
+                    manifest, manifest.games.filter(game => !removed.has(game.romName)).map(game => game.romName), summary,
+                );
+                entryFilter = wantedEntries(manifest);
+            }
         }
         if (manifest && options.precheckGames) {
             // Whatever the page offered: what is ticked is checked again here, before any download.
