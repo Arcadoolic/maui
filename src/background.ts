@@ -16,6 +16,10 @@ import Config from '@/class/Config.class';
 import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
 import {getAppIconPath} from '@/staticPath';
+import {totalmem} from 'os';
+import {isKioskLayout} from '@/class/KioskRestart';
+import {applyDisplayMode} from '@/class/DisplayMode';
+import {resolveUiMode} from '@/class/UiMode';
 
 remoteMain.initialize();
 
@@ -83,6 +87,27 @@ function integrateAppImage(): void {
     }
 }
 
+// The screen mode of a dedicated cabinet (DisplayMode.ts), before any window opens. Only there, on
+// its bare X session: a desktop's own screen settings are never touched.
+function setCabinetDisplayMode(): void {
+    if (!isKioskLayout(app.isPackaged) || !process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
+        return;
+    }
+    try {
+        const config = new Config();
+        config.load();
+        // The GPU's status is not known this early: the memory alone tells Lite here (UiMode.ts).
+        const lite = resolveUiMode(config.uiMode, {totalMemBytes: totalmem()}) === 'lite';
+        const mode = applyDisplayMode(config.displayMode, lite);
+        if (mode) {
+            console.log(`[background] Screen mode set to ${mode.width}x${mode.height}`);
+        }
+    } catch (error) {
+        // Never worth keeping the application from starting.
+        console.error('[background] Screen mode not set:', error);
+    }
+}
+
 // Quit when all windows are closed.
 app.on('window-all-closed', () => {
     // On macOS it is common for applications and their menu bar
@@ -105,6 +130,7 @@ app.on('activate', () => {
 // Some APIs can only be used after this event occurs.
 app.on('ready', async () => {
     integrateAppImage();
+    setCabinetDisplayMode();
     const bo = startBoServer(BO_SERVER_PORT, () => {
         if (win) {
             loadPath(win, 'init');

@@ -50,7 +50,7 @@ import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {decodeXmlEntities} from '@/class/XmlEntities';
-import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
+import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
 import {
     describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
@@ -74,6 +74,7 @@ import {
 } from '@/class/MauiControls';
 import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
+import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import {
     describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
@@ -4927,13 +4928,9 @@ function getSquashfsRootPath(): string {
     return join(os.homedir(), 'squashfs-root');
 }
 
-// Mirrors the dedicated-system layout documented in docs/RASPBERRY-PI-DEPLOY.md §5.3/§7: the
-// AppImage extracted once into a fixed ~/squashfs-root, referenced by path from ~/.xinitrc. Ruled
-// out in development (app.isPackaged) so this never fires from a repo checkout that happens to also
-// have a stray ~/squashfs-root from a real install on the same machine.
+// The dedicated-system layout (KioskRestart.ts).
 function isKioskLayout(): boolean {
-    return process.platform === 'linux' && electronApp.isPackaged
-        && existsSync(join(getSquashfsRootPath(), 'AppRun'));
+    return isKioskSystem(electronApp.isPackaged);
 }
 
 // On Windows, an application put there by its installer (WindowsUpdate.ts): the portable .exe of
@@ -5280,6 +5277,15 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                     <option value="lite" ${config.uiMode === 'lite' ? 'selected' : ''}>Lite - no animations, blurs or shadows, for a Raspberry Pi 3 and the like</option>
                     <option value="full" ${config.uiMode === 'full' ? 'selected' : ''}>Full</option>
                 </select>
+                ${isKioskLayout() ? `
+                    <label for="displayMode">Screen mode (applied the next time the cabinet starts; MAME follows it)</label>
+                    <select id="displayMode" name="displayMode">
+                        <option value="auto" ${config.displayMode === 'auto' ? 'selected' : ''}>Automatic (1080p at most, 720p with the Lite interface)</option>
+                        <option value="1080p" ${config.displayMode === '1080p' ? 'selected' : ''}>1080p</option>
+                        <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
+                        <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
+                    </select>
+                ` : ''}
                 <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
@@ -8581,6 +8587,11 @@ export function startBoServer(
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
         const previousUiMode = config.uiMode;
         config.uiMode = parseUiModeSetting(req.body.uiMode);
+        // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
+        // which must not reset it.
+        if (typeof req.body.displayMode === 'string') {
+            config.displayMode = parseDisplayModeSetting(req.body.displayMode);
+        }
         config.save();
         if (config.uiMode !== previousUiMode) {
             // The front decides its mode once, when it loads (App.vue).

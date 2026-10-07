@@ -205,18 +205,21 @@ describe('Config.load', () => {
     });
 });
 
-describe('Config uiMode', () => {
-    it('defaults to auto, also for a file without the key or with an unknown value', () => {
+describe('Config uiMode and displayMode', () => {
+    it('default to auto, also for a file without the key or with an unknown value', () => {
         expect(new Config().uiMode).toBe('auto');
+        expect(new Config().displayMode).toBe('auto');
         for (const written of [undefined, 'turbo']) {
             const seed = new Config();
             seed.save();
             const raw = JSON.parse(readFileSync(configPath, 'utf8'));
             raw.uiMode = written;
+            raw.displayMode = written;
             writeFileSync(configPath, JSON.stringify(raw));
             const config = new Config();
             config.load();
             expect(config.uiMode).toBe('auto');
+            expect(config.displayMode).toBe('auto');
         }
     });
 });
@@ -231,6 +234,7 @@ describe('Config.save', () => {
         written.openDevTools = true;
         written.fullscreen = true;
         written.uiMode = 'lite';
+        written.displayMode = '720p';
         written.save();
 
         expect(existsSync(configPath)).toBe(true);
@@ -244,6 +248,7 @@ describe('Config.save', () => {
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(true);
         expect(read.uiMode).toBe('lite');
+        expect(read.displayMode).toBe('720p');
     });
 
     it('writes only the documented keys, and never avatarsPath', () => {
@@ -254,6 +259,7 @@ describe('Config.save', () => {
         const raw = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(Object.keys(raw).sort()).toEqual([
             'bezelAspect',
+            'displayMode',
             'fullscreen',
             'mameBinaryName',
             'mamePath',

@@ -178,3 +178,22 @@ seule et l'image à l'écran. C'est la marge que la résolution peut rendre.
   même écran, sans animation infinie, transitions, filtres ni ombres floues,
   fond réduit à 1280 px, fenêtre de 13 lignes au lieu de 41 dans la liste.
   Gain à mesurer sur le Pi.
+- **Mode d'écran** (`src/class/DisplayMode.ts`, réglage « Screen mode » du même
+  onglet, sur borne dédiée seulement) : appliqué par `xrandr` au démarrage,
+  avant l'ouverture de la fenêtre. « Automatic » plafonne à 1080 lignes, et à
+  720 en mode Lite ; MAME suit le mode du bureau. Sur ce Pi 3, le réglage
+  automatique passe donc de 1152x864 à 1280x720.
+
+### Étude 720p — à faire sur le Pi
+
+Mêmes mesures dans les deux modes, réglage « Screen mode » sur 1080p puis 720p,
+borne redémarrée entre les deux :
+
+| | 1152x864 (avant) | 1920x1080 | 1280x720 |
+|---|---|---|---|
+| Front au repos, CPU (GPU + renderer) | 150 % (sans Lite) | | |
+| `gng`, `-str 30 -nothrottle` | 136 % | | |
+| `bublbobl`, idem | | | |
+
+Si 720p n'apporte rien de net face à 1080p en mode Lite, « Automatic » doit
+revenir à 1080 lignes partout (`pickMode()`).
