@@ -1,3 +1,18 @@
+## [2.7.0](https://github.com/Arcadoolic/maui/compare/2.6.1...2.7.0) (2026-10-07)
+
+### Features
+
+* **bo:** load the back office on demand ([66b897f](https://github.com/Arcadoolic/maui/commit/66b897f6d292ea851fca8589605e0495911bbe42))
+* **cabinet:** set the screen mode of a dedicated cabinet at startup ([912ef4a](https://github.com/Arcadoolic/maui/commit/912ef4afabb6d0e81506fc68d5e47b5dd00291fc))
+* **cabinet:** show the cabinet's own address for the back office, on port 80 ([328903e](https://github.com/Arcadoolic/maui/commit/328903e7752b95bc23bfbdb8a7f7d42594a91bd1))
+* **front:** add a Lite mode without effects for weak hardware ([d0862aa](https://github.com/Arcadoolic/maui/commit/d0862aa1c24c732107ecef84d9ba9ada7504f64a))
+* **online:** change a player's avatar from its origin cabinet only ([75fa24c](https://github.com/Arcadoolic/maui/commit/75fa24c1c304d25d34e3d62a16feb5dbdfb20d0c))
+
+### Bug Fixes
+
+* **hiscores:** read Moonwalker's scores from its nvram (mhiex 2.2.2) ([195eab4](https://github.com/Arcadoolic/maui/commit/195eab440524edbf4c6d2ef1925bbbe1fa387132))
+* **packs:** never bring back a favorite removed on the cabinet ([651829c](https://github.com/Arcadoolic/maui/commit/651829cec3c9765590d44c25c89575b558d32884))
+
 ## [2.6.1](https://github.com/Arcadoolic/maui/compare/2.6.0...2.6.1) (2026-10-06)
 
 ### Bug Fixes
