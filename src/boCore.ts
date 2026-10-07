@@ -1,5 +1,5 @@
 import {createServer, type IncomingMessage, type Server, type ServerResponse} from 'http';
-import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs';
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import * as os from 'os';
 import {app as electronApp, nativeImage} from 'electron';
@@ -103,6 +103,14 @@ export function readLocalAvatar(pseudo3: string): {png: Uint8Array; hash: string
         .toPNG());
 }
 
+/** Makes `png` the avatar of a local player: the one of a player created on another cabinet (PlayerSync.ts). */
+export function saveLocalAvatar(pseudo3: string, png: Uint8Array): void {
+    const avatarsPath = new Config().avatarsPath;
+    writeFileSync(join(avatarsPath, `${pseudo3}.png`), png);
+    // The PNG replaces the generated default, which would only be left unused.
+    rmSync(join(avatarsPath, `${pseudo3}.svg`), {force: true});
+}
+
 /**
  * Same sqlite connection Database.class.ts sets up (bootstrapped by bootstrapDatabase() above
  * rather than its install()/update()) - built directly here rather than importing
@@ -190,8 +198,9 @@ export function startCore(port: number, reloadFront: () => void, onReset: () => 
                 ? join(config.mamePath, config.mameBinaryName)
                 : '');
         },
-        // Also sends the avatars MAUI-API does not have (maui-api D53).
-        syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars),
+        // Also sends the avatars MAUI-API does not have (maui-api D53), and takes those of the
+        // players created on another cabinet (maui-api D56).
+        syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars, saveLocalAvatar),
         flushScores: client => flushOutbox(scoreStore, client),
         refreshLeaderboards: client => leaderboards.refresh(client),
     });

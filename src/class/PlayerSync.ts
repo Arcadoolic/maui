@@ -65,9 +65,14 @@ export function planPlayerSync(local: LocalPlayer[], remote: OnlinePlayer[]): Pl
  */
 export type LocalAvatarReader = (pseudo3: string) => {png: Uint8Array; hash: string} | null;
 
+/** Writes the avatar of a local player. Given by the main process, as LocalAvatarReader is. */
+export type LocalAvatarWriter = (pseudo3: string, png: Uint8Array) => void;
+
 /**
- * Sends the avatar of each linked player whose PNG differs from the one MAUI-API has (maui-api D53):
- * created or changed since. A PNG MAUI-API refused is not sent again during this run.
+ * Sends the avatar of each player created on this cabinet whose PNG differs from the one MAUI-API
+ * has (maui-api D53): created or changed since. A player's picture is only changed where the
+ * player was created (maui-api D56): the other cabinets it is linked to take it from MAUI-API
+ * (downloadAvatars()). A PNG MAUI-API refused is not sent again during this run.
  */
 export async function uploadAvatars(
     client: MauiApiClient, local: LocalPlayer[], remote: OnlinePlayer[], readAvatar: LocalAvatarReader, refused: Set<string>,
@@ -76,7 +81,7 @@ export async function uploadAvatars(
     let sent = 0;
     for (const player of local) {
         const online = player.remote_id !== null ? byId.get(player.remote_id) : undefined;
-        const avatar = online ? readAvatar(player.pseudo_3) : null;
+        const avatar = online?.isOrigin ? readAvatar(player.pseudo_3) : null;
         if (!online || !avatar || avatar.hash === online.avatar || refused.has(avatar.hash)) {
             continue;
         }
@@ -90,9 +95,36 @@ export async function uploadAvatars(
     return sent;
 }
 
+/**
+ * Takes from MAUI-API the avatar of each player linked to this cabinet but created on another one,
+ * when it differs from the local picture (the default one a link starts with, or an older one):
+ * it becomes the player's local avatar, shown by the front and the BO alike. A player without an
+ * avatar upstream keeps its local one.
+ */
+export async function downloadAvatars(
+    client: MauiApiClient, local: LocalPlayer[], remote: OnlinePlayer[], readAvatar: LocalAvatarReader,
+    saveAvatar: LocalAvatarWriter,
+): Promise<number> {
+    const byId = new Map(remote.map(player => [player.id, player]));
+    let saved = 0;
+    for (const player of local) {
+        const online = player.remote_id !== null ? byId.get(player.remote_id) : undefined;
+        if (!online || online.isOrigin || online.avatar === null || readAvatar(player.pseudo_3)?.hash === online.avatar) {
+            continue;
+        }
+        const png = await client.getAvatar(online.id);
+        if (png.kind === 'ok') {
+            saveAvatar(player.pseudo_3, png.value);
+            saved++;
+        }
+    }
+    return saved;
+}
+
 /** Fetches the players of this cabinet and applies planPlayerSync(). Returns the rows changed. */
 export async function syncPlayers(
     client: MauiApiClient, readAvatar?: LocalAvatarReader, refusedAvatars: Set<string> = new Set(),
+    saveAvatar?: LocalAvatarWriter,
 ): Promise<ApiResult<number>> {
     const remote = await client.listPlayers();
     if (remote.kind !== 'ok') {
@@ -113,6 +145,9 @@ export async function syncPlayers(
     if (readAvatar) {
         const synced = local.map(player => ({...player, ...changes.find(change => change.id_user === player.id_user)}));
         await uploadAvatars(client, synced, remote.value, readAvatar, refusedAvatars);
+        if (saveAvatar) {
+            await downloadAvatars(client, synced, remote.value, readAvatar, saveAvatar);
+        }
     }
     return {kind: 'ok', value: changes.length};
 }
