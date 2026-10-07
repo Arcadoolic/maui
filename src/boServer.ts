@@ -6939,6 +6939,11 @@ interface UsersListExtras {
  * reserved and their scores stay in the database (hidden from the hiscore views), so restoring
  * brings all of it back.
  */
+/** Whether a player's avatar is another cabinet's to change: linked here, created elsewhere. */
+function isAvatarFromOrigin(user: {remote_id?: string | null; is_origin?: boolean}): boolean {
+    return (user.remote_id ?? null) !== null && !user.is_origin;
+}
+
 function renderUsersListCard(
     users: User[], avatarFilenames: string[], error?: string, info?: string,
     extras: UsersListExtras = {isAdvanced: false, deleted: []},
@@ -6948,9 +6953,15 @@ function renderUsersListCard(
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const hasAvatar = avatarFilename !== undefined;
         const disabledUpstream = isDisabledUpstream({online_status: user.online_status ?? null}, !!extras.online);
+        // A player created on another cabinet: its picture comes from MAUI-API (PlayerSync.ts) and
+        // is only changed there (maui-api D56).
+        const avatarFromOrigin = isAvatarFromOrigin(user);
         return `
         <tr>
             <td class="center">
+                ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
+                    ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
+                    : '<span class="avatar-thumb avatar-placeholder">-</span>'}</span>` : `
                 <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
                     <label class="avatar-upload" title="Change the avatar (PNG)">
                         ${hasAvatar
@@ -6961,7 +6972,7 @@ function renderUsersListCard(
                         leave the browser stuck on this POST's own URL (see renderPageTail()). -->
                         <input type="file" name="avatar" accept="image/png" onchange="this.form.requestSubmit()">
                     </label>
-                </form>
+                </form>`}
             </td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
@@ -8072,6 +8083,13 @@ export function createBoApp(
 
         if (!user) {
             res.status(404).send(await usersPage(req, users, getAvatarFilenames(config), 'Player not found.'));
+            return;
+        }
+        if (isAvatarFromOrigin(user)) {
+            res.status(403).send(await usersPage(
+                req, users, getAvatarFilenames(config),
+                `"${user.pseudo_3}" was created on another cabinet: the avatar is changed from that one.`,
+            ));
             return;
         }
         if (!req.file) {
