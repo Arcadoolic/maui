@@ -10,8 +10,30 @@ import {ref, onMounted} from 'vue';
 import * as remote from '@electron/remote';
 import Gamepads from '@/class/Gamepads.class';
 import OnlineBadge from '@/components/OnlineBadge.vue';
+import {totalmem} from 'os';
+import {resolveUiMode, type UiModeHardware} from '@/class/UiMode';
+import {getConfiguration, setUiMode} from '@/services';
 
 const focused = ref(true);
+
+// Decided once, before any view is set up (they read isLite()): changing the BO's setting takes
+// the front's reload that every BO save already triggers.
+function readHardware(): UiModeHardware {
+    const hardware: UiModeHardware = {totalMemBytes: totalmem()};
+    try {
+        const status = remote.app.getGPUFeatureStatus() as unknown as Record<string, string>;
+        hardware.gpuCompositing = status.gpu_compositing;
+    } catch {
+        // Left undefined: the memory alone decides.
+    }
+    return hardware;
+}
+
+const configuration = getConfiguration();
+configuration.load();
+const uiMode = resolveUiMode(configuration.uiMode, readHardware());
+setUiMode(uiMode);
+document.documentElement.classList.toggle('lite', uiMode === 'lite');
 
 onMounted(() => {
     // Electron event
@@ -84,6 +106,43 @@ onMounted(() => {
     html.window-draggable a, html.window-draggable button, html.window-draggable input,
     html.window-draggable select, html.window-draggable textarea {
         -webkit-app-region: no-drag;
+    }
+
+    /***************************************/
+    /*/////////////// LITE ////////////////*/
+    /***************************************/
+    /* Lite mode (UiMode.ts): the same screen without what a software compositor pays for on every
+       frame. !important, to win over the components' scoped rules from this one place. */
+    html.lite body {
+        transform: none;
+    }
+    html.lite *, html.lite *::before, html.lite *::after {
+        transition: none !important;
+        filter: none !important;
+        box-shadow: none !important;
+    }
+    /* The only endless animation, which kept the compositor drawing 60 frames a second on an idle
+       screen. Loader.vue's own (a long press filling up) runs for 2 seconds and stays. */
+    html.lite .online-badge, html.lite .online-badge::before {
+        animation: none !important;
+    }
+    /* Blurred shadows replaced by a solid one: the titles keep their relief. */
+    html.lite .gameTitle, html.lite .categoryTitle, html.lite .no-games h1,
+    html.lite .hiscores, html.lite .letters, html.lite .letters > div.selected {
+        text-shadow: 0 3px 0 rgb(255, 81, 0), 0 6px 0 #000000 !important;
+    }
+    html.lite .home {
+        background-image: url(./assets/background-lite.jpg);
+    }
+    html.lite .home.empty {
+        background-image: none;
+    }
+    /* Without its blur and darkening filter, the flyer behind a logo is dimmed over black. */
+    html.lite .flyerLogoFallback {
+        background-color: #000000;
+    }
+    html.lite .flyerLogoFallback .flyerBackground {
+        opacity: 0.5;
     }
 
     /******************************************/
