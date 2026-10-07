@@ -224,6 +224,22 @@ describe('Config uiMode and displayMode', () => {
     });
 });
 
+describe('Config boIdleMinutes', () => {
+    it('defaults to 15 and only takes a whole number of minutes, 0 included', () => {
+        expect(new Config().boIdleMinutes).toBe(15);
+        for (const [written, expected] of [[0, 0], [60, 60], [-1, 15], [2.5, 15], ['30', 15], [undefined, 15]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.boIdleMinutes = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.boIdleMinutes).toBe(expected);
+        }
+    });
+});
+
 describe('Config.save', () => {
     it('round-trips through load', () => {
         const written = new Config();
@@ -259,6 +275,7 @@ describe('Config.save', () => {
         const raw = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(Object.keys(raw).sort()).toEqual([
             'bezelAspect',
+            'boIdleMinutes',
             'displayMode',
             'fullscreen',
             'mameBinaryName',

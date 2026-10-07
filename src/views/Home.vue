@@ -1,8 +1,13 @@
 <template>
     <div class="home" :class="{empty: noGames}">
-        <modal v-if="showLoader">
+        <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
+        </modal>
+
+        <modal v-if="backOfficeUrl">
+            <p>Back office</p>
+            <p>{{backOfficeUrl}}</p>
         </modal>
 
 
@@ -75,6 +80,7 @@ import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
 import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
 import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
+import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 
 let gameService: GameService;
 
@@ -94,6 +100,8 @@ const timeouts: {
     showGame?: number,
     showFlyer?: number,
     addPlayer?: number,
+    backOffice?: number,
+    hideBackOffice?: number,
 } = {};
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
@@ -120,6 +128,12 @@ const gamesLoaded = ref(false);
 const boUrl = `http://localhost:${BO_SERVER_PORT}`;
 // No game at all: the message replaces the carousel (and its blue selection band).
 const noGames = computed(() => gamesLoaded.value && !games.value.length);
+
+// The BO's address on the local network, while it is shown (see askBackOffice()).
+const backOfficeUrl = ref('');
+const BACK_OFFICE_SHOWN_MS = 15000;
+// Keys of the two-key long press currently held down.
+const heldKeys = new Set<string>();
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -338,6 +352,46 @@ function addPlayer() {
     }, LONG_PRESS_MS.newPlayer);
 }
 
+/**
+ * The scores and new-player keys held together: loads the BO, which is not kept in memory on a
+ * cabinet nobody is setting up (boCore.ts), and shows where to reach it. Each key started its own
+ * long press on the way down: both are taken back.
+ */
+function askBackOffice() {
+    clearTimeout(timeouts.quit);
+    clearTimeout(timeouts.addPlayer);
+    clearTimeout(timeouts.hideBackOffice);
+    showHiscores.value = false;
+    backOfficeUrl.value = '';
+    loaderDuration.value = LONG_PRESS_MS.backOffice / 1000;
+    loaderTitle.value = 'Back office ?';
+    showLoader.value = true;
+    timeouts.backOffice = window.setTimeout(async () => {
+        timeouts.backOffice = undefined;
+        showLoader.value = false;
+        let url = boUrl;
+        try {
+            const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
+            url = wake ? await wake() : boUrl;
+        } catch (err) {
+            Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
+        }
+        backOfficeUrl.value = url;
+        timeouts.hideBackOffice = window.setTimeout(() => {
+            backOfficeUrl.value = '';
+        }, BACK_OFFICE_SHOWN_MS);
+    }, LONG_PRESS_MS.backOffice);
+}
+
+function cancelBackOffice() {
+    if (timeouts.backOffice === undefined) {
+        return;
+    }
+    clearTimeout(timeouts.backOffice);
+    timeouts.backOffice = undefined;
+    showLoader.value = false;
+}
+
 const {onKeydown, onKeyup} = useControllable();
 
 function registerKeyMapping() {
@@ -346,6 +400,16 @@ function registerKeyMapping() {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        if (key === MAUI_KEYS.space || key === MAUI_KEYS.p) {
+            heldKeys.add(key);
+            if (heldKeys.has(MAUI_KEYS.space) && heldKeys.has(MAUI_KEYS.p)) {
+                // Also reached by a held keyboard key repeating: started once.
+                if (timeouts.backOffice === undefined) {
+                    askBackOffice();
+                }
+                return;
+            }
+        }
         switch (key) {
         case MAUI_KEYS.up:
             onGameChange(true);
@@ -381,6 +445,9 @@ function registerKeyMapping() {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        if (heldKeys.delete(key)) {
+            cancelBackOffice();
+        }
         switch (key) {
         case MAUI_KEYS.space:
             clearTimeout(timeouts.quit);

@@ -177,23 +177,50 @@ seule et l'image à l'écran. C'est la marge que la résolution peut rendre.
   l'onglet MAUI du BO, automatique sous 2 Gio de RAM ou en rendu logiciel) :
   même écran, sans animation infinie, transitions, filtres ni ombres floues,
   fond réduit à 1280 px, fenêtre de 13 lignes au lieu de 41 dans la liste.
-  Gain à mesurer sur le Pi.
 - **Mode d'écran** (`src/class/DisplayMode.ts`, réglage « Screen mode » du même
   onglet, sur borne dédiée seulement) : appliqué par `xrandr` au démarrage,
   avant l'ouverture de la fenêtre. « Automatic » plafonne à 1080 lignes, et à
   720 en mode Lite ; MAME suit le mode du bureau. Sur ce Pi 3, le réglage
   automatique passe donc de 1152x864 à 1280x720.
+- **BO à la demande** (`src/boCore.ts`, `src/class/BoOnDemand.ts`) : express et
+  les pages du BO ne sont plus chargés au démarrage. Le port 3131 reste ouvert ;
+  la première requête charge le BO (comme les touches scores + nouveau joueur
+  tenues 2 s sur la borne, qui affichent aussi son adresse), et il est relâché
+  après 15 minutes sans requête (réglage de l'onglet MAUI). Le gain est en
+  mémoire, pas en CPU. Node ne décharge pas le code d'un module : seul un
+  redémarrage de l'application rend tout.
 
-### Étude 720p — à faire sur le Pi
+### Résultats sur le Pi, build de test du 2026-10-07
 
-Mêmes mesures dans les deux modes, réglage « Screen mode » sur 1080p puis 720p,
-borne redémarrée entre les deux :
+Mode Lite et mode d'écran automatiques (aucun réglage touché), BO jamais ouvert
+depuis le démarrage :
 
-| | 1152x864 (avant) | 1920x1080 | 1280x720 |
+| | Avant (2.6.0, 1152x864) | Après (Lite, 1280x720) |
+|---|---|---|
+| CPU total au repos sur l'écran d'accueil | ~37 % des 4 cœurs occupés | 99 % d'inactivité |
+| Processus principal, RSS | 181 Mo | 172 Mo |
+| Processus principal, RSS une fois le BO chargé | (toujours chargé) | 183 Mo |
+
+Le mode Lite rend à lui seul le cœur et demi que l'écran d'accueil consommait.
+Le BO à la demande rend une dizaine de Mo et se charge en 0,9 s à la première
+requête : un gain réel mais modeste, comme attendu.
+
+### Étude 720p
+
+`-str 30 -nothrottle`, front Lite affiché derrière, même session :
+
+| Jeu | 1920x1080 | 1280x720 | Écart |
 |---|---|---|---|
-| Front au repos, CPU (GPU + renderer) | 150 % (sans Lite) | | |
-| `gng`, `-str 30 -nothrottle` | 136 % | | |
-| `bublbobl`, idem | | | |
+| `dkong` | 123 % | 145 % | +18 % |
+| `gng` | 115 % | 132 % | +15 % |
+| `bublbobl` | 100 % | 109 % | +9 % |
 
-Si 720p n'apporte rien de net face à 1080p en mode Lite, « Automatic » doit
-revenir à 1080 lignes partout (`pickMode()`).
+À 1080 lignes `bublbobl` n'a plus aucune marge sur un Pi 3 ; à 720 il en
+retrouve un peu. 1280x720 fait à peu près le même nombre de pixels que le
+1152x864 d'origine (`gng` : 136 % avant, 132 % après), donc le passage
+automatique à 720p ne coûte rien et donne une image 16:9. « Automatic » reste
+donc à 720 lignes en mode Lite, et 1080p est à éviter sur ce matériel.
+
+Reste à essayer : l'accélération GPU de Chromium (`--ignore-gpu-blocklist
+--use-gl=angle --use-angle=gles-egl`), devenue secondaire maintenant que
+l'écran d'accueil ne coûte plus rien au repos.

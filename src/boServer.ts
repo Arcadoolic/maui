@@ -1,6 +1,5 @@
 import express, {Request, Response} from 'express';
 import session from 'express-session';
-import {Server} from 'http';
 import {
     existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
     chmodSync, renameSync, createWriteStream, statfsSync, statSync, lstatSync,
@@ -11,7 +10,7 @@ import {randomBytes} from 'crypto';
 import {ChildProcess, execFileSync, spawn} from 'child_process';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
-import {app as electronApp, nativeImage} from 'electron';
+import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
 // Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
@@ -65,7 +64,6 @@ import {
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
-import {runMigrations} from '@/class/Migrations';
 import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
@@ -82,13 +80,7 @@ import {
 } from '@/class/OnlineSetup';
 import {OnlineSession} from '@/class/OnlineSession';
 import {readCabinetTables} from '@/class/HiscoreBackfill';
-import {describeFlush, flushOutbox, queueScores} from '@/class/ScoreOutbox';
-import {ScoreCapture} from '@/class/ScoreCapture';
-import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
-import {LeaderboardSync} from '@/class/LeaderboardSync';
-import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
-import {avatarForUpload} from '@/class/AvatarForUpload';
-import {syncPlayers} from '@/class/PlayerSync';
+import {describeFlush, queueScores} from '@/class/ScoreOutbox';
 import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
 import {
@@ -100,20 +92,18 @@ import {
     describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, resolveRepository,
     type RepositoryAccess,
 } from '@/class/RepositoryAuth';
-import {readMameVersion} from '@/class/MameVersion';
 import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath} from '@/staticPath';
-// Same *TS import shape as Database.class.ts. Duplicated (not imported) for the same reason
-// as the rest of this file: Database.class.ts pulls in GameService.class -> MameService.class
-// -> Helpers.class.ts's @electron/remote import at module scope, which would break this
-// main-process server. The models themselves (Category/Game/User/Hiscore) are electron-free.
-import * as SequelizeTS from 'sequelize-typescript';
-const Sequelize = SequelizeTS.Sequelize;
-type Sequelize = SequelizeTS.Sequelize;
+import {
+    getDatabasePath, getMameHomePath, getRunningVersion, type BoCore,
+} from '@/boCore';
+import type {BoApp} from '@/class/BoOnDemand';
+// The models registered on boCore.ts's connection (see its comment on why Database.class.ts is
+// not imported in the main process).
 import Category from '@/model/Category.model';
 import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
@@ -212,96 +202,19 @@ function ensureMameConfigBootstrapped(mameBinary: string, iniPath: string): void
     setMameIniValue(join(iniPath, 'mame.ini'), 'window', '0');
 }
 
-/**
- * Same directory MameService pins mame's ini/home to (see Helpers.getMameHomePath()) - a plain
- * ~/.mame, separate from ~/.mame-awesome-ui (this app's own config/database - see
- * Config.class.ts) since it belongs to mame itself, not to mame-awesome-ui. Duplicated here
- * rather than imported, matching the rest of this file's electron-free helpers.
- */
-function getMameHomePath(): string {
-    const homePath = join(os.homedir(), '.mame');
-    if (!existsSync(homePath)) {
-        mkdirSync(homePath, {recursive: true});
-    }
-    return homePath;
-}
 
-/**
- * Same fixed <home>/.mame-awesome-ui/mame-awesome-ui.sqlite path Database.class.ts uses (see
- * Config.class.ts's getAppDataPath() comment) - kept identical in dev and production. Ensures
- * the parent directory exists itself (sqlite won't create missing intermediate directories),
- * same as Config.class.ts/Database.class.ts's own constructors - doesn't rely on
- * getMameHomePath() having been called first to create it as a side effect.
- */
-function getDatabasePath(): string {
-    const appDataPath = join(os.homedir(), '.mame-awesome-ui');
-    if (!existsSync(appDataPath)) {
-        mkdirSync(appDataPath, {recursive: true});
-    }
-    return join(appDataPath, 'mame-awesome-ui.sqlite');
-}
 
-/**
- * Creates the database if it doesn't exist yet and brings it up to date - what the renderer's
- * Database.install()/update() (Init.vue) does, but run by the main process as soon as the app
- * starts, before any window opens (see background.ts): on a first launch the BO login page is
- * reachable right away, and its bo_user table (created and seeded by a migration) must already
- * be there - Init.vue used to be the only one creating it, racing against the first sign-in.
- * Same base tables as Database.install()'s sync() (bo_user excluded, see its models comment),
- * created only when missing: also repairs a file left empty by a connection opened before any
- * table existed. Never rejects: a failure is logged and Init.vue then tries again itself.
- */
-async function bootstrapDatabase(sequelize: Sequelize): Promise<void> {
-    try {
-        const tables = await sequelize.getQueryInterface().showAllTables();
-        if (!tables.includes('game')) {
-            // One by one, referenced tables first (game -> category, hiscore -> game/user).
-            for (const model of [Category, Game, User, Hiscore]) {
-                await model.sync();
-            }
-        }
-        await runMigrations(sequelize);
-    } catch (error) {
-        console.error('[boServer] Database bootstrap failed:', error);
-    }
-}
+
 
 /**
  * Filenames currently sitting in Config's fixed avatarsPath (<home>/.mame-awesome-ui/avatars,
  * created eagerly by Config's constructor). Matches the "<pseudo_3>.png" lookup
  * UserService.class.ts/Champions.vue/Hiscores.vue use in the Electron app itself.
  */
-/** The PNG avatar of a local player and its SHA-256, for MAUI-API (PlayerSync.ts); null without one. */
-function readLocalAvatar(pseudo3: string): {png: Uint8Array; hash: string} | null {
-    const file = join(new Config().avatarsPath, `${pseudo3}.png`);
-    if (!existsSync(file)) {
-        return null;
-    }
-    // A photo of several megabytes is scaled down first (AvatarForUpload.ts).
-    return avatarForUpload(readFileSync(file), (png, width, height) => nativeImage
-        .createFromBuffer(Buffer.from(png))
-        .resize({width, height, quality: 'best'})
-        .toPNG());
-}
-
 function getAvatarFilenames(config: Config): string[] {
     return readdirSync(config.avatarsPath);
 }
 
-/**
- * Same sqlite connection Database.class.ts sets up (bootstrapped by bootstrapDatabase() below
- * rather than its install()/update()) - built directly here rather than importing
- * Database.class.ts, which pulls in GameService.class -> MameService.class ->
- * Helpers.class.ts's @electron/remote import at module scope.
- */
-function createSequelize(): Sequelize {
-    return new Sequelize({
-        dialect: 'sqlite',
-        storage: getDatabasePath(),
-        models: [Category, Game, User, Hiscore, BoUser],
-        logging: false,
-    });
-}
 
 /**
  * Same ini-line parsing MameService uses for `-showconfig` output. Duplicated for the
@@ -4914,15 +4827,6 @@ interface UpdateInfo {
     releasesError?: string;
 }
 
-/**
- * package.json's version plus, for develop builds, "+dev.<short sha>" (see
- * electron.vite.config.ts) - the same string as that build's GitHub prerelease tag, so it is both
- * what the BO header shows and what the releases list matches "version actuelle" against.
- */
-function getRunningVersion(): string {
-    const suffix = typeof MAUI_BUILD_VERSION_SUFFIX === 'string' ? MAUI_BUILD_VERSION_SUFFIX : '';
-    return electronApp.getVersion() + suffix;
-}
 
 function getSquashfsRootPath(): string {
     return join(os.homedir(), 'squashfs-root');
@@ -5286,6 +5190,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
                     </select>
                 ` : ''}
+                <label for="boIdleMinutes">Unload this back office from memory after this many minutes without a request (0 = keep it loaded) - it loads again at the next visit, which asks to sign in again</label>
+                <input type="number" id="boIdleMinutes" name="boIdleMinutes" min="0" max="1440" step="1" value="${config.boIdleMinutes}">
                 <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
@@ -7404,10 +7310,6 @@ function renderBrowsePage(
 }
 
 /**
- * Starts the BO. `databaseReady` resolves once the database exists and is migrated (see
- * bootstrapDatabase()); requests arriving before wait for it.
- */
-/**
  * Guard of the /maui/online/* routes, which decide where the ONLINE token is sent: Advanced
  * configuration only, and same-origin only since the BO has no CSRF token (see SameOrigin.ts and
  * docs/DECISIONS.md). Sends the 403 itself; true means the caller must stop.
@@ -7424,28 +7326,15 @@ function refuseOnlineRequest(req: Request, res: Response): boolean {
     return false;
 }
 
-export function startBoServer(
-    port: number, reloadFront: () => void, onReset: () => void,
-): {server: Server; databaseReady: Promise<void>; online: OnlineSession; scores: ScoreCapture; leaderboards: LeaderboardSync} {
-    // Created here so the Online routes can restart it; started and stopped by background.ts.
-    const online = new OnlineSession({
-        mauiVersion: getRunningVersion(),
-        readMameVersion: () => {
-            const config = new Config();
-            config.load();
-            return readMameVersion(config.mamePath && config.mameBinaryName
-                ? join(config.mamePath, config.mameBinaryName)
-                : '');
-        },
-        // Also sends the avatars MAUI-API does not have (maui-api D53).
-        syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars),
-        // leaderboards and scoreStore are set below, before the session is started (background.ts, once the
-        // database is ready).
-        flushScores: client => flushOutbox(scoreStore, client),
-        refreshLeaderboards: client => leaderboards.refresh(client),
-    });
-    // PNGs MAUI-API refused (too big...): not sent again during this run.
-    const refusedAvatars = new Set<string>();
+/**
+ * Builds the BO: called by boCore.ts when the first request reaches its port, on top of what the
+ * main process already runs (`core`). `databaseReady` resolves once the database exists and is
+ * migrated (see boCore.ts's bootstrapDatabase()); requests arriving before wait for it.
+ */
+export function createBoApp(
+    core: BoCore, databaseReady: Promise<void>, reloadFront: () => void, onReset: () => void,
+): BoApp {
+    const {online, scoreStore} = core;
     onlineSession = online;
     const app = express();
     app.use(express.urlencoded({extended: false}));
@@ -7458,7 +7347,7 @@ export function startBoServer(
         saveUninitialized: false,
         cookie: {maxAge: 7 * 24 * 60 * 60 * 1000},
     }));
-    // The BO is reachable from the whole LAN (app.listen() has no host argument), so every route
+    // The BO is reachable from the whole LAN (boCore.ts listens on every address), so every route
     // below this guard requires a logged-in session except the login page itself and the static
     // assets it needs (background/logo) to render.
     const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg', '/maui-logo.png']);
@@ -7481,37 +7370,6 @@ export function startBoServer(
     // storage has no buffer). An export is the config file and the SQLite database, a few MiB.
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
-    // Single connection for the server's lifetime: sequelize-typescript's static model methods
-    // (User.findAll(), etc.) bind to whichever Sequelize instance last registered the model, so
-    // this must not be recreated per-request.
-    const sequelize = createSequelize();
-    const databaseReady = bootstrapDatabase(sequelize);
-    // Lot 2.3: the scores of the games played, queued then sent to MAUI-API (ScoreCapture.ts).
-    const scoreStore = new SqliteScoreStore(sequelize);
-    // Lot 2.4: the shared leaderboards of the games with hiscores, for the front in ONLINE mode.
-    const leaderboards = new LeaderboardSync({
-        store: new SqliteLeaderboardStore(sequelize),
-        avatars: {
-            has: hash => existsSync(onlineAvatarFile(hash) ?? ''),
-            save: (hash, png) => {
-                const file = onlineAvatarFile(hash);
-                if (file) {
-                    mkdirSync(getOnlineAvatarsPath(), {recursive: true});
-                    writeFileSync(file, png);
-                }
-            },
-        },
-        romnames: async () => (await Game.findAll({where: {hi: true}, attributes: ['romName']})).map(game => game.romName),
-    });
-    const scores = new ScoreCapture({
-        mameHome: getMameHomePath,
-        enabled: isOnlineActive,
-        players: () => User.findAll(),
-        store: scoreStore,
-        startupId: () => online.getStatus().startupId,
-        flush: () => void online.flushScoresNow(),
-        log: message => console.warn(message),
-    });
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -8587,6 +8445,10 @@ export function startBoServer(
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
         const previousUiMode = config.uiMode;
         config.uiMode = parseUiModeSetting(req.body.uiMode);
+        const boIdleMinutes = Number(req.body.boIdleMinutes);
+        if (Number.isInteger(boIdleMinutes) && boIdleMinutes >= 0 && boIdleMinutes <= 1440) {
+            config.boIdleMinutes = boIdleMinutes;
+        }
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
@@ -9616,8 +9478,14 @@ export function startBoServer(
         setTimeout(onReset, 300);
     });
 
-    const server = app.listen(port, () => {
-        console.log(`BO server listening on http://localhost:${port}`);
-    });
-    return {server, databaseReady, online, scores, leaderboards};
+    return {
+        handler: app,
+        isBusy: () => isMameConfigSessionAlive() || (!!adoptedMame && isProcessAlive(adoptedMame.pid)),
+        dispose: () => {
+            // The sessions go with `app` itself; these are the module's own, which outlive it.
+            romLabelsCache = undefined;
+            releasesCache = null;
+            directorySizeCache.clear();
+        },
+    };
 }
