@@ -61,6 +61,8 @@ describe('MAUI_CONTROL_CONTEXTS', () => {
         expect(longPresses).toEqual([
             [MAUI_KEYS.space, LONG_PRESS_MS.quit],
             [MAUI_KEYS.p, LONG_PRESS_MS.newPlayer],
+            // Held together with the new-player key.
+            [MAUI_KEYS.space, LONG_PRESS_MS.backOffice],
         ]);
     });
 });

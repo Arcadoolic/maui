@@ -127,3 +127,100 @@ régime établi.
    le rendu logiciel forcé est plus stable qu'un fallback GPU
    partiellement supporté sur le Pi — à valider empiriquement, ça peut
    aussi aller dans l'autre sens.
+
+## Raspberry Pi 3 Model B (1 Go) — mesures du 2026-10-07
+
+Borne `arcade-frogger` : Pi 3 Model B Rev 1.2, 905 Mio de RAM, Debian 13 arm64,
+MAUI 2.6.0, MAME 0.289 (Homebrew), X en 1152x864 (mode choisi par X, l'écran
+propose aussi 1920x1080 et 1280x720). 62 favoris, 10 marquees de 1200 px de
+large.
+
+### Écran d'accueil au repos, sans jeu lancé
+
+| Processus | CPU | RSS |
+|---|---|---|
+| Electron GPU (`VizCompositorThread`) | 92 % | 125 Mo |
+| Electron renderer (`Compositor` 27 %, thread principal 18 %) | 58 % | 191 Mo |
+| Electron main (BO, ONLINE, scores) | 3 % | 181 Mo |
+| Xorg | 2 % | 93 Mo |
+
+Chromium tourne en rendu logiciel (le processus GPU est lancé avec
+`--use-gl=disabled`) : chaque image est composée par le CPU. Et l'écran n'est
+jamais au repos : l'animation infinie du badge ONLINE (`online-halo`,
+`src/components/OnlineBadge.vue`) redemande une image 60 fois par seconde. Un
+cœur et demi sur quatre part donc dans un écran immobile.
+
+Le BO, lui, ne coûte rien en CPU tant que personne ne l'ouvre (3 % pour tout le
+processus principal).
+
+### Pendant un jeu
+
+`gng` lancé en plein écran (`-str 30 -nothrottle`) : les processus Electron
+disparaissent du haut de `top`, MAME prend 92 % d'un cœur et Xorg 8 %. Chromium
+cesse de produire des images quand sa fenêtre est recouverte : le front ne vole
+pas de CPU à MAME, inutile de le mettre en pause à la main.
+
+### Vitesse de MAME
+
+| Jeu | Sans vidéo (`-bench 30`) | Avec vidéo, 1152x864 |
+|---|---|---|
+| `dkong` | 259 % | |
+| `gng` | 215 % | 136 % |
+| `bublbobl` | 160 % | |
+
+L'affichage coûte cher : `gng` perd un tiers de sa vitesse entre l'émulation
+seule et l'image à l'écran. C'est la marge que la résolution peut rendre.
+
+### Ce qui en découle
+
+- Mode **Lite** du front (`src/class/UiMode.ts`, réglage « Interface » de
+  l'onglet MAUI du BO, automatique sous 2 Gio de RAM ou en rendu logiciel) :
+  même écran, sans animation infinie, transitions, filtres ni ombres floues,
+  fond réduit à 1280 px, fenêtre de 13 lignes au lieu de 41 dans la liste.
+- **Mode d'écran** (`src/class/DisplayMode.ts`, réglage « Screen mode » du même
+  onglet, sur borne dédiée seulement) : appliqué par `xrandr` au démarrage,
+  avant l'ouverture de la fenêtre. « Automatic » plafonne à 1080 lignes, et à
+  720 en mode Lite ; MAME suit le mode du bureau. Sur ce Pi 3, le réglage
+  automatique passe donc de 1152x864 à 1280x720.
+- **BO à la demande** (`src/boCore.ts`, `src/class/BoOnDemand.ts`) : express et
+  les pages du BO ne sont plus chargés au démarrage. Le port 3131 reste ouvert ;
+  la première requête charge le BO (comme les touches scores + nouveau joueur
+  tenues 2 s sur la borne, qui affichent aussi son adresse), et il est relâché
+  après 15 minutes sans requête (réglage de l'onglet MAUI). Le gain est en
+  mémoire, pas en CPU. Node ne décharge pas le code d'un module : seul un
+  redémarrage de l'application rend tout.
+
+### Résultats sur le Pi, build de test du 2026-10-07
+
+Mode Lite et mode d'écran automatiques (aucun réglage touché), BO jamais ouvert
+depuis le démarrage :
+
+| | Avant (2.6.0, 1152x864) | Après (Lite, 1280x720) |
+|---|---|---|
+| CPU total au repos sur l'écran d'accueil | ~37 % des 4 cœurs occupés | 99 % d'inactivité |
+| Processus principal, RSS | 181 Mo | 172 Mo |
+| Processus principal, RSS une fois le BO chargé | (toujours chargé) | 183 Mo |
+
+Le mode Lite rend à lui seul le cœur et demi que l'écran d'accueil consommait.
+Le BO à la demande rend une dizaine de Mo et se charge en 0,9 s à la première
+requête : un gain réel mais modeste, comme attendu.
+
+### Étude 720p
+
+`-str 30 -nothrottle`, front Lite affiché derrière, même session :
+
+| Jeu | 1920x1080 | 1280x720 | Écart |
+|---|---|---|---|
+| `dkong` | 123 % | 145 % | +18 % |
+| `gng` | 115 % | 132 % | +15 % |
+| `bublbobl` | 100 % | 109 % | +9 % |
+
+À 1080 lignes `bublbobl` n'a plus aucune marge sur un Pi 3 ; à 720 il en
+retrouve un peu. 1280x720 fait à peu près le même nombre de pixels que le
+1152x864 d'origine (`gng` : 136 % avant, 132 % après), donc le passage
+automatique à 720p ne coûte rien et donne une image 16:9. « Automatic » reste
+donc à 720 lignes en mode Lite, et 1080p est à éviter sur ce matériel.
+
+Reste à essayer : l'accélération GPU de Chromium (`--ignore-gpu-blocklist
+--use-gl=angle --use-angle=gles-egl`), devenue secondaire maintenant que
+l'écran d'accueil ne coûte plus rien au repos.

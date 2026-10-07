@@ -5,8 +5,8 @@ import * as remoteMain from '@electron/remote/main';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import {join} from 'path';
 import {homedir} from 'os';
-import {Server} from 'http';
-import {startBoServer} from '@/boServer';
+import {startCore, type StartedCore} from '@/boCore';
+import {BO_URL_GLOBAL, BO_WAKE_GLOBAL, type BoUrlReader, type BoWaker} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
@@ -16,6 +16,10 @@ import Config from '@/class/Config.class';
 import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
 import {getAppIconPath} from '@/staticPath';
+import {totalmem} from 'os';
+import {isKioskLayout} from '@/class/KioskRestart';
+import {applyDisplayMode} from '@/class/DisplayMode';
+import {resolveUiMode} from '@/class/UiMode';
 
 remoteMain.initialize();
 
@@ -24,7 +28,7 @@ const isDevelopment = process.env.NODE_ENV !== 'production';
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
 let win: BrowserWindow | null;
-let boServer: Server | undefined;
+let core: StartedCore | undefined;
 let onlineSession: OnlineSession | undefined;
 
 // Read by the front's ONLINE badge (OnlineBadge.vue) through @electron/remote.
@@ -83,6 +87,27 @@ function integrateAppImage(): void {
     }
 }
 
+// The screen mode of a dedicated cabinet (DisplayMode.ts), before any window opens. Only there, on
+// its bare X session: a desktop's own screen settings are never touched.
+function setCabinetDisplayMode(): void {
+    if (!isKioskLayout(app.isPackaged) || !process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
+        return;
+    }
+    try {
+        const config = new Config();
+        config.load();
+        // The GPU's status is not known this early: the memory alone tells Lite here (UiMode.ts).
+        const lite = resolveUiMode(config.uiMode, {totalMemBytes: totalmem()}) === 'lite';
+        const mode = applyDisplayMode(config.displayMode, lite);
+        if (mode) {
+            console.log(`[background] Screen mode set to ${mode.width}x${mode.height}`);
+        }
+    } catch (error) {
+        // Never worth keeping the application from starting.
+        console.error('[background] Screen mode not set:', error);
+    }
+}
+
 // Quit when all windows are closed.
 app.on('window-all-closed', () => {
     // On macOS it is common for applications and their menu bar
@@ -105,7 +130,9 @@ app.on('activate', () => {
 // Some APIs can only be used after this event occurs.
 app.on('ready', async () => {
     integrateAppImage();
-    const bo = startBoServer(BO_SERVER_PORT, () => {
+    setCabinetDisplayMode();
+    // What always runs, and the BO's port: the BO itself is loaded by its first request (boCore.ts).
+    const bo = startCore(BO_SERVER_PORT, () => {
         if (win) {
             loadPath(win, 'init');
         }
@@ -123,8 +150,8 @@ app.on('ready', async () => {
         // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
     });
-    boServer = bo.server;
-    // The BO creates/migrates the database first (see boServer.ts's bootstrapDatabase()): the
+    core = bo;
+    // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
     onlineSession = bo.online;
@@ -135,14 +162,28 @@ app.on('ready', async () => {
     (global as Record<string, unknown>)[PLAY_ENDED_GLOBAL] = playEnded;
     // New shared leaderboards (LeaderboardSync.ts): the front reads them again (LeaderboardSource.ts).
     bo.leaderboards.onChange(() => win?.webContents.send(LEADERBOARDS_CHANGED_CHANNEL));
+    // The cabinet's own way to the BO (Home.vue): loads it and tells where it is.
+    const wakeBackOffice: BoWaker = async () => {
+        try {
+            await bo.bo.wake();
+        } catch (error) {
+            // The URL is still worth showing: the request made to it reports the failure (503).
+            console.error('[background] Back office not loaded:', error);
+        }
+        return bo.getUrl();
+    };
+    (global as Record<string, unknown>)[BO_WAKE_GLOBAL] = wakeBackOffice;
+    // Read by the first-run screen and the empty game list (useBoUrl.ts).
+    const readBackOfficeUrl: BoUrlReader = () => bo.getUrl();
+    (global as Record<string, unknown>)[BO_URL_GLOBAL] = readBackOfficeUrl;
     // Not awaited: ONLINE must never delay the window (start() never throws, see OnlineSession.ts).
-    void onlineSession.start();
+    void bo.online.start();
     win = createSplashWin();
 });
 
 app.on('will-quit', () => {
     onlineSession?.stop();
-    boServer?.close();
+    core?.close();
 });
 
 // Exit cleanly on request from parent process in development mode.

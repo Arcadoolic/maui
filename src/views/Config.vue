@@ -6,15 +6,16 @@
 </template>
 
 <script setup lang="ts">
-import {BO_SERVER_PORT} from '@/boServerPort';
 import * as remote from '@electron/remote';
+import {useBoUrl} from '@/composables/useBoUrl';
 
-const configUrl = `http://localhost:${BO_SERVER_PORT}`;
+// This machine's address on a dedicated cabinet, whose BO is opened from another one.
+const configUrl = useBoUrl();
 
 // Opened in the OS's default browser (not navigated to in this frameless kiosk window) - the
 // whole point is to configure the app from a real browser, per the message above.
 function openConfigUrl() {
-    remote.shell.openExternal(configUrl);
+    remote.shell.openExternal(configUrl.value);
 }
 </script>
 

@@ -205,6 +205,41 @@ describe('Config.load', () => {
     });
 });
 
+describe('Config uiMode and displayMode', () => {
+    it('default to auto, also for a file without the key or with an unknown value', () => {
+        expect(new Config().uiMode).toBe('auto');
+        expect(new Config().displayMode).toBe('auto');
+        for (const written of [undefined, 'turbo']) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.uiMode = written;
+            raw.displayMode = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.uiMode).toBe('auto');
+            expect(config.displayMode).toBe('auto');
+        }
+    });
+});
+
+describe('Config boIdleMinutes', () => {
+    it('defaults to 15 and only takes a whole number of minutes, 0 included', () => {
+        expect(new Config().boIdleMinutes).toBe(15);
+        for (const [written, expected] of [[0, 0], [60, 60], [-1, 15], [2.5, 15], ['30', 15], [undefined, 15]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.boIdleMinutes = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.boIdleMinutes).toBe(expected);
+        }
+    });
+});
+
 describe('Config.save', () => {
     it('round-trips through load', () => {
         const written = new Config();
@@ -214,6 +249,8 @@ describe('Config.save', () => {
         written.bezelAspect = '4:3';
         written.openDevTools = true;
         written.fullscreen = true;
+        written.uiMode = 'lite';
+        written.displayMode = '720p';
         written.save();
 
         expect(existsSync(configPath)).toBe(true);
@@ -226,6 +263,8 @@ describe('Config.save', () => {
         expect(read.bezelAspect).toBe('4:3');
         expect(read.openDevTools).toBe(true);
         expect(read.fullscreen).toBe(true);
+        expect(read.uiMode).toBe('lite');
+        expect(read.displayMode).toBe('720p');
     });
 
     it('writes only the documented keys, and never avatarsPath', () => {
@@ -236,6 +275,8 @@ describe('Config.save', () => {
         const raw = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(Object.keys(raw).sort()).toEqual([
             'bezelAspect',
+            'boIdleMinutes',
+            'displayMode',
             'fullscreen',
             'mameBinaryName',
             'mamePath',
@@ -246,6 +287,7 @@ describe('Config.save', () => {
             'ssUserId',
             'ssUserPassword',
             'thumbsDownRemovesFavorite',
+            'uiMode',
             'voteEnabled',
         ]);
     });

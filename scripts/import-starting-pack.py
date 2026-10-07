@@ -80,6 +80,20 @@ def roms_infos_cache_path():
     return os.path.join(app_data_path(), 'roms-infos-cache.json')
 
 
+def removed_favorites():
+    """romNames of the favorites removed on this cabinet (the app's removed-favorites.json, see
+    FavoritesStore.ts): an import never brings them back, like PackImport.ts's removedGames."""
+    path = os.path.join(app_data_path(), 'removed-favorites.json')
+    try:
+        with open(path, encoding='utf-8') as handle:
+            removed = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(removed, list):
+        return set()
+    return {item.get('romName') for item in removed if isinstance(item, dict)}
+
+
 def database_path():
     return os.path.join(app_data_path(), 'mame-awesome-ui.sqlite')
 
@@ -539,7 +553,7 @@ def default_summary():
     return {
         'gamesUpserted': 0, 'romFilesWritten': 0, 'biosFilesWritten': 0, 'marqueesWritten': 0,
         'flyersWritten': 0, 'logosWritten': 0, 'favoritesAdded': 0, 'romsInfosAdded': 0,
-        'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
+        'removedGamesSkipped': [], 'categoriesCreated': [], 'directoriesImported': [], 'warnings': [],
         'errors': [],
     }
 
@@ -913,6 +927,8 @@ def print_summary(summary):
         f"{summary['romsInfosAdded']} publisher(s) recorded",
         f"{len(summary['errors'])} error(s)",
     ]
+    if summary['removedGamesSkipped']:
+        parts.append(f"{len(summary['removedGamesSkipped'])} game(s) skipped, removed from the favorites")
     print()
     print('[import-starting-pack] ' + ' — '.join(parts))
     if summary['categoriesCreated']:
@@ -1059,6 +1075,17 @@ def _run_import(pack_source, skip_confirmation, only=None, pack_label=None):
         if only:
             manifest = select_games(manifest, only, summary)
             entry_filter = wanted_entries(manifest)
+        if manifest is not None:
+            removed = removed_favorites()
+            skipped = [game['romName'] for game in manifest.get('games', []) if game['romName'] in removed]
+            if skipped:
+                for rom_name in skipped:
+                    summary['removedGamesSkipped'].append(rom_name)
+                    print(f'  {rom_name}: not imported, it was removed from the favorites '
+                          '(restore it from the Removed tab).')
+                kept = [game['romName'] for game in manifest.get('games', []) if game['romName'] not in removed]
+                manifest = select_games(manifest, kept, summary)
+                entry_filter = wanted_entries(manifest)
         directory_targets = resolve_directory_targets(zf, resolved_ini, ini_path, summary)
 
         space_targets = dict(directory_targets)

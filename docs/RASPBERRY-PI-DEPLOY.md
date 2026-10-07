@@ -278,6 +278,23 @@ pour toute commande que `sudo` autorise, mot de passe ou non.
   sur une unité saine), donc il ne coupe rien si elle manque. Si tu changes la commande ici, il faut aussi changer
   `src/class/KioskRestart.ts`.
 
+### 5.8 BO sur le port 80
+
+Sur une borne dédiée, MAUI ouvre aussi son BO sur le port 80 : l'écran affiche
+alors simplement `http://<ip-de-la-borne>`, sans numéro de port à recopier. Un
+processus non privilégié n'a pas droit aux ports sous 1024 par défaut ; on les
+ouvre à partir de 80 :
+
+```bash
+echo 'net.ipv4.ip_unprivileged_port_start = 80' | sudo tee /etc/sysctl.d/90-maui-back-office-port.conf
+sudo sysctl --system
+```
+
+puis on relance l'app (§5.7). Sans ce réglage rien ne casse : le BO reste sur
+le port 3131 et l'écran affiche `http://<ip-de-la-borne>:3131`. Le port 3131
+répond dans les deux cas. Sur un poste classique (AppImage lancé depuis un
+bureau, macOS, Windows), MAUI n'utilise que le 3131.
+
 ## 6. Audio (sortie HDMI)
 
 Le Pi 4 expose deux cartes ALSA HDMI (`vc4hdmi0`/`vc4hdmi1`, une par port

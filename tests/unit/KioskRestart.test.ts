@@ -1,5 +1,8 @@
 import {describe, it, expect} from 'vitest';
-import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'fs';
+import {tmpdir} from 'os';
+import {join} from 'path';
+import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
 
 describe('canRestartKiosk', () => {
     it('runs the rule\'s harmless reset-failed through sudo -n, which cannot prompt', async () => {
@@ -39,5 +42,21 @@ describe('restartKiosk', () => {
             detached: true,
         });
         expect(unref).toBe(true);
+    });
+});
+
+describe('isKioskLayout', () => {
+    it('is a packaged Linux application next to an extracted ~/squashfs-root', () => {
+        const home = mkdtempSync(join(tmpdir(), 'maui-kiosk-'));
+        try {
+            expect(isKioskLayout(true, 'linux', home)).toBe(false);
+            mkdirSync(join(home, 'squashfs-root'));
+            writeFileSync(join(home, 'squashfs-root', 'AppRun'), '');
+            expect(isKioskLayout(true, 'linux', home)).toBe(true);
+            expect(isKioskLayout(false, 'linux', home)).toBe(false);
+            expect(isKioskLayout(true, 'win32', home)).toBe(false);
+        } finally {
+            rmSync(home, {recursive: true, force: true});
+        }
     });
 });
