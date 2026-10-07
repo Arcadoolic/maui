@@ -61,6 +61,7 @@ import Gamepads from '@/class/Gamepads.class';
 import GameService from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
+import {useBoUrl} from '@/composables/useBoUrl';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import {
@@ -68,7 +69,6 @@ import {
 } from '@/types/CarouselCategory';
 import {mergeTtlCategories} from '@/class/CarouselCategories';
 import {join} from 'path';
-import {BO_SERVER_PORT} from '@/boServerPort';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
@@ -125,7 +125,7 @@ const voteGame = ref<Game | null>(null);
 // Set once the first game list is loaded: an empty list then means no game on the cabinet at all
 // (no favorite yet), shown as a message instead of an empty screen.
 const gamesLoaded = ref(false);
-const boUrl = `http://localhost:${BO_SERVER_PORT}`;
+const boUrl = useBoUrl();
 // No game at all: the message replaces the carousel (and its blue selection band).
 const noGames = computed(() => gamesLoaded.value && !games.value.length);
 
@@ -369,10 +369,10 @@ function askBackOffice() {
     timeouts.backOffice = window.setTimeout(async () => {
         timeouts.backOffice = undefined;
         showLoader.value = false;
-        let url = boUrl;
+        let url = boUrl.value;
         try {
             const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
-            url = wake ? await wake() : boUrl;
+            url = wake ? await wake() : boUrl.value;
         } catch (err) {
             Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
         }

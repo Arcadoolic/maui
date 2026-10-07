@@ -16,6 +16,8 @@ import {syncPlayers} from '@/class/PlayerSync';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {BoOnDemand, type BoApp} from '@/class/BoOnDemand';
+import {CABINET_BO_PORT, describeBoUrl} from '@/class/BoUrl';
+import {isKioskLayout} from '@/class/KioskRestart';
 // Same *TS import shape as Database.class.ts, which is not imported: it pulls in
 // GameService.class -> MameService.class -> Helpers.class.ts's @electron/remote import at module
 // scope, which would break the main process. The models themselves are electron-free.
@@ -138,9 +140,12 @@ export interface BoCore {
 }
 
 export interface StartedCore extends BoCore {
-    server: Server;
     databaseReady: Promise<void>;
     bo: BoOnDemand;
+    // Where the BO is reached from, as the front shows it (BoUrl.ts).
+    getUrl(): string;
+    // Closes the BO's port(s).
+    close(): void;
 }
 
 // How often the idle BO is looked at (BoOnDemand.check()).
@@ -215,20 +220,48 @@ export function startCore(port: number, reloadFront: () => void, onReset: () => 
         },
         log: message => console.log(message),
     });
-    const server = createServer((req: IncomingMessage, res: ServerResponse) => void bo.handle(req, res));
+    const onRequest = (req: IncomingMessage, res: ServerResponse) => void bo.handle(req, res);
+    const server = createServer(onRequest);
     // The BO is reachable from the whole LAN (no host argument): see its session guard.
     server.listen(port, () => {
         console.log(`BO port open on http://localhost:${port} (loaded by its first request)`);
     });
+    // A dedicated cabinet also answers on port 80, so that its address is all there is to type.
+    // An unprivileged process only gets that port where the system allows it (maui-cabinets sets
+    // net.ipv4.ip_unprivileged_port_start): without it, or with the port taken, the BO's own port
+    // is the only one and the URL shown says so.
+    const cabinet = isKioskLayout(electronApp.isPackaged);
+    let cabinetServer: Server | null = null;
+    let onCabinetPort = false;
+    if (cabinet) {
+        cabinetServer = createServer(onRequest);
+        cabinetServer.on('error', (error) => {
+            onCabinetPort = false;
+            console.warn(`BO not reachable on port ${CABINET_BO_PORT}, only on ${port}: ${error.message}`);
+        });
+        cabinetServer.listen(CABINET_BO_PORT, () => {
+            onCabinetPort = true;
+            console.log(`BO port open on port ${CABINET_BO_PORT} too`);
+        });
+    }
     const idleCheck = setInterval(() => bo.check(), IDLE_CHECK_MS);
     // Neither keeps the process alive, nor outlives the port.
     idleCheck.unref();
     server.on('close', () => clearInterval(idleCheck));
-    return {...core, server, databaseReady, bo};
+    return {
+        ...core,
+        databaseReady,
+        bo,
+        getUrl: () => describeBoUrl({cabinet, lanAddress: getLanAddress(), onCabinetPort, port}),
+        close: () => {
+            server.close();
+            cabinetServer?.close();
+        },
+    };
 }
 
 /** This machine's address on the local network, for the BO's URL shown on the cabinet; null offline. */
-export function getLanAddress(interfaces: ReturnType<typeof os.networkInterfaces> = os.networkInterfaces()): string | null {
+function getLanAddress(interfaces: ReturnType<typeof os.networkInterfaces> = os.networkInterfaces()): string | null {
     for (const addresses of Object.values(interfaces)) {
         const found = addresses?.find(address => address.family === 'IPv4' && !address.internal);
         if (found) {
