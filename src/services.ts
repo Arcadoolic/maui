@@ -4,6 +4,7 @@ import GameService from '@/class/GameService.class';
 import MameService from '@/class/MameService.class';
 import UserService from '@/class/UserService.class';
 import HiscoreService from '@/class/HiscoreService.class';
+import type {UiMode} from '@/class/UiMode';
 
 // Replaces the Vuex store (src/store.ts, deleted at step 5 - see DECISIONS.md D3). Every
 // `$store` access in the app was an imperative read inside a method: zero template bindings,
@@ -19,6 +20,8 @@ let gameService: GameService | null = null;
 let userService: UserService | null = null;
 let hiscoreService: HiscoreService | null = null;
 let isInit = false;
+// Set by App.vue as soon as it is set up, before any view: the front's effects are on until then.
+let uiMode: UiMode = 'full';
 
 /**
  * Builds mameService/userService/hiscoreService/gameService in the same dependency order as the
@@ -62,4 +65,13 @@ export function getUserService(): UserService {
 
 export function getHiscoreService(): HiscoreService {
     return hiscoreService!;
+}
+
+export function setUiMode(mode: UiMode): void {
+    uiMode = mode;
+}
+
+/** Whether the front runs without its effects (UiMode.ts). */
+export function isLite(): boolean {
+    return uiMode === 'lite';
 }

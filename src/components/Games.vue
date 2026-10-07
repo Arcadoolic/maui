@@ -31,7 +31,7 @@ import Champions from '@/components/Champions.vue';
 import Game from '@/model/Game.model';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
-import {getMameService, getGameService} from '@/services';
+import {getMameService, getGameService, isLite} from '@/services';
 import defaultMarqueeUrl from '@/assets/default_marquee.jpg';
 
 const props = withDefaults(defineProps<{
@@ -44,8 +44,9 @@ const gameListRef = useTemplateRef<HTMLUListElement>('gameList');
 
 // Only the selected game and its immediate neighbours are ever visible (navigation moves the
 // selection by one at a time), so render a window around it instead of the full list - avoids
-// keeping hundreds/thousands of rows (each with costly CSS filters) alive in the DOM.
-const WINDOW_RADIUS = 20;
+// keeping hundreds/thousands of rows (each with costly CSS filters) alive in the DOM. Narrower in
+// Lite mode: every row holds a decoded marquee, for 7 rows on screen.
+const WINDOW_RADIUS = isLite() ? 6 : 20;
 
 const windowStart = computed(() => Math.max(0, props.selectedGameIndex - WINDOW_RADIUS));
 const windowEnd = computed(() => Math.min(props.games.length - 1, props.selectedGameIndex + WINDOW_RADIUS));

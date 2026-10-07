@@ -67,7 +67,7 @@ import {BO_SERVER_PORT} from '@/boServerPort';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
-import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService} from '@/services';
+import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
 import * as Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
@@ -95,6 +95,10 @@ const timeouts: {
     showFlyer?: number,
     addPlayer?: number,
 } = {};
+
+// How long a game or category change waits for the leaving elements to slide out: nothing slides
+// in Lite mode.
+const SLIDE_OUT_MS = isLite() ? 0 : 300;
 
 const showHiscores = ref(false);
 const flyersPath = ref('');
@@ -172,7 +176,7 @@ function onGameChange(previous: boolean) {
     };
     showFlyer.value = false;
     clearTimeout(timeouts.showFlyer);
-    timeouts.showFlyer = window.setTimeout(showFlyerFn, 300);
+    timeouts.showFlyer = window.setTimeout(showFlyerFn, SLIDE_OUT_MS);
     selectedGameIndex.value = previous ?
         ((selectedGameIndex.value <= 0) ? games.value.length - 1 : selectedGameIndex.value - 1) :
         ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1);
@@ -215,7 +219,7 @@ function onCategoryChange(previous: boolean) {
     showFlyer.value = false;
     showGames.value = false;
     clearTimeout(timeouts.showGame);
-    timeouts.showGame = window.setTimeout(showGameFn, 300);
+    timeouts.showGame = window.setTimeout(showGameFn, SLIDE_OUT_MS);
     selectedCategoryIndex.value = previous ?
         ((selectedCategoryIndex.value <= 0) ? categories.value.length : selectedCategoryIndex.value - 1) :
         ((selectedCategoryIndex.value >= categories.value.length) ? 0 : selectedCategoryIndex.value + 1);

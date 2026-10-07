@@ -73,6 +73,7 @@ import {
     MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
 } from '@/class/MauiControls';
 import {escapeHtml} from '@/class/EscapeHtml';
+import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import {
     describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
@@ -5245,7 +5246,19 @@ function renderUpdateCard(
     `;
 }
 
+/** The mode "auto" comes down to on this machine - what App.vue works out for the front. */
+function getAutoUiMode(): UiMode {
+    let gpuCompositing: string | undefined;
+    try {
+        gpuCompositing = (electronApp.getGPUFeatureStatus() as unknown as Record<string, string>).gpu_compositing;
+    } catch {
+        // Left undefined: the memory alone decides (UiMode.ts).
+    }
+    return resolveUiMode('auto', {totalMemBytes: os.totalmem(), gpuCompositing});
+}
+
 function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): string {
+    const autoUiMode = getAutoUiMode() === 'lite' ? 'Lite' : 'Full';
     return `
         <section class="card">
             <h2>mame-awesome-ui</h2>
@@ -5261,6 +5274,12 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         Open DevTools on startup (development mode)
                     </label>
                 ` : ''}
+                <label for="uiMode">Interface</label>
+                <select id="uiMode" name="uiMode">
+                    <option value="auto" ${config.uiMode === 'auto' ? 'selected' : ''}>Automatic (${autoUiMode} on this machine)</option>
+                    <option value="lite" ${config.uiMode === 'lite' ? 'selected' : ''}>Lite - no animations, blurs or shadows, for a Raspberry Pi 3 and the like</option>
+                    <option value="full" ${config.uiMode === 'full' ? 'selected' : ''}>Full</option>
+                </select>
                 <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
@@ -8560,7 +8579,13 @@ export function startBoServer(
         config.fullscreen = req.body.fullscreen === 'on';
         config.voteEnabled = req.body.voteEnabled === 'on';
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
+        const previousUiMode = config.uiMode;
+        config.uiMode = parseUiModeSetting(req.body.uiMode);
         config.save();
+        if (config.uiMode !== previousUiMode) {
+            // The front decides its mode once, when it loads (App.vue).
+            reloadFront();
+        }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
     });
 
