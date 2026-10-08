@@ -6770,6 +6770,8 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                     var boxes = shownBoxes(row);
                     var ticked = boxes.filter(function (box) { return box.checked; }).length;
                     var toggle = row.querySelector('.pack-toggle');
+                    // Nothing it could tick: every game shown is installed or not offered.
+                    toggle.disabled = boxes.length === 0;
                     toggle.checked = boxes.length > 0 && ticked === boxes.length;
                     toggle.indeterminate = ticked > 0 && ticked < boxes.length;
                 });
@@ -8328,11 +8330,13 @@ export function createBoApp(
                 const manifest = manifests[index];
                 // Per-game sizes for the disk bar: the manifest lists them, unless it is out of date.
                 const entrySizes = manifestEntrySizes(manifest, pack.size);
-                pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
-                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size)
-                    .map(game => ({...game, incompatibility: incompatible[index]?.get(game.romName)}));
                 const tooSlow = findCabinetTooSlowGames(manifest);
-                pack.games = pack.games.map(game => ({...game, tooSlow: tooSlow.get(game.romName)}));
+                // Neither kind is offered below: they do not make the pack look incomplete.
+                const notOffered = new Set([...tooSlow.keys(), ...(incompatible[index]?.keys() ?? [])]);
+                pack.ownership = computePackOwnership(manifest, installedRoms, notOffered) ?? undefined;
+                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size).map(game => ({
+                    ...game, incompatibility: incompatible[index]?.get(game.romName), tooSlow: tooSlow.get(game.romName),
+                }));
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             });
             res.send(await renderFavoritesTab(req, {}, {packs, url: repository.url}));

@@ -18,15 +18,21 @@ export interface PackOwnership {
  * Compares a pack's manifest with the rom zips present in the roms folder (names without the
  * `.zip`). `null` when nothing can be compared: a fallback/unknown manifest, or a pack with no
  * game shipping a rom file.
+ *
+ * notOffered: the games this machine cannot take (too slow for it, or refused by its MAME). One
+ * that is not installed counts neither as part of the pack nor as missing: a pack is not waiting
+ * for an update because of games it will never get.
  */
 export function computePackOwnership(
     manifest: Partial<StartingPackManifest> | null | undefined, installedRomNames: readonly string[],
+    notOffered: ReadonlySet<string> = new Set(),
 ): PackOwnership | null {
     if (!manifest || manifest.formatVersion !== 1 || !Array.isArray(manifest.games)) {
         return null;
     }
     const installed = new Set(installedRomNames.map(name => name.toLowerCase()));
-    const withRom = manifest.games.filter(game => game.hasRomFile);
+    const withRom = manifest.games.filter(game => game.hasRomFile
+        && (installed.has(game.romName.toLowerCase()) || !notOffered.has(game.romName)));
     if (!withRom.length) {
         return null;
     }
