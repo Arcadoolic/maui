@@ -1,3 +1,18 @@
+## [2.9.0](https://github.com/Arcadoolic/maui/compare/2.8.0...2.9.0) (2026-10-08)
+
+### Features
+
+* **bo:** pair Bluetooth gamepads from the MAUI tab ([6416ed7](https://github.com/Arcadoolic/maui/commit/6416ed73b57455e30b033729a4fa7348c8b85b9e))
+* **bo:** set the cabinet's Wi-Fi from the MAUI tab ([fe46a81](https://github.com/Arcadoolic/maui/commit/fe46a81a05df8b580514ba64fb8762bc4c630489))
+* **packs:** take a too slow game all the same ([56e65db](https://github.com/Arcadoolic/maui/commit/56e65dbd790ee59548f7f983bada5ad1cc2fc8af))
+* **packs:** tick the games the hiscores filter shows ([ce30211](https://github.com/Arcadoolic/maui/commit/ce30211bbbf92d63bad7d8aae2311ca86f8304b2))
+* **update:** keep earlier versions for Advanced configuration ([2e684df](https://github.com/Arcadoolic/maui/commit/2e684dfc877a071b7a72ebb76a70791eb1d72ab3))
+* **update:** lay the releases out like the favorites table ([25fc78f](https://github.com/Arcadoolic/maui/commit/25fc78f0d142c5c7a632fc1babc9846345e9c9c6))
+
+### Bug Fixes
+
+* **packs:** do not count the games a cabinet is not offered as missing ([72bb920](https://github.com/Arcadoolic/maui/commit/72bb9204463256379e9b602b346c1527744766bd))
+
 ## [2.8.0](https://github.com/Arcadoolic/maui/compare/2.7.0...2.8.0) (2026-10-08)
 
 ### Features
