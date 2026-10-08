@@ -48,7 +48,7 @@ import {verifyRoms} from '@/class/MameVerifyRoms';
 import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
-import {findTooSlowGames, isWeakHardware} from '@/class/GameSpeed';
+import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
@@ -1304,6 +1304,7 @@ function runConfPackImport(
 async function runRepositoryImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, title: string, filename: string,
     only?: string[], overall?: {index: number; total: number}, tabbed = false,
+    forcedSlow: ReadonlySet<string> = new Set(),
 ): Promise<void> {
     const block = openImportBlock(res, title, true, overall, tabbed);
     const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
@@ -1319,7 +1320,7 @@ async function runRepositoryImport(
             reporter: {line: block.writeLine, progress: block.progress},
             precheckGames: async manifest => (await findPacksIncompatibleGames(config, [manifest]))[0],
             removedGames: () => new Set(readRemovedFavorites().map(item => item.romName)),
-            tooSlowGames: manifest => findCabinetTooSlowGames(manifest),
+            tooSlowGames: manifest => findCabinetTooSlowGames(manifest, forcedSlow),
             verifyRoms: mameBinary && existsSync(mameBinary)
                 ? romNames => verifyRoms(mameBinary, getMameInfo(config).iniPath, romNames)
                 : undefined,
@@ -2533,6 +2534,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .pack-game-incompatible {
             opacity: 0.6;
+        }
+        button.pack-game-unlock {
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: none;
+            font: inherit;
+            line-height: inherit;
+            cursor: pointer;
+        }
+        button.pack-game-unlock:hover {
+            color: var(--text);
         }
         .pack-swatch {
             display: inline-block;
@@ -6595,9 +6608,11 @@ async function findPacksIncompatibleGames(
  * The games of a pack this machine is too weak to run at full speed, by game then reason: none on
  * a machine that is no Raspberry Pi 3 or the like, nor for a manifest without speeds.
  */
-function findCabinetTooSlowGames(manifest: StartingPackManifest | null): Map<string, string> {
+function findCabinetTooSlowGames(
+    manifest: StartingPackManifest | null, forced: ReadonlySet<string> = new Set(),
+): Map<string, string> {
     return manifest && Array.isArray(manifest.games) && isWeakHardware(os.totalmem())
-        ? findTooSlowGames(manifest) : new Map();
+        ? findTooSlowGames(manifest, forced) : new Map();
 }
 
 const MISSING_GAMES_SHOWN = 4;
@@ -6667,12 +6682,24 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
             game.publisher, game.categoryName, game.year,
         ].filter(Boolean).join(' '));
         if (game.tooSlow && game.status !== 'installed') {
-            // Not offered either: this cabinet is too weak for it (PackImport's tooSlowGames).
+            // Not offered: this cabinet is too weak for it (PackImport's tooSlowGames), unless its
+            // owner asks for it all the same. A click on the cross swaps it for the game's
+            // checkbox, left unticked (script in renderRepoPackPicker()); until then both fields
+            // are disabled, so neither is posted nor ticked by a pack box. `forceSlow` is what
+            // lets the import take it.
             return `
-                <li class="pack-game pack-game-incompatible" data-search="${search}" data-hi="${hasHi ? '1' : '0'}"
+                <li class="pack-game pack-game-incompatible pack-game-slow" data-search="${search}" data-hi="${hasHi ? '1' : '0'}"
                     title="${escapeHtml(`Too slow on this cabinet: ${game.tooSlow}.`)}">
-                    <span class="pack-game-mark">✕</span>
-                    <span>${label}<span class="checkbox-row-detail">Too slow on this cabinet (${escapeHtml(game.tooSlow)})</span></span>
+                    <button type="button" class="pack-game-mark pack-game-unlock" data-rom="${escapeHtml(game.romName)}"
+                        title="Offer it all the same" aria-label="${escapeHtml(`Offer ${decodeXmlEntities(game.fullname)} all the same`)}">✕</button>
+                    <label class="pack-game-label">
+                        <input type="checkbox" class="game-checkbox" name="game" disabled hidden
+                            value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
+                            data-rom="${escapeHtml(game.romName)}" data-size="${game.size}"
+                            data-bios="${escapeHtml(game.requiredRoms.join(' '))}">
+                        <input type="hidden" name="forceSlow" value="${escapeHtml(game.romName)}" disabled>
+                        <span>${label}<span class="checkbox-row-detail">Too slow on this cabinet (${escapeHtml(game.tooSlow)})</span></span>
+                    </label>
                 </li>
             `;
         }
@@ -6762,7 +6789,8 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
             A game listed by several packs is fetched once. The hiscores box also ticks the games it shows.
             While a search or the hiscores filter is active, the pack boxes and "Select all" only act on the
-            games shown; ticked games stay ticked when they are hidden.</p>
+            games shown; ticked games stay ticked when they are hidden. A game marked too slow for this cabinet
+            can be taken all the same: click its cross, then tick it.</p>
             ${rows}
             <label class="checkbox-row">
                 <input type="checkbox" id="packSelectAll">
@@ -6791,10 +6819,12 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
                 return bytes.toFixed(1) + ' ' + units[i];
             }
+            // Disabled: a game too slow for this cabinet, until its cross is clicked (see below).
             function gameBoxes(row) {
                 return Array.prototype.slice.call(row.querySelectorAll('.game-checkbox:not([disabled])'));
             }
-            var allBoxes = [].concat.apply([], rows.map(gameBoxes));
+            var everyBox = Array.prototype.slice.call(document.querySelectorAll('.pack-row .game-checkbox'));
+            function enabledBoxes() { return everyBox.filter(function (box) { return !box.disabled; }); }
             // What a pack box / "Select all" acts on: the games a search leaves showing.
             function isShown(box) { return !box.closest('li').hidden; }
             function shownBoxes(row) { return gameBoxes(row).filter(isShown); }
@@ -6850,9 +6880,9 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                     toggle.indeterminate = ticked > 0 && ticked < boxes.length;
                 });
                 // The import takes every ticked game, shown or not.
-                var pickedBoxes = allBoxes.filter(function (box) { return box.checked; });
+                var pickedBoxes = enabledBoxes().filter(function (box) { return box.checked; });
                 submit.disabled = pickedBoxes.length === 0;
-                var shownAll = allBoxes.filter(isShown);
+                var shownAll = enabledBoxes().filter(isShown);
                 all.checked = shownAll.length > 0 && shownAll.every(function (box) { return box.checked; });
                 all.disabled = shownAll.length === 0;
                 if (!summary) { return; }
@@ -6892,12 +6922,29 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             }
             // Ticking a game ticks the same game in every other pack that lists it.
             function mirror(box) {
-                allBoxes.forEach(function (other) {
+                enabledBoxes().forEach(function (other) {
                     if (other.dataset.rom === box.dataset.rom) { other.checked = box.checked; }
                 });
             }
-            allBoxes.forEach(function (box) {
+            everyBox.forEach(function (box) {
                 box.addEventListener('change', function () { mirror(box); refresh(); });
+            });
+            // The cross of a game too slow for this cabinet: a click swaps it for the game's
+            // checkbox, unticked, in every pack that lists the game.
+            Array.prototype.forEach.call(document.querySelectorAll('.pack-game-unlock'), function (cross) {
+                cross.addEventListener('click', function () {
+                    Array.prototype.forEach.call(document.querySelectorAll('.pack-game-unlock'), function (other) {
+                        if (other.dataset.rom !== cross.dataset.rom) { return; }
+                        var item = other.closest('li');
+                        Array.prototype.forEach.call(item.querySelectorAll('input'), function (input) {
+                            input.disabled = false;
+                            input.hidden = false;
+                        });
+                        item.classList.remove('pack-game-incompatible');
+                        other.remove();
+                    });
+                    refresh();
+                });
             });
             rows.forEach(function (row) {
                 row.querySelector('.pack-toggle').addEventListener('change', function (event) {
@@ -6906,7 +6953,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 });
             });
             all.addEventListener('change', function () {
-                allBoxes.filter(isShown).forEach(function (box) { box.checked = all.checked; mirror(box); });
+                enabledBoxes().filter(isShown).forEach(function (box) { box.checked = all.checked; mirror(box); });
                 refresh();
             });
 
@@ -6961,7 +7008,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             hiOnly.addEventListener('change', function () {
                 applySearch();
                 if (hiOnly.checked) {
-                    tickedByHiOnly = allBoxes.filter(function (box) { return isShown(box) && !box.checked; });
+                    tickedByHiOnly = enabledBoxes().filter(function (box) { return isShown(box) && !box.checked; });
                     tickedByHiOnly.forEach(function (box) { box.checked = true; mirror(box); });
                 } else {
                     tickedByHiOnly.forEach(function (box) { box.checked = false; mirror(box); });
@@ -8513,6 +8560,8 @@ export function createBoApp(
         // packs is kept for the first). urlencoded (extended: false) yields a string for one
         // ticked box, an array for several; anything malformed is refused (see the function).
         const selection = groupSelectedGames(req.body?.game);
+        // The too slow games asked for all the same (see renderPackGames()).
+        const forcedSlow = parseForcedGames(req.body?.forceSlow);
 
         if (selection && !selection.size) {
             res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Tick at least one game to import.'}));
@@ -8562,6 +8611,7 @@ export function createBoApp(
                 romNames,
                 {index, total: selection.size},
                 tabbed,
+                forcedSlow,
             );
         }
         if (tabbed) {
