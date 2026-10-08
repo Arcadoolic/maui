@@ -98,6 +98,11 @@ import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} f
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
+import {renderBluetoothCard} from '@/class/BluetoothBoCard';
+import {
+    pairBluetooth, readBluetoothState, removeBluetooth, scanBluetooth, setBluetoothPower,
+    type BluetoothDevice, type BluetoothState,
+} from '@/class/BluetoothControl';
 import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, setWifiRadio, type NetworkState} from '@/class/WifiControl';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath} from '@/staticPath';
@@ -4868,9 +4873,10 @@ function isWindowsInstall(): boolean {
     return process.platform === 'win32' && electronApp.isPackaged && isInstalledByInstaller(process.execPath);
 }
 
-// Where the MAUI tab offers the Network card (WifiControl.ts): a dedicated cabinet, which has no
-// other way to join a Wi-Fi than a keyboard or SSH. A desktop has its own network settings; in
-// development the card shows there too, to work on it.
+// Where the MAUI tab offers the Network and Bluetooth cards (WifiControl.ts, BluetoothControl.ts):
+// a dedicated cabinet, which has no other way to join a Wi-Fi or pair a gamepad than a keyboard or
+// SSH. A desktop has its own settings for both; in development the cards show there too, to work
+// on them.
 function isNetworkControlHost(): boolean {
     return isKioskLayout() || (process.platform === 'linux' && process.env.NODE_ENV === 'development');
 }
@@ -5312,6 +5318,10 @@ interface MauiPageMessages {
     networkError?: string;
     // Look again at the Wi-Fi networks in range before rendering (seconds).
     networkRescan?: boolean;
+    bluetoothInfo?: string;
+    bluetoothError?: string;
+    // What a search for Bluetooth devices just found.
+    bluetoothFound?: BluetoothDevice[];
 }
 
 /**
@@ -5468,7 +5478,7 @@ function renderScoresBackfillCard(messages: MauiPageMessages): string {
 
 function renderMauiPage(
     config: Config, messages: MauiPageMessages = {}, isAdvanced: boolean = false,
-    updateInfo?: UpdateInfo, network?: NetworkState | null,
+    updateInfo?: UpdateInfo, network?: NetworkState | null, bluetooth?: BluetoothState | null,
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
@@ -5479,6 +5489,15 @@ function renderMauiPage(
             id: 'network',
             label: 'Network',
             html: renderNetworkCard(network, {error: messages.networkError, info: messages.networkInfo}),
+        });
+    }
+    if (bluetooth) {
+        sections.push({
+            id: 'bluetooth',
+            label: 'Bluetooth',
+            html: renderBluetoothCard(bluetooth, {
+                error: messages.bluetoothError, info: messages.bluetoothInfo, found: messages.bluetoothFound,
+            }),
         });
     }
     if (updateInfo) {
@@ -5511,8 +5530,9 @@ function renderMauiPage(
             : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
                 : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                     : (messages.networkError ?? messages.networkInfo) !== undefined || messages.networkRescan ? 'network'
-                        : messages.mauiInfo !== undefined ? 'general'
-                            : undefined;
+                        : (messages.bluetoothError ?? messages.bluetoothInfo ?? messages.bluetoothFound) !== undefined ? 'bluetooth'
+                            : messages.mauiInfo !== undefined ? 'general'
+                                : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -5525,11 +5545,12 @@ async function sendMauiPage(
     req: express.Request, res: Response, config: Config, messages: MauiPageMessages = {},
 ): Promise<void> {
     const isAdvanced = req.session.boAdvanced === true;
-    const [updateInfo, network] = await Promise.all([
+    const [updateInfo, network, bluetooth] = await Promise.all([
         getUpdateInfo(),
         isNetworkControlHost() ? readNetworkState(messages.networkRescan === true) : null,
+        isNetworkControlHost() ? readBluetoothState() : null,
     ]);
-    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo, network));
+    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo, network, bluetooth));
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -7451,11 +7472,11 @@ function refuseOnlineRequest(req: Request, res: Response): boolean {
 }
 
 /**
- * Guard of the /maui/network/* routes, which can cut the cabinet off its network: a dedicated
- * cabinet only, and same-origin only (see refuseOnlineRequest()). Sends the 403 itself; true means
+ * Guard of the /maui/network/* and /maui/bluetooth/* routes, which act on the cabinet's system
+ * (and can cut it off its network): a dedicated cabinet only, and same-origin only (see refuseOnlineRequest()). Sends the 403 itself; true means
  * the caller must stop.
  */
-function refuseNetworkRequest(req: Request, res: Response): boolean {
+function refuseCabinetSystemRequest(req: Request, res: Response): boolean {
     if (!isNetworkControlHost()) {
         res.status(403).send('Network settings unavailable on this machine.');
         return true;
@@ -8960,7 +8981,7 @@ export function createBoApp(
     // The Network card (NetworkBoCard.ts). Any BO account, like the restart above: joining the
     // Wi-Fi is part of setting a cabinet up.
     app.post('/maui/network/scan', async (req, res) => {
-        if (refuseNetworkRequest(req, res)) {
+        if (refuseCabinetSystemRequest(req, res)) {
             return;
         }
         const config = new Config();
@@ -8969,7 +8990,7 @@ export function createBoApp(
     });
 
     app.post('/maui/network/radio', async (req, res) => {
-        if (refuseNetworkRequest(req, res)) {
+        if (refuseCabinetSystemRequest(req, res)) {
             return;
         }
         const config = new Config();
@@ -8991,7 +9012,7 @@ export function createBoApp(
     // Answers once the cabinet joined the network or gave up (WifiControl.ts connectWifi(), half a
     // minute at most). Reached over the Wi-Fi being left, the answer never arrives.
     app.post('/maui/network/connect', async (req, res) => {
-        if (refuseNetworkRequest(req, res)) {
+        if (refuseCabinetSystemRequest(req, res)) {
             return;
         }
         const config = new Config();
@@ -9008,7 +9029,7 @@ export function createBoApp(
     });
 
     app.post('/maui/network/forget', async (req, res) => {
-        if (refuseNetworkRequest(req, res)) {
+        if (refuseCabinetSystemRequest(req, res)) {
             return;
         }
         const config = new Config();
@@ -9025,6 +9046,73 @@ export function createBoApp(
             return;
         }
         await sendMauiPage(req, res, config, {networkInfo: 'Network forgotten.'});
+    });
+
+    // The Bluetooth card (BluetoothBoCard.ts), same access as the Network card. A search and a
+    // pairing answer once done: ten seconds for the first, up to a minute for the second.
+    app.post('/maui/bluetooth/power', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const on = req.body.bluetooth === 'on';
+        try {
+            await setBluetoothPower(on);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `Bluetooth not switched ${on ? 'on' : 'off'}: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {bluetoothInfo: `Bluetooth switched ${on ? 'on' : 'off'}.`});
+    });
+
+    app.post('/maui/bluetooth/scan', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        try {
+            await sendMauiPage(req, res, config, {bluetoothFound: await scanBluetooth()});
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `Search failed: ${(error as Error).message}`});
+        }
+    });
+
+    app.post('/maui/bluetooth/pair', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const address = typeof req.body.address === 'string' ? req.body.address : '';
+        const name = typeof req.body.name === 'string' && req.body.name ? req.body.name : address;
+        try {
+            const device = await pairBluetooth(address);
+            await sendMauiPage(req, res, config, {
+                bluetoothInfo: device.connected
+                    ? `${name} paired and connected.`
+                    : `${name} paired. It connects at its next key press.`,
+            });
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `${name} not paired: ${(error as Error).message}`});
+        }
+    });
+
+    app.post('/maui/bluetooth/remove', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const address = typeof req.body.address === 'string' ? req.body.address : '';
+        try {
+            await removeBluetooth(address);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `Device not forgotten: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {bluetoothInfo: 'Device forgotten.'});
     });
 
     app.post('/screenscraper/save', (req, res) => {
