@@ -1,5 +1,8 @@
 import type Category from '@/model/Category.model';
-import type {CarouselCategory, MergedCategory} from '@/types/CarouselCategory';
+import {
+    ALL_GAMES_CATEGORY, HISCORES_ONLY_CATEGORY, BEAT_THIS_CATEGORY,
+    type CarouselCategory, type MergedCategory,
+} from '@/types/CarouselCategory';
 import {GENRE_ICON_KEYS} from '@/class/CatverGenres';
 
 const TTL_PREFIX = /^TTL \* /;
@@ -19,7 +22,8 @@ export function getCategoryIconKey(categoryName: string): string {
     if (genreIconKey) {
         return genreIconKey;
     }
-    return categoryName.replace(TTL_PREFIX, '').replace(/[\s\W]+/g, '_').toLowerCase();
+    // A name's closing punctuation is no part of its key: "Beat This!" -> "beat_this".
+    return categoryName.replace(TTL_PREFIX, '').replace(/[\s\W]+/g, '_').replace(/_+$/, '').toLowerCase();
 }
 
 /** Name a category is displayed under: mame's "TTL * " prefix dropped (see mergeTtlCategories()). */
@@ -56,4 +60,30 @@ export function mergeTtlCategories(categories: Category[]): CarouselCategory[] {
     }
     // Plain comparison, like SQLite's default (binary) ORDER BY name.
     return merged.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(item => item.entry);
+}
+
+export interface CarouselOptions {
+    // The BO's MAUI tab (Config.showAllGamesCategory...).
+    showAllGames: boolean;
+    showBeatThis: boolean;
+    showHiscoresOnly: boolean;
+    // An empty category would be a dead end in the carousel: these two are only offered once
+    // they hold a game.
+    hasBeatThisGames: boolean;
+    hasHiscoreGames: boolean;
+}
+
+/**
+ * The carousel's entries, in order: "All Games", "Beat This!", "Hiscores Only", then the
+ * genres. Never empty: with everything hidden and no genre (no configuration pack yet), "All
+ * Games" is shown all the same, or the cabinet would list no game at all.
+ */
+export function buildCarousel(genres: CarouselCategory[], options: CarouselOptions): CarouselCategory[] {
+    const carousel = [
+        ...(options.showAllGames ? [ALL_GAMES_CATEGORY] : []),
+        ...(options.showBeatThis && options.hasBeatThisGames ? [BEAT_THIS_CATEGORY] : []),
+        ...(options.showHiscoresOnly && options.hasHiscoreGames ? [HISCORES_ONLY_CATEGORY] : []),
+        ...genres,
+    ];
+    return carousel.length ? carousel : [ALL_GAMES_CATEGORY];
 }

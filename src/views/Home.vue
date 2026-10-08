@@ -53,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onMounted, watch} from 'vue';
+import {ref, computed, onMounted, onUnmounted, watch} from 'vue';
 import router from '@/router';
 import Categories from '@/components/Categories.vue';
 import Games from '@/components/Games.vue';
@@ -65,9 +65,10 @@ import {useBoUrl} from '@/composables/useBoUrl';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import {
-    CarouselCategory, HISCORES_ONLY_CATEGORY, isDynamicCategory, isMergedCategory,
+    CarouselCategory, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
-import {mergeTtlCategories} from '@/class/CarouselCategories';
+import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
+import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSource';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
@@ -140,14 +141,10 @@ const loaderTitle = ref('Button pressing');
 
 const selectedGame = computed(() => games.value[selectedGameIndex.value] || null);
 
-const category = computed(() => {
-    if (displayedCategoryIndex.value) {
-        return categories.value[displayedCategoryIndex.value - 1];
-    }
-    return {name: 'All Games'};
-});
+const category = computed(() => categories.value[displayedCategoryIndex.value]);
 
-const hasCategories = computed(() => categories.value.length > 0);
+// A single entry (no genre yet, or everything else hidden from the BO) is nothing to browse.
+const hasCategories = computed(() => categories.value.length > 1);
 
 // The scores table only exists for a game that has a .hi file, and only while the player asked for it.
 const hiscoresVisible = computed(() => !!(selectedGame.value && selectedGame.value.hi && showHiscores.value));
@@ -197,12 +194,16 @@ function onGameChange(previous: boolean) {
 }
 
 async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
-    if (!categoryIndex) {
-        return await gameService.loadGames();
-    }
-    const selected = categories.value[categoryIndex - 1];
+    const selected = categories.value[categoryIndex];
     if (isDynamicCategory(selected)) {
-        return await gameService.loadHiscoreGames();
+        switch (selected.dynamic) {
+        case 'all':
+            return await gameService.loadGames();
+        case 'hiscores':
+            return await gameService.loadHiscoreGames();
+        case 'beat-this':
+            return await loadBeatThisGames();
+        }
     }
     if (isMergedCategory(selected)) {
         return await gameService.loadGamesByCategoryIds(selected.categoryIds);
@@ -235,8 +236,8 @@ function onCategoryChange(previous: boolean) {
     clearTimeout(timeouts.showGame);
     timeouts.showGame = window.setTimeout(showGameFn, SLIDE_OUT_MS);
     selectedCategoryIndex.value = previous ?
-        ((selectedCategoryIndex.value <= 0) ? categories.value.length : selectedCategoryIndex.value - 1) :
-        ((selectedCategoryIndex.value >= categories.value.length) ? 0 : selectedCategoryIndex.value + 1);
+        ((selectedCategoryIndex.value <= 0) ? categories.value.length - 1 : selectedCategoryIndex.value - 1) :
+        ((selectedCategoryIndex.value >= categories.value.length - 1) ? 0 : selectedCategoryIndex.value + 1);
 }
 
 /** Never throws: ONLINE must never keep a game from starting. */
@@ -265,8 +266,9 @@ function startGame() {
             });
             gameProcess.on('close', () => {
                 void notifyScoreCapture(PLAY_ENDED_GLOBAL, game.romName);
-                hiService.saveHiscores(game).then(() => {
+                hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
+                    await onScoresChanged();
                     return askVote(game);
                 }).catch((err) => {
                     Log.error('[Home] Error after game ' + game.id_game + ' quit.');
@@ -306,7 +308,7 @@ async function onVote(vote: Vote) {
     try {
         const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite);
         if (removed) {
-            await reloadAfterRemoval();
+            await reloadCarousel();
         }
     } catch (err) {
         Log.error('[Home] Error on game ' + game.id_game + ' vote.');
@@ -315,31 +317,57 @@ async function onVote(vote: Vote) {
 }
 
 /**
- * A game left the favorites: refresh the carousel, which may have lost its category, and keep the
- * selection where it was.
+ * Builds the carousel again and keeps the selection where it was: a game left the favorites
+ * (its category may have gone with it), or the scores changed.
  */
-async function reloadAfterRemoval() {
+async function reloadCarousel() {
+    const selectedId = categories.value[selectedCategoryIndex.value]?.id_category;
+    const selectedRomName = selectedGame.value?.romName;
     await loadCategories();
-    let loadedGames = selectedCategoryIndex.value <= categories.value.length
-        ? await loadCategoryGames(selectedCategoryIndex.value)
-        : [];
-    if (!loadedGames.length && selectedCategoryIndex.value) {
-        // The category the game was in had no other game: back to "All Games".
-        selectedCategoryIndex.value = 0;
-        displayedCategoryIndex.value = 0;
-        loadedGames = await loadCategoryGames(0);
-    }
+    // The category the game was in had no other game, and left the carousel: back to the first.
+    const index = Math.max(categories.value.findIndex(entry => entry.id_category === selectedId), 0);
+    selectedCategoryIndex.value = index;
+    displayedCategoryIndex.value = index;
+    const loadedGames = await loadCategoryGames(index);
     games.value = loadedGames;
-    selectedGameIndex.value = Math.min(selectedGameIndex.value, Math.max(loadedGames.length - 1, 0));
+    // The same game when it is still there ("Beat This!" changes its order), else the same
+    // position.
+    const gameIndex = loadedGames.findIndex(loaded => loaded.romName === selectedRomName);
+    selectedGameIndex.value = gameIndex >= 0
+        ? gameIndex
+        : Math.min(selectedGameIndex.value, Math.max(loadedGames.length - 1, 0));
     flyer.value = generateFlyerPath();
 }
 
+/**
+ * New scores (a game was quit, or MAUI-API's leaderboards changed): "Beat This!" may have
+ * to appear, or to put another game first. Nothing is touched otherwise.
+ */
+async function onScoresChanged() {
+    if (!getConfiguration().showBeatThisCategory) {
+        return;
+    }
+    try {
+        const beatThis = (await loadBeatThisGames()).length > 0;
+        const selected = categories.value[selectedCategoryIndex.value];
+        if (beatThis !== categories.value.includes(BEAT_THIS_CATEGORY) || selected === BEAT_THIS_CATEGORY) {
+            await reloadCarousel();
+        }
+    } catch (err) {
+        Log.error('[Home] Error on carousel refresh.');
+        Log.error(err);
+    }
+}
+
 async function loadCategories() {
-    const storedCategories = mergeTtlCategories(await gameService.loadCategories());
-    // Right after "All Games". Only offered once at least one game has extractable
-    // hiscores: an empty category would be a dead end in the carousel.
-    const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
-    categories.value = hasHiscoreGames ? [HISCORES_ONLY_CATEGORY, ...storedCategories] : storedCategories;
+    const config = getConfiguration();
+    categories.value = buildCarousel(mergeTtlCategories(await gameService.loadCategories()), {
+        showAllGames: config.showAllGamesCategory,
+        showBeatThis: config.showBeatThisCategory,
+        showHiscoresOnly: config.showHiscoresOnlyCategory,
+        hasBeatThisGames: config.showBeatThisCategory && (await loadBeatThisGames()).length > 0,
+        hasHiscoreGames: config.showHiscoresOnlyCategory && (await gameService.loadHiscoreGames()).length > 0,
+    });
 }
 
 function addPlayer() {
@@ -393,6 +421,9 @@ function cancelBackOffice() {
 }
 
 const {onKeydown, onKeyup} = useControllable();
+
+let stopLeaderboardsListener: (() => void) | undefined;
+onUnmounted(() => stopLeaderboardsListener?.());
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
@@ -479,7 +510,7 @@ if (!getIsInit()) {
 
     onMounted(async () => {
         await loadCategories();
-        games.value = await gameService.loadGames();
+        games.value = await loadCategoryGames(0);
         gamesLoaded.value = true;
         // Start on the game played last, when there is one still in the favorites.
         const lastPlayed = await gameService.loadLastPlayedGame();
@@ -491,6 +522,7 @@ if (!getIsInit()) {
 
         Gamepads.init();
         registerKeyMapping();
+        stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="140px" height="140px" viewBox="228 351 140 140">
+<circle fill="#F8EB48" cx="298" cy="421" r="70"/>
+<!-- Podium: three steps, the winner's in the middle, and its star -->
+<path fill="#556F7B" d="M256,428h28v32h-28V428z"/>
+<path fill="#7C86BF" d="M284,410h28v50h-28V410z"/>
+<path fill="#384850" d="M312,438h28v22h-28V438z"/>
+<path fill="#C6C9E4" d="M288,414h6v42h-6V414z"/>
+<path fill="#384850" d="M298,376l5.3,10.7l11.8,1.7l-8.6,8.3l2,11.8L298,402.9l-10.5,5.6l2-11.8l-8.6-8.3l11.8-1.7L298,376z"/>
+</svg>

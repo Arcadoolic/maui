@@ -5238,6 +5238,11 @@ function getAutoUiMode(): UiMode {
     return resolveUiMode('auto', {totalMemBytes: os.totalmem(), gpuCompositing});
 }
 
+/** The carousel categories switched on in the MAUI tab, to tell whether a save changed them. */
+function shownCategories(config: Config): string {
+    return [config.showAllGamesCategory, config.showBeatThisCategory, config.showHiscoresOnlyCategory].join();
+}
+
 function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): string {
     const autoUiMode = getAutoUiMode() === 'lite' ? 'Lite' : 'Full';
     return `
@@ -5255,6 +5260,18 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         Open DevTools on startup (development mode)
                     </label>
                 ` : ''}
+                <label class="checkbox-row">
+                    <input type="checkbox" name="showAllGamesCategory" ${config.showAllGamesCategory ? 'checked' : ''}>
+                    Show the "All Games" category
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="showBeatThisCategory" ${config.showBeatThisCategory ? 'checked' : ''}>
+                    Show the "Beat This!" category - the games players have a score on, the one scored on last first
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="showHiscoresOnlyCategory" ${config.showHiscoresOnlyCategory ? 'checked' : ''}>
+                    Show the "Hiscores Only" category - the games whose hiscores can be extracted
+                </label>
                 <label for="uiMode">Interface</label>
                 <select id="uiMode" name="uiMode">
                     <option value="auto" ${config.uiMode === 'auto' ? 'selected' : ''}>Automatic (${autoUiMode} on this machine)</option>
@@ -8666,6 +8683,10 @@ export function createBoApp(
         config.fullscreen = req.body.fullscreen === 'on';
         config.voteEnabled = req.body.voteEnabled === 'on';
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
+        const previousCategories = shownCategories(config);
+        config.showAllGamesCategory = req.body.showAllGamesCategory === 'on';
+        config.showBeatThisCategory = req.body.showBeatThisCategory === 'on';
+        config.showHiscoresOnlyCategory = req.body.showHiscoresOnlyCategory === 'on';
         const previousUiMode = config.uiMode;
         config.uiMode = parseUiModeSetting(req.body.uiMode);
         const boIdleMinutes = Number(req.body.boIdleMinutes);
@@ -8678,8 +8699,9 @@ export function createBoApp(
             config.displayMode = parseDisplayModeSetting(req.body.displayMode);
         }
         config.save();
-        if (config.uiMode !== previousUiMode) {
-            // The front decides its mode once, when it loads (App.vue).
+        if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories) {
+            // The front decides its mode once, when it loads (App.vue), and builds its carousel
+            // when Home.vue is mounted.
             reloadFront();
         }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
