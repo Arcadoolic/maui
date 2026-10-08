@@ -2108,6 +2108,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .col-romname { width: 130px; }
         .col-assets { width: 88px; }
         .col-date { width: 140px; }
+        .col-published { width: 170px; }
+        /* MAUI tab's releases: only some rows hold the install icon, all keep its height. */
+        .update-table {
+            margin-top: 16px;
+        }
+        .update-table td {
+            height: 33px;
+        }
+        /* Three columns only: narrow enough for a phone without scrolling sideways. */
+        .update-table table.favorites-table.fixed-columns {
+            min-width: 340px;
+        }
         .col-plays { width: 64px; }
         .col-vote { width: 140px; }
         .col-action { width: 56px; }
@@ -5082,14 +5094,16 @@ const INSTALL_ICON_PATHS = '<path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10"/>'
 function renderUpdateReleaseRow(
     release: UpdateReleaseEntry, capable: boolean, isAdvanced: boolean, confirmLabel: string,
 ): string {
-    let action: string;
+    // What the row is, next to its name; the last column only ever holds the install icon.
+    let status = '';
+    let action = '';
     if (release.isCurrent) {
-        action = '';
+        status = '<span class="badge-yes">current version</span>';
     } else if (release.isOlder && !isAdvanced) {
         // Going back to an earlier version is refused by the route too (/maui/update/install).
-        action = '<em>Earlier version</em>';
+        status = '<span class="badge-deleted" title="Installed in Advanced configuration only">earlier version</span>';
     } else if (!release.assetUrl) {
-        action = '<em>No artifact for this platform</em>';
+        status = '<span class="badge-warn">no artifact for this platform</span>';
     } else {
         action = `
             <form method="post" action="/maui/update/install" data-stream
@@ -5101,10 +5115,29 @@ function renderUpdateReleaseRow(
     }
     return `
         <tr>
-            <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">current version</span>' : ''}</td>
+            <td>${escapeHtml(release.name)}${status ? ` ${status}` : ''}</td>
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
             <td class="center">${action}</td>
         </tr>
+    `;
+}
+
+/** The releases as a table laid out like the favorites': the name takes what the fixed columns leave. */
+function renderUpdateTable(rows: string, emptyLabel: string): string {
+    return `
+        <div class="table-wrap update-table">
+            <table class="favorites-table fixed-columns">
+                <colgroup>
+                    <col>
+                    <col class="col-published">
+                    <col class="col-action">
+                </colgroup>
+                <thead>
+                    <tr><th>Version</th><th>Published on</th><th class="center"></th></tr>
+                </thead>
+                <tbody>${rows || `<tr><td colspan="3"><em>${emptyLabel}</em></td></tr>`}</tbody>
+            </table>
+        </div>
     `;
 }
 
@@ -5147,22 +5180,14 @@ function renderUpdateCard(
             ${installMessage ? `<p class="info flash">${escapeHtml(installMessage)}</p>` : ''}
             ${updateInfo.releasesError
                 ? `<p class="error">Unable to fetch the GitHub releases: ${escapeHtml(updateInfo.releasesError)}</p>`
-                : `<table>
-                    <thead><tr><th>Version</th><th>Published on</th><th></th></tr></thead>
-                    <tbody>${releaseRows || '<tr><td colspan="3"><em>No release found.</em></td></tr>'}</tbody>
-                </table>`}
+                : renderUpdateTable(releaseRows, 'No release found.')}
         </section>
         ${isAdvanced ? `
             <section class="card">
                 <h2>Development builds (unpublished)</h2>
                 <p class="error">GitHub prereleases generated automatically on every push to
                 develop (workflow "Build") - not yet promoted to main, meant for testing only.</p>
-                ${!updateInfo.releasesError
-                    ? `<table>
-                        <thead><tr><th>Version</th><th>Published on</th><th></th></tr></thead>
-                        <tbody>${devBuildRows || '<tr><td colspan="3"><em>No build available.</em></td></tr>'}</tbody>
-                    </table>`
-                    : ''}
+                ${!updateInfo.releasesError ? renderUpdateTable(devBuildRows, 'No build available.') : ''}
             </section>
         ` : ''}
     `;
