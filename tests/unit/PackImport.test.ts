@@ -242,6 +242,22 @@ describe('importRepositoryPack', () => {
         expect(existsSync(join(home, 'roms', 'alpha.zip'))).toBe(false);
     });
 
+    it('does not fetch a game too slow for the cabinet, even ticked on its own', async () => {
+        const pack = starterPack();
+        const tooSlowGames = () => new Map([['alpha', '52% of its speed on a Raspberry Pi 3']]);
+
+        expect(await run(pack, {tooSlowGames})).toBe(true);
+
+        expect(lines).toContain('  alpha: not fetched, too slow on this cabinet (52% of its speed on a Raspberry Pi 3).');
+        expect(readdirSync(join(home, 'roms'))).toEqual(['beta.zip']);
+        expect([...games.keys()]).toEqual(['beta']);
+        expect(readFileSync(join(home, 'ui', 'favorites.ini'), 'utf8')).not.toContain('alpha');
+        expect(lines.some(line => line.endsWith('1 game(s) skipped, too slow on this cabinet'))).toBe(true);
+
+        expect(await run(pack, {tooSlowGames, only: ['alpha']})).toBe(true);
+        expect(existsSync(join(home, 'roms', 'alpha.zip'))).toBe(false);
+    });
+
     it('imports every game when the manifest cannot tell', async () => {
         expect(await run(starterPack(), {precheckGames: async () => null})).toBe(true);
 
