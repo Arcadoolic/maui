@@ -65,7 +65,7 @@ import {
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
-import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
+import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
@@ -4816,6 +4816,8 @@ interface UpdateReleaseEntry {
     publishedAt: string;
     assetUrl: string | null;
     isCurrent: boolean;
+    // A version under the running one: only installed in Advanced configuration.
+    isOlder: boolean;
     isPrerelease: boolean;
 }
 
@@ -4903,11 +4905,14 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
                 publishedAt: release.published_at,
                 assetUrl: asset ? asset.browser_download_url : null,
                 isCurrent: release.tag_name === info.currentVersion,
+                isOlder: isOlderVersion(release.tag_name, info.currentVersion),
                 isPrerelease: release.prerelease,
             };
         });
         // Sorted here, not left in the API's order - see sortByPublishedDesc().
-        info.releases = sortByPublishedDesc(entries.filter(entry => !entry.isPrerelease));
+        info.releases = limitOlderReleases(
+            sortByPublishedDesc(entries.filter(entry => !entry.isPrerelease)), info.currentVersion,
+        );
         info.devBuilds = sortByPublishedDesc(entries.filter(entry => entry.isPrerelease));
     } catch (error) {
         info.releasesError = error instanceof Error ? error.message : 'unexpected error';
@@ -5072,20 +5077,33 @@ function renderRestartWaitScript(backHref: string): string {
     }</script>`;
 }
 
-function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, confirmLabel: string): string {
+const INSTALL_ICON_PATHS = '<path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10"/>';
+
+function renderUpdateReleaseRow(
+    release: UpdateReleaseEntry, capable: boolean, isAdvanced: boolean, confirmLabel: string,
+): string {
+    let action: string;
+    if (release.isCurrent) {
+        action = '';
+    } else if (release.isOlder && !isAdvanced) {
+        // Going back to an earlier version is refused by the route too (/maui/update/install).
+        action = '<em>Earlier version</em>';
+    } else if (!release.assetUrl) {
+        action = '<em>No artifact for this platform</em>';
+    } else {
+        action = `
+            <form method="post" action="/maui/update/install" data-stream
+                onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
+                <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
+                ${renderIconButton(`Install version ${release.tagName}`, INSTALL_ICON_PATHS, 'accent', !capable)}
+            </form>
+        `;
+    }
     return `
         <tr>
             <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">current version</span>' : ''}</td>
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
-            <td class="center">
-                ${release.assetUrl && !release.isCurrent ? `
-                    <form method="post" action="/maui/update/install" data-stream
-                        onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
-                        <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
-                        <button type="submit" ${capable ? '' : 'disabled'}>Install</button>
-                    </form>
-                ` : release.isCurrent ? '' : '<em>No artifact for this platform</em>'}
-            </td>
+            <td class="center">${action}</td>
         </tr>
     `;
 }
@@ -5099,12 +5117,12 @@ function renderUpdateCard(
         : 'The application closes and reopens on that version.';
     const confirmRelease = `Install version {tag}? ${afterInstall}`;
     const releaseRows = updateInfo.releases
-        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmRelease))
+        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, isAdvanced, confirmRelease))
         .join('');
 
     const confirmDevBuild = `Install the development build {tag} (not promoted to main)? ${afterInstall}`;
     const devBuildRows = updateInfo.devBuilds
-        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmDevBuild))
+        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, isAdvanced, confirmDevBuild))
         .join('');
 
     return `
@@ -8784,8 +8802,14 @@ export function createBoApp(
         }
         // The file to fetch is the one GitHub lists for that version, not an address the form
         // sent: it is run on this machine.
-        const assetUrl = [...preUpdateInfo.releases, ...preUpdateInfo.devBuilds]
-            .find(release => release.tagName === tagName)?.assetUrl;
+        const target = [...preUpdateInfo.releases, ...preUpdateInfo.devBuilds]
+            .find(release => release.tagName === tagName);
+        // Same as the dev builds: the row offers nothing, and a forged form gets no further.
+        if (!isAdvanced && target?.isOlder) {
+            res.status(403).send('Going back to an earlier version is available in Advanced configuration only.');
+            return;
+        }
+        const assetUrl = target?.assetUrl;
         if (!assetUrl) {
             await sendMauiPage(req, res, config, {updateInfoError: `Version ${tagName || '?'} has nothing to install on this machine.`});
             return;
