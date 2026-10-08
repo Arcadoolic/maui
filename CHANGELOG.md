@@ -1,3 +1,9 @@
+## [2.8.0](https://github.com/Arcadoolic/maui/compare/2.7.0...2.8.0) (2026-10-08)
+
+### Features
+
+* **packs:** leave out the games too slow for a weak cabinet ([5dba508](https://github.com/Arcadoolic/maui/commit/5dba50811695cf45562ae1db9e4fa990270248cf))
+
 ## [2.7.0](https://github.com/Arcadoolic/maui/compare/2.6.1...2.7.0) (2026-10-07)
 
 ### Features
