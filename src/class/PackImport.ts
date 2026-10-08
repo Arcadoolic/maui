@@ -70,6 +70,8 @@ export interface PackImportSummary {
     // Games left out: taken out of the favorites on this cabinet (a thumbs down, or the Games
     // tab's remove button), where only the BO's "Removed" tab puts them back.
     removedGamesSkipped: string[];
+    // Games left out: too slow on a cabinet this weak (GameSpeed.ts).
+    tooSlowGamesSkipped: string[];
     categoriesCreated: string[];
     directoriesImported: {zipFolder: string; filesWritten: number}[];
     warnings: string[];
@@ -137,6 +139,9 @@ export interface PackImportOptions {
     // romNames of the favorites removed on this cabinet (FavoritesStore's removed-favorites.json):
     // an import never brings them back, even ticked one by one. Absent = nothing is held back.
     removedGames?: () => ReadonlySet<string>;
+    // The games of the pack this cabinet is too weak to run at full speed, each with the reason
+    // (GameSpeed.findTooSlowGames()): not fetched, even ticked one by one. Absent = no such limit.
+    tooSlowGames?: (manifest: StartingPackManifest) => ReadonlyMap<string, string>;
     fetchImpl?: typeof fetch;
 }
 
@@ -196,7 +201,7 @@ export function humanSize(bytes: number): string {
 function defaultSummary(): PackImportSummary {
     return {
         gamesUpserted: 0, romFilesWritten: 0, biosFilesWritten: 0, marqueesWritten: 0, flyersWritten: 0,
-        logosWritten: 0, favoritesAdded: 0, romsInfosAdded: 0, incompatibleGames: [], removedGamesSkipped: [], categoriesCreated: [], directoriesImported: [],
+        logosWritten: 0, favoritesAdded: 0, romsInfosAdded: 0, incompatibleGames: [], removedGamesSkipped: [], tooSlowGamesSkipped: [], categoriesCreated: [], directoriesImported: [],
         warnings: [], errors: [],
     };
 }
@@ -737,6 +742,7 @@ function reportSummary(summary: PackImportSummary, say: (text: string) => void):
         `${summary.errors.length} error(s)`,
         ...(summary.incompatibleGames.length ? [`${summary.incompatibleGames.length} game(s) not compatible with the installed MAME`] : []),
         ...(summary.removedGamesSkipped.length ? [`${summary.removedGamesSkipped.length} game(s) skipped, removed from the favorites`] : []),
+        ...(summary.tooSlowGamesSkipped.length ? [`${summary.tooSlowGamesSkipped.length} game(s) skipped, too slow on this cabinet`] : []),
     ].join(' — '));
     if (summary.categoriesCreated.length) {
         say(`Categories created: ${summary.categoriesCreated.join(', ')}`);
@@ -801,6 +807,20 @@ export async function importRepositoryPack(options: PackImportOptions): Promise<
                 }
                 manifest = selectGames(
                     manifest, manifest.games.filter(game => !removed.has(game.romName)).map(game => game.romName), summary,
+                );
+                entryFilter = wantedEntries(manifest);
+            }
+        }
+        if (manifest && options.tooSlowGames) {
+            const tooSlow = options.tooSlowGames(manifest);
+            const skipped = manifest.games.filter(game => tooSlow.has(game.romName));
+            if (skipped.length) {
+                for (const {romName} of skipped) {
+                    summary.tooSlowGamesSkipped.push(romName);
+                    reporter.line(`  ${romName}: not fetched, too slow on this cabinet (${tooSlow.get(romName)}).`);
+                }
+                manifest = selectGames(
+                    manifest, manifest.games.filter(game => !tooSlow.has(game.romName)).map(game => game.romName), summary,
                 );
                 entryFilter = wantedEntries(manifest);
             }

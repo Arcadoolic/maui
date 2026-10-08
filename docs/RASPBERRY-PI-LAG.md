@@ -224,3 +224,30 @@ donc à 720 lignes en mode Lite, et 1080p est à éviter sur ce matériel.
 Reste à essayer : l'accélération GPU de Chromium (`--ignore-gpu-blocklist
 --use-gl=angle --use-angle=gles-egl`), devenue secondaire maintenant que
 l'écran d'accueil ne coûte plus rien au repos.
+
+### Vitesse des jeux des packs, mesure du 2026-10-08
+
+Les 391 jeux des 22 packs du dépôt ont été mesurés un par un sur ce Pi 3 avec
+`mame <rom> -bench 30` (sans affichage ni son réels, donc quelques points
+au-dessus de la vitesse en jeu) : aucune erreur, pas de bridage thermique
+(68 à 72 °C).
+
+| Vitesse | Jeux | Part |
+|---|---|---|
+| Sous 100 % | 112 | 29 % |
+| 100 à 120 % | 59 | 15 % |
+| 120 % et plus | 220 | 56 % |
+
+- Capcom, Nichibutsu, Tecmo, Centuri et Gottlieb passent presque entièrement.
+- Irem (34 sur 55) et Sega (24 sur 39) sont en majorité trop lents ; le Neo Geo
+  est presque entièrement entre 100 et 120 %.
+- `mwalk` (System 18) tourne à 52 %, et le saut d'images maximal ne le remonte
+  qu'à 63 % : c'est l'émulation qui sature un cœur, pas le rendu.
+- Des jeux très anciens sont parmi les plus lents (`pong` 37 %, `kungfum` 42 %,
+  `ldrun` 41 %, `elim2` 29 %), sans doute à cause de leur son analogique (non
+  vérifié) : une liste par système ne les aurait pas trouvés.
+
+Seuls les jeux à 120 % ou plus sont proposés à une borne de cette classe
+(2 Gio de mémoire ou moins, `src/class/GameSpeed.ts`). Les mesures sont dans
+`scripts/pi3-speeds.json` de maui-repository, qui les écrit dans le manifeste de
+chaque pack (`pi3Speeds`).

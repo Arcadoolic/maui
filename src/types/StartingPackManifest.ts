@@ -89,4 +89,9 @@ export interface StartingPackManifest {
     // MAME expects (`mame -listxml`), it tells whether a game suits it before anything is
     // downloaded (RomsetCompatibility.ts). A set that could not be read is absent.
     romsets?: Record<string, string[]>;
+    // Companion only too: the speed of the pack's games on a Raspberry Pi 3 Model B, in percent of
+    // their real speed (`mame <rom> -bench`, rounded down; maui-repository's pi3-speeds.json). A
+    // cabinet that weak is not offered a game under its threshold (GameSpeed.ts). A game that was
+    // not measured is absent, and nothing is held against it.
+    pi3Speeds?: Record<string, number>;
 }

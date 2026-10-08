@@ -75,6 +75,9 @@ export interface PackGameDetail {
     // Why the installed MAME cannot run it with the sets of this pack
     // (RomsetCompatibility.findIncompatibleGames()); absent when it can, or when nothing tells.
     incompatibility?: string;
+    // Why this cabinet is too weak for it (GameSpeed.findTooSlowGames()); absent when it is not,
+    // or when the cabinet is no weak one.
+    tooSlow?: string;
 }
 
 /**
