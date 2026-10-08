@@ -33,3 +33,43 @@ export function formatPublishedAt(iso: string): string {
     }
     return date.toLocaleString('en-GB', {dateStyle: 'short', timeStyle: 'medium'});
 }
+
+// Earlier releases the list still shows under the installed one: enough to step back after a bad
+// update, without the whole history.
+export const MAX_OLDER_RELEASES = 3;
+
+/** "2.8.0" or "2.8.0+dev.1a2b3c4" (a develop build, see getRunningVersion()) as [2, 8, 0]; null for anything else. */
+function parseVersion(version: string): number[] | null {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version.trim());
+    return match ? match.slice(1, 4).map(Number) : null;
+}
+
+/**
+ * Whether `tagName` is a version under `currentVersion`. What follows the three numbers is not
+ * compared: a develop build is neither older nor newer than the release of the same number. A
+ * version that cannot be read is never taken for an older one.
+ */
+export function isOlderVersion(tagName: string, currentVersion: string): boolean {
+    const tag = parseVersion(tagName);
+    const current = parseVersion(currentVersion);
+    if (!tag || !current) {
+        return false;
+    }
+    for (let i = 0; i < 3; i++) {
+        if (tag[i] !== current[i]) {
+            return tag[i] < current[i];
+        }
+    }
+    return false;
+}
+
+/**
+ * `entries` (newest first, see sortByPublishedDesc()) without the versions under `currentVersion`
+ * past the first `max` of them.
+ */
+export function limitOlderReleases<T extends {tagName: string}>(
+    entries: T[], currentVersion: string, max: number = MAX_OLDER_RELEASES,
+): T[] {
+    let older = 0;
+    return entries.filter(entry => !isOlderVersion(entry.tagName, currentVersion) || ++older <= max);
+}

@@ -48,7 +48,7 @@ import {verifyRoms} from '@/class/MameVerifyRoms';
 import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
-import {findTooSlowGames, isWeakHardware} from '@/class/GameSpeed';
+import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
@@ -65,7 +65,7 @@ import {
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
-import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
+import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
@@ -97,6 +97,13 @@ import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
+import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
+import {renderBluetoothCard} from '@/class/BluetoothBoCard';
+import {
+    pairBluetooth, readBluetoothState, removeBluetooth, scanBluetooth, setBluetoothPower,
+    type BluetoothDevice, type BluetoothState,
+} from '@/class/BluetoothControl';
+import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, setWifiRadio, type NetworkState} from '@/class/WifiControl';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath} from '@/staticPath';
 import {
@@ -1302,6 +1309,7 @@ function runConfPackImport(
 async function runRepositoryImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, title: string, filename: string,
     only?: string[], overall?: {index: number; total: number}, tabbed = false,
+    forcedSlow: ReadonlySet<string> = new Set(),
 ): Promise<void> {
     const block = openImportBlock(res, title, true, overall, tabbed);
     const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
@@ -1317,7 +1325,7 @@ async function runRepositoryImport(
             reporter: {line: block.writeLine, progress: block.progress},
             precheckGames: async manifest => (await findPacksIncompatibleGames(config, [manifest]))[0],
             removedGames: () => new Set(readRemovedFavorites().map(item => item.romName)),
-            tooSlowGames: manifest => findCabinetTooSlowGames(manifest),
+            tooSlowGames: manifest => findCabinetTooSlowGames(manifest, forcedSlow),
             verifyRoms: mameBinary && existsSync(mameBinary)
                 ? romNames => verifyRoms(mameBinary, getMameInfo(config).iniPath, romNames)
                 : undefined,
@@ -2108,6 +2116,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .col-romname { width: 130px; }
         .col-assets { width: 88px; }
         .col-date { width: 140px; }
+        .col-published { width: 170px; }
+        /* MAUI tab's releases: only some rows hold the install icon, all keep its height. */
+        .update-table {
+            margin-top: 16px;
+        }
+        .update-table td {
+            height: 33px;
+        }
+        /* Three columns only: narrow enough for a phone without scrolling sideways. */
+        .update-table table.favorites-table.fixed-columns {
+            min-width: 340px;
+        }
         .col-plays { width: 64px; }
         .col-vote { width: 140px; }
         .col-action { width: 56px; }
@@ -2162,6 +2182,12 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         /* Same height as the icon buttons beside it: the generic input padding and top margin
            made the row taller than the others. */
+        .row-actions input[name="password"] {
+            width: 14em;
+            height: 32px;
+            margin-top: 0;
+            padding: 4px 6px;
+        }
         .row-actions input[name="pin"] {
             width: 4.5em;
             height: 32px;
@@ -2513,6 +2539,18 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .pack-game-incompatible {
             opacity: 0.6;
+        }
+        button.pack-game-unlock {
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: none;
+            font: inherit;
+            line-height: inherit;
+            cursor: pointer;
+        }
+        button.pack-game-unlock:hover {
+            color: var(--text);
         }
         .pack-swatch {
             display: inline-block;
@@ -4816,6 +4854,8 @@ interface UpdateReleaseEntry {
     publishedAt: string;
     assetUrl: string | null;
     isCurrent: boolean;
+    // A version under the running one: only installed in Advanced configuration.
+    isOlder: boolean;
     isPrerelease: boolean;
 }
 
@@ -4844,6 +4884,14 @@ function isKioskLayout(): boolean {
 // the earlier versions has nothing an installer could replace.
 function isWindowsInstall(): boolean {
     return process.platform === 'win32' && electronApp.isPackaged && isInstalledByInstaller(process.execPath);
+}
+
+// Where the MAUI tab offers the Network and Bluetooth cards (WifiControl.ts, BluetoothControl.ts):
+// a dedicated cabinet, which has no other way to join a Wi-Fi or pair a gamepad than a keyboard or
+// SSH. A desktop has its own settings for both; in development the cards show there too, to work
+// on them.
+function isNetworkControlHost(): boolean {
+    return isKioskLayout() || (process.platform === 'linux' && process.env.NODE_ENV === 'development');
 }
 
 function isSelfUpdateCapable(): boolean {
@@ -4903,11 +4951,14 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
                 publishedAt: release.published_at,
                 assetUrl: asset ? asset.browser_download_url : null,
                 isCurrent: release.tag_name === info.currentVersion,
+                isOlder: isOlderVersion(release.tag_name, info.currentVersion),
                 isPrerelease: release.prerelease,
             };
         });
         // Sorted here, not left in the API's order - see sortByPublishedDesc().
-        info.releases = sortByPublishedDesc(entries.filter(entry => !entry.isPrerelease));
+        info.releases = limitOlderReleases(
+            sortByPublishedDesc(entries.filter(entry => !entry.isPrerelease)), info.currentVersion,
+        );
         info.devBuilds = sortByPublishedDesc(entries.filter(entry => entry.isPrerelease));
     } catch (error) {
         info.releasesError = error instanceof Error ? error.message : 'unexpected error';
@@ -5072,21 +5123,55 @@ function renderRestartWaitScript(backHref: string): string {
     }</script>`;
 }
 
-function renderUpdateReleaseRow(release: UpdateReleaseEntry, capable: boolean, confirmLabel: string): string {
+const INSTALL_ICON_PATHS = '<path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5M3 13.5h10"/>';
+
+function renderUpdateReleaseRow(
+    release: UpdateReleaseEntry, capable: boolean, isAdvanced: boolean, confirmLabel: string,
+): string {
+    // What the row is, next to its name; the last column only ever holds the install icon.
+    let status = '';
+    let action = '';
+    if (release.isCurrent) {
+        status = '<span class="badge-yes">current version</span>';
+    } else if (release.isOlder && !isAdvanced) {
+        // Going back to an earlier version is refused by the route too (/maui/update/install).
+        status = '<span class="badge-deleted" title="Installed in Advanced configuration only">earlier version</span>';
+    } else if (!release.assetUrl) {
+        status = '<span class="badge-warn">no artifact for this platform</span>';
+    } else {
+        action = `
+            <form method="post" action="/maui/update/install" data-stream
+                onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
+                <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
+                ${renderIconButton(`Install version ${release.tagName}`, INSTALL_ICON_PATHS, 'accent', !capable)}
+            </form>
+        `;
+    }
     return `
         <tr>
-            <td>${escapeHtml(release.name)}${release.isCurrent ? ' <span class="badge-yes">current version</span>' : ''}</td>
+            <td>${escapeHtml(release.name)}${status ? ` ${status}` : ''}</td>
             <td>${escapeHtml(formatPublishedAt(release.publishedAt))}</td>
-            <td class="center">
-                ${release.assetUrl && !release.isCurrent ? `
-                    <form method="post" action="/maui/update/install" data-stream
-                        onsubmit="return confirm('${confirmLabel.replace('{tag}', escapeHtml(release.tagName))}')">
-                        <input type="hidden" name="tagName" value="${escapeHtml(release.tagName)}">
-                        <button type="submit" ${capable ? '' : 'disabled'}>Install</button>
-                    </form>
-                ` : release.isCurrent ? '' : '<em>No artifact for this platform</em>'}
-            </td>
+            <td class="center">${action}</td>
         </tr>
+    `;
+}
+
+/** The releases as a table laid out like the favorites': the name takes what the fixed columns leave. */
+function renderUpdateTable(rows: string, emptyLabel: string): string {
+    return `
+        <div class="table-wrap update-table">
+            <table class="favorites-table fixed-columns">
+                <colgroup>
+                    <col>
+                    <col class="col-published">
+                    <col class="col-action">
+                </colgroup>
+                <thead>
+                    <tr><th>Version</th><th>Published on</th><th class="center"></th></tr>
+                </thead>
+                <tbody>${rows || `<tr><td colspan="3"><em>${emptyLabel}</em></td></tr>`}</tbody>
+            </table>
+        </div>
     `;
 }
 
@@ -5099,12 +5184,12 @@ function renderUpdateCard(
         : 'The application closes and reopens on that version.';
     const confirmRelease = `Install version {tag}? ${afterInstall}`;
     const releaseRows = updateInfo.releases
-        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmRelease))
+        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, isAdvanced, confirmRelease))
         .join('');
 
     const confirmDevBuild = `Install the development build {tag} (not promoted to main)? ${afterInstall}`;
     const devBuildRows = updateInfo.devBuilds
-        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, confirmDevBuild))
+        .map(release => renderUpdateReleaseRow(release, updateInfo.capable, isAdvanced, confirmDevBuild))
         .join('');
 
     return `
@@ -5129,22 +5214,14 @@ function renderUpdateCard(
             ${installMessage ? `<p class="info flash">${escapeHtml(installMessage)}</p>` : ''}
             ${updateInfo.releasesError
                 ? `<p class="error">Unable to fetch the GitHub releases: ${escapeHtml(updateInfo.releasesError)}</p>`
-                : `<table>
-                    <thead><tr><th>Version</th><th>Published on</th><th></th></tr></thead>
-                    <tbody>${releaseRows || '<tr><td colspan="3"><em>No release found.</em></td></tr>'}</tbody>
-                </table>`}
+                : renderUpdateTable(releaseRows, 'No release found.')}
         </section>
         ${isAdvanced ? `
             <section class="card">
                 <h2>Development builds (unpublished)</h2>
                 <p class="error">GitHub prereleases generated automatically on every push to
                 develop (workflow "Build") - not yet promoted to main, meant for testing only.</p>
-                ${!updateInfo.releasesError
-                    ? `<table>
-                        <thead><tr><th>Version</th><th>Published on</th><th></th></tr></thead>
-                        <tbody>${devBuildRows || '<tr><td colspan="3"><em>No build available.</em></td></tr>'}</tbody>
-                    </table>`
-                    : ''}
+                ${!updateInfo.releasesError ? renderUpdateTable(devBuildRows, 'No build available.') : ''}
             </section>
         ` : ''}
     `;
@@ -5250,6 +5327,14 @@ interface MauiPageMessages {
     onlineError?: string;
     backfillInfo?: string;
     backfillError?: string;
+    networkInfo?: string;
+    networkError?: string;
+    // Look again at the Wi-Fi networks in range before rendering (seconds).
+    networkRescan?: boolean;
+    bluetoothInfo?: string;
+    bluetoothError?: string;
+    // What a search for Bluetooth devices just found.
+    bluetoothFound?: BluetoothDevice[];
 }
 
 /**
@@ -5406,12 +5491,28 @@ function renderScoresBackfillCard(messages: MauiPageMessages): string {
 
 function renderMauiPage(
     config: Config, messages: MauiPageMessages = {}, isAdvanced: boolean = false,
-    updateInfo?: UpdateInfo,
+    updateInfo?: UpdateInfo, network?: NetworkState | null, bluetooth?: BluetoothState | null,
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
         {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
     ];
+    if (network) {
+        sections.push({
+            id: 'network',
+            label: 'Network',
+            html: renderNetworkCard(network, {error: messages.networkError, info: messages.networkInfo}),
+        });
+    }
+    if (bluetooth) {
+        sections.push({
+            id: 'bluetooth',
+            label: 'Bluetooth',
+            html: renderBluetoothCard(bluetooth, {
+                error: messages.bluetoothError, info: messages.bluetoothInfo, found: messages.bluetoothFound,
+            }),
+        });
+    }
     if (updateInfo) {
         sections.push({
             id: 'update',
@@ -5441,8 +5542,10 @@ function renderMauiPage(
         : (messages.onlineError ?? messages.onlineInfo ?? messages.backfillError ?? messages.backfillInfo) !== undefined ? 'online'
             : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
                 : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
-                    : messages.mauiInfo !== undefined ? 'general'
-                        : undefined;
+                    : (messages.networkError ?? messages.networkInfo) !== undefined || messages.networkRescan ? 'network'
+                        : (messages.bluetoothError ?? messages.bluetoothInfo ?? messages.bluetoothFound) !== undefined ? 'bluetooth'
+                            : messages.mauiInfo !== undefined ? 'general'
+                                : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -5455,8 +5558,12 @@ async function sendMauiPage(
     req: express.Request, res: Response, config: Config, messages: MauiPageMessages = {},
 ): Promise<void> {
     const isAdvanced = req.session.boAdvanced === true;
-    const updateInfo = await getUpdateInfo();
-    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo));
+    const [updateInfo, network, bluetooth] = await Promise.all([
+        getUpdateInfo(),
+        isNetworkControlHost() ? readNetworkState(messages.networkRescan === true) : null,
+        isNetworkControlHost() ? readBluetoothState() : null,
+    ]);
+    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo, network, bluetooth));
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -6522,9 +6629,11 @@ async function findPacksIncompatibleGames(
  * The games of a pack this machine is too weak to run at full speed, by game then reason: none on
  * a machine that is no Raspberry Pi 3 or the like, nor for a manifest without speeds.
  */
-function findCabinetTooSlowGames(manifest: StartingPackManifest | null): Map<string, string> {
+function findCabinetTooSlowGames(
+    manifest: StartingPackManifest | null, forced: ReadonlySet<string> = new Set(),
+): Map<string, string> {
     return manifest && Array.isArray(manifest.games) && isWeakHardware(os.totalmem())
-        ? findTooSlowGames(manifest) : new Map();
+        ? findTooSlowGames(manifest, forced) : new Map();
 }
 
 const MISSING_GAMES_SHOWN = 4;
@@ -6594,12 +6703,24 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
             game.publisher, game.categoryName, game.year,
         ].filter(Boolean).join(' '));
         if (game.tooSlow && game.status !== 'installed') {
-            // Not offered either: this cabinet is too weak for it (PackImport's tooSlowGames).
+            // Not offered: this cabinet is too weak for it (PackImport's tooSlowGames), unless its
+            // owner asks for it all the same. A click on the cross swaps it for the game's
+            // checkbox, left unticked (script in renderRepoPackPicker()); until then both fields
+            // are disabled, so neither is posted nor ticked by a pack box. `forceSlow` is what
+            // lets the import take it.
             return `
-                <li class="pack-game pack-game-incompatible" data-search="${search}" data-hi="${hasHi ? '1' : '0'}"
+                <li class="pack-game pack-game-incompatible pack-game-slow" data-search="${search}" data-hi="${hasHi ? '1' : '0'}"
                     title="${escapeHtml(`Too slow on this cabinet: ${game.tooSlow}.`)}">
-                    <span class="pack-game-mark">✕</span>
-                    <span>${label}<span class="checkbox-row-detail">Too slow on this cabinet (${escapeHtml(game.tooSlow)})</span></span>
+                    <button type="button" class="pack-game-mark pack-game-unlock" data-rom="${escapeHtml(game.romName)}"
+                        title="Offer it all the same" aria-label="${escapeHtml(`Offer ${decodeXmlEntities(game.fullname)} all the same`)}">✕</button>
+                    <label class="pack-game-label">
+                        <input type="checkbox" class="game-checkbox" name="game" disabled hidden
+                            value="${escapeHtml(`${pack.filename}|${game.romName}`)}"
+                            data-rom="${escapeHtml(game.romName)}" data-size="${game.size}"
+                            data-bios="${escapeHtml(game.requiredRoms.join(' '))}">
+                        <input type="hidden" name="forceSlow" value="${escapeHtml(game.romName)}" disabled>
+                        <span>${label}<span class="checkbox-row-detail">Too slow on this cabinet (${escapeHtml(game.tooSlow)})</span></span>
+                    </label>
                 </li>
             `;
         }
@@ -6687,8 +6808,10 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
         <form method="post" action="/import/from-url" data-stream
             onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
-            A game listed by several packs is fetched once. While a search or the hiscores filter is active,
-            the pack boxes and "Select all" only act on the games shown; ticked games stay ticked when they are hidden.</p>
+            A game listed by several packs is fetched once. The hiscores box also ticks the games it shows.
+            While a search or the hiscores filter is active, the pack boxes and "Select all" only act on the
+            games shown; ticked games stay ticked when they are hidden. A game marked too slow for this cabinet
+            can be taken all the same: click its cross, then tick it.</p>
             ${rows}
             <label class="checkbox-row">
                 <input type="checkbox" id="packSelectAll">
@@ -6717,10 +6840,12 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
                 return bytes.toFixed(1) + ' ' + units[i];
             }
+            // Disabled: a game too slow for this cabinet, until its cross is clicked (see below).
             function gameBoxes(row) {
                 return Array.prototype.slice.call(row.querySelectorAll('.game-checkbox:not([disabled])'));
             }
-            var allBoxes = [].concat.apply([], rows.map(gameBoxes));
+            var everyBox = Array.prototype.slice.call(document.querySelectorAll('.pack-row .game-checkbox'));
+            function enabledBoxes() { return everyBox.filter(function (box) { return !box.disabled; }); }
             // What a pack box / "Select all" acts on: the games a search leaves showing.
             function isShown(box) { return !box.closest('li').hidden; }
             function shownBoxes(row) { return gameBoxes(row).filter(isShown); }
@@ -6770,13 +6895,15 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                     var boxes = shownBoxes(row);
                     var ticked = boxes.filter(function (box) { return box.checked; }).length;
                     var toggle = row.querySelector('.pack-toggle');
+                    // Nothing it could tick: every game shown is installed or not offered.
+                    toggle.disabled = boxes.length === 0;
                     toggle.checked = boxes.length > 0 && ticked === boxes.length;
                     toggle.indeterminate = ticked > 0 && ticked < boxes.length;
                 });
                 // The import takes every ticked game, shown or not.
-                var pickedBoxes = allBoxes.filter(function (box) { return box.checked; });
+                var pickedBoxes = enabledBoxes().filter(function (box) { return box.checked; });
                 submit.disabled = pickedBoxes.length === 0;
-                var shownAll = allBoxes.filter(isShown);
+                var shownAll = enabledBoxes().filter(isShown);
                 all.checked = shownAll.length > 0 && shownAll.every(function (box) { return box.checked; });
                 all.disabled = shownAll.length === 0;
                 if (!summary) { return; }
@@ -6816,12 +6943,29 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
             }
             // Ticking a game ticks the same game in every other pack that lists it.
             function mirror(box) {
-                allBoxes.forEach(function (other) {
+                enabledBoxes().forEach(function (other) {
                     if (other.dataset.rom === box.dataset.rom) { other.checked = box.checked; }
                 });
             }
-            allBoxes.forEach(function (box) {
+            everyBox.forEach(function (box) {
                 box.addEventListener('change', function () { mirror(box); refresh(); });
+            });
+            // The cross of a game too slow for this cabinet: a click swaps it for the game's
+            // checkbox, unticked, in every pack that lists the game.
+            Array.prototype.forEach.call(document.querySelectorAll('.pack-game-unlock'), function (cross) {
+                cross.addEventListener('click', function () {
+                    Array.prototype.forEach.call(document.querySelectorAll('.pack-game-unlock'), function (other) {
+                        if (other.dataset.rom !== cross.dataset.rom) { return; }
+                        var item = other.closest('li');
+                        Array.prototype.forEach.call(item.querySelectorAll('input'), function (input) {
+                            input.disabled = false;
+                            input.hidden = false;
+                        });
+                        item.classList.remove('pack-game-incompatible');
+                        other.remove();
+                    });
+                    refresh();
+                });
             });
             rows.forEach(function (row) {
                 row.querySelector('.pack-toggle').addEventListener('change', function (event) {
@@ -6830,13 +6974,13 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 });
             });
             all.addEventListener('change', function () {
-                allBoxes.filter(isShown).forEach(function (box) { box.checked = all.checked; mirror(box); });
+                enabledBoxes().filter(isShown).forEach(function (box) { box.checked = all.checked; mirror(box); });
                 refresh();
             });
 
             // Search: every term must appear (accents and case ignored) in the game's name, rom
             // name, studio, category or year, or in its pack's name; with the hiscores box ticked
-            // the game must also have an extractor (data-hi). A pack with no match is hidden,
+            // the game must also have an extractor (data-hi), see below. A pack with no match is hidden,
             // one with matches opens on them; clearing both puts the packs back as they were.
             function fold(text) {
                 return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
@@ -6879,7 +7023,20 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 refresh();
             }
             search.addEventListener('input', applySearch);
-            hiOnly.addEventListener('change', applySearch);
+            // The hiscores box also ticks what it leaves showing (the games with an extractor
+            // this machine is offered), and unticking it takes back the ones it ticked itself.
+            var tickedByHiOnly = [];
+            hiOnly.addEventListener('change', function () {
+                applySearch();
+                if (hiOnly.checked) {
+                    tickedByHiOnly = enabledBoxes().filter(function (box) { return isShown(box) && !box.checked; });
+                    tickedByHiOnly.forEach(function (box) { box.checked = true; mirror(box); });
+                } else {
+                    tickedByHiOnly.forEach(function (box) { box.checked = false; mirror(box); });
+                    tickedByHiOnly = [];
+                }
+                refresh();
+            });
             search.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') { event.preventDefault(); }
             });
@@ -7352,6 +7509,23 @@ function renderBrowsePage(
 function refuseOnlineRequest(req: Request, res: Response): boolean {
     if (!req.session.boAdvanced) {
         res.status(403).send('Available in Advanced configuration only.');
+        return true;
+    }
+    if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+        res.status(403).send('Cross-site request refused.');
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Guard of the /maui/network/* and /maui/bluetooth/* routes, which act on the cabinet's system
+ * (and can cut it off its network): a dedicated cabinet only, and same-origin only (see refuseOnlineRequest()). Sends the 403 itself; true means
+ * the caller must stop.
+ */
+function refuseCabinetSystemRequest(req: Request, res: Response): boolean {
+    if (!isNetworkControlHost()) {
+        res.status(403).send('Network settings unavailable on this machine.');
         return true;
     }
     if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
@@ -8328,11 +8502,13 @@ export function createBoApp(
                 const manifest = manifests[index];
                 // Per-game sizes for the disk bar: the manifest lists them, unless it is out of date.
                 const entrySizes = manifestEntrySizes(manifest, pack.size);
-                pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
-                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size)
-                    .map(game => ({...game, incompatibility: incompatible[index]?.get(game.romName)}));
                 const tooSlow = findCabinetTooSlowGames(manifest);
-                pack.games = pack.games.map(game => ({...game, tooSlow: tooSlow.get(game.romName)}));
+                // Neither kind is offered below: they do not make the pack look incomplete.
+                const notOffered = new Set([...tooSlow.keys(), ...(incompatible[index]?.keys() ?? [])]);
+                pack.ownership = computePackOwnership(manifest, installedRoms, notOffered) ?? undefined;
+                pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size).map(game => ({
+                    ...game, incompatibility: incompatible[index]?.get(game.romName), tooSlow: tooSlow.get(game.romName),
+                }));
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             });
             res.send(await renderFavoritesTab(req, {}, {packs, url: repository.url}));
@@ -8405,6 +8581,8 @@ export function createBoApp(
         // packs is kept for the first). urlencoded (extended: false) yields a string for one
         // ticked box, an array for several; anything malformed is refused (see the function).
         const selection = groupSelectedGames(req.body?.game);
+        // The too slow games asked for all the same (see renderPackGames()).
+        const forcedSlow = parseForcedGames(req.body?.forceSlow);
 
         if (selection && !selection.size) {
             res.status(422).send(await renderFavoritesTab(req, {}, {error: 'Tick at least one game to import.'}));
@@ -8454,6 +8632,7 @@ export function createBoApp(
                 romNames,
                 {index, total: selection.size},
                 tabbed,
+                forcedSlow,
             );
         }
         if (tabbed) {
@@ -8766,8 +8945,14 @@ export function createBoApp(
         }
         // The file to fetch is the one GitHub lists for that version, not an address the form
         // sent: it is run on this machine.
-        const assetUrl = [...preUpdateInfo.releases, ...preUpdateInfo.devBuilds]
-            .find(release => release.tagName === tagName)?.assetUrl;
+        const target = [...preUpdateInfo.releases, ...preUpdateInfo.devBuilds]
+            .find(release => release.tagName === tagName);
+        // Same as the dev builds: the row offers nothing, and a forged form gets no further.
+        if (!isAdvanced && target?.isOlder) {
+            res.status(403).send('Going back to an earlier version is available in Advanced configuration only.');
+            return;
+        }
+        const assetUrl = target?.assetUrl;
         if (!assetUrl) {
             await sendMauiPage(req, res, config, {updateInfoError: `Version ${tagName || '?'} has nothing to install on this machine.`});
             return;
@@ -8841,6 +9026,143 @@ export function createBoApp(
         // Delayed so this response finishes flushing before the session - this process included -
         // goes down.
         setTimeout(restartKiosk, 500);
+    });
+
+    // The Network card (NetworkBoCard.ts). Any BO account, like the restart above: joining the
+    // Wi-Fi is part of setting a cabinet up.
+    app.post('/maui/network/scan', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        await sendMauiPage(req, res, config, {networkRescan: true});
+    });
+
+    app.post('/maui/network/radio', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const on = req.body.wifi === 'on';
+        try {
+            const state = await readNetworkState();
+            if (!on && state && isWifiTheOnlyLink(state)) {
+                throw new Error(ONLY_LINK_REASON);
+            }
+            await setWifiRadio(on);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `Wi-Fi not switched ${on ? 'on' : 'off'}: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: `Wi-Fi switched ${on ? 'on' : 'off'}.`, networkRescan: on});
+    });
+
+    // Answers once the cabinet joined the network or gave up (WifiControl.ts connectWifi(), half a
+    // minute at most). Reached over the Wi-Fi being left, the answer never arrives.
+    app.post('/maui/network/connect', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const ssid = typeof req.body.ssid === 'string' ? req.body.ssid : '';
+        const password = typeof req.body.password === 'string' ? req.body.password : '';
+        try {
+            await connectWifi(ssid, password);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `Not connected to ${ssid}: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: `Connected to ${ssid}.`});
+    });
+
+    app.post('/maui/network/forget', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const uuid = typeof req.body.uuid === 'string' ? req.body.uuid : '';
+        try {
+            const state = await readNetworkState();
+            if (state && isWifiTheOnlyLink(state) && state.saved.some(profile => profile.uuid === uuid && profile.active)) {
+                throw new Error(ONLY_LINK_REASON);
+            }
+            await forgetWifi(uuid);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `Network not forgotten: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: 'Network forgotten.'});
+    });
+
+    // The Bluetooth card (BluetoothBoCard.ts), same access as the Network card. A search and a
+    // pairing answer once done: ten seconds for the first, up to a minute for the second.
+    app.post('/maui/bluetooth/power', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const on = req.body.bluetooth === 'on';
+        try {
+            await setBluetoothPower(on);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `Bluetooth not switched ${on ? 'on' : 'off'}: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {bluetoothInfo: `Bluetooth switched ${on ? 'on' : 'off'}.`});
+    });
+
+    app.post('/maui/bluetooth/scan', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        try {
+            await sendMauiPage(req, res, config, {bluetoothFound: await scanBluetooth()});
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `Search failed: ${(error as Error).message}`});
+        }
+    });
+
+    app.post('/maui/bluetooth/pair', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const address = typeof req.body.address === 'string' ? req.body.address : '';
+        const name = typeof req.body.name === 'string' && req.body.name ? req.body.name : address;
+        try {
+            const device = await pairBluetooth(address);
+            await sendMauiPage(req, res, config, {
+                bluetoothInfo: device.connected
+                    ? `${name} paired and connected.`
+                    : `${name} paired. It connects at its next key press.`,
+            });
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `${name} not paired: ${(error as Error).message}`});
+        }
+    });
+
+    app.post('/maui/bluetooth/remove', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const address = typeof req.body.address === 'string' ? req.body.address : '';
+        try {
+            await removeBluetooth(address);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {bluetoothError: `Device not forgotten: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {bluetoothInfo: 'Device forgotten.'});
     });
 
     app.post('/screenscraper/save', (req, res) => {

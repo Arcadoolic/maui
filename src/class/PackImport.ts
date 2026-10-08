@@ -140,7 +140,8 @@ export interface PackImportOptions {
     // an import never brings them back, even ticked one by one. Absent = nothing is held back.
     removedGames?: () => ReadonlySet<string>;
     // The games of the pack this cabinet is too weak to run at full speed, each with the reason
-    // (GameSpeed.findTooSlowGames()): not fetched, even ticked one by one. Absent = no such limit.
+    // (GameSpeed.findTooSlowGames()): not fetched, even ticked one by one, unless asked for all the
+    // same (the pack picker's cross). Absent = no such limit.
     tooSlowGames?: (manifest: StartingPackManifest) => ReadonlyMap<string, string>;
     fetchImpl?: typeof fetch;
 }

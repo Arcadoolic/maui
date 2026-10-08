@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {sortByPublishedDesc, formatPublishedAt} from '@/class/ReleaseList';
+import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases} from '@/class/ReleaseList';
 
 describe('sortByPublishedDesc', () => {
     it('puts the most recently published first, whatever the input order', () => {
@@ -51,5 +51,41 @@ describe('formatPublishedAt', () => {
 
     it('falls back to the raw value for an unparseable date', () => {
         expect(formatPublishedAt('nope')).toBe('nope');
+    });
+});
+
+describe('isOlderVersion', () => {
+    it('compares the three numbers, not the text', () => {
+        expect(isOlderVersion('2.7.0', '2.8.0')).toBe(true);
+        expect(isOlderVersion('2.9.0', '2.10.0')).toBe(true);
+        expect(isOlderVersion('1.99.99', '2.0.0')).toBe(true);
+        expect(isOlderVersion('2.8.0', '2.8.0')).toBe(false);
+        expect(isOlderVersion('2.8.1', '2.8.0')).toBe(false);
+        expect(isOlderVersion('3.0.0', '2.8.0')).toBe(false);
+    });
+
+    it('ignores what a develop build adds to its number', () => {
+        expect(isOlderVersion('2.8.0', '2.8.0+dev.1a2b3c4')).toBe(false);
+        expect(isOlderVersion('2.8.0+dev.1a2b3c4', '2.8.0')).toBe(false);
+        expect(isOlderVersion('2.7.0', '2.8.0+dev.1a2b3c4')).toBe(true);
+        expect(isOlderVersion('2.7.0+dev.1a2b3c4', '2.8.0')).toBe(true);
+    });
+
+    it('never takes a version it cannot read for an older one', () => {
+        expect(isOlderVersion('nightly', '2.8.0')).toBe(false);
+        expect(isOlderVersion('2.7.0', '')).toBe(false);
+    });
+});
+
+describe('limitOlderReleases', () => {
+    const tags = (...names: string[]) => names.map(tagName => ({tagName}));
+
+    it('keeps the newer versions, the current one and the three before it', () => {
+        const kept = limitOlderReleases(tags('2.9.0', '2.8.0', '2.7.0', '2.6.1', '2.6.0', '2.5.0', '2.4.0'), '2.8.0');
+        expect(kept.map(entry => entry.tagName)).toEqual(['2.9.0', '2.8.0', '2.7.0', '2.6.1', '2.6.0']);
+    });
+
+    it('keeps everything when fewer than three are older', () => {
+        expect(limitOlderReleases(tags('2.8.0', '2.7.0'), '2.8.0')).toHaveLength(2);
     });
 });
