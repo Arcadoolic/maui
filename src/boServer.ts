@@ -48,6 +48,7 @@ import {verifyRoms} from '@/class/MameVerifyRoms';
 import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
+import {findTooSlowGames, isWeakHardware} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
@@ -1316,6 +1317,7 @@ async function runRepositoryImport(
             reporter: {line: block.writeLine, progress: block.progress},
             precheckGames: async manifest => (await findPacksIncompatibleGames(config, [manifest]))[0],
             removedGames: () => new Set(readRemovedFavorites().map(item => item.romName)),
+            tooSlowGames: manifest => findCabinetTooSlowGames(manifest),
             verifyRoms: mameBinary && existsSync(mameBinary)
                 ? romNames => verifyRoms(mameBinary, getMameInfo(config).iniPath, romNames)
                 : undefined,
@@ -6516,6 +6518,15 @@ async function findPacksIncompatibleGames(
     return manifests.map(manifest => (machines ? findIncompatibleGames(manifest, machines) : null));
 }
 
+/**
+ * The games of a pack this machine is too weak to run at full speed, by game then reason: none on
+ * a machine that is no Raspberry Pi 3 or the like, nor for a manifest without speeds.
+ */
+function findCabinetTooSlowGames(manifest: StartingPackManifest | null): Map<string, string> {
+    return manifest && Array.isArray(manifest.games) && isWeakHardware(os.totalmem())
+        ? findTooSlowGames(manifest) : new Map();
+}
+
 const MISSING_GAMES_SHOWN = 4;
 
 function renderPackOwnership(ownership: PackOwnership | undefined): string {
@@ -6539,9 +6550,11 @@ function renderPackOwnership(ownership: PackOwnership | undefined): string {
 /** How many games of a pack are not offered because the installed MAME cannot run them. */
 function renderPackIncompatible(pack: RepoPack): string {
     const count = (pack.games ?? []).filter(game => game.incompatibility && game.status !== 'installed').length;
-    return count
+    const tooSlow = (pack.games ?? []).filter(game => game.tooSlow && game.status !== 'installed').length;
+    return (count
         ? `<span class="pack-status pack-status-incompatible">${count} game(s) not compatible with the installed MAME</span>`
-        : '';
+        : '')
+        + (tooSlow ? `<span class="pack-status pack-status-incompatible">${tooSlow} game(s) too slow on this cabinet</span>` : '');
 }
 
 const PACK_GAME_MARKS: {[status in PackGameDetail['status']]: {mark: string; title: string}} = {
@@ -6580,6 +6593,16 @@ function renderPackGames(pack: RepoPack, fullyOwned: boolean): string {
             decodeXmlEntities(game.fullname), game.romName, game.manufacturer && decodeXmlEntities(game.manufacturer),
             game.publisher, game.categoryName, game.year,
         ].filter(Boolean).join(' '));
+        if (game.tooSlow && game.status !== 'installed') {
+            // Not offered either: this cabinet is too weak for it (PackImport's tooSlowGames).
+            return `
+                <li class="pack-game pack-game-incompatible" data-search="${search}" data-hi="${hasHi ? '1' : '0'}"
+                    title="${escapeHtml(`Too slow on this cabinet: ${game.tooSlow}.`)}">
+                    <span class="pack-game-mark">✕</span>
+                    <span>${label}<span class="checkbox-row-detail">Too slow on this cabinet (${escapeHtml(game.tooSlow)})</span></span>
+                </li>
+            `;
+        }
         if (game.incompatibility && game.status !== 'installed') {
             // Not offered at all: the import would refuse it anyway (PackImport's precheckGames).
             return `
@@ -8308,6 +8331,8 @@ export function createBoApp(
                 pack.ownership = computePackOwnership(manifest, installedRoms) ?? undefined;
                 pack.games = listPackGames(manifest, installedRoms, entrySizes, pack.size)
                     .map(game => ({...game, incompatibility: incompatible[index]?.get(game.romName)}));
+                const tooSlow = findCabinetTooSlowGames(manifest);
+                pack.games = pack.games.map(game => ({...game, tooSlow: tooSlow.get(game.romName)}));
                 pack.biosSizes = computeBiosSizes(manifest, entrySizes);
             });
             res.send(await renderFavoritesTab(req, {}, {packs, url: repository.url}));
