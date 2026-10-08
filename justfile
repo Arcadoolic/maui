@@ -67,6 +67,9 @@ _check-sandbox:
 
 # Run the app in development mode (Electron, hot-reload)
 serve: install _check-electron-binary _check-sandbox
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/resolve-swc-cache.sh
     npm run electron:serve
 
 # Build production Electron app
@@ -77,6 +80,7 @@ build: install _check-electron-binary
     # ('-dev'/''), but a plain local build has nothing to expand and errors out. Default it here
     # so `just build` works standalone; CI's own exported value still wins.
     export ARTIFACT_SUFFIX="${ARTIFACT_SUFFIX:--local}"
+    source scripts/resolve-swc-cache.sh
     npm run electron:build
 
 # Lint and auto-fix files
