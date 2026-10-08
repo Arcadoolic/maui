@@ -6687,8 +6687,9 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
         <form method="post" action="/import/from-url" data-stream
             onsubmit="return confirm('This overwrites the roms and media of the selected games, then adds them to your MAME favorites without touching yours. Only these games are fetched from their pack. Continue?')">
             <p class="info">Tick a pack for all its games not installed yet, or open it to pick games one by one.
-            A game listed by several packs is fetched once. While a search or the hiscores filter is active,
-            the pack boxes and "Select all" only act on the games shown; ticked games stay ticked when they are hidden.</p>
+            A game listed by several packs is fetched once. The hiscores box also ticks the games it shows.
+            While a search or the hiscores filter is active, the pack boxes and "Select all" only act on the
+            games shown; ticked games stay ticked when they are hidden.</p>
             ${rows}
             <label class="checkbox-row">
                 <input type="checkbox" id="packSelectAll">
@@ -6838,7 +6839,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
 
             // Search: every term must appear (accents and case ignored) in the game's name, rom
             // name, studio, category or year, or in its pack's name; with the hiscores box ticked
-            // the game must also have an extractor (data-hi). A pack with no match is hidden,
+            // the game must also have an extractor (data-hi), see below. A pack with no match is hidden,
             // one with matches opens on them; clearing both puts the packs back as they were.
             function fold(text) {
                 return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
@@ -6881,7 +6882,20 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 refresh();
             }
             search.addEventListener('input', applySearch);
-            hiOnly.addEventListener('change', applySearch);
+            // The hiscores box also ticks what it leaves showing (the games with an extractor
+            // this machine is offered), and unticking it takes back the ones it ticked itself.
+            var tickedByHiOnly = [];
+            hiOnly.addEventListener('change', function () {
+                applySearch();
+                if (hiOnly.checked) {
+                    tickedByHiOnly = allBoxes.filter(function (box) { return isShown(box) && !box.checked; });
+                    tickedByHiOnly.forEach(function (box) { box.checked = true; mirror(box); });
+                } else {
+                    tickedByHiOnly.forEach(function (box) { box.checked = false; mirror(box); });
+                    tickedByHiOnly = [];
+                }
+                refresh();
+            });
             search.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') { event.preventDefault(); }
             });
