@@ -97,6 +97,8 @@ import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
+import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
+import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, setWifiRadio, type NetworkState} from '@/class/WifiControl';
 import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath} from '@/staticPath';
 import {
@@ -2174,6 +2176,12 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         /* Same height as the icon buttons beside it: the generic input padding and top margin
            made the row taller than the others. */
+        .row-actions input[name="password"] {
+            width: 14em;
+            height: 32px;
+            margin-top: 0;
+            padding: 4px 6px;
+        }
         .row-actions input[name="pin"] {
             width: 4.5em;
             height: 32px;
@@ -4860,6 +4868,13 @@ function isWindowsInstall(): boolean {
     return process.platform === 'win32' && electronApp.isPackaged && isInstalledByInstaller(process.execPath);
 }
 
+// Where the MAUI tab offers the Network card (WifiControl.ts): a dedicated cabinet, which has no
+// other way to join a Wi-Fi than a keyboard or SSH. A desktop has its own network settings; in
+// development the card shows there too, to work on it.
+function isNetworkControlHost(): boolean {
+    return isKioskLayout() || (process.platform === 'linux' && process.env.NODE_ENV === 'development');
+}
+
 function isSelfUpdateCapable(): boolean {
     return isKioskLayout() || isWindowsInstall();
 }
@@ -5293,6 +5308,10 @@ interface MauiPageMessages {
     onlineError?: string;
     backfillInfo?: string;
     backfillError?: string;
+    networkInfo?: string;
+    networkError?: string;
+    // Look again at the Wi-Fi networks in range before rendering (seconds).
+    networkRescan?: boolean;
 }
 
 /**
@@ -5449,12 +5468,19 @@ function renderScoresBackfillCard(messages: MauiPageMessages): string {
 
 function renderMauiPage(
     config: Config, messages: MauiPageMessages = {}, isAdvanced: boolean = false,
-    updateInfo?: UpdateInfo,
+    updateInfo?: UpdateInfo, network?: NetworkState | null,
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
         {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
     ];
+    if (network) {
+        sections.push({
+            id: 'network',
+            label: 'Network',
+            html: renderNetworkCard(network, {error: messages.networkError, info: messages.networkInfo}),
+        });
+    }
     if (updateInfo) {
         sections.push({
             id: 'update',
@@ -5484,8 +5510,9 @@ function renderMauiPage(
         : (messages.onlineError ?? messages.onlineInfo ?? messages.backfillError ?? messages.backfillInfo) !== undefined ? 'online'
             : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
                 : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
-                    : messages.mauiInfo !== undefined ? 'general'
-                        : undefined;
+                    : (messages.networkError ?? messages.networkInfo) !== undefined || messages.networkRescan ? 'network'
+                        : messages.mauiInfo !== undefined ? 'general'
+                            : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -5498,8 +5525,11 @@ async function sendMauiPage(
     req: express.Request, res: Response, config: Config, messages: MauiPageMessages = {},
 ): Promise<void> {
     const isAdvanced = req.session.boAdvanced === true;
-    const updateInfo = await getUpdateInfo();
-    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo));
+    const [updateInfo, network] = await Promise.all([
+        getUpdateInfo(),
+        isNetworkControlHost() ? readNetworkState(messages.networkRescan === true) : null,
+    ]);
+    res.send(renderMauiPage(config, messages, isAdvanced, updateInfo, network));
 }
 
 function renderScreenScraperCard(values: ScreenScraperValues, error?: string, info?: string): string {
@@ -7421,6 +7451,23 @@ function refuseOnlineRequest(req: Request, res: Response): boolean {
 }
 
 /**
+ * Guard of the /maui/network/* routes, which can cut the cabinet off its network: a dedicated
+ * cabinet only, and same-origin only (see refuseOnlineRequest()). Sends the 403 itself; true means
+ * the caller must stop.
+ */
+function refuseNetworkRequest(req: Request, res: Response): boolean {
+    if (!isNetworkControlHost()) {
+        res.status(403).send('Network settings unavailable on this machine.');
+        return true;
+    }
+    if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+        res.status(403).send('Cross-site request refused.');
+        return true;
+    }
+    return false;
+}
+
+/**
  * Builds the BO: called by boCore.ts when the first request reaches its port, on top of what the
  * main process already runs (`core`). `databaseReady` resolves once the database exists and is
  * migrated (see boCore.ts's bootstrapDatabase()); requests arriving before wait for it.
@@ -8908,6 +8955,76 @@ export function createBoApp(
         // Delayed so this response finishes flushing before the session - this process included -
         // goes down.
         setTimeout(restartKiosk, 500);
+    });
+
+    // The Network card (NetworkBoCard.ts). Any BO account, like the restart above: joining the
+    // Wi-Fi is part of setting a cabinet up.
+    app.post('/maui/network/scan', async (req, res) => {
+        if (refuseNetworkRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        await sendMauiPage(req, res, config, {networkRescan: true});
+    });
+
+    app.post('/maui/network/radio', async (req, res) => {
+        if (refuseNetworkRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const on = req.body.wifi === 'on';
+        try {
+            const state = await readNetworkState();
+            if (!on && state && isWifiTheOnlyLink(state)) {
+                throw new Error(ONLY_LINK_REASON);
+            }
+            await setWifiRadio(on);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `Wi-Fi not switched ${on ? 'on' : 'off'}: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: `Wi-Fi switched ${on ? 'on' : 'off'}.`, networkRescan: on});
+    });
+
+    // Answers once the cabinet joined the network or gave up (WifiControl.ts connectWifi(), half a
+    // minute at most). Reached over the Wi-Fi being left, the answer never arrives.
+    app.post('/maui/network/connect', async (req, res) => {
+        if (refuseNetworkRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const ssid = typeof req.body.ssid === 'string' ? req.body.ssid : '';
+        const password = typeof req.body.password === 'string' ? req.body.password : '';
+        try {
+            await connectWifi(ssid, password);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `Not connected to ${ssid}: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: `Connected to ${ssid}.`});
+    });
+
+    app.post('/maui/network/forget', async (req, res) => {
+        if (refuseNetworkRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const uuid = typeof req.body.uuid === 'string' ? req.body.uuid : '';
+        try {
+            const state = await readNetworkState();
+            if (state && isWifiTheOnlyLink(state) && state.saved.some(profile => profile.uuid === uuid && profile.active)) {
+                throw new Error(ONLY_LINK_REASON);
+            }
+            await forgetWifi(uuid);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `Network not forgotten: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: 'Network forgotten.'});
     });
 
     app.post('/screenscraper/save', (req, res) => {
