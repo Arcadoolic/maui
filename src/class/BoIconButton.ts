@@ -5,12 +5,12 @@ export const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 16 16" fill="
 
 /** Icon-only submit button; `label` is its tooltip and accessible name. */
 export function renderIconButton(
-    label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' | 'accent' = 'danger',
+    label: string, svgPaths: string, tone: 'danger' | 'ok' | 'warn' | 'accent' = 'danger', disabled = false,
 ): string {
     // danger (red) is the default: removing/deleting; ok (green): restoring/enabling; warn
     // (amber): switching something off without losing it; accent (blue): neither, e.g. a new PIN.
     const toneClass = tone === 'danger' ? '' : ` icon-button-${tone}`;
-    return `<button type="submit" class="icon-button${toneClass}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+    return `<button type="submit" class="icon-button${toneClass}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"${disabled ? ' disabled' : ''}>
         <svg ${ICON_SVG_ATTRS}>${svgPaths}</svg>
     </button>`;
 }

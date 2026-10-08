@@ -42,6 +42,15 @@ describe('computePackOwnership', () => {
         expect(computePackOwnership(pack, ['ASTEROID', 'Centiped'])?.missing).toEqual([]);
     });
 
+    it('leaves out the games this machine is not offered, unless they are installed', () => {
+        const notOffered = new Set(['centiped']);
+
+        expect(computePackOwnership(pack, [], notOffered)).toEqual({total: 1, owned: 0, missing: ['Asteroids (rev 4)']});
+        expect(isPackFullyOwned(computePackOwnership(pack, ['asteroid'], notOffered))).toBe(true);
+        expect(computePackOwnership(pack, ['asteroid', 'centiped'], notOffered)).toEqual({total: 2, owned: 2, missing: []});
+        expect(computePackOwnership(pack, [], new Set(['asteroid', 'centiped']))).toBeNull();
+    });
+
     it('cannot compare a pack whose games ship no rom file', () => {
         expect(computePackOwnership(manifest([game('pong', 'Pong', false)]), [])).toBeNull();
     });
