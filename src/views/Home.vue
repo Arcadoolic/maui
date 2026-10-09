@@ -13,7 +13,7 @@
 
         <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
 
-        <who-played-modal v-if="whoPlayed" :key="whoPlayed.key" :score="whoPlayed.score" :players="whoPlayed.players"
+        <who-played-modal v-if="whoPlayed" :key="whoPlayed.key" :score="whoPlayed.score" :index="whoPlayed.key" :total="whoPlayed.total" :players="whoPlayed.players"
                           @choose="whoPlayed.answer($event)" @skip="whoPlayed.answer(null)" @expire="whoPlayed.answer(undefined)"></who-played-modal>
 
         <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
@@ -133,11 +133,12 @@ const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
 // The nameless score being asked about, right after the game was quit (see askWhoPlayed()).
-// `answer` takes the player picked, null when nobody claims the score, undefined when nobody
-// answered at all.
+// `answer` takes the player picked, null when nobody claims the score, undefined when the
+// question was cancelled or nobody answered at all.
 const whoPlayed = ref<{
     key: number,
     score: number,
+    total: number,
     players: PendingAttribution['players'],
     answer: (playerId: string | null | undefined) => void,
 } | null>(null);
@@ -282,7 +283,8 @@ async function endScoreCapture(romName: string): Promise<PendingAttribution | nu
 
 /**
  * Asks who made each score the game wrote without a name, best first, and tells the main process
- * (ScoreCapture.attribute()). Once nobody answers, the scores left are dropped without asking.
+ * (ScoreCapture.attribute()). Once it is cancelled or nobody answers, the scores left are dropped
+ * without asking.
  * Never throws.
  */
 async function askWhoPlayed(pending: PendingAttribution | null) {
@@ -292,7 +294,7 @@ async function askWhoPlayed(pending: PendingAttribution | null) {
     let expired = false;
     for (const [key, {score}] of pending.scores.entries()) {
         const playerId = expired ? undefined : await new Promise<string | null | undefined>((resolve) => {
-            whoPlayed.value = {key, score, players: pending.players, answer: resolve};
+            whoPlayed.value = {key, score, total: pending.scores.length, players: pending.players, answer: resolve};
         });
         whoPlayed.value = null;
         expired = playerId === undefined;

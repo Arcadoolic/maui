@@ -52,6 +52,26 @@ describe('ScoreDeclarations', () => {
         expect((await declarations.settle('scobra')).ask?.scores).toEqual([{score: 12900, rank: 2}]);
     });
 
+    it('drops the scores the table no longer has when the game ends', async () => {
+        const {declarations} = harness([player('NOB'), player('SAJ')]);
+        // A single top score the game rewrote on the way up, then a second game scoring the same.
+        declarations.hold('scobra', [row(1, 12000)], context);
+        declarations.hold('scobra', [row(1, 12500)], context);
+        declarations.hold('scobra', [row(1, 15300)], context);
+        declarations.hold('scobra', [row(2, 15300)], context);
+
+        const table = [row(1, 15300), row(2, 15300), row(3, 10000), row(4, 10000, 'MAF')];
+        expect((await declarations.settle('scobra', table)).ask?.scores).toEqual([{score: 15300, rank: 1}, {score: 15300, rank: 2}]);
+    });
+
+    it('has nothing to ask once the table kept none of the held scores', async () => {
+        const {declarations} = harness([player('NOB'), player('SAJ')]);
+        declarations.hold('scobra', [row(1, 12000)], context);
+
+        expect(await declarations.settle('scobra', [row(1, 10000)])).toEqual({queued: 0, ask: null});
+        expect(await declarations.settle('scobra')).toEqual({queued: 0, ask: null});
+    });
+
     it('has nothing to ask for a game that left no nameless score', async () => {
         const {declarations} = harness([player('NOB'), player('SAJ')]);
 
