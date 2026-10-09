@@ -8,6 +8,7 @@ import {runMigrations} from '@/class/Migrations';
 import {OnlineSession} from '@/class/OnlineSession';
 import {flushOutbox} from '@/class/ScoreOutbox';
 import {ScoreCapture} from '@/class/ScoreCapture';
+import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
@@ -162,9 +163,11 @@ const IDLE_CHECK_MS = 60 * 1000;
 /**
  * Starts what always runs, and opens the BO's port. `databaseReady` resolves once the database
  * exists and is migrated (see bootstrapDatabase()); BO requests arriving before wait for it.
- * `reloadFront` and `onReset` are handed to the BO when it is loaded (see createBoApp()).
+ * `reloadFront`, `onReset` and `showGameOnFront` are handed to the BO when it is loaded (see createBoApp()).
  */
-export function startCore(port: number, reloadFront: () => void, onReset: () => void): StartedCore {
+export function startCore(
+    port: number, reloadFront: () => void, onReset: () => void, showGameOnFront: FrontGameShower,
+): StartedCore {
     const refusedAvatars = new Set<string>();
     // Single connection for the application's lifetime: sequelize-typescript's static model
     // methods (User.findAll(), etc.) bind to whichever Sequelize instance last registered the
@@ -220,7 +223,7 @@ export function startCore(port: number, reloadFront: () => void, onReset: () => 
         // from the disk before this.
         load: async (): Promise<BoApp> => {
             const {createBoApp} = await import('@/boServer');
-            return createBoApp(core, databaseReady, reloadFront, onReset);
+            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront);
         },
         idleMs: () => {
             const config = new Config();

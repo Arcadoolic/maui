@@ -89,6 +89,8 @@ import {
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
+import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {ipcRenderer} from 'electron';
 
 let gameService: GameService;
 
@@ -394,6 +396,43 @@ async function reloadCarousel() {
 }
 
 /**
+ * The BO asks for a game on screen (Favorites tab): its own category when the carousel has it,
+ * else the first one that lists it ("All games"...). Left alone while a game is being played or a
+ * question is up, and when no category has the game.
+ */
+async function showGame(romName: string) {
+    if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value) {
+        return;
+    }
+    try {
+        const order = categories.value.map((_, index) => index).sort((a, b) =>
+            Number(isDynamicCategory(categories.value[a])) - Number(isDynamicCategory(categories.value[b])));
+        for (const index of order) {
+            const loadedGames = await loadCategoryGames(index);
+            const gameIndex = loadedGames.findIndex(loaded => loaded.romName === romName);
+            if (gameIndex < 0) {
+                continue;
+            }
+            clearTimeout(timeouts.showGame);
+            clearTimeout(timeouts.showFlyer);
+            showHiscores.value = false;
+            selectedCategoryIndex.value = index;
+            displayedCategoryIndex.value = index;
+            games.value = loadedGames;
+            selectedGameIndex.value = gameIndex;
+            flyer.value = generateFlyerPath();
+            showGames.value = true;
+            showTitle.value = true;
+            showFlyer.value = true;
+            return;
+        }
+    } catch (err) {
+        Log.error('[Home] Error on showing game ' + romName + '.');
+        Log.error(err);
+    }
+}
+
+/**
  * New scores (a game was quit, or MAUI-API's leaderboards changed): "Beat This!" may have
  * to appear, or to put another game first. Nothing is touched otherwise.
  */
@@ -477,7 +516,11 @@ function cancelBackOffice() {
 const {onKeydown, onKeyup} = useControllable();
 
 let stopLeaderboardsListener: (() => void) | undefined;
-onUnmounted(() => stopLeaderboardsListener?.());
+const onShowGame = (_event: unknown, romName: string) => void showGame(romName);
+onUnmounted(() => {
+    stopLeaderboardsListener?.();
+    ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
+});
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
@@ -577,6 +620,7 @@ if (!getIsInit()) {
         Gamepads.init();
         registerKeyMapping();
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
+        ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();

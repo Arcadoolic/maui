@@ -15,6 +15,7 @@ import {
     LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
+import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import Config from '@/class/Config.class';
 import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
@@ -152,6 +153,13 @@ app.on('ready', async () => {
         // tells the user to close and restart manually (`just serve` in dev; relaunching the
         // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
+    }, (romName) => {
+        // The BO's Favorites tab: the front moves to this game (Home.vue).
+        if (!win || win.isDestroyed()) {
+            return false;
+        }
+        win.webContents.send(SHOW_GAME_CHANNEL, romName);
+        return true;
     });
     core = bo;
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
