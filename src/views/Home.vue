@@ -13,6 +13,9 @@
 
         <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
 
+        <who-played-modal v-if="whoPlayed" :key="whoPlayed.key" :score="whoPlayed.score" :players="whoPlayed.players"
+                          @choose="whoPlayed.answer($event)" @skip="whoPlayed.answer(null)" @expire="whoPlayed.answer(undefined)"></who-played-modal>
+
         <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
 
         <transition name="title">
@@ -80,8 +83,14 @@ import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
 import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
-import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
+import WhoPlayedModal from '@/components/WhoPlayedModal.vue';
+import {
+    PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
+    type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
+} from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
+import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {ipcRenderer} from 'electron';
 
 let gameService: GameService;
 
@@ -123,6 +132,15 @@ const showLoader = ref(false);
 const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
+// The nameless score being asked about, right after the game was quit (see askWhoPlayed()).
+// `answer` takes the player picked, null when nobody claims the score, undefined when nobody
+// answered at all.
+const whoPlayed = ref<{
+    key: number,
+    score: number,
+    players: PendingAttribution['players'],
+    answer: (playerId: string | null | undefined) => void,
+} | null>(null);
 // Set once the first game list is loaded: an empty list then means no game on the cabinet at all
 // (no favorite yet), shown as a message instead of an empty screen.
 const gamesLoaded = ref(false);
@@ -241,12 +259,49 @@ function onCategoryChange(previous: boolean) {
 }
 
 /** Never throws: ONLINE must never keep a game from starting. */
-async function notifyScoreCapture(name: string, romName: string): Promise<void> {
+async function notifyScoreCapture(romName: string): Promise<void> {
     try {
-        const notify = remote.getGlobal(name) as PlayNotifier | undefined;
+        const notify = remote.getGlobal(PLAY_STARTED_GLOBAL) as PlayNotifier | undefined;
         await notify?.(romName);
     } catch (err) {
         Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
+/** The game ended: the nameless scores to ask about, null when there is none. Never throws. */
+async function endScoreCapture(romName: string): Promise<PendingAttribution | null> {
+    try {
+        const notify = remote.getGlobal(PLAY_ENDED_GLOBAL) as PlayEndNotifier | undefined;
+        const pending = await notify?.(romName);
+        return pending ? JSON.parse(pending) as PendingAttribution : null;
+    } catch (err) {
+        Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
+        return null;
+    }
+}
+
+/**
+ * Asks who made each score the game wrote without a name, best first, and tells the main process
+ * (ScoreCapture.attribute()). Once nobody answers, the scores left are dropped without asking.
+ * Never throws.
+ */
+async function askWhoPlayed(pending: PendingAttribution | null) {
+    if (!pending) {
+        return;
+    }
+    let expired = false;
+    for (const [key, {score}] of pending.scores.entries()) {
+        const playerId = expired ? undefined : await new Promise<string | null | undefined>((resolve) => {
+            whoPlayed.value = {key, score, players: pending.players, answer: resolve};
+        });
+        whoPlayed.value = null;
+        expired = playerId === undefined;
+        try {
+            const attribute = remote.getGlobal(SCORE_ATTRIBUTE_GLOBAL) as ScoreAttributor | undefined;
+            await attribute?.(pending.romname, score, playerId ?? null);
+        } catch (err) {
+            Log.warn('[Home] Score not attributed: ' + (err instanceof Error ? err.message : String(err)));
+        }
     }
 }
 
@@ -258,17 +313,18 @@ function startGame() {
         return;
     }
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
-    void notifyScoreCapture(PLAY_STARTED_GLOBAL, game.romName).then(() => mameService.startGame(game.romName)).then(
+    void notifyScoreCapture(game.romName).then(() => mameService.startGame(game.romName)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
             gameProcess.on('close', () => {
-                void notifyScoreCapture(PLAY_ENDED_GLOBAL, game.romName);
+                const pending = endScoreCapture(game.romName);
                 hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
                     await onScoresChanged();
+                    await askWhoPlayed(await pending);
                     return askVote(game);
                 }).catch((err) => {
                     Log.error('[Home] Error after game ' + game.id_game + ' quit.');
@@ -337,6 +393,43 @@ async function reloadCarousel() {
         ? gameIndex
         : Math.min(selectedGameIndex.value, Math.max(loadedGames.length - 1, 0));
     flyer.value = generateFlyerPath();
+}
+
+/**
+ * The BO asks for a game on screen (Favorites tab): its own category when the carousel has it,
+ * else the first one that lists it ("All games"...). Left alone while a game is being played or a
+ * question is up, and when no category has the game.
+ */
+async function showGame(romName: string) {
+    if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value) {
+        return;
+    }
+    try {
+        const order = categories.value.map((_, index) => index).sort((a, b) =>
+            Number(isDynamicCategory(categories.value[a])) - Number(isDynamicCategory(categories.value[b])));
+        for (const index of order) {
+            const loadedGames = await loadCategoryGames(index);
+            const gameIndex = loadedGames.findIndex(loaded => loaded.romName === romName);
+            if (gameIndex < 0) {
+                continue;
+            }
+            clearTimeout(timeouts.showGame);
+            clearTimeout(timeouts.showFlyer);
+            showHiscores.value = false;
+            selectedCategoryIndex.value = index;
+            displayedCategoryIndex.value = index;
+            games.value = loadedGames;
+            selectedGameIndex.value = gameIndex;
+            flyer.value = generateFlyerPath();
+            showGames.value = true;
+            showTitle.value = true;
+            showFlyer.value = true;
+            return;
+        }
+    } catch (err) {
+        Log.error('[Home] Error on showing game ' + romName + '.');
+        Log.error(err);
+    }
 }
 
 /**
@@ -423,11 +516,15 @@ function cancelBackOffice() {
 const {onKeydown, onKeyup} = useControllable();
 
 let stopLeaderboardsListener: (() => void) | undefined;
-onUnmounted(() => stopLeaderboardsListener?.());
+const onShowGame = (_event: unknown, romName: string) => void showGame(romName);
+onUnmounted(() => {
+    stopLeaderboardsListener?.();
+    ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
+});
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        if (showAddUser.value || voteGame.value) {
+        if (showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -472,7 +569,7 @@ function registerKeyMapping() {
     });
 
     onKeyup((e, isGamepad) => {
-        if (showAddUser.value || voteGame.value) {
+        if (showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -523,6 +620,7 @@ if (!getIsInit()) {
         Gamepads.init();
         registerKeyMapping();
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
+        ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();

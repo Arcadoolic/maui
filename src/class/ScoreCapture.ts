@@ -3,11 +3,14 @@ import {join} from 'path';
 import {MameHiExtractor} from '@arcadoolic/mhiex';
 import {PlaySession} from '@/class/PlaySession';
 import {queueScores, type PublishablePlayer, type ScoreStore} from '@/class/ScoreOutbox';
+import {ScoreDeclarations} from '@/class/ScoreDeclaration';
+import type {PendingAttribution} from '@/class/ScoreCaptureBridge';
 import type {TableRow} from '@/class/ScoreDiff';
 
 // The games played on this cabinet, in ONLINE mode (maui-api Lot 2.3): one PlaySession per game,
 // started and ended by the front (Home.vue, through background.ts). The scores it finds go to the
-// outbox, then to MAUI-API right away.
+// outbox, then to MAUI-API right away. Those the game wrote without a name wait for the game to
+// end: ScoreDeclaration.ts then says whose they are, or what to ask on the cabinet.
 
 export interface ScoreCaptureDeps {
     store: ScoreStore;
@@ -47,14 +50,18 @@ function watchHiscoreFile(mameHome: string, romname: string, onChange: () => voi
 
 export class ScoreCapture {
     private readonly sessions = new Map<string, PlaySession>();
+    private readonly declarations: ScoreDeclarations;
 
-    public constructor(private readonly deps: ScoreCaptureDeps) {}
+    public constructor(private readonly deps: ScoreCaptureDeps) {
+        this.declarations = new ScoreDeclarations({store: deps.store, players: deps.players});
+    }
 
     /** A game starts: the table as it is now is the baseline. Never throws. */
     public async started(romname: string): Promise<void> {
         if (!this.deps.enabled() || this.sessions.has(romname)) {
             return;
         }
+        this.declarations.reset(romname);
         const mameHome = this.deps.mameHome();
         const extractor = new MameHiExtractor(mameHome);
         const files = extractor.files(romname);
@@ -76,19 +83,43 @@ export class ScoreCapture {
         }
     }
 
-    /** The game ended: a last look at its table. Never throws. */
-    public async ended(romname: string): Promise<void> {
+    /**
+     * The game ended: a last look at its table, then its nameless scores. Returns those to ask
+     * about on the cabinet, null when there is none. Never throws.
+     */
+    public async ended(romname: string): Promise<PendingAttribution | null> {
         const session = this.sessions.get(romname);
         this.sessions.delete(romname);
         await session?.end();
+        try {
+            const {queued, ask} = await this.declarations.settle(romname);
+            this.sent(romname, queued);
+            return ask;
+        } catch (error) {
+            this.deps.log?.(`[scores] ${romname}: ${error instanceof Error ? error.message : String(error)}`);
+            return null;
+        }
+    }
+
+    /** The cabinet's answer for a nameless score: the player picked, or null. Never throws. */
+    public async attribute(romname: string, score: number, playerId: string | null): Promise<void> {
+        try {
+            this.sent(romname, await this.declarations.attribute(romname, score, playerId) ? 1 : 0);
+        } catch (error) {
+            this.deps.log?.(`[scores] ${romname}: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     private async queue(romname: string, rows: TableRow[]): Promise<void> {
-        const queued = await queueScores(this.deps.store, await this.deps.players(), rows, {
-            romname, achievedAt: new Date().toISOString(), startupId: this.deps.startupId(),
-        });
-        if (queued.length > 0) {
-            this.deps.log?.(`[scores] ${romname}: ${queued.length} score(s) queued for MAUI-API.`);
+        const context = {achievedAt: new Date().toISOString(), startupId: this.deps.startupId()};
+        this.declarations.hold(romname, rows, context);
+        const queued = await queueScores(this.deps.store, await this.deps.players(), rows, {romname, ...context});
+        this.sent(romname, queued.length);
+    }
+
+    private sent(romname: string, count: number): void {
+        if (count > 0) {
+            this.deps.log?.(`[scores] ${romname}: ${count} score(s) queued for MAUI-API.`);
             this.deps.flush();
         }
     }

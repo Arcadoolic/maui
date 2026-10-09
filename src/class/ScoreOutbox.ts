@@ -88,6 +88,26 @@ export async function queueScores(
     return queued;
 }
 
+/**
+ * Queues a score whose player was declared on the cabinet (ScoreDeclaration.ts), when it beats
+ * that player's cached best. Returns what was queued, null otherwise.
+ */
+export async function queueDeclaredScore(
+    store: ScoreStore, playerId: string, row: TableRow, context: QueueContext,
+): Promise<ScoreSubmission | null> {
+    const cached = await store.getBest(playerId, context.romname, DEFAULT_TABLE);
+    if (cached !== null && row.score <= cached) {
+        return null;
+    }
+    const submission: ScoreSubmission = {
+        id: (context.newId ?? randomUUID)(), playerId, romname: context.romname, score: row.score,
+        rankOnCabinet: row.rank, achievedAt: context.achievedAt, startupId: context.startupId,
+        attribution: 'declared',
+    };
+    await store.add([submission]);
+    return submission;
+}
+
 export interface FlushSummary {
     sent: number;
     accepted: number;

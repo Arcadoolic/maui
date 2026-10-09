@@ -75,6 +75,7 @@ import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
+import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import {
     describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
     testConnection,
@@ -5746,6 +5747,8 @@ const ASSET_PREVIEW_SCRIPT = `<img class="asset-preview" id="assetPreview" alt="
             })();</script>`;
 
 
+// A screen with a play mark: puts the front on the game.
+const SHOW_ON_FRONT_ICON_PATHS = '<rect x="2" y="3" width="12" height="8.5" rx="1"/><path d="M6 14h4M7 6l2.5 1.3L7 8.6z"/>';
 const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
 const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
     + '<path d="M5 7l2.6-4.5c1.2 0 1.9 1 1.6 2.1L8.8 6.5h3.4c1 0 1.7.9 1.5 1.9l-.9 4c-.2.7-.8 1.1-1.5 1.1H5"/>';
@@ -6013,6 +6016,12 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
             <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
             <td class="center">
+                <form method="post" action="/favorites/show">
+                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
+                    ${renderIconButton('Show on the cabinet', SHOW_ON_FRONT_ICON_PATHS, 'accent')}
+                </form>
+            </td>
+            <td class="center">
                 <form method="post" action="/favorites/delete">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
                     ${renderIconButton('Remove from favorites', TRASH_ICON_PATHS)}
@@ -6142,6 +6151,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         <col class="col-plays">
                         <col class="col-vote">
                         <col class="col-action">
+                        <col class="col-action">
                     </colgroup>
                     <thead>
                         <tr>
@@ -6150,6 +6160,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center" title="Times the game was launched">Plays</th>
                             <th class="center">Vote</th>
+                            <th class="center"></th>
                             <th class="center"></th>
                         </tr>
                     </thead>
@@ -7559,6 +7570,7 @@ function refuseCabinetSystemRequest(req: Request, res: Response): boolean {
  */
 export function createBoApp(
     core: BoCore, databaseReady: Promise<void>, reloadFront: () => void, onReset: () => void,
+    showGameOnFront: FrontGameShower,
 ): BoApp {
     const {online, scoreStore} = core;
     onlineSession = online;
@@ -7815,6 +7827,22 @@ export function createBoApp(
 
     app.get('/favorites', async (req, res) => {
         res.send(await renderFavoritesTab(req));
+    });
+
+    // Puts the cabinet's front on a favorite: its category, then the game (Home.vue).
+    app.post('/favorites/show', async (req, res) => {
+        const romName: string = (req.body.romName || '').trim();
+        if (!/^[a-z0-9]+$/.test(romName)) {
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid rom name.'}));
+            return;
+        }
+        if (!showGameOnFront(romName)) {
+            res.status(409).send(await renderFavoritesTab(req, {warning: 'The cabinet\'s screen is not open.'}));
+            return;
+        }
+        res.send(await renderFavoritesTab(req, {
+            notice: `The cabinet now shows "${romName}" (unless a game is being played, or the game is not in its list).`,
+        }));
     });
 
     app.post('/favorites/delete', async (req, res) => {

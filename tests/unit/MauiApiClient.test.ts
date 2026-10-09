@@ -440,6 +440,13 @@ describe('scores', () => {
         }]});
     });
 
+    it('says which scores were declared on the cabinet', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {results: []}));
+        await client.postScores([{...submission, attribution: 'declared'}]);
+
+        expect(JSON.parse(requestOf(fetchImpl).init.body as string).scores[0].attribution).toBe('declared');
+    });
+
     it('treats results that do not match the contract as invalid', async () => {
         for (const body of [{}, {results: [{id: 'x', status: 'kept'}]}]) {
             const {client} = clientReturning(json(200, body));

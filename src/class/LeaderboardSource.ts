@@ -63,6 +63,11 @@ function avatarResolver(): AvatarResolver {
     };
 }
 
+/** The picture of one of the cabinet's players, null for the default one. */
+export function playerAvatar(pseudo3: string): string | null {
+    return avatarResolver()(pseudo3, null);
+}
+
 async function onlineRows(game: Game, limit: number): Promise<BoardRow[]> {
     const sequelize = Game.sequelize;
     if (!sequelize) {
