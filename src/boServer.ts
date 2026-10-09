@@ -7218,8 +7218,10 @@ function renderUsersListCard(
         const avatarFromOrigin = isAvatarFromOrigin(user);
         // Only a picture given to the player can be deleted: the generated default then comes back.
         const hasCustomAvatar = hasAvatar && !avatarFromOrigin && !isDefaultAvatar(avatarsPath, user.pseudo_3);
+        // What the status filter goes by: disabled in MAUI-API counts as inactive.
+        const status = user.active && !disabledUpstream ? 'active' : 'inactive';
         return `
-        <tr>
+        <tr data-status="${status}">
             <td class="center">
                 ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
                     ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
@@ -7272,13 +7274,15 @@ function renderUsersListCard(
     }).join('');
 
     const deleted = extras.isAdvanced ? extras.deleted : [];
+    const activeCount = users.filter(user => user.active
+        && !isDisabledUpstream({online_status: user.online_status ?? null}, !!extras.online)).length;
     const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
             dateStyle: 'short', timeStyle: 'short',
         });
         return `
-        <tr class="row-deleted">
+        <tr class="row-deleted" data-status="deleted">
             <td class="center">${avatarFilename !== undefined
                 ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
@@ -7316,8 +7320,19 @@ function renderUsersListCard(
             scores and avatar; only restore a player for the person who owns the nickname. Deleting
             permanently removes the player, their scores and their avatar from the database for good,
             and frees the nickname.</p>` : ''}
+            ${users.length + deleted.length ? `<div class="table-search">
+                <div class="table-search-controls">
+                    <select id="playersStatus" aria-label="Filter the players by status">
+                        <option value="*">All players (${users.length + deleted.length})</option>
+                        <option value="active">Active (${activeCount})</option>
+                        <option value="inactive">Inactive (${users.length - activeCount})</option>
+                        ${deleted.length ? `<option value="deleted">Deleted (${deleted.length})</option>` : ''}
+                    </select>
+                </div>
+                <p class="info table-search-count" id="playersStatusCount" hidden>No player has this status.</p>
+            </div>` : ''}
             <div class="table-wrap">
-                <table class="favorites-table">
+                <table class="favorites-table" id="playersTable">
                     <thead>
                         <tr>
                             <th class="center">Avatar</th>
@@ -7331,6 +7346,35 @@ function renderUsersListCard(
                     <tbody>${rows + deletedRows || `<tr><td colspan="${extras.onlineColumn ? 6 : 5}"><em>No players</em></td></tr>`}</tbody>
                 </table>
             </div>
+            <script>(function () {
+                // Status filter: rows are only hidden (their data-status), so their buttons keep
+                // working. Every action re-renders the whole page: the choice is kept for the
+                // browser session, or deactivating a player would drop back to "All players".
+                var status = document.getElementById('playersStatus');
+                if (!status) { return; }
+                var count = document.getElementById('playersStatusCount');
+                var rows = Array.prototype.slice.call(document.querySelectorAll('#playersTable tbody tr'));
+                var STATUS_KEY = 'bo.players.status';
+                try {
+                    var stored = sessionStorage.getItem(STATUS_KEY);
+                    if (stored && status.querySelector('option[value="' + CSS.escape(stored) + '"]')) {
+                        status.value = stored;
+                    }
+                } catch (error) { /* storage blocked: all the players are shown */ }
+                function render() {
+                    var shown = 0;
+                    rows.forEach(function (row) {
+                        row.hidden = status.value !== '*' && row.dataset.status !== status.value;
+                        if (!row.hidden) { shown++; }
+                    });
+                    count.hidden = shown > 0;
+                }
+                status.addEventListener('change', function () {
+                    try { sessionStorage.setItem(STATUS_KEY, status.value); } catch (error) { /* blocked */ }
+                    render();
+                });
+                render();
+            })();</script>
         </section>
     `;
 }
