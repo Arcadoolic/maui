@@ -51,6 +51,30 @@ describe('PlaySession', () => {
         expect(h.stop).toHaveBeenCalled();
     });
 
+    it('takes the nameless rows of a first table as the game\'s default scores', async () => {
+        const h = harness([]);
+        await h.session.start();
+
+        // The first file ever written: the score that beat a default one, among the others.
+        h.write([row(1, 12000, ''), row(2, 10000, ''), row(3, 10000, ''), row(4, 9000, 'NOB')]);
+        await vi.advanceTimersByTimeAsync(100);
+        h.write([row(1, 15300, ''), row(2, 10000, ''), row(3, 10000, ''), row(4, 9000, 'NOB')]);
+        await vi.advanceTimersByTimeAsync(100);
+        await h.session.end();
+
+        expect(h.report.mock.calls).toEqual([[[row(4, 9000, 'NOB')]], [[row(1, 15300, '')]]]);
+    });
+
+    it('still reports the nameless rows a game with a table adds', async () => {
+        const h = harness([row(1, 10000, ''), row(2, 10000, '')]);
+        await h.session.start();
+
+        h.write([row(1, 12000, ''), row(2, 10000, '')]);
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(h.report).toHaveBeenCalledWith([row(1, 12000, '')]);
+    });
+
     it('reads a game without a watch (nvram) when it ends', async () => {
         const h = harness([row(1, 100, 'NOB')], false);
         await h.session.start();

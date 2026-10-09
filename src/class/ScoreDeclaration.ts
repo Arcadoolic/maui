@@ -4,8 +4,9 @@ import type {TableRow} from '@/class/ScoreDiff';
 
 // Scores a game wrote without any name (route16, scobra, the games keeping a single top score):
 // the file cannot tell whose they are (maui-api D61). They are held while the game runs, then
-// given to the cabinet's only publishable player, or asked on the cabinet when there are several
-// (WhoPlayedModal.vue). Nothing is kept: a score nobody claims is dropped.
+// those still in the table when it ends are given to the cabinet's only publishable player, or
+// asked on the cabinet when there are several (WhoPlayedModal.vue). Nothing is kept: a score
+// nobody claims is dropped.
 
 export interface ScoreDeclarationsDeps {
     store: ScoreStore;
@@ -35,6 +36,19 @@ export interface Settlement {
     ask: PendingAttribution | null;
 }
 
+/** The held scores the final table still has without a name, each row counting once. */
+function stillInTable(scores: HeldScore[], table: TableRow[]): HeldScore[] {
+    const left = new Map<number, number>();
+    for (const row of table.filter(row => row.name === '')) {
+        left.set(row.score, (left.get(row.score) ?? 0) + 1);
+    }
+    return scores.filter((held) => {
+        const count = left.get(held.row.score) ?? 0;
+        left.set(held.row.score, count - 1);
+        return count > 0;
+    });
+}
+
 export class ScoreDeclarations {
     private readonly games = new Map<string, HeldGame>();
 
@@ -57,11 +71,22 @@ export class ScoreDeclarations {
         this.games.set(romname, game);
     }
 
-    /** The game ended: who gets what it held, or what to ask. */
-    public async settle(romname: string): Promise<Settlement> {
+    /**
+     * The game ended: who gets what it held, or what to ask. `table` is the game's table as it
+     * ended (null when it cannot be read): a held score it no longer has was only a step on the
+     * way, a top score the game rewrote as it went up, and is nobody's.
+     */
+    public async settle(romname: string, table: TableRow[] | null = null): Promise<Settlement> {
         const game = this.games.get(romname);
         if (!game) {
             return {queued: 0, ask: null};
+        }
+        if (table) {
+            game.scores = stillInTable(game.scores, table);
+            if (game.scores.length === 0) {
+                this.games.delete(romname);
+                return {queued: 0, ask: null};
+            }
         }
         const players = (await this.deps.players()).filter(isPublishable);
         if (players.length < 2) {

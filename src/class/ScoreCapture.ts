@@ -50,6 +50,8 @@ function watchHiscoreFile(mameHome: string, romname: string, onChange: () => voi
 
 export class ScoreCapture {
     private readonly sessions = new Map<string, PlaySession>();
+    // How to read the table of each game being played, for a last look when it ends.
+    private readonly readers = new Map<string, () => Promise<TableRow[] | null>>();
     private readonly declarations: ScoreDeclarations;
 
     public constructor(private readonly deps: ScoreCaptureDeps) {
@@ -68,8 +70,10 @@ export class ScoreCapture {
         if (!files) {
             return;
         }
+        const read = () => readTable(extractor, romname);
+        this.readers.set(romname, read);
         const session = new PlaySession({
-            read: () => readTable(extractor, romname),
+            read,
             watch: files.hi ? onChange => watchHiscoreFile(mameHome, romname, onChange) : undefined,
             report: rows => this.queue(romname, rows),
             log: this.deps.log,
@@ -79,6 +83,7 @@ export class ScoreCapture {
             await session.start();
         } catch (error) {
             this.sessions.delete(romname);
+            this.readers.delete(romname);
             this.deps.log?.(`[scores] ${romname} not captured: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
@@ -91,8 +96,11 @@ export class ScoreCapture {
         const session = this.sessions.get(romname);
         this.sessions.delete(romname);
         await session?.end();
+        const read = this.readers.get(romname);
+        this.readers.delete(romname);
         try {
-            const {queued, ask} = await this.declarations.settle(romname);
+            // The table as the game left it: what it held on the way up is not asked about.
+            const {queued, ask} = await this.declarations.settle(romname, await read?.() ?? null);
             this.sent(romname, queued);
             return ask;
         } catch (error) {

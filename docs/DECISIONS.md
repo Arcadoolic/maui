@@ -445,8 +445,16 @@ while the game runs (`src/class/ScoreDeclaration.ts`). When the game is quit:
 no publishable player on the cabinet (active, public, linked, not disabled),
 they are dropped; only one, the best is theirs without a question; several,
 `Home.vue` asks for each score, best first and before the vote
-(`WhoPlayedModal.vue`, joystick up/down). A score nobody claims is dropped,
-and once nobody answers at all the scores left are not asked. Nothing is
+(`WhoPlayedModal.vue`: one name shown at a time, as the letters of a new
+player are, joystick up/down going through the players then "nobody"). Only
+the scores the table still has when the game ends are asked: a game rewrites
+its top score as it goes up, and each of those steps was held. A game never
+played has no file to compare with, and the first one MAME writes holds the
+game's default scores too: its nameless rows are taken as already there
+(`PlaySession.ts`), so the first score of such a game is only asked when the
+file is written again during the same game. A score nobody
+claims is dropped, and once the question is cancelled or nobody answers at all
+the scores left are not asked. Nothing is
 stored on the cabinet: a question left unanswered is lost when the game is
 started again or MAUI is quit. Such a score is sent as `attribution: declared`
 and, as for any other, only when it beats the player's best. Rows with
