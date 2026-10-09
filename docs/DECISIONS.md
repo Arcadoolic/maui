@@ -437,6 +437,22 @@ lock does not stop scores: it only blocks linking to another cabinet.
 Before, `active` was ignored and players created from the BO got no score
 until the app restarted.
 
+**Scores without a name, 2026-10-09: asked on the cabinet (maui-api D61).**
+Some games write their scores without initials (`route16`, `scobra`, the
+games keeping a single top score): nothing in the file says whose they are.
+In ONLINE mode, `ScoreCapture` holds the rows mhiex gives with an empty name
+while the game runs (`src/class/ScoreDeclaration.ts`). When the game is quit:
+no publishable player on the cabinet (active, public, linked, not disabled),
+they are dropped; only one, the best is theirs without a question; several,
+`Home.vue` asks for each score, best first and before the vote
+(`WhoPlayedModal.vue`, joystick up/down). A score nobody claims is dropped,
+and once nobody answers at all the scores left are not asked. Nothing is
+stored on the cabinet: a question left unanswered is lost when the game is
+started again or MAUI is quit. Such a score is sent as `attribution: declared`
+and, as for any other, only when it beats the player's best. Rows with
+initials no player owns are still ignored, and LOCAL mode is unchanged: the
+local `Hiscore` table only holds what the file attributes.
+
 **`fetch` in the renderer, 2026-10-02: never called as a method.** Chromium's
 `window.fetch` throws "Illegal invocation" when called with another `this`;
 Node's does not care. `MauiApiClient` stored it as `this.fetchImpl` and the

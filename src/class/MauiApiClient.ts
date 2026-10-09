@@ -77,6 +77,8 @@ export interface ScoreSubmission {
     // ISO 8601, the cabinet's clock.
     achievedAt: string;
     startupId?: string | null;
+    // Set when the game wrote no name and the player was picked on the cabinet (maui-api D61).
+    attribution?: 'declared';
 }
 
 export type ScoreStatus = 'accepted' | 'not_improved' | 'rejected';
@@ -386,6 +388,7 @@ export class MauiApiClient {
                 rank_on_cabinet: score.rankOnCabinet ?? null,
                 achieved_at: score.achievedAt,
                 startup_id: score.startupId ?? null,
+                ...(score.attribution ? {attribution: score.attribution} : {}),
             }))},
         );
     }
