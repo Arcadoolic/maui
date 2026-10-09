@@ -453,6 +453,20 @@ and, as for any other, only when it beats the player's best. Rows with
 initials no player owns are still ignored, and LOCAL mode is unchanged: the
 local `Hiscore` table only holds what the file attributes.
 
+**The BO's badge names the cabinet and the server, 2026-10-09 (maui-api D62).**
+In the BO's header, ONLINE / OFFLINE is followed by the cabinet's name and
+MAUI-API's environment (`STG`, `LOCAL`, the name in capitals for any
+other): `ONLINE • marvelous_mario • STG`. Production is the case nobody
+needs to be told about, so its environment is left out, as is the one of a
+server too old to give it. The front shows none of it, and no longer the
+words ONLINE / OFFLINE either: only the dot, with the same colors, to stay
+discreet on the cabinet's screen. Both come with the answer to the startup
+report, which every run sends, rather than from a ping of their own. They
+are written in `online.json` (`cabinetName`, `environment`): without it a
+cabinet whose ONLINE is turned off or was rejected, the very one to look
+for, would have no name. A new configuration string forgets them, since it
+may be another cabinet's.
+
 **`fetch` in the renderer, 2026-10-02: never called as a method.** Chromium's
 `window.fetch` throws "Illegal invocation" when called with another `this`;
 Node's does not care. `MauiApiClient` stored it as `this.fetchImpl` and the

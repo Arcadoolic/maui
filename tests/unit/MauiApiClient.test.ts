@@ -161,16 +161,33 @@ describe('successful responses', () => {
                 client: {key: credentials.key, name: 'marvelous_mario'},
                 machine: {boundAt: '2026-09-23T18:15:01Z', newlyBound: true},
                 serverTime: '2026-09-23T18:15:01Z',
+                environment: null,
             },
         });
     });
 
+    it('reads the environment a ping gives', async () => {
+        const {client} = clientReturning(json(200, {...pingBody, environment: 'staging'}));
+        expect(await client.ping()).toMatchObject({kind: 'ok', value: {environment: 'staging'}});
+    });
+
     it('maps the startup response', async () => {
-        const {client} = clientReturning(json(201, {id: '9d5e7f3a-1b2c-4d5e-8f90-a1b2c3d4e5f6', received_at: '2026-09-23T18:15:01Z'}));
+        const {client} = clientReturning(json(201, {
+            id: '9d5e7f3a-1b2c-4d5e-8f90-a1b2c3d4e5f6', received_at: '2026-09-23T18:15:01Z',
+            client: {name: 'marvelous_mario'}, environment: 'staging',
+        }));
         expect(await client.reportStartup(report)).toEqual({
             kind: 'ok',
-            value: {id: '9d5e7f3a-1b2c-4d5e-8f90-a1b2c3d4e5f6', receivedAt: '2026-09-23T18:15:01Z'},
+            value: {
+                id: '9d5e7f3a-1b2c-4d5e-8f90-a1b2c3d4e5f6', receivedAt: '2026-09-23T18:15:01Z',
+                cabinetName: 'marvelous_mario', environment: 'staging',
+            },
         });
+    });
+
+    it('takes a startup response from a server that names neither the cabinet nor itself', async () => {
+        const {client} = clientReturning(json(201, {id: '9d5e7f3a-1b2c-4d5e-8f90-a1b2c3d4e5f6', received_at: '2026-09-23T18:15:01Z'}));
+        expect(await client.reportStartup(report)).toMatchObject({kind: 'ok', value: {cabinetName: null, environment: null}});
     });
 
     it('maps the heartbeat 204', async () => {

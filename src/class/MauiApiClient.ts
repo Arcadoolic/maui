@@ -20,6 +20,8 @@ export interface PingResult {
     client: {key: string; name: string};
     machine: {boundAt: string; newlyBound: boolean};
     serverTime: string;
+    // The server's APP_ENV (production, staging, local); null from a server that does not say.
+    environment: string | null;
 }
 
 export interface StartupReport {
@@ -35,6 +37,10 @@ export interface StartupReport {
 export interface StartupResult {
     id: string;
     receivedAt: string;
+    // Shown next to ONLINE / OFFLINE (OnlineIndicatorBridge.ts, maui-api D62); null from a server
+    // that does not say.
+    cabinetName: string | null;
+    environment: string | null;
 }
 
 export interface RepositoryInfo {
@@ -180,6 +186,7 @@ function parsePing(body: unknown): PingResult | null {
         client: {key: client.key, name: client.name},
         machine: {boundAt: machine.bound_at, newlyBound: machine.newly_bound},
         serverTime: body.server_time,
+        environment: typeof body.environment === 'string' ? body.environment : null,
     };
 }
 
@@ -187,7 +194,12 @@ function parseStartup(body: unknown): StartupResult | null {
     if (!isObject(body) || typeof body.id !== 'string' || typeof body.received_at !== 'string') {
         return null;
     }
-    return {id: body.id, receivedAt: body.received_at};
+    return {
+        id: body.id,
+        receivedAt: body.received_at,
+        cabinetName: isObject(body.client) && typeof body.client.name === 'string' ? body.client.name : null,
+        environment: typeof body.environment === 'string' ? body.environment : null,
+    };
 }
 
 function parseRepository(body: unknown): RepositoryInfo | null {

@@ -115,6 +115,39 @@ describe('start', () => {
         });
     });
 
+    it('keeps the cabinet name and the environment the startup report answers', async () => {
+        writeOnlineSettings(configured, path);
+        const named = () => new Response(
+            JSON.stringify({...startupBody, client: {name: 'marvelous_mario'}, environment: 'staging'}), {status: 201},
+        );
+        const {instance} = session(api(named).fetchImpl);
+        expect(instance.getIdentity()).toBeNull();
+        await instance.start();
+
+        expect(instance.getIdentity()).toEqual({cabinetName: 'marvelous_mario', environment: 'staging'});
+        expect(readOnlineSettings(path)).toEqual({...configured, cabinetName: 'marvelous_mario', environment: 'staging'});
+    });
+
+    it('still knows the cabinet while ONLINE is turned off, or MAUI-API does not answer', async () => {
+        writeOnlineSettings({...configured, enabled: false, cabinetName: 'marvelous_mario', environment: 'staging'}, path);
+        const {instance} = session(api(() => problem(503, 'server_error')).fetchImpl);
+        await instance.start();
+        expect(instance.getIdentity()).toEqual({cabinetName: 'marvelous_mario', environment: 'staging'});
+
+        writeOnlineSettings({...configured, cabinetName: 'marvelous_mario', environment: 'staging'}, path);
+        await instance.restart();
+        expect(instance.getIdentity()).toEqual({cabinetName: 'marvelous_mario', environment: 'staging'});
+    });
+
+    it('keeps what it knew when the server does not name the cabinet', async () => {
+        writeOnlineSettings({...configured, cabinetName: 'marvelous_mario'}, path);
+        const {instance} = session(api().fetchImpl);
+        await instance.start();
+
+        expect(instance.getIdentity()).toEqual({cabinetName: 'marvelous_mario', environment: null});
+        expect(readOnlineSettings(path)).toEqual({...configured, cabinetName: 'marvelous_mario'});
+    });
+
     it('never throws, even when an unexpected error happens while starting', async () => {
         writeOnlineSettings(configured, path);
         const {fetchImpl} = api();

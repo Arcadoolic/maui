@@ -15,6 +15,10 @@ export interface OnlineSettings {
     token: string;
     localUuid: string;
     enabled: boolean;
+    // What MAUI-API last said of this cabinet and of itself (OnlineSession.ts), kept so that the
+    // badge can still name the cabinet while OFFLINE. Absent until a first startup report.
+    cabinetName?: string;
+    environment?: string;
 }
 
 const DEFAULTS: OnlineSettings = {url: '', key: '', token: '', localUuid: '', enabled: false};
@@ -57,6 +61,8 @@ export function readOnlineSettings(path: string = getOnlineSettingsPath()): Onli
         token: stringOr(raw.token, DEFAULTS.token),
         localUuid: stringOr(raw.localUuid, DEFAULTS.localUuid),
         enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULTS.enabled,
+        ...(typeof raw.cabinetName === 'string' && raw.cabinetName !== '' ? {cabinetName: raw.cabinetName} : {}),
+        ...(typeof raw.environment === 'string' && raw.environment !== '' ? {environment: raw.environment} : {}),
     };
 }
 

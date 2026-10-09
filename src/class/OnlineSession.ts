@@ -1,12 +1,14 @@
 import {release} from 'os';
 import type {MachineIdSources} from '@/class/MachineFingerprint';
-import {MauiApiClient, type ApiFailure, type ApiResult, type StartupReport} from '@/class/MauiApiClient';
+import {MauiApiClient, type ApiFailure, type ApiResult, type StartupReport, type StartupResult} from '@/class/MauiApiClient';
 import {
     OnlineSettingsError,
     getOnlineSettingsPath,
     readOnlineSettings,
+    writeOnlineSettings,
     type OnlineSettings,
 } from '@/class/OnlineSettings';
+import type {OnlineIdentity} from '@/class/OnlineIndicatorBridge';
 import {buildApiCredentials, isOnlineConfigured} from '@/class/OnlineCredentials';
 import {readOsName} from '@/class/OsName';
 import type {FlushSummary} from '@/class/ScoreOutbox';
@@ -57,6 +59,9 @@ const idle = (state: OnlineState): OnlineStatus => ({state, startupId: null, las
 
 export class OnlineSession {
     private status: OnlineStatus = idle('disabled');
+    // The cabinet's name and the server's environment, as the settings file last had them, then
+    // as the startup report answered. Null when not known.
+    private identity: OnlineIdentity | null = null;
     private timer: ReturnType<typeof setTimeout> | null = null;
     private heartbeats = 0;
     // Client of the running session, for syncPlayersNow(); null when stopped.
@@ -82,6 +87,11 @@ export class OnlineSession {
 
     public getStatus(): OnlineStatus {
         return this.status;
+    }
+
+    /** Kept while the session is stopped or turned off: the badge still names the cabinet. */
+    public getIdentity(): OnlineIdentity | null {
+        return this.identity;
     }
 
     /** The client of the running session, null when it is not running. */
@@ -111,8 +121,12 @@ export class OnlineSession {
                 throw error;
             }
             this.status = idle('unreadable');
+            this.identity = null;
             return;
         }
+        this.identity = settings.cabinetName
+            ? {cabinetName: settings.cabinetName, environment: settings.environment ?? null}
+            : null;
         if (!settings.enabled) {
             this.status = idle('disabled');
             return;
@@ -131,12 +145,29 @@ export class OnlineSession {
         }
         if (startup.kind === 'ok') {
             this.status = {...this.status, startupId: startup.value.id};
+            this.identify(startup.value);
             this.heartbeats = 0;
             this.caughtUp = true;
             void this.syncPlayers(client);
             void this.flushScores(client).then(() => this.refreshLeaderboards(client));
         }
         this.handle(startup, client, generation);
+    }
+
+    /** Keeps what the server said of the cabinet, in the settings file too. Never throws. */
+    private identify({cabinetName, environment}: StartupResult): void {
+        if (cabinetName === null
+            || (cabinetName === this.identity?.cabinetName && environment === this.identity.environment)) {
+            return;
+        }
+        this.identity = {cabinetName, environment};
+        try {
+            // Read again: the BO may have written the file since the session started.
+            const settings = readOnlineSettings(this.settingsPath);
+            writeOnlineSettings({...settings, cabinetName, environment: environment ?? undefined}, this.settingsPath);
+        } catch (error) {
+            this.log(`[online] Cabinet name not saved: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
 
     public stop(): void {

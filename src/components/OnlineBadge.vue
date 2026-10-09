@@ -1,10 +1,10 @@
 <template>
-    <div v-if="display" class="online-badge" :class="indicator" :title="display.title">{{ display.label }}</div>
+    <div v-if="display" class="online-badge" :class="indicator" :title="display.title"></div>
 </template>
 
 <script setup lang="ts">
-// ONLINE / OFFLINE in the top right corner, the BO header badge's states and colors: the only
-// sign of the connection to MAUI-API while the cabinet runs fullscreen.
+// A dot in the top right corner, the BO header badge's states and colors without its text: the
+// only sign of the connection to MAUI-API while the cabinet runs fullscreen, kept discreet.
 import {computed, onMounted, onUnmounted, ref} from 'vue';
 import * as remote from '@electron/remote';
 import type {OnlineIndicator} from '@/class/OnlineSetup';
@@ -40,13 +40,6 @@ onUnmounted(() => clearInterval(timer));
         right: 0.8vw;
         z-index: 1000;
         display: flex;
-        align-items: center;
-        gap: 0.4vw;
-        font-family: 'Arcade_N', sans-serif;
-        font-size: 0.7vw;
-        padding: 0.3vw 0.5vw;
-        border-radius: 0.3vw;
-        background-color: rgba(0, 0, 0, 0.6);
         pointer-events: none;
     }
 

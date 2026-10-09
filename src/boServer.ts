@@ -76,6 +76,7 @@ import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
+import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
     describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
     testConnection,
@@ -5439,14 +5440,16 @@ function getOnlineBadge(): OnlineBadge | null {
     if (!indicator || !status) {
         return null;
     }
+    // Followed by the cabinet's name and, outside production, MAUI-API's environment.
+    const identity = describeIdentity(onlineSession?.getIdentity() ?? null);
     if (indicator === 'off') {
-        return {indicator, label: 'OFFLINE', title: 'ONLINE is turned off: this cabinet plays LOCAL.'};
+        return {indicator, label: badgeLabel('OFFLINE', identity), title: 'ONLINE is turned off: this cabinet plays LOCAL.'};
     }
     const view = getOnlineView();
     const message = view.state === 'configured' ? describeOnlineStatus(status, view.url).message : 'ONLINE settings unreadable.';
     return {
         indicator,
-        label: indicator === 'offline' ? 'OFFLINE' : 'ONLINE',
+        label: badgeLabel(indicator === 'offline' ? 'OFFLINE' : 'ONLINE', identity),
         title: indicator === 'unstable' ? `MAUI-API not answering, retrying. ${message}` : message,
     };
 }
