@@ -58,7 +58,7 @@ import {
 } from '@/class/HiscoreInspector';
 import {getCategoryDisplayName, getCategoryIconKey} from '@/class/CarouselCategories';
 import type {StartingPackManifest} from '@/types/StartingPackManifest';
-import {ensureDefaultAvatar} from '@/class/DefaultAvatar';
+import {ensureDefaultAvatar, isDefaultAvatar, resetToDefaultAvatar} from '@/class/DefaultAvatar';
 import {
     findDeletedUser, listDeletedUsers, restoreDeletedUser, purgeDeletedUser, DeletedUserRow,
 } from '@/class/UserReservation';
@@ -76,6 +76,7 @@ import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
+import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
     describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
     testConnection,
@@ -2271,24 +2272,71 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: #888888;
             font-size: 18px;
         }
-        .avatar-upload {
+        /* An avatar that can be changed: its actions (.avatar-actions) lie over the picture and
+           show on hover or keyboard focus. */
+        .avatar-edit {
             display: inline-block;
-            /* A <label>: the generic label rule's 16px top margin pushed the avatar down its row. */
-            margin-top: 0;
             vertical-align: middle;
             position: relative;
-            cursor: pointer;
             border-radius: 4px;
+        }
+        .avatar-actions {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            border-radius: 4px;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.65);
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+        .avatar-edit:hover .avatar-actions, .avatar-edit:focus-within .avatar-actions {
+            opacity: 1;
+        }
+        /* No hover on a touch screen: the actions stay shown, or a tap would hit one unseen. */
+        @media (hover: none) {
+            .avatar-actions {
+                opacity: 1;
+            }
+        }
+        .avatar-actions form {
+            display: flex;
+            flex: 1;
+            margin: 0;
+        }
+        /* A <label> (change, around the file input) or a submit button (delete): the selector
+           outweighs the generic label, button and "form > button[type=submit]:last-child" rules. */
+        .avatar-actions form > .avatar-action:last-child {
+            position: relative;
+            display: flex;
+            flex: 1;
+            align-items: center;
+            justify-content: center;
+            min-width: 0;
+            margin: 0;
+            padding: 0;
+            color: #ffffff;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            cursor: pointer;
+        }
+        .avatar-actions form > .avatar-action:last-child:hover {
+            background: rgba(255, 255, 255, 0.18);
+        }
+        .avatar-actions form > .avatar-action-danger:last-child {
+            color: var(--danger);
+        }
+        .avatar-action svg {
+            width: 14px;
+            height: 14px;
         }
         /* A bare avatar (deleted players, not uploadable): display: block ignores the cell's
            text-align, so it's centered by margin to line up with the .avatar-upload ones. */
         td.center > .avatar-thumb {
             margin: 0 auto;
         }
-        .avatar-upload:hover .avatar-thumb {
-            opacity: 0.6;
-        }
-        .avatar-upload input[type="file"] {
+        .avatar-action input[type="file"] {
             position: absolute;
             inset: 0;
             width: 100%;
@@ -5439,14 +5487,16 @@ function getOnlineBadge(): OnlineBadge | null {
     if (!indicator || !status) {
         return null;
     }
+    // Followed by the cabinet's name and, outside production, MAUI-API's environment.
+    const identity = describeIdentity(onlineSession?.getIdentity() ?? null);
     if (indicator === 'off') {
-        return {indicator, label: 'OFFLINE', title: 'ONLINE is turned off: this cabinet plays LOCAL.'};
+        return {indicator, label: badgeLabel('OFFLINE', identity), title: 'ONLINE is turned off: this cabinet plays LOCAL.'};
     }
     const view = getOnlineView();
     const message = view.state === 'configured' ? describeOnlineStatus(status, view.url).message : 'ONLINE settings unreadable.';
     return {
         indicator,
-        label: indicator === 'offline' ? 'OFFLINE' : 'ONLINE',
+        label: badgeLabel(indicator === 'offline' ? 'OFFLINE' : 'ONLINE', identity),
         title: indicator === 'unstable' ? `MAUI-API not answering, retrying. ${message}` : message,
     };
 }
@@ -5749,6 +5799,7 @@ const ASSET_PREVIEW_SCRIPT = `<img class="asset-preview" id="assetPreview" alt="
 
 // A screen with a play mark: puts the front on the game.
 const SHOW_ON_FRONT_ICON_PATHS = '<rect x="2" y="3" width="12" height="8.5" rx="1"/><path d="M6 14h4M7 6l2.5 1.3L7 8.6z"/>';
+const EDIT_ICON_PATHS = '<path d="M11 2.5l2.5 2.5L6 12.5l-3.5 1 1-3.5z"/><path d="M9.5 4l2.5 2.5"/>';
 const TRASH_ICON_PATHS = '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4"/>';
 const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
     + '<path d="M5 7l2.6-4.5c1.2 0 1.9 1 1.6 2.1L8.8 6.5h3.4c1 0 1.7.9 1.5 1.9l-.9 4c-.2.7-.8 1.1-1.5 1.1H5"/>';
@@ -7165,23 +7216,38 @@ function renderUsersListCard(
         // A player created on another cabinet: its picture comes from MAUI-API (PlayerSync.ts) and
         // is only changed there (maui-api D56).
         const avatarFromOrigin = isAvatarFromOrigin(user);
+        // Only a picture given to the player can be deleted: the generated default then comes back.
+        const hasCustomAvatar = hasAvatar && !avatarFromOrigin && !isDefaultAvatar(avatarsPath, user.pseudo_3);
+        // What the status filter goes by: disabled in MAUI-API counts as inactive.
+        const status = user.active && !disabledUpstream ? 'active' : 'inactive';
         return `
-        <tr>
+        <tr data-status="${status}">
             <td class="center">
                 ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
                     ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
                     : '<span class="avatar-thumb avatar-placeholder">-</span>'}</span>` : `
-                <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
-                    <label class="avatar-upload" title="Change the avatar (PNG)">
-                        ${hasAvatar
-                            ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
-                            : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
-                        <!-- requestSubmit(), not submit(): the latter bypasses the 'submit' event
-                        entirely (a DOM quirk), which would skip the AJAX interception below and
-                        leave the browser stuck on this POST's own URL (see renderPageTail()). -->
-                        <input type="file" name="avatar" accept="image/png" onchange="this.form.requestSubmit()">
-                    </label>
-                </form>`}
+                <div class="avatar-edit">
+                    ${hasAvatar
+                        ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
+                        : '<span class="avatar-thumb avatar-placeholder">＋</span>'}
+                    <div class="avatar-actions">
+                        <form method="post" action="/users/${user.id_user}/avatar" enctype="multipart/form-data">
+                            <label class="avatar-action" title="Change the avatar (PNG)">
+                                <svg ${ICON_SVG_ATTRS}>${EDIT_ICON_PATHS}</svg>
+                                <!-- requestSubmit(), not submit(): the latter bypasses the 'submit' event
+                                entirely (a DOM quirk), which would skip the AJAX interception below and
+                                leave the browser stuck on this POST's own URL (see renderPageTail()). -->
+                                <input type="file" name="avatar" accept="image/png" aria-label="Change the avatar (PNG)" onchange="this.form.requestSubmit()">
+                            </label>
+                        </form>
+                        ${hasCustomAvatar ? `<form method="post" action="/users/${user.id_user}/avatar/delete"
+                            onsubmit="return confirm('Delete the avatar of ${escapeHtml(user.pseudo_3)}? The default one comes back.')">
+                            <button type="submit" class="avatar-action avatar-action-danger" title="Delete the avatar" aria-label="Delete the avatar">
+                                <svg ${ICON_SVG_ATTRS}>${TRASH_ICON_PATHS}</svg>
+                            </button>
+                        </form>` : ''}
+                    </div>
+                </div>`}
             </td>
             <td>${escapeHtml(user.pseudo_3)}</td>
             <td>${user.realname ? escapeHtml(user.realname) : '<em>-</em>'}</td>
@@ -7208,13 +7274,15 @@ function renderUsersListCard(
     }).join('');
 
     const deleted = extras.isAdvanced ? extras.deleted : [];
+    const activeCount = users.filter(user => user.active
+        && !isDisabledUpstream({online_status: user.online_status ?? null}, !!extras.online)).length;
     const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
             dateStyle: 'short', timeStyle: 'short',
         });
         return `
-        <tr class="row-deleted">
+        <tr class="row-deleted" data-status="deleted">
             <td class="center">${avatarFilename !== undefined
                 ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
@@ -7252,8 +7320,19 @@ function renderUsersListCard(
             scores and avatar; only restore a player for the person who owns the nickname. Deleting
             permanently removes the player, their scores and their avatar from the database for good,
             and frees the nickname.</p>` : ''}
+            ${users.length + deleted.length ? `<div class="table-search">
+                <div class="table-search-controls">
+                    <select id="playersStatus" aria-label="Filter the players by status">
+                        <option value="*">All players (${users.length + deleted.length})</option>
+                        <option value="active">Active (${activeCount})</option>
+                        <option value="inactive">Inactive (${users.length - activeCount})</option>
+                        ${deleted.length ? `<option value="deleted">Deleted (${deleted.length})</option>` : ''}
+                    </select>
+                </div>
+                <p class="info table-search-count" id="playersStatusCount" hidden>No player has this status.</p>
+            </div>` : ''}
             <div class="table-wrap">
-                <table class="favorites-table">
+                <table class="favorites-table" id="playersTable">
                     <thead>
                         <tr>
                             <th class="center">Avatar</th>
@@ -7267,6 +7346,35 @@ function renderUsersListCard(
                     <tbody>${rows + deletedRows || `<tr><td colspan="${extras.onlineColumn ? 6 : 5}"><em>No players</em></td></tr>`}</tbody>
                 </table>
             </div>
+            <script>(function () {
+                // Status filter: rows are only hidden (their data-status), so their buttons keep
+                // working. Every action re-renders the whole page: the choice is kept for the
+                // browser session, or deactivating a player would drop back to "All players".
+                var status = document.getElementById('playersStatus');
+                if (!status) { return; }
+                var count = document.getElementById('playersStatusCount');
+                var rows = Array.prototype.slice.call(document.querySelectorAll('#playersTable tbody tr'));
+                var STATUS_KEY = 'bo.players.status';
+                try {
+                    var stored = sessionStorage.getItem(STATUS_KEY);
+                    if (stored && status.querySelector('option[value="' + CSS.escape(stored) + '"]')) {
+                        status.value = stored;
+                    }
+                } catch (error) { /* storage blocked: all the players are shown */ }
+                function render() {
+                    var shown = 0;
+                    rows.forEach(function (row) {
+                        row.hidden = status.value !== '*' && row.dataset.status !== status.value;
+                        if (!row.hidden) { shown++; }
+                    });
+                    count.hidden = shown > 0;
+                }
+                status.addEventListener('change', function () {
+                    try { sessionStorage.setItem(STATUS_KEY, status.value); } catch (error) { /* blocked */ }
+                    render();
+                });
+                render();
+            })();</script>
         </section>
     `;
 }
@@ -8349,8 +8457,6 @@ export function createBoApp(
         }
 
         writeFileSync(join(config.avatarsPath, `${user.pseudo_3}.png`), req.file.buffer);
-        // The uploaded PNG replaces the generated default, which would only be left unused.
-        rmSync(join(config.avatarsPath, `${user.pseudo_3}.svg`), {force: true});
         res.send(await usersPage(req, 
             users, getAvatarFilenames(config), undefined, `Avatar updated for "${user.pseudo_3}".`,
         ));
@@ -8374,6 +8480,30 @@ export function createBoApp(
                 res.status(404).end();
             }
         });
+    });
+
+    // Deleting an avatar brings the player's generated default back (see DefaultAvatar.ts).
+    app.post('/users/:id/avatar/delete', async (req, res) => {
+        const user = await User.findByPk(req.params.id);
+        const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
+        const config = new Config();
+
+        if (!user) {
+            res.status(404).send(await usersPage(req, users, getAvatarFilenames(config), 'Player not found.'));
+            return;
+        }
+        if (isAvatarFromOrigin(user)) {
+            res.status(403).send(await usersPage(
+                req, users, getAvatarFilenames(config),
+                `"${user.pseudo_3}" was created on another cabinet: the avatar is changed from that one.`,
+            ));
+            return;
+        }
+        const removed = resetToDefaultAvatar(config.avatarsPath, user.pseudo_3);
+        res.send(await usersPage(
+            req, users, getAvatarFilenames(config), undefined,
+            removed ? `Avatar deleted for "${user.pseudo_3}".` : `"${user.pseudo_3}" already has the default avatar.`,
+        ));
     });
 
     app.get('/avatars/:filename', (req, res) => {

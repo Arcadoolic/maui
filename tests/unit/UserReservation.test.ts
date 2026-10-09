@@ -108,11 +108,10 @@ describe('purgeDeletedUser', () => {
         ]);
     });
 
-    it('removes the avatar files of the purged player', async () => {
+    it('removes the avatar file of the purged player', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'maui-purge-'));
         try {
             writeFileSync(join(dir, 'NOB.png'), 'x');
-            writeFileSync(join(dir, 'NOB.svg'), 'x');
             writeFileSync(join(dir, 'KEEP.png'), 'x');
             stubDeletedUser([]);
 

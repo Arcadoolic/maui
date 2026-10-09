@@ -147,7 +147,7 @@ describe('UserService.registerUser default avatar', () => {
 
         await service.registerUser('NEW');
 
-        expect(service.getAvatars().sort()).toEqual(['NEW.svg', 'OLD.png']);
+        expect(service.getAvatars().sort()).toEqual(['NEW.png', 'OLD.png']);
     });
 
     it('gives none to a player who already existed', async () => {

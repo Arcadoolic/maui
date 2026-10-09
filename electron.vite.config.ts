@@ -99,6 +99,8 @@ const rendererCjsModules = {
     sequelize: {type: 'cjs' as const},
     'sequelize-typescript': {type: 'cjs' as const},
     umzug: {type: 'cjs' as const},
+    // Default avatars (src/class/DefaultAvatar.ts): a native module, loaded by Node itself.
+    '@resvg/resvg-js': {type: 'cjs' as const},
 };
 
 const alias = {
