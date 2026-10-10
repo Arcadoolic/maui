@@ -7,6 +7,8 @@ import Config from '@/class/Config.class';
 import {runMigrations} from '@/class/Migrations';
 import {OnlineSession} from '@/class/OnlineSession';
 import {flushOutbox} from '@/class/ScoreOutbox';
+import {reportOpinions} from '@/class/OpinionReport';
+import {SqliteOpinionStore} from '@/class/SqliteOpinionStore';
 import {ScoreCapture} from '@/class/ScoreCapture';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
@@ -182,6 +184,7 @@ export function startCore(
     const databaseReady = bootstrapDatabase(sequelize);
     // Lot 2.3: the scores of the games played, queued then sent to MAUI-API (ScoreCapture.ts).
     const scoreStore = new SqliteScoreStore(sequelize);
+    const opinionStore = new SqliteOpinionStore(sequelize);
     // Lot 2.4: the shared leaderboards of the games with hiscores, for the front in ONLINE mode.
     const leaderboards = new LeaderboardSync({
         store: new SqliteLeaderboardStore(sequelize),
@@ -211,6 +214,7 @@ export function startCore(
         // players created on another cabinet (maui-api D56).
         syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars, saveLocalAvatar),
         flushScores: client => flushOutbox(scoreStore, client),
+        reportOpinions: client => reportOpinions(opinionStore, client),
         refreshLeaderboards: client => leaderboards.refresh(client),
     });
     const scores = new ScoreCapture({

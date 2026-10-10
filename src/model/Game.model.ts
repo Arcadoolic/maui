@@ -102,6 +102,16 @@ export default class Game extends Model<Game> {
     })
     public last_played_at!: Date | null;
 
+    /**
+     * The vote and plays MAUI-API last acknowledged for the game (OpinionReport.ts's
+     * opinionSignature()); null until a report went through.
+     */
+    @Column({
+        type: DataType.STRING,
+        allowNull: true,
+    })
+    public opinion_sent!: string | null;
+
     @HasMany(() => Hiscore)
     public hiscores!: InstanceType<typeof Hiscore>[];
 
