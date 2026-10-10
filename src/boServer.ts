@@ -6083,7 +6083,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
 
     // Favorites removed from this list (removed-favorites.json), in their own table right after
     // it, newest first. A rom put back by another route (or by mame's own menu) since it was
-    // removed isn't "removed" anymore - don't offer to restore what's already there.
+    // removed is taken out again the next time MAUI starts (removeReturnedFavorites()): until
+    // then it is in the list above - don't offer to restore what's already there.
     const current = new Set(favoritesInfo.rows.map(row => row.romName));
     const removed = readRemovedFavorites()
         .filter(item => !current.has(item.romName))

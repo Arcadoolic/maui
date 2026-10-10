@@ -174,3 +174,38 @@ export function removeFavoriteFromDisk(favoritesPath: string, romName: string): 
     }
     return {fullname};
 }
+
+/**
+ * Takes out of favorites.ini every rom still listed as removed (removed-favorites.json), run on
+ * every start (Init.vue) before the games are synced with the favorites: a removed game put back
+ * by another route - a pack imported before PackImport.ts skipped them, a restored favorites.ini -
+ * would otherwise be back on the cabinet, thumbs down included. Only the BO's "Restore" brings a
+ * removed favorite back, since it also drops its removed record. The records are left as they
+ * are. Returns the rom names taken out.
+ */
+export function removeReturnedFavorites(favoritesPath: string): string[] {
+    const removed = readRemovedFavorites();
+    if (removed.length === 0) {
+        return [];
+    }
+    let content = readFileSync(favoritesPath, 'utf8');
+    const returned: string[] = [];
+    for (const {romName} of removed) {
+        const removal = removeFavorite(content, romName);
+        if (removal !== null) {
+            content = removal.content;
+            returned.push(romName);
+        }
+    }
+    if (returned.length === 0) {
+        return [];
+    }
+    writeFileSync(favoritesPath, content, 'utf8');
+
+    const cache = readFavoritesCache();
+    if (cache && returned.some(romName => cache.entries[romName])) {
+        returned.forEach(romName => delete cache.entries[romName]);
+        writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
+    }
+    return returned;
+}
