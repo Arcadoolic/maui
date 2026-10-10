@@ -59,7 +59,7 @@ describe('MAUI_CONTROL_CONTEXTS', () => {
             .filter(control => control.longPressMs !== undefined)
             .map(control => [control.key, control.longPressMs]);
         expect(longPresses).toEqual([
-            // Held: letter jumps in "All games", fast scroll elsewhere.
+            // Held: letter jumps in "All games" and "Hiscores only", fast scroll elsewhere.
             [MAUI_KEYS.up, HOLD_MS.delay],
             [MAUI_KEYS.down, HOLD_MS.delay],
             [MAUI_KEYS.space, LONG_PRESS_MS.quit],

@@ -1,6 +1,6 @@
 /**
- * Letter jumps of the front's game list (Home.vue): holding up or down in "All games" goes from
- * one initial to the next instead of one game at a time. The initial is the one of the title the
+ * Letter jumps of the front's game list (Home.vue): holding up or down in "All games" or "Hiscores only"
+ * goes from one initial to the next instead of one game at a time. The initial is the one of the title the
  * front shows above the list, which is also what the list is ordered by (GameService's
  * GAMES_BY_TITLE): the jumps follow the order the games are in. Electron-free.
  */

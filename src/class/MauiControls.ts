@@ -32,7 +32,7 @@ export const LONG_PRESS_MS = {
 export const HOLD_MS = {
     // How long the key is held before the list starts moving by itself.
     delay: 500,
-    // "All games": time on each letter, enough to read it before the next jump.
+    // "All games" and "Hiscores only": time on each letter, enough to read it before the next jump.
     alphaJump: 450,
     // Any other category: time on each game.
     fastScroll: 150,
@@ -58,8 +58,8 @@ export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
         controls: [
             {key: MAUI_KEYS.up, role: 'Previous game (wraps to the last one after the first)'},
             {key: MAUI_KEYS.down, role: 'Next game (wraps to the first one after the last)'},
-            {key: MAUI_KEYS.up, longPressMs: HOLD_MS.delay, role: 'Held: jump to the previous letter in "All games", scroll fast in the other categories'},
-            {key: MAUI_KEYS.down, longPressMs: HOLD_MS.delay, role: 'Held: jump to the next letter in "All games", scroll fast in the other categories'},
+            {key: MAUI_KEYS.up, longPressMs: HOLD_MS.delay, role: 'Held: jump to the previous letter in "All games" and "Hiscores only", scroll fast in the other categories'},
+            {key: MAUI_KEYS.down, longPressMs: HOLD_MS.delay, role: 'Held: jump to the next letter in "All games" and "Hiscores only", scroll fast in the other categories'},
             {key: MAUI_KEYS.left, role: 'Previous category (if categories exist)'},
             {key: MAUI_KEYS.right, role: 'Next category (if categories exist)'},
             {key: MAUI_KEYS.enter, role: 'Confirm: launch the selected game'},

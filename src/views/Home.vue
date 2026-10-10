@@ -134,7 +134,7 @@ const flyer = ref('');
 // A landscape flyer is turned 90 degrees to the left to fill the tall flyer area (see .flyer.landscape)
 const flyerLandscape = ref(false);
 
-// The column of initials, up while up or down is held in "All games" (see startHold()).
+// The column of initials, up while up or down is held in "All games" or "Hiscores only" (see startHold()).
 const alphaJumping = ref(false);
 const letters = computed(() => getLetters(games.value.map(game => game.shortname)));
 const selectedLetter = computed(() => selectedGame.value ? getLetter(selectedGame.value.shortname) : '');
@@ -239,8 +239,8 @@ function onGameChange(previous: boolean) {
 
 /**
  * Up or down kept held: after HOLD_MS.delay the list moves by itself until the key is released.
- * In "All games" it jumps from one initial of the titles to the next, the initials the list has
- * shown on the left; any other category scrolls its games fast.
+ * In "All games" and "Hiscores only" it jumps from one initial of the titles to the next, the
+ * initials the list has shown on the left; any other category scrolls its games fast.
  */
 function startHold(previous: boolean) {
     stopHold();
@@ -250,7 +250,8 @@ function startHold(previous: boolean) {
             return;
         }
         const selected = categories.value[selectedCategoryIndex.value];
-        const alpha = !!selected && isDynamicCategory(selected) && selected.dynamic === 'all';
+        const alpha = !!selected && isDynamicCategory(selected)
+            && (selected.dynamic === 'all' || selected.dynamic === 'hiscores');
         const step = () => alpha
             ? selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous))
             : onGameChange(previous);
