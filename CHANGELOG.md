@@ -1,3 +1,9 @@
+## [2.11.0](https://github.com/Arcadoolic/maui/compare/2.10.0...2.11.0) (2026-10-10)
+
+### Features
+
+* **online:** report the cabinet's votes and play counts to MAUI-API ([e52f44c](https://github.com/Arcadoolic/maui/commit/e52f44c2c7626c4df36ac9fb97194ea01b1d1c35))
+
 ## [2.10.0](https://github.com/Arcadoolic/maui/compare/2.9.0...2.10.0) (2026-10-10)
 
 ### Features
