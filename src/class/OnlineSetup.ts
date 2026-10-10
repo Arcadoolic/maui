@@ -88,7 +88,8 @@ export function saveConfigurationString(input: string, path: string = getOnlineS
     if ('unreadable' in settings) {
         return {ok: false, error: settings.unreadable};
     }
-    writeOnlineSettings({...settings, ...credentials}, path);
+    // Other credentials may be another cabinet's, or another server's: what was known is forgotten.
+    writeOnlineSettings({...settings, ...credentials, cabinetName: undefined, environment: undefined}, path);
     return {ok: true};
 }
 

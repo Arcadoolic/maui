@@ -1,7 +1,9 @@
 import {describe, it, expect} from 'vitest';
 import type Category from '@/model/Category.model';
-import {mergeTtlCategories} from '@/class/CarouselCategories';
-import {isMergedCategory} from '@/types/CarouselCategory';
+import {buildCarousel, getCategoryIconKey, mergeTtlCategories, type CarouselOptions} from '@/class/CarouselCategories';
+import {
+    ALL_GAMES_CATEGORY, HISCORES_ONLY_CATEGORY, BEAT_THIS_CATEGORY, isMergedCategory,
+} from '@/types/CarouselCategory';
 
 const category = (id: number, name: string) => ({id_category: id, name}) as unknown as Category;
 
@@ -49,5 +51,55 @@ describe('mergeTtlCategories', () => {
         const result = mergeTtlCategories([category(1, 'Settled * Games')]);
 
         expect(result.map(entry => entry.name)).toEqual(['Settled * Games']);
+    });
+});
+
+describe('buildCarousel', () => {
+    const everything: CarouselOptions = {
+        showAllGames: true,
+        showBeatThis: true,
+        showHiscoresOnly: true,
+        hasBeatThisGames: true,
+        hasHiscoreGames: true,
+    };
+    const maze = category(9, 'Maze');
+
+    it('puts "All Games", "Beat This!" and "Hiscores Only" before the genres', () => {
+        expect(buildCarousel([maze], everything)).toEqual([
+            ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY, maze,
+        ]);
+    });
+
+    it('leaves out the categories hidden from the BO', () => {
+        expect(buildCarousel([maze], {...everything, showAllGames: false})).toEqual([
+            BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY, maze,
+        ]);
+        expect(buildCarousel([maze], {...everything, showBeatThis: false, showHiscoresOnly: false})).toEqual([
+            ALL_GAMES_CATEGORY, maze,
+        ]);
+    });
+
+    it('leaves out a category that would be empty', () => {
+        expect(buildCarousel([maze], {...everything, hasBeatThisGames: false, hasHiscoreGames: false})).toEqual([
+            ALL_GAMES_CATEGORY, maze,
+        ]);
+    });
+
+    it('falls back on "All Games" rather than an empty carousel', () => {
+        expect(buildCarousel([], {
+            ...everything, showAllGames: false, hasBeatThisGames: false, hasHiscoreGames: false,
+        })).toEqual([ALL_GAMES_CATEGORY]);
+    });
+
+    it('gives its three own entries ids that clash with nothing', () => {
+        const ids = [ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY].map(entry => entry.id_category);
+        expect(new Set(ids).size).toBe(3);
+        expect(ids.every(id => id < 0)).toBe(true);
+    });
+});
+
+describe('getCategoryIconKey', () => {
+    it('gives "Beat This!" the key of its icon file, without its closing punctuation', () => {
+        expect(getCategoryIconKey(BEAT_THIS_CATEGORY.name)).toBe('beat_this');
     });
 });

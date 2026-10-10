@@ -1,5 +1,5 @@
 import {createServer, type IncomingMessage, type Server, type ServerResponse} from 'http';
-import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'fs';
+import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import * as os from 'os';
 import {app as electronApp, nativeImage} from 'electron';
@@ -8,10 +8,12 @@ import {runMigrations} from '@/class/Migrations';
 import {OnlineSession} from '@/class/OnlineSession';
 import {flushOutbox} from '@/class/ScoreOutbox';
 import {ScoreCapture} from '@/class/ScoreCapture';
+import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
+import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
 import {syncPlayers} from '@/class/PlayerSync';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
@@ -107,8 +109,6 @@ export function readLocalAvatar(pseudo3: string): {png: Uint8Array; hash: string
 export function saveLocalAvatar(pseudo3: string, png: Uint8Array): void {
     const avatarsPath = new Config().avatarsPath;
     writeFileSync(join(avatarsPath, `${pseudo3}.png`), png);
-    // The PNG replaces the generated default, which would only be left unused.
-    rmSync(join(avatarsPath, `${pseudo3}.svg`), {force: true});
 }
 
 /**
@@ -162,10 +162,19 @@ const IDLE_CHECK_MS = 60 * 1000;
 /**
  * Starts what always runs, and opens the BO's port. `databaseReady` resolves once the database
  * exists and is migrated (see bootstrapDatabase()); BO requests arriving before wait for it.
- * `reloadFront` and `onReset` are handed to the BO when it is loaded (see createBoApp()).
+ * `reloadFront`, `onReset` and `showGameOnFront` are handed to the BO when it is loaded (see createBoApp()).
  */
-export function startCore(port: number, reloadFront: () => void, onReset: () => void): StartedCore {
+export function startCore(
+    port: number, reloadFront: () => void, onReset: () => void, showGameOnFront: FrontGameShower,
+): StartedCore {
     const refusedAvatars = new Set<string>();
+    // Default avatars written as SVG by an earlier version become PNGs (see DefaultAvatar.ts). A
+    // failure here only leaves those players without a picture: it must not stop the app.
+    try {
+        replaceSvgDefaultAvatars(new Config().avatarsPath);
+    } catch (error) {
+        console.error('[boCore] Replacing the SVG default avatars failed:', error);
+    }
     // Single connection for the application's lifetime: sequelize-typescript's static model
     // methods (User.findAll(), etc.) bind to whichever Sequelize instance last registered the
     // model, so this must not be recreated.
@@ -220,7 +229,7 @@ export function startCore(port: number, reloadFront: () => void, onReset: () => 
         // from the disk before this.
         load: async (): Promise<BoApp> => {
             const {createBoApp} = await import('@/boServer');
-            return createBoApp(core, databaseReady, reloadFront, onReset);
+            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront);
         },
         idleMs: () => {
             const config = new Config();

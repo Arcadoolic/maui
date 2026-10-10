@@ -4,6 +4,13 @@ import {newRows, type TableRow} from '@/class/ScoreDiff';
 // game starts, then again each time MAME writes it (the hiscore plugin saves the .hi during the
 // game) and once more when the game ends (nvram is only written then). Only the rows the game
 // added since the start are reported, each once: the startup scan never sends anything.
+//
+// A game never played has no file yet: the hiscore plugin only writes one once a score of the
+// game's own default table is beaten, and that first file holds those default scores next to the
+// new one. A row with a name is only ever sent for a player with these initials; one without a
+// name would be asked about on the cabinet (ScoreDeclaration.ts), default scores included. With
+// nothing to compare them to, the nameless rows of the first table read are taken as already
+// there: only what the game adds after it is reported.
 
 export interface PlaySessionDeps {
     // Calls back on every write of the file; returns how to stop. None for nvram-only games.
@@ -21,6 +28,8 @@ const DEFAULT_DEBOUNCE_MS = 1500;
 export class PlaySession {
     private snapshot: TableRow[] = [];
     private reported: TableRow[] = [];
+    // The game started without a table: see the note on nameless rows above.
+    private withoutBaseline = false;
     private stopWatching: (() => void) | null = null;
     private timer: ReturnType<typeof setTimeout> | null = null;
     // Reads one after the other: two checks must not report the same row twice.
@@ -30,6 +39,7 @@ export class PlaySession {
 
     public async start(): Promise<void> {
         this.snapshot = await this.deps.read() ?? [];
+        this.withoutBaseline = this.snapshot.length === 0;
         this.stopWatching = this.deps.watch?.(() => this.schedule()) ?? null;
     }
 
@@ -59,6 +69,10 @@ export class PlaySession {
             const table = await this.deps.read();
             if (!table) {
                 return;
+            }
+            if (this.withoutBaseline && table.length > 0) {
+                this.withoutBaseline = false;
+                this.snapshot.push(...table.filter(row => row.name === ''));
             }
             const fresh = newRows(this.reported, newRows(this.snapshot, table));
             if (fresh.length === 0) {

@@ -1,6 +1,6 @@
 import {describe, it, expect, vi} from 'vitest';
 import {
-    backoffMs, describeFlush, flushOutbox, isPublishable, queueScores, SCORE_BATCH_SIZE,
+    backoffMs, describeFlush, flushOutbox, isPublishable, queueDeclaredScore, queueScores, SCORE_BATCH_SIZE,
     type OutboxEntry, type PublishablePlayer, type ScoreStore,
 } from '@/class/ScoreOutbox';
 import type {ApiResult, MauiApiClient, ScoreResult, ScoreSubmission} from '@/class/MauiApiClient';
@@ -75,6 +75,30 @@ describe('queueScores', () => {
 
         expect(await queueScores(store, [player('NOB')], [row(1, 12900, 'NOB')], context)).toEqual([]);
         expect(await queueScores(store, [player('NOB')], [row(1, 13000, 'NOB')], context)).toHaveLength(1);
+    });
+});
+
+describe('queueDeclaredScore', () => {
+    it('queues a score for the player declared on the cabinet, marked as such', async () => {
+        const store = new MemoryStore();
+        const queued = await queueDeclaredScore(store, 'id-NOB', row(2, 12900, ''), context);
+
+        expect(queued).toMatchObject({playerId: 'id-NOB', romname: 'dkong', score: 12900, rankOnCabinet: 2, attribution: 'declared'});
+        expect([...store.entries.values()].map(entry => entry.submission)).toEqual([queued]);
+    });
+
+    it('skips what does not beat the cached best', async () => {
+        const store = new MemoryStore();
+        await store.setBest('id-NOB', 'dkong', 'default', 12900);
+
+        expect(await queueDeclaredScore(store, 'id-NOB', row(1, 12900, ''), context)).toBeNull();
+        expect(store.entries.size).toBe(0);
+    });
+
+    it('is the only way in for a row without a name', async () => {
+        const store = new MemoryStore();
+
+        expect(await queueScores(store, [player('NOB')], [row(1, 12900, '')], context)).toEqual([]);
     });
 });
 

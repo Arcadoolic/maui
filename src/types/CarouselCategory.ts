@@ -2,13 +2,13 @@ import type Category from '@/model/Category.model';
 
 /**
  * A category of the Home carousel that is not a row of the `category` table: its games are
- * computed when it is selected (see GameService.loadHiscoreGames()), so it never needs
+ * computed when it is selected (see Home.vue's loadCategoryGames()), so it never needs
  * maintaining as games are added or removed.
  */
 export interface DynamicCategory {
     id_category: number;
     name: string;
-    dynamic: 'hiscores';
+    dynamic: 'all' | 'hiscores' | 'beat-this';
 }
 
 /**
@@ -24,7 +24,20 @@ export interface MergedCategory {
 
 export type CarouselCategory = Category | DynamicCategory | MergedCategory;
 
-// Negative id: can never clash with an autoincrement `category` primary key.
+// Negative ids: can never clash with an autoincrement `category` primary key.
+export const ALL_GAMES_CATEGORY: DynamicCategory = {
+    id_category: -2,
+    name: 'All Games',
+    dynamic: 'all',
+};
+
+// The games players have a score on, the one scored on last first (LeaderboardSource.ts).
+export const BEAT_THIS_CATEGORY: DynamicCategory = {
+    id_category: -3,
+    name: 'Beat This!',
+    dynamic: 'beat-this',
+};
+
 export const HISCORES_ONLY_CATEGORY: DynamicCategory = {
     id_category: -1,
     name: 'Hiscores Only',

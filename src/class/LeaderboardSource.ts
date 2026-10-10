@@ -63,6 +63,11 @@ function avatarResolver(): AvatarResolver {
     };
 }
 
+/** The picture of one of the cabinet's players, null for the default one. */
+export function playerAvatar(pseudo3: string): string | null {
+    return avatarResolver()(pseudo3, null);
+}
+
 async function onlineRows(game: Game, limit: number): Promise<BoardRow[]> {
     const sequelize = Game.sequelize;
     if (!sequelize) {
@@ -108,6 +113,72 @@ export async function loadChampions(game: Game): Promise<BoardRow[]> {
         order: [['score', 'DESC']],
         group: ['user.id_user'],
     }) as Hiscore[] || []);
+}
+
+/**
+ * The games of the cached leaderboards that hold a score, the one scored on last first (then by
+ * name). A damaged cache entry counts as empty.
+ */
+export function lastScoredRomnames(leaderboards: {romname: string; entries: string}[]): string[] {
+    const lastScores: {romname: string; at: number}[] = [];
+    for (const leaderboard of leaderboards) {
+        let entries: LeaderboardEntry[];
+        try {
+            entries = JSON.parse(leaderboard.entries) as LeaderboardEntry[];
+        } catch {
+            continue;
+        }
+        if (!Array.isArray(entries) || !entries.length) {
+            continue;
+        }
+        // A date that cannot be read sorts last rather than hiding the game.
+        const at = Math.max(...entries.map(entry => Date.parse(entry.achievedAt) || 0));
+        lastScores.push({romname: leaderboard.romname, at});
+    }
+    return lastScores
+        .sort((a, b) => b.at - a.at || (a.romname < b.romname ? -1 : a.romname > b.romname ? 1 : 0))
+        .map(lastScore => lastScore.romname);
+}
+
+async function beatThisRomnames(): Promise<string[]> {
+    const sequelize = Game.sequelize;
+    if (!sequelize) {
+        return [];
+    }
+    if (isOnlineActive()) {
+        const [leaderboards] = await sequelize.query(
+            'SELECT romname, entries FROM online_leaderboard WHERE table_name = ?',
+            {replacements: ['default']},
+        ) as [{romname: string; entries: string}[], unknown];
+        return lastScoredRomnames(leaderboards);
+    }
+    // Same scores as loadHiscores(): those of a deleted player are not shown, so do not count.
+    // creationDate is when the cabinet first read the score in the game's file.
+    const [rows] = await sequelize.query(
+        'SELECT game.romName AS romname, MAX(hiscore.creationDate) AS last_score FROM hiscore'
+        + ' JOIN "user" ON "user".id_user = hiscore.id_user AND "user".deletionDate IS NULL'
+        + ' JOIN game ON game.id_game = hiscore.id_game'
+        + ' WHERE hiscore.deletionDate IS NULL'
+        + ' GROUP BY game.romName ORDER BY last_score DESC, game.romName',
+    ) as [{romname: string}[], unknown];
+    return rows.map(row => row.romname);
+}
+
+/**
+ * The "Beat This!" carousel category: the games players have a score on, the one scored on
+ * last first. The scores are those the front shows (see the top of this file): the shared
+ * leaderboards in ONLINE mode, the local database otherwise. Queried on every call, like
+ * GameService.loadHiscoreGames().
+ */
+export async function loadBeatThisGames(): Promise<Game[]> {
+    const romnames = await beatThisRomnames();
+    if (!romnames.length) {
+        return [];
+    }
+    // A leaderboard can outlive its game on this cabinet (removed favorite): findAll() drops it.
+    const games = await Game.findAll({where: {romName: romnames}});
+    const position = new Map(romnames.map((romname, index) => [romname, index]));
+    return games.sort((a, b) => position.get(a.romName)! - position.get(b.romName)!);
 }
 
 /** Calls `listener` when MAUI-API's leaderboards changed; returns how to stop. */

@@ -17,6 +17,9 @@ export default class Gamepads {
     // gamepadKeyPressed state and each independently dispatch gamepadKeydown/gamepadKeyup,
     // doubling (or worse) every button press.
     protected static running: boolean = false;
+    // True while a game runs (see suspend()): nothing restarts the polling loop, not even the
+    // window getting its focus back or a controller being plugged in.
+    protected static suspended: boolean = false;
     protected static warnedUnmappedGamepadIds: Set<string> = new Set();
 
     // Bound once and reused for both addEventListener and removeEventListener - passing
@@ -46,8 +49,25 @@ export default class Gamepads {
         }
     }
 
+    /**
+     * Stops reading the controllers until resume(): Home.vue calls it when a game is launched,
+     * so that what is pressed in the game never moves the front behind it. The window losing its
+     * focus to the game also pauses the polling (App.vue), but only once the game's window is up,
+     * and a focus coming back during the game would restart it.
+     */
+    public static suspend() {
+        this.suspended = true;
+        this.stopGamepadsListeners();
+    }
+
+    /** The game was quit: the controllers are read again. */
+    public static resume() {
+        this.suspended = false;
+        this.init();
+    }
+
     protected static resumePolling() {
-        if (this.running) {
+        if (this.running || this.suspended) {
             return;
         }
         this.running = true;

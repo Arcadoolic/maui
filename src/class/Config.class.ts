@@ -77,6 +77,13 @@ export default class Config {
     // the other way round.
     public thumbsDownRemovesFavorite: boolean = true;
 
+    // The carousel's categories that are not genres (CarouselCategories.ts buildCarousel()): every
+    // game, the games players have a score on ("Beat This!"), and the games whose hiscores
+    // can be extracted ("Hiscores Only").
+    public showAllGamesCategory: boolean = true;
+    public showBeatThisCategory: boolean = true;
+    public showHiscoresOnlyCategory: boolean = true;
+
     // The front with or without its effects (UiMode.ts): "auto" picks Lite on weak hardware.
     public uiMode: UiModeSetting = 'auto';
 
@@ -124,6 +131,9 @@ export default class Config {
             this.fullscreen = configFile.fullscreen === true;
             this.voteEnabled = configFile.voteEnabled !== false;
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
+            this.showAllGamesCategory = configFile.showAllGamesCategory !== false;
+            this.showBeatThisCategory = configFile.showBeatThisCategory !== false;
+            this.showHiscoresOnlyCategory = configFile.showHiscoresOnlyCategory !== false;
             this.uiMode = parseUiModeSetting(configFile.uiMode);
             this.displayMode = parseDisplayModeSetting(configFile.displayMode);
             this.boIdleMinutes = Number.isInteger(configFile.boIdleMinutes) && configFile.boIdleMinutes >= 0
@@ -169,6 +179,9 @@ export default class Config {
                 fullscreen: this.fullscreen,
                 voteEnabled: this.voteEnabled,
                 thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
+                showAllGamesCategory: this.showAllGamesCategory,
+                showBeatThisCategory: this.showBeatThisCategory,
+                showHiscoresOnlyCategory: this.showHiscoresOnlyCategory,
                 uiMode: this.uiMode,
                 displayMode: this.displayMode,
                 boIdleMinutes: this.boIdleMinutes,

@@ -281,6 +281,9 @@ describe('Config.save', () => {
             'mameBinaryName',
             'mamePath',
             'openDevTools',
+            'showAllGamesCategory',
+            'showBeatThisCategory',
+            'showHiscoresOnlyCategory',
             'ssDevId',
             'ssDevPassword',
             'ssSoftName',
@@ -312,6 +315,34 @@ describe('Config.save', () => {
         legacy.load();
         expect(legacy.voteEnabled).toBe(true);
         expect(legacy.thumbsDownRemovesFavorite).toBe(true);
+    });
+});
+
+describe('Config carousel categories', () => {
+    it('shows the three categories by default, and reads back the ones switched off', () => {
+        const config = new Config();
+        config.mamePath = '/opt/mame';
+        expect(config.showAllGamesCategory).toBe(true);
+        expect(config.showBeatThisCategory).toBe(true);
+        expect(config.showHiscoresOnlyCategory).toBe(true);
+
+        config.showAllGamesCategory = false;
+        config.showBeatThisCategory = false;
+        config.showHiscoresOnlyCategory = false;
+        config.save();
+        const read = new Config();
+        read.load();
+        expect(read.showAllGamesCategory).toBe(false);
+        expect(read.showBeatThisCategory).toBe(false);
+        expect(read.showHiscoresOnlyCategory).toBe(false);
+
+        // A config file written before these settings existed keeps the defaults.
+        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame'}));
+        const legacy = new Config();
+        legacy.load();
+        expect(legacy.showAllGamesCategory).toBe(true);
+        expect(legacy.showBeatThisCategory).toBe(true);
+        expect(legacy.showHiscoresOnlyCategory).toBe(true);
     });
 });
 

@@ -8,7 +8,9 @@
 import * as remote from '@electron/remote';
 import {ref, onMounted, nextTick} from 'vue';
 import router from '@/router';
+import * as Log from 'electron-log';
 import {emitter} from '@/emitter';
+import {removeReturnedFavorites} from '@/class/FavoritesStore';
 import {
     getConfiguration,
     getDatabase,
@@ -76,6 +78,20 @@ onMounted(async () => {
         // id_category that must already exist in this table (see Database.syncCategories()'s own
         // comment).
         await database.syncCategories(gameService);
+
+        // A favorite removed on this cabinet stays removed, whatever put it back since.
+        const favoritesPath = mameService.favoritesPath;
+        if (favoritesPath) {
+            try {
+                const returned = removeReturnedFavorites(favoritesPath);
+                if (returned.length > 0) {
+                    Log.info('[Init] Removed favorites taken out again: ' + returned.join(', ') + '.');
+                }
+            } catch (e) {
+                // Not worth blocking the start: the games stay listed until the next one.
+                Log.warn('[Init] Removed favorites not checked: ' + (e instanceof Error ? e.message : String(e)));
+            }
+        }
 
         // Save new games
         const romList = mameService.getRomListFromFavorites();

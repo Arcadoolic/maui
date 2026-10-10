@@ -11,7 +11,11 @@ import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
 import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
-import {LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
+import {
+    LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
+    type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
+} from '@/class/ScoreCaptureBridge';
+import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import Config from '@/class/Config.class';
 import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
@@ -149,6 +153,13 @@ app.on('ready', async () => {
         // tells the user to close and restart manually (`just serve` in dev; relaunching the
         // packaged app otherwise), and this just performs the actual exit.
         app.exit(0);
+    }, (romName) => {
+        // The BO's Favorites tab: the front moves to this game (Home.vue).
+        if (!win || win.isDestroyed()) {
+            return false;
+        }
+        win.webContents.send(SHOW_GAME_CHANNEL, romName);
+        return true;
     });
     core = bo;
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
@@ -157,9 +168,15 @@ app.on('ready', async () => {
     onlineSession = bo.online;
     // Games started and ended by the front (Home.vue): their new scores go to MAUI-API.
     const playStarted: PlayNotifier = romName => bo.scores.started(romName);
-    const playEnded: PlayNotifier = romName => bo.scores.ended(romName);
+    const playEnded: PlayEndNotifier = async (romName) => {
+        const ask = await bo.scores.ended(romName);
+        return ask ? JSON.stringify(ask) : null;
+    };
+    // The player picked on the cabinet for a score the game wrote without a name (WhoPlayedModal.vue).
+    const attributeScore: ScoreAttributor = (romName, score, playerId) => bo.scores.attribute(romName, score, playerId);
     (global as Record<string, unknown>)[PLAY_STARTED_GLOBAL] = playStarted;
     (global as Record<string, unknown>)[PLAY_ENDED_GLOBAL] = playEnded;
+    (global as Record<string, unknown>)[SCORE_ATTRIBUTE_GLOBAL] = attributeScore;
     // New shared leaderboards (LeaderboardSync.ts): the front reads them again (LeaderboardSource.ts).
     bo.leaderboards.onChange(() => win?.webContents.send(LEADERBOARDS_CHANGED_CHANNEL));
     // The cabinet's own way to the BO (Home.vue): loads it and tells where it is.

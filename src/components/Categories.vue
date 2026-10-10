@@ -1,11 +1,10 @@
 <template>
     <div class="categories">
-        <div class="category" :class="getCategoryClasses(0)"></div>
         <div
             class="category"
             v-for="(category, index) in categories"
             :key="category.id_category"
-            :class="getCategoryClasses(index + 1)"
+            :class="getCategoryClasses(index)"
         ></div>
     </div>
 </template>
@@ -20,7 +19,7 @@ const props = withDefaults(defineProps<{
 }>(), {selectedCategoryIndex: 0});
 
 function getCategoryClasses(index: number) {
-    const catLen = props.categories.length + 1;
+    const catLen = props.categories.length;
     let previous = props.selectedCategoryIndex - 1 === index;
     let previous2 = props.selectedCategoryIndex - 2 === index;
     let next2 = props.selectedCategoryIndex + 2 === index;
@@ -46,10 +45,8 @@ function getCategoryClasses(index: number) {
         previous2,
         next2,
     };
-    if (index > 0) {
-        const classLogo = getCategoryIconKey(props.categories[index - 1].name);
-        classes[classLogo] = true;
-    }
+    // "All Games" has no icon of its own: _default.svg, like a genre without one.
+    classes[getCategoryIconKey(props.categories[index].name)] = true;
     return classes;
 }
 </script>
@@ -160,6 +157,10 @@ function getCategoryClasses(index: number) {
 
     .categories .category.hiscores_only {
         background-image: url(../assets/categories/hiscores_only.svg);
+    }
+
+    .categories .category.beat_this {
+        background-image: url(../assets/categories/beat_this.svg);
     }
 
     .categories .category.maze {

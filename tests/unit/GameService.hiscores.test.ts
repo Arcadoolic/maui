@@ -1,6 +1,6 @@
 import {describe, it, expect, beforeEach, afterEach} from 'vitest';
 import Game from '@/model/Game.model';
-import GameService from '@/class/GameService.class';
+import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import type MameService from '@/class/MameService.class';
 import type HiscoreService from '@/class/HiscoreService.class';
 import {HISCORES_ONLY_CATEGORY, isDynamicCategory} from '@/types/CarouselCategory';
@@ -30,7 +30,7 @@ describe('GameService.loadHiscoreGames', () => {
 
         await service.loadHiscoreGames();
 
-        expect(findAllArgs).toEqual([{where: {hi: true}, order: ['romName']}]);
+        expect(findAllArgs).toEqual([{where: {hi: true}, order: GAMES_BY_TITLE}]);
     });
 
     it('is queried every time: a game gaining hiscore support shows up without a restart', async () => {

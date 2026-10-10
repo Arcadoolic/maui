@@ -13,6 +13,9 @@
 
         <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
 
+        <who-played-modal v-if="whoPlayed" :key="whoPlayed.key" :score="whoPlayed.score" :index="whoPlayed.key" :total="whoPlayed.total" :players="whoPlayed.players"
+                          @choose="whoPlayed.answer($event)" @skip="whoPlayed.answer(null)" @expire="whoPlayed.answer(undefined)"></who-played-modal>
+
         <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
 
         <transition name="title">
@@ -37,6 +40,12 @@
             <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
         </transition>
 
+        <transition name="alpha-jump">
+            <ul class="alpha-jump" v-if="alphaJumping">
+                <li v-for="letter in letters" :key="letter" :class="{selected: letter === selectedLetter}">{{letter}}</li>
+            </ul>
+        </transition>
+
         <transition name="flyer">
             <div class="flyer-container" v-show="showFlyer">
                 <div class="flyer" :class="{landscape: flyerLandscape}" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
@@ -53,25 +62,27 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onMounted, watch} from 'vue';
+import {ref, computed, onMounted, onUnmounted, watch} from 'vue';
 import router from '@/router';
 import Categories from '@/components/Categories.vue';
 import Games from '@/components/Games.vue';
 import Gamepads from '@/class/Gamepads.class';
-import GameService from '@/class/GameService.class';
+import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import {
-    CarouselCategory, HISCORES_ONLY_CATEGORY, isDynamicCategory, isMergedCategory,
+    CarouselCategory, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
-import {mergeTtlCategories} from '@/class/CarouselCategories';
+import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
+import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSource';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
-import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
+import {MAUI_KEYS, LONG_PRESS_MS, HOLD_MS} from '@/class/MauiControls';
+import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
 import * as Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
@@ -79,8 +90,14 @@ import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
 import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
-import {PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, type PlayNotifier} from '@/class/ScoreCaptureBridge';
+import WhoPlayedModal from '@/components/WhoPlayedModal.vue';
+import {
+    PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
+    type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
+} from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
+import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {ipcRenderer} from 'electron';
 
 let gameService: GameService;
 
@@ -102,6 +119,8 @@ const timeouts: {
     addPlayer?: number,
     backOffice?: number,
     hideBackOffice?: number,
+    hold?: number,
+    holdRepeat?: number,
 } = {};
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
@@ -115,6 +134,11 @@ const flyer = ref('');
 // A landscape flyer is turned 90 degrees to the left to fill the tall flyer area (see .flyer.landscape)
 const flyerLandscape = ref(false);
 
+// The column of initials, up while up or down is held in "All games" or "Hiscores only" (see startHold()).
+const alphaJumping = ref(false);
+const letters = computed(() => getLetters(games.value.map(game => game.shortname)));
+const selectedLetter = computed(() => selectedGame.value ? getLetter(selectedGame.value.shortname) : '');
+
 const showGames = ref(true);
 const showTitle = ref(true);
 const showFlyer = ref(true);
@@ -122,6 +146,16 @@ const showLoader = ref(false);
 const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
+// The nameless score being asked about, right after the game was quit (see askWhoPlayed()).
+// `answer` takes the player picked, null when nobody claims the score, undefined when the
+// question was cancelled or nobody answered at all.
+const whoPlayed = ref<{
+    key: number,
+    score: number,
+    total: number,
+    players: PendingAttribution['players'],
+    answer: (playerId: string | null | undefined) => void,
+} | null>(null);
 // Set once the first game list is loaded: an empty list then means no game on the cabinet at all
 // (no favorite yet), shown as a message instead of an empty screen.
 const gamesLoaded = ref(false);
@@ -134,20 +168,19 @@ const backOfficeUrl = ref('');
 const BACK_OFFICE_SHOWN_MS = 15000;
 // Keys of the two-key long press currently held down.
 const heldKeys = new Set<string>();
+// A game is being launched or runs: the front takes no input, keyboard or controller, until it
+// is quit (see lockFront()).
+let gameRunning = false;
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
 
 const selectedGame = computed(() => games.value[selectedGameIndex.value] || null);
 
-const category = computed(() => {
-    if (displayedCategoryIndex.value) {
-        return categories.value[displayedCategoryIndex.value - 1];
-    }
-    return {name: 'All Games'};
-});
+const category = computed(() => categories.value[displayedCategoryIndex.value]);
 
-const hasCategories = computed(() => categories.value.length > 0);
+// A single entry (no genre yet, or everything else hidden from the BO) is nothing to browse.
+const hasCategories = computed(() => categories.value.length > 1);
 
 // The scores table only exists for a game that has a .hi file, and only while the player asked for it.
 const hiscoresVisible = computed(() => !!(selectedGame.value && selectedGame.value.hi && showHiscores.value));
@@ -183,42 +216,90 @@ watch(flyer, (url) => {
     image.src = url;
 });
 
-function onGameChange(previous: boolean) {
-    const showFlyerFn = () => {
-        flyer.value = generateFlyerPath();
-        showFlyer.value = true;
-    };
+function showSelectedFlyer() {
+    flyer.value = generateFlyerPath();
+    showFlyer.value = true;
+}
+
+function selectGame(index: number) {
     showFlyer.value = false;
     clearTimeout(timeouts.showFlyer);
-    timeouts.showFlyer = window.setTimeout(showFlyerFn, SLIDE_OUT_MS);
-    selectedGameIndex.value = previous ?
+    // While the list moves by itself (a held key), the flyer waits for it to stop: stopHold().
+    if (timeouts.holdRepeat === undefined) {
+        timeouts.showFlyer = window.setTimeout(showSelectedFlyer, SLIDE_OUT_MS);
+    }
+    selectedGameIndex.value = index;
+}
+
+function onGameChange(previous: boolean) {
+    selectGame(previous ?
         ((selectedGameIndex.value <= 0) ? games.value.length - 1 : selectedGameIndex.value - 1) :
-        ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1);
+        ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1));
+}
+
+/**
+ * Up or down kept held: after HOLD_MS.delay the list moves by itself until the key is released.
+ * In "All games" and "Hiscores only" it jumps from one initial of the titles to the next, the
+ * initials the list has shown on the left; any other category scrolls its games fast.
+ */
+function startHold(previous: boolean) {
+    stopHold();
+    timeouts.hold = window.setTimeout(() => {
+        timeouts.hold = undefined;
+        if (games.value.length < 2) {
+            return;
+        }
+        const selected = categories.value[selectedCategoryIndex.value];
+        const alpha = !!selected && isDynamicCategory(selected)
+            && (selected.dynamic === 'all' || selected.dynamic === 'hiscores');
+        const step = () => alpha
+            ? selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous))
+            : onGameChange(previous);
+        alphaJumping.value = alpha;
+        timeouts.holdRepeat = window.setInterval(step, alpha ? HOLD_MS.alphaJump : HOLD_MS.fastScroll);
+        step();
+    }, HOLD_MS.delay);
+}
+
+function stopHold() {
+    clearTimeout(timeouts.hold);
+    timeouts.hold = undefined;
+    alphaJumping.value = false;
+    if (timeouts.holdRepeat !== undefined) {
+        clearInterval(timeouts.holdRepeat);
+        timeouts.holdRepeat = undefined;
+        clearTimeout(timeouts.showFlyer);
+        timeouts.showFlyer = window.setTimeout(showSelectedFlyer, SLIDE_OUT_MS);
+    }
 }
 
 async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
-    if (!categoryIndex) {
-        return await gameService.loadGames();
-    }
-    const selected = categories.value[categoryIndex - 1];
+    const selected = categories.value[categoryIndex];
     if (isDynamicCategory(selected)) {
-        return await gameService.loadHiscoreGames();
+        switch (selected.dynamic) {
+        case 'all':
+            return await gameService.loadGames();
+        case 'hiscores':
+            return await gameService.loadHiscoreGames();
+        case 'beat-this':
+            return await loadBeatThisGames();
+        }
     }
     if (isMergedCategory(selected)) {
         return await gameService.loadGamesByCategoryIds(selected.categoryIds);
     }
-    return await selected.$get('games', {order: ['romName']}) as Game[] || [];
+    return await selected.$get('games', {order: GAMES_BY_TITLE}) as Game[] || [];
 }
 
 function onCategoryChange(previous: boolean) {
+    stopHold();
     const showGameFn = async () => {
         // The title finished sliding out (showTitle is false since the switch started): swap its
         // text now, it slides back in with the new name once the games are loaded below.
         displayedCategoryIndex.value = selectedCategoryIndex.value;
-        // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
-        // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
-        // within its category no longer matched where it sits in the full list (e.g. "005" first
-        // alphabetically, but wherever insertion order placed it inside its category).
+        // Every list in GAMES_BY_TITLE's order, the one of "All games": without it, $get('games')
+        // falls back to SQLite's unspecified row order, and a game's position within its category
+        // no longer matches where it sits in the full list.
         games.value = await loadCategoryGames(selectedCategoryIndex.value);
 
         selectedGameIndex.value = 0;
@@ -235,38 +316,105 @@ function onCategoryChange(previous: boolean) {
     clearTimeout(timeouts.showGame);
     timeouts.showGame = window.setTimeout(showGameFn, SLIDE_OUT_MS);
     selectedCategoryIndex.value = previous ?
-        ((selectedCategoryIndex.value <= 0) ? categories.value.length : selectedCategoryIndex.value - 1) :
-        ((selectedCategoryIndex.value >= categories.value.length) ? 0 : selectedCategoryIndex.value + 1);
+        ((selectedCategoryIndex.value <= 0) ? categories.value.length - 1 : selectedCategoryIndex.value - 1) :
+        ((selectedCategoryIndex.value >= categories.value.length - 1) ? 0 : selectedCategoryIndex.value + 1);
 }
 
 /** Never throws: ONLINE must never keep a game from starting. */
-async function notifyScoreCapture(name: string, romName: string): Promise<void> {
+async function notifyScoreCapture(romName: string): Promise<void> {
     try {
-        const notify = remote.getGlobal(name) as PlayNotifier | undefined;
+        const notify = remote.getGlobal(PLAY_STARTED_GLOBAL) as PlayNotifier | undefined;
         await notify?.(romName);
     } catch (err) {
         Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
     }
 }
 
+/** The game ended: the nameless scores to ask about, null when there is none. Never throws. */
+async function endScoreCapture(romName: string): Promise<PendingAttribution | null> {
+    try {
+        const notify = remote.getGlobal(PLAY_ENDED_GLOBAL) as PlayEndNotifier | undefined;
+        const pending = await notify?.(romName);
+        return pending ? JSON.parse(pending) as PendingAttribution : null;
+    } catch (err) {
+        Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
+        return null;
+    }
+}
+
+/**
+ * Asks who made each score the game wrote without a name, best first, and tells the main process
+ * (ScoreCapture.attribute()). Once it is cancelled or nobody answers, the scores left are dropped
+ * without asking.
+ * Never throws.
+ */
+async function askWhoPlayed(pending: PendingAttribution | null) {
+    if (!pending) {
+        return;
+    }
+    let expired = false;
+    for (const [key, {score}] of pending.scores.entries()) {
+        const playerId = expired ? undefined : await new Promise<string | null | undefined>((resolve) => {
+            whoPlayed.value = {key, score, total: pending.scores.length, players: pending.players, answer: resolve};
+        });
+        whoPlayed.value = null;
+        expired = playerId === undefined;
+        try {
+            const attribute = remote.getGlobal(SCORE_ATTRIBUTE_GLOBAL) as ScoreAttributor | undefined;
+            await attribute?.(pending.romname, score, playerId ?? null);
+        } catch (err) {
+            Log.warn('[Home] Score not attributed: ' + (err instanceof Error ? err.message : String(err)));
+        }
+    }
+}
+
+/**
+ * From the moment a game is launched: no key or button acts on the front, whose controllers are
+ * no longer read, and anything a held key had started is dropped. A second press on the launch
+ * key while the first game is starting is ignored the same way.
+ */
+function lockFront() {
+    gameRunning = true;
+    stopHold();
+    heldKeys.clear();
+    cancelBackOffice();
+    clearTimeout(timeouts.quit);
+    clearTimeout(timeouts.addPlayer);
+    showLoader.value = false;
+    Gamepads.suspend();
+}
+
+function unlockFront() {
+    gameRunning = false;
+    Gamepads.resume();
+}
+
 function startGame() {
     const mameService = getMameService();
     const hiService = getHiscoreService();
     const game = selectedGame.value;
-    if (!game) {
+    if (!game || gameRunning) {
         return;
     }
+    lockFront();
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
-    void notifyScoreCapture(PLAY_STARTED_GLOBAL, game.romName).then(() => mameService.startGame(game.romName)).then(
+    void notifyScoreCapture(game.romName).then(() => mameService.startGame(game.romName)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
+            // A game that could not even start (mame missing) may only say so here.
+            gameProcess.on('error', unlockFront);
             gameProcess.on('close', () => {
-                void notifyScoreCapture(PLAY_ENDED_GLOBAL, game.romName);
-                hiService.saveHiscores(game).then(() => {
+                // Before the questions asked after a game (who played, vote), answered with the
+                // controller.
+                unlockFront();
+                const pending = endScoreCapture(game.romName);
+                hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
+                    await onScoresChanged();
+                    await askWhoPlayed(await pending);
                     return askVote(game);
                 }).catch((err) => {
                     Log.error('[Home] Error after game ' + game.id_game + ' quit.');
@@ -275,6 +423,7 @@ function startGame() {
             });
         },
         (err) => {
+            unlockFront();
             Log.error('[Home] Error on game ' + game.id_game + ' launch.');
             Log.error(err);
         },
@@ -306,7 +455,7 @@ async function onVote(vote: Vote) {
     try {
         const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite);
         if (removed) {
-            await reloadAfterRemoval();
+            await reloadCarousel();
         }
     } catch (err) {
         Log.error('[Home] Error on game ' + game.id_game + ' vote.');
@@ -315,31 +464,95 @@ async function onVote(vote: Vote) {
 }
 
 /**
- * A game left the favorites: refresh the carousel, which may have lost its category, and keep the
- * selection where it was.
+ * Builds the carousel again and keeps the selection where it was: a game left the favorites
+ * (its category may have gone with it), or the scores changed.
  */
-async function reloadAfterRemoval() {
+async function reloadCarousel() {
+    const selectedId = categories.value[selectedCategoryIndex.value]?.id_category;
+    const selectedRomName = selectedGame.value?.romName;
     await loadCategories();
-    let loadedGames = selectedCategoryIndex.value <= categories.value.length
-        ? await loadCategoryGames(selectedCategoryIndex.value)
-        : [];
-    if (!loadedGames.length && selectedCategoryIndex.value) {
-        // The category the game was in had no other game: back to "All Games".
-        selectedCategoryIndex.value = 0;
-        displayedCategoryIndex.value = 0;
-        loadedGames = await loadCategoryGames(0);
-    }
+    // The category the game was in had no other game, and left the carousel: back to the first.
+    const index = Math.max(categories.value.findIndex(entry => entry.id_category === selectedId), 0);
+    selectedCategoryIndex.value = index;
+    displayedCategoryIndex.value = index;
+    const loadedGames = await loadCategoryGames(index);
     games.value = loadedGames;
-    selectedGameIndex.value = Math.min(selectedGameIndex.value, Math.max(loadedGames.length - 1, 0));
+    // The same game when it is still there ("Beat This!" changes its order), else the same
+    // position.
+    const gameIndex = loadedGames.findIndex(loaded => loaded.romName === selectedRomName);
+    selectedGameIndex.value = gameIndex >= 0
+        ? gameIndex
+        : Math.min(selectedGameIndex.value, Math.max(loadedGames.length - 1, 0));
     flyer.value = generateFlyerPath();
 }
 
+/**
+ * The BO asks for a game on screen (Favorites tab): its own category when the carousel has it,
+ * else the first one that lists it ("All games"...). Left alone while a game is being played or a
+ * question is up, and when no category has the game.
+ */
+async function showGame(romName: string) {
+    if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value) {
+        return;
+    }
+    stopHold();
+    try {
+        const order = categories.value.map((_, index) => index).sort((a, b) =>
+            Number(isDynamicCategory(categories.value[a])) - Number(isDynamicCategory(categories.value[b])));
+        for (const index of order) {
+            const loadedGames = await loadCategoryGames(index);
+            const gameIndex = loadedGames.findIndex(loaded => loaded.romName === romName);
+            if (gameIndex < 0) {
+                continue;
+            }
+            clearTimeout(timeouts.showGame);
+            clearTimeout(timeouts.showFlyer);
+            showHiscores.value = false;
+            selectedCategoryIndex.value = index;
+            displayedCategoryIndex.value = index;
+            games.value = loadedGames;
+            selectedGameIndex.value = gameIndex;
+            flyer.value = generateFlyerPath();
+            showGames.value = true;
+            showTitle.value = true;
+            showFlyer.value = true;
+            return;
+        }
+    } catch (err) {
+        Log.error('[Home] Error on showing game ' + romName + '.');
+        Log.error(err);
+    }
+}
+
+/**
+ * New scores (a game was quit, or MAUI-API's leaderboards changed): "Beat This!" may have
+ * to appear, or to put another game first. Nothing is touched otherwise.
+ */
+async function onScoresChanged() {
+    if (!getConfiguration().showBeatThisCategory) {
+        return;
+    }
+    try {
+        const beatThis = (await loadBeatThisGames()).length > 0;
+        const selected = categories.value[selectedCategoryIndex.value];
+        if (beatThis !== categories.value.includes(BEAT_THIS_CATEGORY) || selected === BEAT_THIS_CATEGORY) {
+            await reloadCarousel();
+        }
+    } catch (err) {
+        Log.error('[Home] Error on carousel refresh.');
+        Log.error(err);
+    }
+}
+
 async function loadCategories() {
-    const storedCategories = mergeTtlCategories(await gameService.loadCategories());
-    // Right after "All Games". Only offered once at least one game has extractable
-    // hiscores: an empty category would be a dead end in the carousel.
-    const hasHiscoreGames = (await gameService.loadHiscoreGames()).length > 0;
-    categories.value = hasHiscoreGames ? [HISCORES_ONLY_CATEGORY, ...storedCategories] : storedCategories;
+    const config = getConfiguration();
+    categories.value = buildCarousel(mergeTtlCategories(await gameService.loadCategories()), {
+        showAllGames: config.showAllGamesCategory,
+        showBeatThis: config.showBeatThisCategory,
+        showHiscoresOnly: config.showHiscoresOnlyCategory,
+        hasBeatThisGames: config.showBeatThisCategory && (await loadBeatThisGames()).length > 0,
+        hasHiscoreGames: config.showHiscoresOnlyCategory && (await gameService.loadHiscoreGames()).length > 0,
+    });
 }
 
 function addPlayer() {
@@ -394,9 +607,30 @@ function cancelBackOffice() {
 
 const {onKeydown, onKeyup} = useControllable();
 
+let stopLeaderboardsListener: (() => void) | undefined;
+const onShowGame = (_event: unknown, romName: string) => void showGame(romName);
+onUnmounted(() => {
+    stopLeaderboardsListener?.();
+    ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
+    window.removeEventListener('blur', stopHold);
+    stopHold();
+    if (gameRunning) {
+        unlockFront();
+    }
+});
+// A keyboard key released while the window is not focused sends no keyup (Gamepads.class.ts
+// sends its own for a controller).
+window.addEventListener('blur', stopHold);
+// A modal takes the keys over: the list stops where it is.
+watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value, (modal) => {
+    if (modal) {
+        stopHold();
+    }
+});
+
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        if (showAddUser.value || voteGame.value) {
+        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -413,9 +647,11 @@ function registerKeyMapping() {
         switch (key) {
         case MAUI_KEYS.up:
             onGameChange(true);
+            startHold(true);
             break;
         case MAUI_KEYS.down:
             onGameChange(false);
+            startHold(false);
             break;
         case MAUI_KEYS.left:
             if (hasCategories.value) {
@@ -441,10 +677,17 @@ function registerKeyMapping() {
     });
 
     onKeyup((e, isGamepad) => {
-        if (showAddUser.value || voteGame.value) {
+        if (gameRunning) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        // Before anything else: a list left moving behind a modal would never stop.
+        if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
+            stopHold();
+        }
+        if (showAddUser.value || whoPlayed.value || voteGame.value) {
+            return;
+        }
         if (heldKeys.delete(key)) {
             cancelBackOffice();
         }
@@ -479,7 +722,7 @@ if (!getIsInit()) {
 
     onMounted(async () => {
         await loadCategories();
-        games.value = await gameService.loadGames();
+        games.value = await loadCategoryGames(0);
         gamesLoaded.value = true;
         // Start on the game played last, when there is one still in the favorites.
         const lastPlayed = await gameService.loadLastPlayedGame();
@@ -491,6 +734,8 @@ if (!getIsInit()) {
 
         Gamepads.init();
         registerKeyMapping();
+        stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
+        ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();
@@ -608,6 +853,46 @@ if (!getIsInit()) {
 
     .slide-enter-from, .slide-leave-to {
         margin-bottom: -100%;
+    }
+
+    /* The initials of "All games" while up or down is held (startHold()): in the margin the
+       marquees leave on the left, over the list. */
+    .alpha-jump {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4.5vw;
+        z-index: 3;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(to right, rgba(0, 0, 0, 0.75), transparent);
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 1.1vw;
+        color: rgba(255, 255, 255, 0.55);
+    }
+
+    .alpha-jump li {
+        line-height: 3.3vh;
+        transition: transform .15s ease, color .15s ease;
+    }
+
+    .alpha-jump li.selected {
+        color: #fff513;
+        transform: scale(2.2) translateX(0.35vw);
+    }
+
+    .alpha-jump-enter-active, .alpha-jump-leave-active {
+        transition: opacity .2s ease;
+    }
+
+    .alpha-jump-enter-from, .alpha-jump-leave-to {
+        opacity: 0;
     }
 
     .flyer-container {

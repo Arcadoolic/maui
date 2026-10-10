@@ -2,12 +2,11 @@ import {rmSync, statSync} from 'fs';
 import {join} from 'path';
 
 /**
- * Avatars live as `<pseudo_3>.<ext>` files in Config.avatarsPath. A player either uploaded a PNG
- * (BO Players tab) or was given a generated default one (`.svg`, see DefaultAvatar.ts) - the PNG
- * wins when both exist, so uploading one replaces the default without deleting anything.
+ * Avatars live as `<pseudo_3>.png` files in Config.avatarsPath. A player either uploaded theirs
+ * (BO Players tab) or was given a generated default one (see DefaultAvatar.ts), which an upload
+ * then overwrites.
  * Kept free of any heavy import: the Vue views only need this lookup, not the generator.
  */
-export const AVATAR_EXTENSIONS = ['png', 'svg'] as const;
 
 // Pseudos are 3 letters in the app and 3 alphanumerics in the BO, but existing avatar files also
 // carry suffixes such as "GUS_1": anything else could not be a plain filename, and is never
@@ -20,8 +19,8 @@ export function isSafePseudo(pseudo3: string): boolean {
 
 /** The avatar filename to show for `pseudo3` among `avatarFilenames`, if it has one. */
 export function findAvatarFile(avatarFilenames: string[], pseudo3: string): string | undefined {
-    return AVATAR_EXTENSIONS.map(extension => `${pseudo3}.${extension}`)
-        .find(filename => avatarFilenames.includes(filename));
+    const filename = `${pseudo3}.png`;
+    return avatarFilenames.includes(filename) ? filename : undefined;
 }
 
 /**
@@ -43,12 +42,10 @@ export function avatarCacheBust(avatarsPath: string, filename: string): string {
     }
 }
 
-/** Deletes every avatar file (`<pseudo3>.png` / `.svg`) of `pseudo3`; a missing one is fine. */
+/** Deletes the avatar file (`<pseudo3>.png`) of `pseudo3`; a missing one is fine. */
 export function removeAvatarFiles(avatarsPath: string | undefined, pseudo3: string): void {
     if (!avatarsPath || !isSafePseudo(pseudo3)) {
         return;
     }
-    for (const extension of AVATAR_EXTENSIONS) {
-        rmSync(join(avatarsPath, `${pseudo3}.${extension}`), {force: true});
-    }
+    rmSync(join(avatarsPath, `${pseudo3}.png`), {force: true});
 }

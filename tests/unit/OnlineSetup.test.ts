@@ -75,6 +75,15 @@ describe('saveConfigurationString', () => {
         expect(readOnlineSettings(path)).toEqual({...configuration, localUuid: 'uuid-1', enabled: true});
     });
 
+    it('forgets the cabinet name and the environment the former credentials had', () => {
+        writeOnlineSettings({
+            url: 'https://old.example', key: 'mk_old', token: '1|old', localUuid: 'uuid-1', enabled: true,
+            cabinetName: 'marvelous_mario', environment: 'staging',
+        }, path);
+        saveConfigurationString(encode(configuration), path);
+        expect(readOnlineSettings(path)).toEqual({...configuration, localUuid: 'uuid-1', enabled: true});
+    });
+
     it('explains an invalid string and writes nothing', () => {
         const outcome = saveConfigurationString('MAUI2.abc', path);
         expect(outcome).toEqual({ok: false, error: expect.stringMatching(/update MAUI/)});

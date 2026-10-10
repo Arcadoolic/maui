@@ -437,6 +437,44 @@ lock does not stop scores: it only blocks linking to another cabinet.
 Before, `active` was ignored and players created from the BO got no score
 until the app restarted.
 
+**Scores without a name, 2026-10-09: asked on the cabinet (maui-api D61).**
+Some games write their scores without initials (`route16`, `scobra`, the
+games keeping a single top score): nothing in the file says whose they are.
+In ONLINE mode, `ScoreCapture` holds the rows mhiex gives with an empty name
+while the game runs (`src/class/ScoreDeclaration.ts`). When the game is quit:
+no publishable player on the cabinet (active, public, linked, not disabled),
+they are dropped; only one, the best is theirs without a question; several,
+`Home.vue` asks for each score, best first and before the vote
+(`WhoPlayedModal.vue`: one name shown at a time, as the letters of a new
+player are, joystick up/down going through the players then "nobody"). Only
+the scores the table still has when the game ends are asked: a game rewrites
+its top score as it goes up, and each of those steps was held. A game never
+played has no file to compare with, and the first one MAME writes holds the
+game's default scores too: its nameless rows are taken as already there
+(`PlaySession.ts`), so the first score of such a game is only asked when the
+file is written again during the same game. A score nobody
+claims is dropped, and once the question is cancelled or nobody answers at all
+the scores left are not asked. Nothing is
+stored on the cabinet: a question left unanswered is lost when the game is
+started again or MAUI is quit. Such a score is sent as `attribution: declared`
+and, as for any other, only when it beats the player's best. Rows with
+initials no player owns are still ignored, and LOCAL mode is unchanged: the
+local `Hiscore` table only holds what the file attributes.
+
+**The BO's badge names the cabinet and the server, 2026-10-09 (maui-api D62).**
+In the BO's header, ONLINE / OFFLINE is followed by the cabinet's name and
+MAUI-API's environment (`STG`, `LOCAL`, the name in capitals for any
+other): `ONLINE • marvelous_mario • STG`. Production is the case nobody
+needs to be told about, so its environment is left out, as is the one of a
+server too old to give it. The front shows none of it, and no longer the
+words ONLINE / OFFLINE either: only the dot, with the same colors, to stay
+discreet on the cabinet's screen. Both come with the answer to the startup
+report, which every run sends, rather than from a ping of their own. They
+are written in `online.json` (`cabinetName`, `environment`): without it a
+cabinet whose ONLINE is turned off or was rejected, the very one to look
+for, would have no name. A new configuration string forgets them, since it
+may be another cabinet's.
+
 **`fetch` in the renderer, 2026-10-02: never called as a method.** Chromium's
 `window.fetch` throws "Illegal invocation" when called with another `this`;
 Node's does not care. `MauiApiClient` stored it as `this.fetchImpl` and the
