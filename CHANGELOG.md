@@ -1,3 +1,27 @@
+## [2.10.0](https://github.com/Arcadoolic/maui/compare/2.9.0...2.10.0) (2026-10-10)
+
+### Features
+
+* **bo:** "Show on the cabinet" button in the Favorites tab ([a355b2e](https://github.com/Arcadoolic/maui/commit/a355b2e96563f47761d588bdd1195d1fbac8c4e3))
+* **bo:** filter the players by status ([556ed13](https://github.com/Arcadoolic/maui/commit/556ed13c52d5c4c1330f9a2dd7f59d3409fd43f6))
+* **front:** "Beat This!" category and carousel category options ([89cb6ea](https://github.com/Arcadoolic/maui/commit/89cb6ea07fb77a0f8812eb769c6ddd5f98d6fdaf))
+* **front:** letter jumps in "Hiscores only" too ([09a0cc9](https://github.com/Arcadoolic/maui/commit/09a0cc9d04d659c8d5fb2d6f1412d95b4538b193))
+* **front:** letter jumps while up or down is held, lists ordered by title ([30a7ac4](https://github.com/Arcadoolic/maui/commit/30a7ac4a1794572896832f7ccbe08f506de5bcfb))
+* **front:** podium colours and edge placement of the champions ([7532ea9](https://github.com/Arcadoolic/maui/commit/7532ea9440e4afd2ee167221ef874e5ec8540a2d))
+* **hiscores:** read 13 games that keep a score without a name (mhiex 2.2.4) ([8e9fcc3](https://github.com/Arcadoolic/maui/commit/8e9fcc301b6452b1e0e2055d058238df124f5a2c))
+* **hiscores:** read 47 more Sega, Data East and Toaplan games (mhiex 2.2.5) ([07d6d68](https://github.com/Arcadoolic/maui/commit/07d6d68e0abf10422ea44fd87b4bc20c6f97ee8f))
+* **hiscores:** read 6 more Taito and Cave games (mhiex 2.2.6) ([161c067](https://github.com/Arcadoolic/maui/commit/161c067e6ba70283bc7f56e9aebdc83f247294f8))
+* **online:** name the cabinet and the environment in the BO's badge ([5987983](https://github.com/Arcadoolic/maui/commit/5987983e6b043da583c47d0f6c3dae6a44e9f6d5))
+* **players:** "beam" PNG default avatars, change and delete from the BO ([eb31896](https://github.com/Arcadoolic/maui/commit/eb31896f9efa7d5c77b8c0807ca09a90e7f460db))
+* **scores:** ask who played for the scores a game wrote without a name ([fe30290](https://github.com/Arcadoolic/maui/commit/fe302907b572b5b3b1a3a5ab7946969b3e9d62cc))
+
+### Bug Fixes
+
+* **favorites:** take a removed favorite out again when it comes back ([7cd419c](https://github.com/Arcadoolic/maui/commit/7cd419c25ed75c5ed72543fcd4b2a4be0fa52429))
+* **front:** ignore the controller and keyboard while a game is running ([3a41a1e](https://github.com/Arcadoolic/maui/commit/3a41a1e980ac6db93a61ea6730a989cbbd1308be))
+* **hiscores:** give Super Cobra's top score first (mhiex 2.2.3) ([417b3ab](https://github.com/Arcadoolic/maui/commit/417b3ab84d545fab9b29d34064d4b1434cdb1d89))
+* **scores:** ask who played with a selector, and only for real scores ([9151102](https://github.com/Arcadoolic/maui/commit/9151102e64e561a3189199c5b26bde5559549c14))
+
 ## [2.9.0](https://github.com/Arcadoolic/maui/compare/2.8.0...2.9.0) (2026-10-08)
 
 ### Features
