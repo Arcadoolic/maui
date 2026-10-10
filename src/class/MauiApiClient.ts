@@ -2,6 +2,8 @@
 // every outcome is an ApiResult, so a failing API can never break MAUI, which stays usable in
 // LOCAL mode. Branches on the problem `code`, never on `title` or `detail`, as the contract asks.
 
+import type {GameOpinion} from '@/class/OpinionReport';
+
 export interface MauiApiCredentials {
     // Full API base, `/api/v1` included (see toApiBaseUrl() in ConfigurationString.ts).
     baseUrl: string;
@@ -405,6 +407,22 @@ export class MauiApiClient {
         );
     }
 
+    /**
+     * The cabinet's vote and play count of at most 500 games (maui-api D75): each replaces what
+     * MAUI-API had for the game. The answer's counts are of no use here.
+     */
+    public putOpinions(opinions: GameOpinion[]): Promise<ApiResult<true>> {
+        return this.call(
+            'PUT', '/opinions', 200, async () => true as const,
+            {opinions: opinions.map(opinion => ({
+                romname: opinion.romname,
+                vote: opinion.vote,
+                play_count: opinion.playCount,
+                last_played_at: opinion.lastPlayedAt,
+            }))},
+        );
+    }
+
     /** At most 100 games (maui-api D52); `etag` from the last answer for the same games. */
     public async getLeaderboards(romnames: string[], etag: string | null = null): Promise<ApiResult<Conditional<Leaderboard[]>>> {
         const response = await this.send(
@@ -463,7 +481,7 @@ export class MauiApiClient {
     }
 
     private async call<T>(
-        method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+        method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
         path: string,
         expectedStatus: number,
         parse: (response: Response) => Promise<T | null>,
@@ -484,7 +502,7 @@ export class MauiApiClient {
 
     /** The response, whatever its status, or why there is none. */
     private async send(
-        method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, extraHeaders: Record<string, string>, body?: Json | FormData,
+        method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, extraHeaders: Record<string, string>, body?: Json | FormData,
     ): Promise<Response | ApiResult<never>> {
         const isForm = body instanceof FormData;
         try {

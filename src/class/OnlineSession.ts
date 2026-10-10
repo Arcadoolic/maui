@@ -12,6 +12,7 @@ import type {OnlineIdentity} from '@/class/OnlineIndicatorBridge';
 import {buildApiCredentials, isOnlineConfigured} from '@/class/OnlineCredentials';
 import {readOsName} from '@/class/OsName';
 import type {FlushSummary} from '@/class/ScoreOutbox';
+import type {OpinionReportSummary} from '@/class/OpinionReport';
 
 // ONLINE mode for one run of MAUI: a startup report, then a heartbeat at a fixed interval (no
 // backoff: MAUI-API shows a cabinet offline after 3 minutes without one, see docs/DECISIONS.md).
@@ -45,6 +46,9 @@ export interface OnlineSessionDeps {
     // Sends the score outbox (ScoreOutbox.ts), after the startup report, after every successful
     // heartbeat and on demand (flushScoresNow()). None: no scores (tests).
     flushScores?: (client: MauiApiClient) => Promise<FlushSummary>;
+    // Sends the votes and play counts MAUI-API does not have (OpinionReport.ts), after the startup
+    // report and every successful heartbeat. None: no report (tests).
+    reportOpinions?: (client: MauiApiClient) => Promise<OpinionReportSummary>;
     // Refreshes the cache of the shared leaderboards (LeaderboardSync.ts): after the startup report,
     // with the player sync, and after scores were accepted. None: no leaderboards (tests).
     refreshLeaderboards?: (client: MauiApiClient) => Promise<unknown>;
@@ -69,6 +73,7 @@ export class OnlineSession {
     // The flush in progress: a second one waits for it instead of sending the same scores again.
     private flushing: Promise<FlushSummary | null> | null = null;
     private refreshing: Promise<void> | null = null;
+    private reporting: Promise<void> | null = null;
     // False until the players and the leaderboards were asked once in this run: when MAUI-API
     // is down at startup, the first heartbeat that gets through does it, without waiting for
     // the PLAYER_SYNC_EVERY cycle.
@@ -150,6 +155,7 @@ export class OnlineSession {
             this.caughtUp = true;
             void this.syncPlayers(client);
             void this.flushScores(client).then(() => this.refreshLeaderboards(client));
+            void this.reportOpinions(client);
         }
         this.handle(startup, client, generation);
     }
@@ -261,6 +267,30 @@ export class OnlineSession {
         return this.refreshing;
     }
 
+    /** One report at a time. Never throws: a failure is logged, the games stay due. */
+    private reportOpinions(client: MauiApiClient): Promise<void> {
+        if (!this.deps.reportOpinions) {
+            return Promise.resolve();
+        }
+        if (this.reporting) {
+            return this.reporting;
+        }
+        const report = this.deps.reportOpinions;
+        this.reporting = report(client)
+            .then(summary => {
+                if (summary.failure) {
+                    this.log(`[online] Votes and plays not sent (${summary.failure.kind}): kept for the next try.`);
+                }
+            })
+            .catch((error: unknown) => {
+                this.log(`[online] Votes and plays not sent: ${error instanceof Error ? error.message : String(error)}`);
+            })
+            .finally(() => {
+                this.reporting = null;
+            });
+        return this.reporting;
+    }
+
     /** One flush at a time. Never throws: a failure is logged, the outbox keeps the scores. */
     private flushScores(client: MauiApiClient): Promise<FlushSummary | null> {
         if (!this.deps.flushScores) {
@@ -322,6 +352,7 @@ export class OnlineSession {
                 }
                 if (result.kind === 'ok') {
                     void this.flushScores(client);
+                    void this.reportOpinions(client);
                 }
                 this.handle(result, client, generation);
             }

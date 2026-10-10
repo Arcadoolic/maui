@@ -462,6 +462,34 @@ describe('score flush', () => {
         instance.stop();
     });
 
+    it('reports the votes and plays after the startup report and after every heartbeat', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const reportOpinions = vi.fn(async () => ({sent: 0}));
+        const {instance} = session(fetchImpl, {reportOpinions});
+
+        await instance.start();
+        expect(reportOpinions).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+        expect(reportOpinions).toHaveBeenCalledTimes(3);
+        instance.stop();
+    });
+
+    it('keeps running when the votes and plays cannot be read', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const log = vi.fn();
+        const {instance} = session(fetchImpl, {reportOpinions: () => Promise.reject(new Error('SQLITE_BUSY')), log});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('SQLITE_BUSY'));
+        expect(instance.getStatus().state).toBe('running');
+        instance.stop();
+    });
+
     it('flushes on demand while running, one flush at a time', async () => {
         writeOnlineSettings(configured, path);
         const {fetchImpl} = api();

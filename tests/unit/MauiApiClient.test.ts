@@ -472,6 +472,30 @@ describe('scores', () => {
     });
 });
 
+describe('opinions', () => {
+    it('sends the votes and play counts in the API field names', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {received: 2, created: 2, updated: 0, unchanged: 0}));
+
+        expect(await client.putOpinions([
+            {romname: 'dkong', vote: 1, playCount: 12, lastPlayedAt: '2026-10-10T14:35:36.507Z'},
+            {romname: 'hasamu', vote: -1, playCount: 0, lastPlayedAt: null},
+        ])).toEqual({kind: 'ok', value: true});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/opinions');
+        expect(init.method).toBe('PUT');
+        expect(JSON.parse(init.body as string)).toEqual({opinions: [
+            {romname: 'dkong', vote: 1, play_count: 12, last_played_at: '2026-10-10T14:35:36.507Z'},
+            {romname: 'hasamu', vote: -1, play_count: 0, last_played_at: null},
+        ]});
+    });
+
+    it('reports a refused report', async () => {
+        const {client} = clientReturning(json(422, {code: 'validation_failed'}));
+
+        expect(await client.putOpinions([])).toMatchObject({kind: 'rejected', status: 422, code: 'validation_failed'});
+    });
+});
+
 describe('leaderboards', () => {
     const apiEntry = {
         rank: 1, player: {id: 'p1', pseudo_3: 'NOB', avatar: 'abc'}, score: 19200,
