@@ -168,6 +168,9 @@ const backOfficeUrl = ref('');
 const BACK_OFFICE_SHOWN_MS = 15000;
 // Keys of the two-key long press currently held down.
 const heldKeys = new Set<string>();
+// A game is being launched or runs: the front takes no input, keyboard or controller, until it
+// is quit (see lockFront()).
+let gameRunning = false;
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -364,14 +367,35 @@ async function askWhoPlayed(pending: PendingAttribution | null) {
     }
 }
 
-function startGame() {
+/**
+ * From the moment a game is launched: no key or button acts on the front, whose controllers are
+ * no longer read, and anything a held key had started is dropped. A second press on the launch
+ * key while the first game is starting is ignored the same way.
+ */
+function lockFront() {
+    gameRunning = true;
     stopHold();
+    heldKeys.clear();
+    cancelBackOffice();
+    clearTimeout(timeouts.quit);
+    clearTimeout(timeouts.addPlayer);
+    showLoader.value = false;
+    Gamepads.suspend();
+}
+
+function unlockFront() {
+    gameRunning = false;
+    Gamepads.resume();
+}
+
+function startGame() {
     const mameService = getMameService();
     const hiService = getHiscoreService();
     const game = selectedGame.value;
-    if (!game) {
+    if (!game || gameRunning) {
         return;
     }
+    lockFront();
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     void notifyScoreCapture(game.romName).then(() => mameService.startGame(game.romName)).then(
         (gameProcess) => {
@@ -379,7 +403,12 @@ function startGame() {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
+            // A game that could not even start (mame missing) may only say so here.
+            gameProcess.on('error', unlockFront);
             gameProcess.on('close', () => {
+                // Before the questions asked after a game (who played, vote), answered with the
+                // controller.
+                unlockFront();
                 const pending = endScoreCapture(game.romName);
                 hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
@@ -393,6 +422,7 @@ function startGame() {
             });
         },
         (err) => {
+            unlockFront();
             Log.error('[Home] Error on game ' + game.id_game + ' launch.');
             Log.error(err);
         },
@@ -583,6 +613,9 @@ onUnmounted(() => {
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     window.removeEventListener('blur', stopHold);
     stopHold();
+    if (gameRunning) {
+        unlockFront();
+    }
 });
 // A keyboard key released while the window is not focused sends no keyup (Gamepads.class.ts
 // sends its own for a controller).
@@ -596,7 +629,7 @@ watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value, (modal) 
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        if (showAddUser.value || whoPlayed.value || voteGame.value) {
+        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -643,6 +676,9 @@ function registerKeyMapping() {
     });
 
     onKeyup((e, isGamepad) => {
+        if (gameRunning) {
+            return;
+        }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
         // Before anything else: a list left moving behind a modal would never stop.
         if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
