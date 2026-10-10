@@ -11,6 +11,13 @@ import Log from 'electron-log';
 // SyntaxError that leaves the window black. Same *TS import shape as Database.class.ts.
 import * as SequelizeTS from 'sequelize-typescript';
 const Sequelize = SequelizeTS.Sequelize;
+
+/**
+ * Order of the games in the front's lists: by the title the front shows above the list (`shortname`),
+ * whatever its case, the rom name only telling two games of the same title apart. Home.vue's letter
+ * jumps (AlphaJump.ts) rely on it.
+ */
+export const GAMES_BY_TITLE: NonNullable<NonNullable<Parameters<typeof Game.findAll>[0]>['order']> = [[Sequelize.literal('shortname COLLATE NOCASE'), 'ASC'], ['romName', 'ASC']];
 import {Vote, VOTE_DOWN} from '@/class/GameVote';
 import {removeFavoriteFromDisk} from '@/class/FavoritesStore';
 import {parseCatverIni} from '@/class/CatverGenres';
@@ -244,7 +251,7 @@ export default class GameService {
     public async loadGames() {
         if (this.games === undefined) {
             this.games = await Game.findAll({
-                order: ['romName'],
+                order: GAMES_BY_TITLE,
             });
         }
         return this.games;
@@ -258,7 +265,7 @@ export default class GameService {
     public async loadHiscoreGames() {
         return await Game.findAll({
             where: {hi: true},
-            order: ['romName'],
+            order: GAMES_BY_TITLE,
         });
     }
 
@@ -269,7 +276,7 @@ export default class GameService {
     public async loadGamesByCategoryIds(categoryIds: number[]) {
         return await Game.findAll({
             where: {id_category: categoryIds},
-            order: ['romName'],
+            order: GAMES_BY_TITLE,
         });
     }
 

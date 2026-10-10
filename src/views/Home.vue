@@ -40,6 +40,12 @@
             <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
         </transition>
 
+        <transition name="alpha-jump">
+            <ul class="alpha-jump" v-if="alphaJumping">
+                <li v-for="letter in letters" :key="letter" :class="{selected: letter === selectedLetter}">{{letter}}</li>
+            </ul>
+        </transition>
+
         <transition name="flyer">
             <div class="flyer-container" v-show="showFlyer">
                 <div class="flyer" :class="{landscape: flyerLandscape}" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
@@ -61,7 +67,7 @@ import router from '@/router';
 import Categories from '@/components/Categories.vue';
 import Games from '@/components/Games.vue';
 import Gamepads from '@/class/Gamepads.class';
-import GameService from '@/class/GameService.class';
+import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
@@ -75,7 +81,8 @@ import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSourc
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
-import {MAUI_KEYS, LONG_PRESS_MS} from '@/class/MauiControls';
+import {MAUI_KEYS, LONG_PRESS_MS, HOLD_MS} from '@/class/MauiControls';
+import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
 import * as Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
@@ -112,6 +119,8 @@ const timeouts: {
     addPlayer?: number,
     backOffice?: number,
     hideBackOffice?: number,
+    hold?: number,
+    holdRepeat?: number,
 } = {};
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
@@ -124,6 +133,11 @@ const flyers = ref<string[]>([]);
 const flyer = ref('');
 // A landscape flyer is turned 90 degrees to the left to fill the tall flyer area (see .flyer.landscape)
 const flyerLandscape = ref(false);
+
+// The column of initials, up while up or down is held in "All games" or "Hiscores only" (see startHold()).
+const alphaJumping = ref(false);
+const letters = computed(() => getLetters(games.value.map(game => game.shortname)));
+const selectedLetter = computed(() => selectedGame.value ? getLetter(selectedGame.value.shortname) : '');
 
 const showGames = ref(true);
 const showTitle = ref(true);
@@ -154,6 +168,9 @@ const backOfficeUrl = ref('');
 const BACK_OFFICE_SHOWN_MS = 15000;
 // Keys of the two-key long press currently held down.
 const heldKeys = new Set<string>();
+// A game is being launched or runs: the front takes no input, keyboard or controller, until it
+// is quit (see lockFront()).
+let gameRunning = false;
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -199,17 +216,61 @@ watch(flyer, (url) => {
     image.src = url;
 });
 
-function onGameChange(previous: boolean) {
-    const showFlyerFn = () => {
-        flyer.value = generateFlyerPath();
-        showFlyer.value = true;
-    };
+function showSelectedFlyer() {
+    flyer.value = generateFlyerPath();
+    showFlyer.value = true;
+}
+
+function selectGame(index: number) {
     showFlyer.value = false;
     clearTimeout(timeouts.showFlyer);
-    timeouts.showFlyer = window.setTimeout(showFlyerFn, SLIDE_OUT_MS);
-    selectedGameIndex.value = previous ?
+    // While the list moves by itself (a held key), the flyer waits for it to stop: stopHold().
+    if (timeouts.holdRepeat === undefined) {
+        timeouts.showFlyer = window.setTimeout(showSelectedFlyer, SLIDE_OUT_MS);
+    }
+    selectedGameIndex.value = index;
+}
+
+function onGameChange(previous: boolean) {
+    selectGame(previous ?
         ((selectedGameIndex.value <= 0) ? games.value.length - 1 : selectedGameIndex.value - 1) :
-        ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1);
+        ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1));
+}
+
+/**
+ * Up or down kept held: after HOLD_MS.delay the list moves by itself until the key is released.
+ * In "All games" and "Hiscores only" it jumps from one initial of the titles to the next, the
+ * initials the list has shown on the left; any other category scrolls its games fast.
+ */
+function startHold(previous: boolean) {
+    stopHold();
+    timeouts.hold = window.setTimeout(() => {
+        timeouts.hold = undefined;
+        if (games.value.length < 2) {
+            return;
+        }
+        const selected = categories.value[selectedCategoryIndex.value];
+        const alpha = !!selected && isDynamicCategory(selected)
+            && (selected.dynamic === 'all' || selected.dynamic === 'hiscores');
+        const step = () => alpha
+            ? selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous))
+            : onGameChange(previous);
+        alphaJumping.value = alpha;
+        timeouts.holdRepeat = window.setInterval(step, alpha ? HOLD_MS.alphaJump : HOLD_MS.fastScroll);
+        step();
+    }, HOLD_MS.delay);
+}
+
+function stopHold() {
+    clearTimeout(timeouts.hold);
+    timeouts.hold = undefined;
+    alphaJumping.value = false;
+    if (timeouts.holdRepeat !== undefined) {
+        clearInterval(timeouts.holdRepeat);
+        timeouts.holdRepeat = undefined;
+        clearTimeout(timeouts.showFlyer);
+        timeouts.showFlyer = window.setTimeout(showSelectedFlyer, SLIDE_OUT_MS);
+    }
 }
 
 async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
@@ -227,18 +288,18 @@ async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
     if (isMergedCategory(selected)) {
         return await gameService.loadGamesByCategoryIds(selected.categoryIds);
     }
-    return await selected.$get('games', {order: ['romName']}) as Game[] || [];
+    return await selected.$get('games', {order: GAMES_BY_TITLE}) as Game[] || [];
 }
 
 function onCategoryChange(previous: boolean) {
+    stopHold();
     const showGameFn = async () => {
         // The title finished sliding out (showTitle is false since the switch started): swap its
         // text now, it slides back in with the new name once the games are loaded below.
         displayedCategoryIndex.value = selectedCategoryIndex.value;
-        // order: ['romName'], matching GameService.loadGames()'s "All games" ordering - without
-        // it, $get('games') falls back to SQLite's unspecified row order, so a game's position
-        // within its category no longer matched where it sits in the full list (e.g. "005" first
-        // alphabetically, but wherever insertion order placed it inside its category).
+        // Every list in GAMES_BY_TITLE's order, the one of "All games": without it, $get('games')
+        // falls back to SQLite's unspecified row order, and a game's position within its category
+        // no longer matches where it sits in the full list.
         games.value = await loadCategoryGames(selectedCategoryIndex.value);
 
         selectedGameIndex.value = 0;
@@ -307,13 +368,35 @@ async function askWhoPlayed(pending: PendingAttribution | null) {
     }
 }
 
+/**
+ * From the moment a game is launched: no key or button acts on the front, whose controllers are
+ * no longer read, and anything a held key had started is dropped. A second press on the launch
+ * key while the first game is starting is ignored the same way.
+ */
+function lockFront() {
+    gameRunning = true;
+    stopHold();
+    heldKeys.clear();
+    cancelBackOffice();
+    clearTimeout(timeouts.quit);
+    clearTimeout(timeouts.addPlayer);
+    showLoader.value = false;
+    Gamepads.suspend();
+}
+
+function unlockFront() {
+    gameRunning = false;
+    Gamepads.resume();
+}
+
 function startGame() {
     const mameService = getMameService();
     const hiService = getHiscoreService();
     const game = selectedGame.value;
-    if (!game) {
+    if (!game || gameRunning) {
         return;
     }
+    lockFront();
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     void notifyScoreCapture(game.romName).then(() => mameService.startGame(game.romName)).then(
         (gameProcess) => {
@@ -321,7 +404,12 @@ function startGame() {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
+            // A game that could not even start (mame missing) may only say so here.
+            gameProcess.on('error', unlockFront);
             gameProcess.on('close', () => {
+                // Before the questions asked after a game (who played, vote), answered with the
+                // controller.
+                unlockFront();
                 const pending = endScoreCapture(game.romName);
                 hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
@@ -335,6 +423,7 @@ function startGame() {
             });
         },
         (err) => {
+            unlockFront();
             Log.error('[Home] Error on game ' + game.id_game + ' launch.');
             Log.error(err);
         },
@@ -406,6 +495,7 @@ async function showGame(romName: string) {
     if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value) {
         return;
     }
+    stopHold();
     try {
         const order = categories.value.map((_, index) => index).sort((a, b) =>
             Number(isDynamicCategory(categories.value[a])) - Number(isDynamicCategory(categories.value[b])));
@@ -522,11 +612,25 @@ const onShowGame = (_event: unknown, romName: string) => void showGame(romName);
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
+    window.removeEventListener('blur', stopHold);
+    stopHold();
+    if (gameRunning) {
+        unlockFront();
+    }
+});
+// A keyboard key released while the window is not focused sends no keyup (Gamepads.class.ts
+// sends its own for a controller).
+window.addEventListener('blur', stopHold);
+// A modal takes the keys over: the list stops where it is.
+watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value, (modal) => {
+    if (modal) {
+        stopHold();
+    }
 });
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        if (showAddUser.value || whoPlayed.value || voteGame.value) {
+        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
@@ -543,9 +647,11 @@ function registerKeyMapping() {
         switch (key) {
         case MAUI_KEYS.up:
             onGameChange(true);
+            startHold(true);
             break;
         case MAUI_KEYS.down:
             onGameChange(false);
+            startHold(false);
             break;
         case MAUI_KEYS.left:
             if (hasCategories.value) {
@@ -571,10 +677,17 @@ function registerKeyMapping() {
     });
 
     onKeyup((e, isGamepad) => {
-        if (showAddUser.value || whoPlayed.value || voteGame.value) {
+        if (gameRunning) {
             return;
         }
         const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        // Before anything else: a list left moving behind a modal would never stop.
+        if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
+            stopHold();
+        }
+        if (showAddUser.value || whoPlayed.value || voteGame.value) {
+            return;
+        }
         if (heldKeys.delete(key)) {
             cancelBackOffice();
         }
@@ -740,6 +853,46 @@ if (!getIsInit()) {
 
     .slide-enter-from, .slide-leave-to {
         margin-bottom: -100%;
+    }
+
+    /* The initials of "All games" while up or down is held (startHold()): in the margin the
+       marquees leave on the left, over the list. */
+    .alpha-jump {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4.5vw;
+        z-index: 3;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(to right, rgba(0, 0, 0, 0.75), transparent);
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 1.1vw;
+        color: rgba(255, 255, 255, 0.55);
+    }
+
+    .alpha-jump li {
+        line-height: 3.3vh;
+        transition: transform .15s ease, color .15s ease;
+    }
+
+    .alpha-jump li.selected {
+        color: #fff513;
+        transform: scale(2.2) translateX(0.35vw);
+    }
+
+    .alpha-jump-enter-active, .alpha-jump-leave-active {
+        transition: opacity .2s ease;
+    }
+
+    .alpha-jump-enter-from, .alpha-jump-leave-to {
+        opacity: 0;
     }
 
     .flyer-container {
