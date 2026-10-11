@@ -1293,7 +1293,7 @@ function getPackImportTargets(config: Config): PackImportTargets {
  */
 function runConfPackImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>,
-): Promise<void> {
+): Promise<boolean> {
     return runRepositoryImport(
         res, config, repository, `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
     );
@@ -1303,7 +1303,7 @@ function runConfPackImport(
  * Imports a pack of the repository, whole or only the games named in `only`, into an
  * already-headed streamed response - caller must have written the page head (renderPageHead()).
  * Whatever happens ends as lines in the import's own block, which this closes: the rest of the
- * page (and res.end()) is left to the caller.
+ * page (and res.end()) is left to the caller. Resolves with whether the import went through.
  *
  * The import runs in the app (PackImport.ts) and needs the pack's manifest to say where its
  * files are, which the repository writes (maui-repository's generate-repo-manifests.py).
@@ -1312,7 +1312,7 @@ async function runRepositoryImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, title: string, filename: string,
     only?: string[], overall?: {index: number; total: number}, tabbed = false,
     forcedSlow: ReadonlySet<string> = new Set(),
-): Promise<void> {
+): Promise<boolean> {
     const block = openImportBlock(res, title, true, overall, tabbed);
     const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
     let ok = false;
@@ -1336,6 +1336,7 @@ async function runRepositoryImport(
         block.writeLine(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
     block.close(ok);
+    return ok;
 }
 
 let importProgressCounter = 0;
@@ -6881,7 +6882,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                 autocomplete="off" aria-label="Search the games of the packs">
             <label class="checkbox-row">
                 <input type="checkbox" id="packHiOnly">
-                <span>Only games with hiscores extraction (<span class="hi-badge">HI</span>)</span>
+                <span>Only games with hiscores extraction (<span class="hi-badge">HI</span>) not installed yet</span>
             </label>
             <p class="info pack-search-count" id="packSearchCount" hidden></p>
         </div>
@@ -7060,7 +7061,7 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
 
             // Search: every term must appear (accents and case ignored) in the game's name, rom
             // name, studio, category or year, or in its pack's name; with the hiscores box ticked
-            // the game must also have an extractor (data-hi), see below. A pack with no match is hidden,
+            // the game must also have an extractor (data-hi) and be one to install, see below. A pack with no match is hidden,
             // one with matches opens on them; clearing both puts the packs back as they were.
             function fold(text) {
                 return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
@@ -7082,8 +7083,11 @@ function renderRepoPackPicker(packs: RepoPack[]): string {
                     var shown = 0;
                     Array.prototype.forEach.call(row.querySelectorAll('.pack-game'), function (item) {
                         var haystack = packName + ' ' + fold(item.dataset.search || '');
+                        // The hiscores box is a selection: it only leaves what it can tick, not the
+                        // games already installed nor those this machine is not offered.
                         var match = terms.every(function (term) { return haystack.indexOf(term) >= 0; })
-                            && (!hiOnly.checked || item.dataset.hi === '1');
+                            && (!hiOnly.checked || (item.dataset.hi === '1'
+                                && !!item.querySelector('.game-checkbox:not([disabled])')));
                         item.hidden = !match;
                         if (match) { shown++; }
                     });
@@ -7935,7 +7939,12 @@ export function createBoApp(
     };
 
     app.get('/favorites', async (req, res) => {
-        res.send(await renderFavoritesTab(req));
+        // Where a repository import sends the page once it is through (POST /import/from-url).
+        const imported = typeof req.query.imported === 'string' && /^\d{1,5}$/.test(req.query.imported)
+            ? Number(req.query.imported) : 0;
+        res.send(await renderFavoritesTab(req, imported
+            ? {notice: `Import finished: ${imported} game${imported > 1 ? 's' : ''} asked for.`}
+            : {}));
     });
 
     // Puts the cabinet's front on a favorite: its category, then the game (Home.vue).
@@ -8796,10 +8805,11 @@ export function createBoApp(
         if (tabbed) {
             res.write(renderImportTabsOpen([...selection.keys()]));
         }
+        let imported = true;
         for (const [index, [packFilename, romNames]] of [...selection.entries()].entries()) {
             const counter = selection.size > 1 ? `[${index + 1}/${selection.size}] ` : '';
             // Just these games are read from the pack (HTTP Range requests, no full download).
-            await runRepositoryImport(
+            imported = await runRepositoryImport(
                 res,
                 config,
                 repository,
@@ -8809,7 +8819,7 @@ export function createBoApp(
                 {index, total: selection.size},
                 tabbed,
                 forcedSlow,
-            );
+            ) && imported;
         }
         if (tabbed) {
             res.write('</div></section>');
@@ -8817,6 +8827,13 @@ export function createBoApp(
 
         streamFavoritesRefreshAfterImport(res, config);
 
+        if (imported) {
+            // Back to the list of games, which now holds the new ones. replace(): this page is the
+            // answer to a POST, and going back to the pack picker before it would show the games
+            // just imported as still to download. A failed import stays here, with its log.
+            const asked = [...selection.values()].reduce((total, romNames) => total + romNames.length, 0);
+            res.write(`<script>location.replace('/favorites?imported=${asked}')</script>`);
+        }
         res.write(renderRepoImportCard(getMameInfo(config)));
         res.write(renderPageTail());
         res.end();
