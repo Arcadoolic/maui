@@ -5340,6 +5340,12 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 <label for="boIdleMinutes">Unload this back office from memory after this many minutes without a request (0 = keep it loaded) - it loads again at the next visit, which asks to sign in again</label>
                 <input type="number" id="boIdleMinutes" name="boIdleMinutes" min="0" max="1440" step="1" value="${config.boIdleMinutes}">
                 <label class="checkbox-row">
+                    <input type="checkbox" name="frontIdleEnabled" ${config.frontIdleEnabled ? 'checked' : ''}>
+                    Idle curtain: when nobody plays, the cabinet shows the latest best scores of the fleet (its own while OFFLINE) and goes to the games they are about
+                </label>
+                <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
+                <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
+                <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
                 </label>
@@ -8869,15 +8875,22 @@ export function createBoApp(
         if (Number.isInteger(boIdleMinutes) && boIdleMinutes >= 0 && boIdleMinutes <= 1440) {
             config.boIdleMinutes = boIdleMinutes;
         }
+        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}`;
+        config.frontIdleEnabled = req.body.frontIdleEnabled === 'on';
+        const frontIdleMinutes = Number(req.body.frontIdleMinutes);
+        if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
+            config.frontIdleMinutes = frontIdleMinutes;
+        }
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
             config.displayMode = parseDisplayModeSetting(req.body.displayMode);
         }
         config.save();
-        if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories) {
+        if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle) {
             // The front decides its mode once, when it loads (App.vue), and builds its carousel
-            // when Home.vue is mounted.
+            // and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});

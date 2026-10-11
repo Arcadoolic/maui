@@ -95,6 +95,11 @@ export default class Config {
     // request loads it again. 0 keeps it loaded once it has been opened.
     public boIdleMinutes: number = 15;
 
+    // The front shows its messages when nobody plays (IdleWatch.ts, MessageBand.vue), after this
+    // many minutes without a key on the list of games.
+    public frontIdleEnabled: boolean = true;
+    public frontIdleMinutes: number = 2;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
     protected _plaintextSecrets: boolean = false;
@@ -139,6 +144,10 @@ export default class Config {
             this.boIdleMinutes = Number.isInteger(configFile.boIdleMinutes) && configFile.boIdleMinutes >= 0
                 ? configFile.boIdleMinutes
                 : 15;
+            this.frontIdleEnabled = configFile.frontIdleEnabled !== false;
+            this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
+                ? configFile.frontIdleMinutes
+                : 2;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
             if (this.dataKey) {
@@ -185,6 +194,8 @@ export default class Config {
                 uiMode: this.uiMode,
                 displayMode: this.displayMode,
                 boIdleMinutes: this.boIdleMinutes,
+                frontIdleEnabled: this.frontIdleEnabled,
+                frontIdleMinutes: this.frontIdleMinutes,
             }),
             {mode: FILE_MODE},
         );

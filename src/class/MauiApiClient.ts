@@ -246,6 +246,27 @@ function parseAvailability(body: unknown): PlayerAvailability | null {
         : null;
 }
 
+/** A score event as a cabinet shows it: its sentence, written by MAUI-API (maui-api D60, D82). */
+export interface ScoreEventLine {
+    id: number;
+    // English, with **bold** around what matters.
+    message: string;
+    // The game the score was made on.
+    romname?: string;
+}
+
+function parseScoreEvents(body: unknown): ScoreEventLine[] | null {
+    if (!isObject(body) || !Array.isArray(body.events)) {
+        return null;
+    }
+    const events = body.events.map(event => isObject(event) && typeof event.id === 'number' && typeof event.message === 'string'
+        ? {
+            id: event.id, message: event.message,
+            ...(isObject(event.game) && typeof event.game.romname === 'string' ? {romname: event.game.romname} : {}),
+        } : null);
+    return events.every(event => event !== null) ? events as ScoreEventLine[] : null;
+}
+
 function parsePin(body: unknown): string | null {
     return isObject(body) && typeof body.pin === 'string' && PIN.test(body.pin) ? body.pin : null;
 }
@@ -405,6 +426,11 @@ export class MauiApiClient {
                 ...(score.attribution ? {attribution: score.attribution} : {}),
             }))},
         );
+    }
+
+    /** The latest score events of the fleet, newest first (maui-api D82). */
+    public getScoreEvents(limit: number): Promise<ApiResult<ScoreEventLine[]>> {
+        return this.call('GET', `/events?limit=${limit}`, 200, async response => parseScoreEvents(await readJson(response)));
     }
 
     /**
