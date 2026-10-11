@@ -1,3 +1,13 @@
+## [2.12.0](https://github.com/Arcadoolic/maui/compare/2.11.0...2.12.0) (2026-10-11)
+
+### Features
+
+* **front:** idle curtain with the fleet's latest best scores ([837a1d1](https://github.com/Arcadoolic/maui/commit/837a1d12f1d241f980af6d2f440673f6b08932fe))
+
+### Bug Fixes
+
+* **bo:** go back to the games after a repository import, and let the hiscores filter show only what it ticks ([d35b970](https://github.com/Arcadoolic/maui/commit/d35b970c2228a93bab44011f932e053d268f8f53))
+
 ## [2.11.0](https://github.com/Arcadoolic/maui/compare/2.10.0...2.11.0) (2026-10-10)
 
 ### Features
