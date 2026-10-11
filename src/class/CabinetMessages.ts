@@ -5,6 +5,8 @@
  * falls back on its own latest best scores, read from its database.
  */
 
+import {splitGameTitle} from '@/class/GameTitle';
+
 export interface BandMessage {
     // Stable for one message: the band tells a new list from the same one read again.
     id: string;
@@ -41,10 +43,20 @@ export function parseMessage(text: string): MessageSegment[] {
     return segments;
 }
 
-/** MAUI-API's score events (MauiApiClient.getScoreEvents()) as messages, in the order given. */
-export function scoreEventMessages(events: readonly {id: number; message: string; romname?: string}[]): BandMessage[] {
+/**
+ * MAUI-API's score events (MauiApiClient.getScoreEvents()) as messages, in the order given. Its
+ * sentence names the game as MAME does ("Galaxian (Namco set 1)"): on the cabinet it is given the
+ * short title the front shows above its list ("Galaxian").
+ */
+export function scoreEventMessages(
+    events: readonly {id: number; message: string; romname?: string; description?: string}[],
+): BandMessage[] {
     return events.map(event => ({
-        id: `event/${event.id}`, text: event.message, kind: 'score',
+        id: `event/${event.id}`,
+        text: event.description
+            ? event.message.replaceAll(`**${event.description}**`, () => `**${plain(splitGameTitle(event.description!).shortname)}**`)
+            : event.message,
+        kind: 'score',
         ...(event.romname ? {romName: event.romname} : {}),
     }));
 }

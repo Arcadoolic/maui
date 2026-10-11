@@ -10,7 +10,7 @@ const local = (overrides: Partial<LocalPlayer>): LocalPlayer => ({
     id_user: 1, pseudo_3: 'ACE', remote_id: null, is_public: false, online_status: null, is_origin: false, ...overrides,
 });
 const remote = (overrides: Partial<OnlinePlayer>): OnlinePlayer => ({
-    id: ID_A, pseudo3: 'ACE', isPublic: false, status: 'active', isOrigin: false, avatar: null, ...overrides,
+    id: ID_A, pseudo3: 'ACE', isPublic: false, status: 'active', isOrigin: false, avatar: null, avatarByAdmin: false, ...overrides,
 });
 
 describe('planPlayerSync', () => {
@@ -100,7 +100,7 @@ describe('uploadAvatars', () => {
         const sent = await uploadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'old', isOrigin: true})], reader('new'), new Set());
 
         expect(sent).toBe(1);
-        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, png);
+        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, png, null);
     });
 
     it('skips the same avatar, local-only players, and a PNG already refused', async () => {
@@ -125,6 +125,83 @@ describe('uploadAvatars', () => {
 
         expect(sent).toBe(0);
         expect(uploadAvatar).not.toHaveBeenCalled();
+    });
+});
+
+// An administrator may change an avatar too (maui-api D83).
+describe('an avatar set by an administrator', () => {
+    const mine = new Uint8Array([1, 2, 3]);
+    const theirs = new Uint8Array([7, 8, 9]);
+    const ledgerOf = (known: string | null) => {
+        const entries = new Map<string, string>(known ? [[ID_A, known]] : []);
+        return {get: (id: string) => entries.get(id) ?? null, set: (id: string, hash: string) => { entries.set(id, hash); }, entries};
+    };
+    const admins = remote({avatar: 'admin', avatarByAdmin: true, isOrigin: true});
+
+    it('is taken by the cabinet the player was created on, which does not send its own over it', async () => {
+        const uploadAvatar = vi.fn(async () => ({kind: 'ok' as const, value: 'x'}));
+        const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: theirs}));
+        const client = {uploadAvatar, getAvatar} as unknown as MauiApiClient;
+        const ledger = ledgerOf('before');
+        const save = vi.fn();
+        const read = () => ({png: mine, hash: 'before'});
+
+        expect(await uploadAvatars(client, [local({remote_id: ID_A})], [admins], read, new Set(), ledger)).toBe(0);
+        expect(uploadAvatar).not.toHaveBeenCalled();
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [admins], read, save, ledger)).toBe(1);
+        expect(save).toHaveBeenCalledWith('ACE', theirs);
+        expect(ledger.entries.get(ID_A)).toBe('admin');
+    });
+
+    it('is taken the first time too, when the cabinet has no record of what it last had', async () => {
+        const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: theirs}));
+        const save = vi.fn();
+
+        expect(await downloadAvatars({getAvatar} as unknown as MauiApiClient, [local({remote_id: ID_A})], [admins],
+            () => ({png: mine, hash: 'mine'}), save, ledgerOf(null))).toBe(1);
+    });
+
+    it('is replaced by a picture changed on the cabinet afterwards, named as what it replaces', async () => {
+        const uploadAvatar = vi.fn(async () => ({kind: 'ok' as const, value: 'newer'}));
+        const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: theirs}));
+        const client = {uploadAvatar, getAvatar} as unknown as MauiApiClient;
+        // The cabinet has had the administrator's picture, then its own was changed.
+        const ledger = ledgerOf('admin');
+        const save = vi.fn();
+        const read = () => ({png: mine, hash: 'newer'});
+
+        expect(await uploadAvatars(client, [local({remote_id: ID_A})], [admins], read, new Set(), ledger)).toBe(1);
+        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, mine, 'admin');
+        expect(ledger.entries.get(ID_A)).toBe('newer');
+        // And nothing is taken back from MAUI-API.
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [admins], read, save, ledger)).toBe(0);
+        expect(save).not.toHaveBeenCalled();
+    });
+
+    it('does not blame the PNG when an administrator changed the avatar meanwhile', async () => {
+        const uploadAvatar = vi.fn(async () => ({kind: 'rejected' as const, status: 409, code: 'avatar_changed_by_admin'}));
+        const refused = new Set<string>();
+
+        await uploadAvatars({uploadAvatar} as unknown as MauiApiClient, [local({remote_id: ID_A})],
+            [remote({avatar: 'old', isOrigin: true})], () => ({png: mine, hash: 'mine'}), refused, ledgerOf('old'));
+
+        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, mine, null);
+        expect(refused.size).toBe(0);
+    });
+
+    it('remembers the avatar both sides have, and still never takes a cabinet\'s own picture back', async () => {
+        const uploadAvatar = vi.fn();
+        const getAvatar = vi.fn();
+        const client = {uploadAvatar, getAvatar} as unknown as MauiApiClient;
+        const ledger = ledgerOf(null);
+
+        await uploadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'same', isOrigin: true})], () => ({png: mine, hash: 'same'}), new Set(), ledger);
+        expect(ledger.entries.get(ID_A)).toBe('same');
+
+        // Created here, changed here since, not an administrator's upstream: sent, never downloaded.
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'same', isOrigin: true})],
+            () => ({png: mine, hash: 'changed'}), vi.fn(), ledger)).toBe(0);
+        expect(getAvatar).not.toHaveBeenCalled();
     });
 });
 

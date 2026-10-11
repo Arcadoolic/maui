@@ -85,7 +85,7 @@ describe('UserService.registerUser', () => {
         stubFindOne(deleted);
 
         const result = await service.registerUser('DEL', {
-            id: 'uuid-1', pseudo3: 'DEL', isPublic: false, status: 'active', isOrigin: false, avatar: null,
+            id: 'uuid-1', pseudo3: 'DEL', isPublic: false, status: 'active', isOrigin: false, avatar: null, avatarByAdmin: false,
         });
 
         expect(result).toEqual({user: deleted, created: false, reserved: false});
@@ -94,7 +94,7 @@ describe('UserService.registerUser', () => {
     });
 
     it('keeps a deleted player reserved for another MAUI-API player, or a local-only one', async () => {
-        const online = {id: 'uuid-2', pseudo3: 'DEL', isPublic: false, status: 'active' as const, isOrigin: false, avatar: null};
+        const online = {id: 'uuid-2', pseudo3: 'DEL', isPublic: false, status: 'active' as const, isOrigin: false, avatar: null, avatarByAdmin: false};
 
         stubFindOne({pseudo_3: 'DEL', deletionDate: new Date(), remote_id: 'uuid-1'});
         expect((await service.registerUser('DEL', online)).reserved).toBe(true);
@@ -169,7 +169,7 @@ describe('UserService.registerUser default avatar', () => {
 });
 
 describe('UserService ONLINE players', () => {
-    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const, isOrigin: true, avatar: null};
+    const online = {id: '01a0f983-0000-7000-8000-00000000000a', pseudo3: 'ONL', isPublic: true, status: 'locked' as const, isOrigin: true, avatar: null, avatarByAdmin: false};
     let service: UserService;
 
     beforeEach(() => {

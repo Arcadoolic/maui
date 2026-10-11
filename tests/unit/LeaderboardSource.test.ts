@@ -1,6 +1,9 @@
 import {describe, it, expect, vi} from 'vitest';
 
-import {lastScoredRomnames, toBoardRows} from '@/class/LeaderboardSource';
+import {mkdtempSync, rmSync, utimesSync, writeFileSync} from 'fs';
+import {tmpdir} from 'os';
+import {join} from 'path';
+import {lastScoredRomnames, localAvatarUrl, toBoardRows} from '@/class/LeaderboardSource';
 
 vi.mock('electron', () => ({ipcRenderer: {on: vi.fn(), off: vi.fn()}}));
 vi.mock('@/services', () => ({getConfiguration: vi.fn(), getUserService: vi.fn()}));
@@ -54,5 +57,36 @@ describe('lastScoredRomnames', () => {
             board('marble', 'someday'),
             board('gravitar', '2026-10-02T08:00:00+00:00'),
         ])).toEqual(['gravitar', 'marble']);
+    });
+});
+
+describe('localAvatarUrl', () => {
+    it('gives the file a new address each time its picture is replaced', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'maui-avatars-'));
+        try {
+            const file = join(dir, 'NOB.png');
+            writeFileSync(file, 'first');
+            utimesSync(file, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+            const first = localAvatarUrl(dir, 'NOB');
+            expect(first).toMatch(/^file:\/\/.*NOB\.png\?v=1700000000000$/);
+            expect(localAvatarUrl(dir, 'NOB')).toBe(first);
+
+            // The same file, overwritten: what a new avatar is.
+            writeFileSync(file, 'second');
+            utimesSync(file, new Date(1_700_000_060_000), new Date(1_700_000_060_000));
+            expect(localAvatarUrl(dir, 'NOB')).toMatch(/NOB\.png\?v=1700000060000$/);
+        } finally {
+            rmSync(dir, {recursive: true, force: true});
+        }
+    });
+
+    it('is null without a file, and never leaves the avatars folder', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'maui-avatars-'));
+        try {
+            expect(localAvatarUrl(dir, 'SKI')).toBeNull();
+            expect(localAvatarUrl(dir, '../NOB')).toBeNull();
+        } finally {
+            rmSync(dir, {recursive: true, force: true});
+        }
     });
 });
