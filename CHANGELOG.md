@@ -1,3 +1,9 @@
+## [2.13.0](https://github.com/Arcadoolic/maui/compare/2.12.0...2.13.0) (2026-10-11)
+
+### Features
+
+* **online:** take an administrator's avatar, refresh changed avatars, short game names on the idle curtain ([2173500](https://github.com/Arcadoolic/maui/commit/21735008e96f824b7bf70234c71f71c3990393f6))
+
 ## [2.12.0](https://github.com/Arcadoolic/maui/compare/2.11.0...2.12.0) (2026-10-11)
 
 ### Features
