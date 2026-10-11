@@ -13,6 +13,7 @@ import {ScoreCapture} from '@/class/ScoreCapture';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
+import {AvatarLedgerFile} from '@/class/AvatarLedger';
 import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
 import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
@@ -212,7 +213,7 @@ export function startCore(
         },
         // Also sends the avatars MAUI-API does not have (maui-api D53), and takes those of the
         // players created on another cabinet (maui-api D56).
-        syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars, saveLocalAvatar),
+        syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars, saveLocalAvatar, new AvatarLedgerFile()),
         flushScores: client => flushOutbox(scoreStore, client),
         reportOpinions: client => reportOpinions(opinionStore, client),
         refreshLeaderboards: client => leaderboards.refresh(client),

@@ -61,6 +61,27 @@ describe('LeaderboardSync', () => {
         expect(result.avatars).toBe(1);
     });
 
+    it('asks a batch again in full while one of its avatars could not be downloaded', async () => {
+        const hash = 'b'.repeat(64);
+        const h = harness(['dkong'], (batch, etag) => etag === '"v1"'
+            ? {kind: 'ok', value: {notModified: true}}
+            : {kind: 'ok', value: {notModified: false, etag: '"v1"', value: batch.map(r => board(r, hash))}});
+        h.getAvatar.mockResolvedValueOnce({kind: 'network', message: 'down'} as never);
+
+        expect((await h.sync.refresh(h.client)).avatars).toBe(0);
+        expect(h.cached.has(hash)).toBe(false);
+
+        // No ETag sent: a 304 would have left the player on the previous picture for good.
+        const second = await h.sync.refresh(h.client);
+        expect(h.getLeaderboards).toHaveBeenLastCalledWith(['dkong'], null);
+        expect(second.avatars).toBe(1);
+        expect(h.cached.has(hash)).toBe(true);
+
+        // Everything is there: the ETag is back.
+        await h.sync.refresh(h.client);
+        expect(h.getLeaderboards).toHaveBeenLastCalledWith(['dkong'], '"v1"');
+    });
+
     it('keeps the cache when MAUI-API cannot be reached', async () => {
         const h = harness(['dkong'], () => ({kind: 'unavailable', reason: 'network'}));
 

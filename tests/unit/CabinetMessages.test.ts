@@ -67,4 +67,21 @@ describe('scoreEventMessages', () => {
             {id: 'event/9', text: 'First blood on **Dig Dug**.', kind: 'score'},
         ]);
     });
+
+    it('names the game by its short title, as the front does', () => {
+        expect(scoreEventMessages([
+            {id: 1, romname: 'galaxian', description: 'Galaxian (Namco set 1)',
+                message: 'First blood on **Galaxian (Namco set 1)** by Namco: **NOB** sets the mark at **2,820**.'},
+            {id: 2, romname: 'robotron', description: 'Robotron: 2084 (Release 5, solid blue label)',
+                message: 'New leader on **Robotron: 2084 (Release 5, solid blue label)** by Williams: **STE** dethrones **SNO**.'},
+            // A name with nothing to cut, and a sentence that does not hold the name as given.
+            {id: 3, romname: 'mpatrol', description: 'Moon Patrol', message: '**NOB** opens the board on **Moon Patrol** by Irem.'},
+            {id: 4, romname: 'dkong', description: 'Donkey Kong (US set 1)', message: '**NOB** is back.'},
+        ]).map(message => message.text)).toEqual([
+            'First blood on **Galaxian** by Namco: **NOB** sets the mark at **2,820**.',
+            'New leader on **Robotron** by Williams: **STE** dethrones **SNO**.',
+            '**NOB** opens the board on **Moon Patrol** by Irem.',
+            '**NOB** is back.',
+        ]);
+    });
 });

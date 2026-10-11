@@ -328,7 +328,7 @@ describe('repository', () => {
 describe('players', () => {
     const uuid = '01a0f983-773f-71b7-b4c5-66c848306e1b';
     const apiPlayer = {id: uuid, pseudo_3: 'ACE', is_public: true, status: 'active'};
-    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active', isOrigin: false, avatar: null};
+    const player = {id: uuid, pseudo3: 'ACE', isPublic: true, status: 'active', isOrigin: false, avatar: null, avatarByAdmin: false};
 
     it('lists the players of the cabinet', async () => {
         const {client, fetchImpl} = clientReturning(json(200, {players: [apiPlayer]}));
@@ -505,7 +505,7 @@ describe('score events', () => {
         ]}));
 
         expect(await client.getScoreEvents(20)).toEqual({kind: 'ok', value: [
-            {id: 12, message: '**NOB** takes 1st on **Galaga**!', romname: 'galaga'},
+            {id: 12, message: '**NOB** takes 1st on **Galaga**!', romname: 'galaga', description: 'Galaga (Rev. 1)'},
             {id: 9, message: 'First blood on **Dig Dug**.'},
         ]});
         expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/events?limit=20');
@@ -566,6 +566,17 @@ describe('avatars', () => {
         expect(url).toBe('https://api.example.org/api/v1/players/p1/avatar');
         expect(init.body).toBeInstanceOf(FormData);
         expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    });
+
+    it('names the avatar it replaces when told to (maui-api D83)', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {player: {}, avatar: 'hash'}));
+
+        await client.uploadAvatar('p1', new Uint8Array([1]), 'previous');
+        expect((requestOf(fetchImpl).init.body as FormData).get('replaces')).toBe('previous');
+
+        await client.uploadAvatar('p1', new Uint8Array([1]));
+        const [, second] = fetchImpl.mock.calls[1] as unknown as [string, RequestInit];
+        expect((second.body as FormData).has('replaces')).toBe(false);
     });
 
     it('maps avatar_not_found', async () => {

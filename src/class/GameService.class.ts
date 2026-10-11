@@ -5,6 +5,7 @@ import MameService from '@/class/MameService.class';
 import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
 import Log from 'electron-log';
+import {splitGameTitle} from '@/class/GameTitle';
 // Sequelize's own helpers (literal...) come from sequelize-typescript, never from the sequelize package
 // itself: imported in the renderer, that makes vite-plugin-electron-renderer generate a module
 // exporting every key of sequelize, one of which ("DOUBLE PRECISION") isn't a valid identifier - a
@@ -98,17 +99,7 @@ export default class GameService {
             const gameInformation = this.mameService.getGameInformation(romName);
 
             // Extract shortname and subname
-            let shortname = gameInformation.description;
-            let subname = '';
-            const shortnameRegexp = /^(.[^(]*)/g.exec(gameInformation.description);
-            if (shortnameRegexp) {
-                shortname = shortnameRegexp[0].trim().replace(/&amp;/g, '&');
-                const subnameRegexp = /^([^\-\/]*)(:\s+|\s+-\s+|\s+\/\s+)(.*)$/.exec(shortname);
-                if (subnameRegexp) {
-                    shortname = subnameRegexp.splice(0, 3)[1];
-                    subname = subnameRegexp[0];
-                }
-            }
+            const {shortname, subname} = splitGameTitle(gameInformation.description);
 
             // Get player numbers
             const players = this.getGameNplayers(romName);
