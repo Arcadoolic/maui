@@ -2,6 +2,8 @@ import {MameHiExtractor} from '@arcadoolic/mhiex';
 import UserService from '@/class/UserService.class';
 import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
+import User from '@/model/User.model';
+import {latestBestMessages, type BandMessage} from '@/class/CabinetMessages';
 import * as Log from 'electron-log';
 import {scorePseudo3} from '@/class/HiscoreSupport';
 import {isOnlineActive} from '@/class/RepositoryAuth';
@@ -29,6 +31,26 @@ export default class HiscoreService {
      */
     public hasHiscore(romName: string) {
         return this.hiExtractor.exist(romName);
+    }
+
+    /**
+     * The cabinet's latest best scores as messages (CabinetMessages.ts): one per active player and
+     * game still on the cabinet, the most recently recorded first.
+     */
+    public async loadLatestBests(limit: number): Promise<BandMessage[]> {
+        const rows = await Hiscore.findAll({
+            include: [{model: User, required: true, where: {active: true}}, {model: Game, required: true}],
+            order: [['creationDate', 'DESC'], ['score', 'DESC']],
+            // Several rows per player and game (a table keeps more than one score of a player).
+            limit: limit * 10,
+        });
+        return latestBestMessages(rows.map(row => ({
+            pseudo: row.user.pseudo_3,
+            romName: row.game.romName,
+            title: row.game.shortname || row.game.fullname || row.game.romName,
+            score: row.score,
+            suffix: row.scoreSuffix,
+        })), limit);
     }
 
     /**
