@@ -63,6 +63,9 @@ export interface OnlinePlayer {
     isOrigin: boolean;
     // SHA-256 of the avatar MAUI-API has (maui-api D53), null without one.
     avatar: string | null;
+    // That avatar was set by an administrator (maui-api D83): the cabinet the player was created on
+    // takes it, instead of sending its own.
+    avatarByAdmin: boolean;
 }
 
 export type PlayerAvailability = 'free' | 'taken' | 'disabled';
@@ -225,6 +228,7 @@ function parsePlayer(body: unknown): OnlinePlayer | null {
         id: body.id, pseudo3: body.pseudo_3, isPublic: body.is_public, status: body.status as OnlinePlayerStatus,
         isOrigin: body.is_origin === true,
         avatar: typeof body.avatar === 'string' ? body.avatar : null,
+        avatarByAdmin: body.avatar_by_admin === true,
     };
 }
 
@@ -251,8 +255,9 @@ export interface ScoreEventLine {
     id: number;
     // English, with **bold** around what matters.
     message: string;
-    // The game the score was made on.
+    // The game the score was made on, and its name as MAME gives it (the one in `message`).
     romname?: string;
+    description?: string;
 }
 
 function parseScoreEvents(body: unknown): ScoreEventLine[] | null {
@@ -263,6 +268,7 @@ function parseScoreEvents(body: unknown): ScoreEventLine[] | null {
         ? {
             id: event.id, message: event.message,
             ...(isObject(event.game) && typeof event.game.romname === 'string' ? {romname: event.game.romname} : {}),
+            ...(isObject(event.game) && typeof event.game.description === 'string' ? {description: event.game.description} : {}),
         } : null);
     return events.every(event => event !== null) ? events as ScoreEventLine[] : null;
 }
@@ -482,10 +488,17 @@ export class MauiApiClient {
         return {kind: 'ok', value: new Uint8Array(await response.arrayBuffer())};
     }
 
-    /** Sends the PNG of a player of this cabinet; answers its hash as MAUI-API stored it. */
-    public uploadAvatar(playerId: string, png: Uint8Array): Promise<ApiResult<string>> {
+    /**
+     * Sends the PNG of a player of this cabinet; answers its hash as MAUI-API stored it.
+     * `replaces`: the hash of the avatar it takes the place of, needed when that one was set by an
+     * administrator (maui-api D83) - else MAUI-API answers `avatar_changed_by_admin`.
+     */
+    public uploadAvatar(playerId: string, png: Uint8Array, replaces: string | null = null): Promise<ApiResult<string>> {
         const form = new FormData();
         form.append('avatar', new Blob([new Uint8Array(png)], {type: 'image/png'}), 'avatar.png');
+        if (replaces !== null) {
+            form.append('replaces', replaces);
+        }
         return this.call(
             'POST', `/players/${encodeURIComponent(playerId)}/avatar`, 200,
             async response => {

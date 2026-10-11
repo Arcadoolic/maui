@@ -58,11 +58,16 @@ export class LeaderboardSync {
                     continue;
                 }
                 await this.deps.store.save(answer.value.value);
-                if (answer.value.etag) {
-                    this.etags.set(key, answer.value.etag);
-                }
                 result.updated += answer.value.value.length;
-                result.avatars += await this.fetchAvatars(client, answer.value.value);
+                const avatars = await this.fetchAvatars(client, answer.value.value);
+                result.avatars += avatars.fetched;
+                // An avatar that could not be downloaded: the batch is asked again in full next
+                // time, instead of a 304 that would leave its players on their previous picture.
+                if (answer.value.etag && avatars.missing === 0) {
+                    this.etags.set(key, answer.value.etag);
+                } else {
+                    this.etags.delete(key);
+                }
             }
         } finally {
             if (result.updated > 0 || result.avatars > 0) {
@@ -72,8 +77,8 @@ export class LeaderboardSync {
         return result;
     }
 
-    /** The avatars of these leaderboards not in the cache yet. */
-    private async fetchAvatars(client: MauiApiClient, leaderboards: Leaderboard[]): Promise<number> {
+    /** The avatars of these leaderboards not in the cache yet: those downloaded, those still missing. */
+    private async fetchAvatars(client: MauiApiClient, leaderboards: Leaderboard[]): Promise<{fetched: number; missing: number}> {
         const missing = new Map<string, string>();
         for (const entry of leaderboards.flatMap(leaderboard => leaderboard.entries)) {
             if (entry.avatar && !this.deps.avatars.has(entry.avatar)) {
@@ -88,6 +93,6 @@ export class LeaderboardSync {
                 fetched++;
             }
         }
-        return fetched;
+        return {fetched, missing: missing.size - fetched};
     }
 }

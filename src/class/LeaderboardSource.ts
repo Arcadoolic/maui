@@ -6,12 +6,12 @@ import * as SequelizeTS from 'sequelize-typescript';
 import Game from '@/model/Game.model';
 import Hiscore from '@/model/Hiscore.model';
 import User from '@/model/User.model';
-import {findAvatarFile} from '@/class/AvatarFiles';
+import {avatarCacheBust, isSafePseudo} from '@/class/AvatarFiles';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {onlineAvatarFile} from '@/class/OnlineAvatars';
 import {LEADERBOARDS_CHANGED_CHANNEL} from '@/class/ScoreCaptureBridge';
 import type {LeaderboardEntry} from '@/class/MauiApiClient';
-import {getConfiguration, getUserService} from '@/services';
+import {getConfiguration} from '@/services';
 
 const Sequelize = SequelizeTS.Sequelize;
 
@@ -50,16 +50,32 @@ function fileUrl(path: string): string {
     return format({pathname: path, protocol: 'file', slashes: true});
 }
 
+/**
+ * The address of a player's own avatar file, `<pseudo3>.png` in `avatarsPath`; null without one.
+ * A new picture overwrites that same file (BO upload, or the download of a player created on
+ * another cabinet, PlayerSync.ts): the address carries the file's date, or the window would go on
+ * showing the picture it already has in memory under that address until the front is restarted -
+ * while the leaderboards, whose avatars are files named after their hash, already show the new one.
+ * Read from the disk each time: a file that came since the front started counts too.
+ */
+export function localAvatarUrl(avatarsPath: string, pseudo3: string): string | null {
+    if (!isSafePseudo(pseudo3)) {
+        return null;
+    }
+    const filename = `${pseudo3}.png`;
+    // '' for a file that is not there.
+    const version = avatarCacheBust(avatarsPath, filename);
+    return version ? fileUrl(join(avatarsPath, filename)) + version : null;
+}
+
 /** The downloaded avatar of a player of MAUI-API, else the local one of the same initials. */
 function avatarResolver(): AvatarResolver {
-    const localFiles = getUserService().getAvatars();
     return (pseudo3, onlineHash) => {
         const online = onlineAvatarFile(onlineHash);
         if (online && existsSync(online)) {
             return fileUrl(online);
         }
-        const local = findAvatarFile(localFiles, pseudo3);
-        return local ? fileUrl(join(getConfiguration().avatarsPath, local)) : null;
+        return localAvatarUrl(getConfiguration().avatarsPath, pseudo3);
     };
 }
 
