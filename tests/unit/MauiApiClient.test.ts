@@ -496,6 +496,27 @@ describe('opinions', () => {
     });
 });
 
+describe('score events', () => {
+    it('reads the sentences of the latest events', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {events: [
+            {id: 12, uuid: 'u', movement: 'takes_first', message: '**NOB** takes 1st on **Galaga**!', score: 300,
+                game: {romname: 'galaga', description: 'Galaga (Rev. 1)', manufacturer: 'Namco'}},
+            {id: 9, message: 'First blood on **Dig Dug**.'},
+        ]}));
+
+        expect(await client.getScoreEvents(20)).toEqual({kind: 'ok', value: [
+            {id: 12, message: '**NOB** takes 1st on **Galaga**!', romname: 'galaga'},
+            {id: 9, message: 'First blood on **Dig Dug**.'},
+        ]});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/events?limit=20');
+    });
+
+    it('refuses an answer that is no list of events', async () => {
+        expect((await clientReturning(json(200, {events: [{id: 1}]})).client.getScoreEvents(5)).kind).not.toBe('ok');
+        expect((await clientReturning(json(200, {})).client.getScoreEvents(5)).kind).not.toBe('ok');
+    });
+});
+
 describe('leaderboards', () => {
     const apiEntry = {
         rank: 1, player: {id: 'p1', pseudo_3: 'NOB', avatar: 'abc'}, score: 19200,

@@ -240,6 +240,36 @@ describe('Config boIdleMinutes', () => {
     });
 });
 
+describe('Config front idle', () => {
+    it('is on unless switched off', () => {
+        expect(new Config().frontIdleEnabled).toBe(true);
+        for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontIdleEnabled = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontIdleEnabled).toBe(expected);
+        }
+    });
+
+    it('waits 2 minutes by default and only takes a whole number of minutes, 1 at least', () => {
+        expect(new Config().frontIdleMinutes).toBe(2);
+        for (const [written, expected] of [[1, 1], [10, 10], [0, 2], [-1, 2], [1.5, 2], ['5', 2], [undefined, 2]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontIdleMinutes = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontIdleMinutes).toBe(expected);
+        }
+    });
+});
+
 describe('Config.save', () => {
     it('round-trips through load', () => {
         const written = new Config();
@@ -277,6 +307,8 @@ describe('Config.save', () => {
             'bezelAspect',
             'boIdleMinutes',
             'displayMode',
+            'frontIdleEnabled',
+            'frontIdleMinutes',
             'fullscreen',
             'mameBinaryName',
             'mamePath',

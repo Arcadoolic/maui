@@ -57,6 +57,8 @@
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
         </transition>
+
+        <message-band v-if="idle && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
     </div>
 
 </template>
@@ -74,7 +76,7 @@ import {useBoUrl} from '@/composables/useBoUrl';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import {
-    CarouselCategory, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
+    CarouselCategory, ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
 import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
 import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSource';
@@ -98,6 +100,10 @@ import {
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {ipcRenderer} from 'electron';
+import MessageBand from '@/components/MessageBand.vue';
+import {IdleWatch} from '@/class/IdleWatch';
+import {scoreEventMessages, type BandMessage} from '@/class/CabinetMessages';
+import {createOnlineClient} from '@/class/OnlineClient';
 
 let gameService: GameService;
 
@@ -121,6 +127,7 @@ const timeouts: {
     hideBackOffice?: number,
     hold?: number,
     holdRepeat?: number,
+    roll?: number,
 } = {};
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
@@ -166,6 +173,37 @@ const noGames = computed(() => gamesLoaded.value && !games.value.length);
 // The BO's address on the local network, while it is shown (see askBackOffice()).
 const backOfficeUrl = ref('');
 const BACK_OFFICE_SHOWN_MS = 15000;
+// Nobody at the controls for a while (IdleWatch.ts): the cabinet shows its messages, its latest
+// best scores, until the next key - which only takes them away.
+const IDLE_MESSAGES = 20;
+const idle = ref(false);
+const idleMessages = ref<BandMessage[]>([]);
+// Switched off in the BO: a delay of 0, the cabinet never turns idle.
+const idleDelayMs = getConfiguration().frontIdleEnabled ? getConfiguration().frontIdleMinutes * 60_000 : 0;
+const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
+    idle.value = isIdle;
+    if (isIdle) {
+        void loadIdleMessages();
+    }
+});
+
+/**
+ * Read each time the cabinet turns idle: MAUI-API's latest score events in ONLINE mode, else, or
+ * when there is none to read, the cabinet's own latest best scores. Never throws.
+ */
+async function loadIdleMessages() {
+    try {
+        const client = await createOnlineClient();
+        const events = client ? await client.getScoreEvents(IDLE_MESSAGES) : null;
+        idleMessages.value = events?.kind === 'ok' && events.value.length
+            ? scoreEventMessages(events.value)
+            : await getHiscoreService().loadLatestBests(IDLE_MESSAGES);
+    } catch (err) {
+        idleMessages.value = [];
+        Log.warn('[Home] Messages not loaded: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
 // Keys of the two-key long press currently held down.
 const heldKeys = new Set<string>();
 // A game is being launched or runs: the front takes no input, keyboard or controller, until it
@@ -375,6 +413,7 @@ async function askWhoPlayed(pending: PendingAttribution | null) {
  */
 function lockFront() {
     gameRunning = true;
+    syncIdleBlock();
     stopHold();
     heldKeys.clear();
     cancelBackOffice();
@@ -386,7 +425,15 @@ function lockFront() {
 
 function unlockFront() {
     gameRunning = false;
+    syncIdleBlock();
     Gamepads.resume();
+}
+
+/** The front is not left alone while a game runs, a modal is up or there is no game to show. */
+function syncIdleBlock() {
+    stopRoll();
+    idleWatch.block(gameRunning || showAddUser.value || !!whoPlayed.value || !!voteGame.value
+        || !!backOfficeUrl.value || noGames.value);
 }
 
 function startGame() {
@@ -486,19 +533,49 @@ async function reloadCarousel() {
     flyer.value = generateFlyerPath();
 }
 
+// Games the list rolls through before it stops on the one an idle cabinet's message is about.
+const ROLL_GAMES = 10;
+
+/** The list stops rolling where it is (see showGame()), and shows the flyer of the game it is on. */
+function stopRoll() {
+    if (timeouts.roll !== undefined) {
+        clearInterval(timeouts.roll);
+        timeouts.roll = undefined;
+        showSelectedFlyer();
+    }
+}
+
+/** The message an idle cabinet starts showing: the front goes to its game, when it has it. */
+function onMessageShown(message: BandMessage) {
+    if (idle.value && message.romName) {
+        void showGame(message.romName, true);
+    }
+}
+
 /**
  * The BO asks for a game on screen (Favorites tab): its own category when the carousel has it,
  * else the first one that lists it ("All games"...). Left alone while a game is being played or a
  * question is up, and when no category has the game.
+ *
+ * announced: the game of an idle cabinet's message instead. "All games" first, the other
+ * categories only when it is hidden, and the list rolls its last games up to that one, as a
+ * player would bring it there (it jumps straight to it in Lite mode).
  */
-async function showGame(romName: string) {
+async function showGame(romName: string, announced = false) {
     if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value) {
         return;
     }
     stopHold();
+    stopRoll();
     try {
-        const order = categories.value.map((_, index) => index).sort((a, b) =>
-            Number(isDynamicCategory(categories.value[a])) - Number(isDynamicCategory(categories.value[b])));
+        // By its kind, not by identity: the carousel's entries are reactive proxies.
+        const isAllGames = (index: number) => {
+            const entry = categories.value[index];
+            return isDynamicCategory(entry) && entry.dynamic === ALL_GAMES_CATEGORY.dynamic;
+        };
+        const order = categories.value.map((_, index) => index).sort((a, b) => announced
+            ? Number(isAllGames(b)) - Number(isAllGames(a))
+            : Number(isDynamicCategory(categories.value[a])) - Number(isDynamicCategory(categories.value[b])));
         for (const index of order) {
             const loadedGames = await loadCategoryGames(index);
             const gameIndex = loadedGames.findIndex(loaded => loaded.romName === romName);
@@ -511,11 +588,26 @@ async function showGame(romName: string) {
             selectedCategoryIndex.value = index;
             displayedCategoryIndex.value = index;
             games.value = loadedGames;
-            selectedGameIndex.value = gameIndex;
-            flyer.value = generateFlyerPath();
             showGames.value = true;
             showTitle.value = true;
-            showFlyer.value = true;
+            // The cabinet woke up while the games were being read: nothing rolls under the player.
+            const rolls = announced && idle.value && !isLite();
+            // From above the game, or from below one too near the top of the list.
+            const step = gameIndex >= ROLL_GAMES ? 1 : -1;
+            const start = rolls ? Math.min(Math.max(gameIndex - step * ROLL_GAMES, 0), loadedGames.length - 1) : gameIndex;
+            selectedGameIndex.value = start;
+            if (start === gameIndex) {
+                flyer.value = generateFlyerPath();
+                showFlyer.value = true;
+                return;
+            }
+            showFlyer.value = false;
+            timeouts.roll = window.setInterval(() => {
+                selectedGameIndex.value += step;
+                if (selectedGameIndex.value === gameIndex) {
+                    stopRoll();
+                }
+            }, HOLD_MS.fastScroll);
             return;
         }
     } catch (err) {
@@ -614,6 +706,8 @@ onUnmounted(() => {
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     window.removeEventListener('blur', stopHold);
     stopHold();
+    stopRoll();
+    idleWatch.stop();
     if (gameRunning) {
         unlockFront();
     }
@@ -627,9 +721,15 @@ watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value, (modal) 
         stopHold();
     }
 });
+watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!backOfficeUrl.value, noGames.value], syncIdleBlock);
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
+        // The key that wakes an idle cabinet only takes its messages away.
+        if (idleWatch.activity()) {
+            stopRoll();
+            return;
+        }
         if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
@@ -734,6 +834,8 @@ if (!getIsInit()) {
 
         Gamepads.init();
         registerKeyMapping();
+        syncIdleBlock();
+        idleWatch.start();
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
 
