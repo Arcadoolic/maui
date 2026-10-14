@@ -3423,13 +3423,35 @@ function renderLoginPage(error?: string): string {
                  username or password gracefully (401 + "Incorrect username or password
                  incorrect."), so letting the browser send an incomplete submission and having
                  the server reject it is simpler than fighting native validation here. -->
-            <form method="post" action="/login">
+            <form method="post" action="/login" id="loginForm">
                 <label for="username">Username</label>
                 <input type="text" id="username" name="username" autofocus>
                 <label for="password">Password</label>
                 <input type="password" id="password" name="password">
                 <button type="submit">Sign in</button>
             </form>
+            <!-- A password manager's menu in a field (an extension, Chrome's own suggestions) can
+                 take Enter for itself, now and then, and the form is not sent: only a click on
+                 the button was. Enter released in a field without the form having gone off in the
+                 meantime sends it. Its keyup, since what takes the keydown may also stop it. The
+                 time of the last submission is kept on window, which the page that answers it
+                 shares (document.write()): its keyup must not send it again, empty. -->
+            <script>(function () {
+                var form = document.getElementById('loginForm');
+                form.addEventListener('submit', function () {
+                    window.boLoginSubmittedAt = Date.now();
+                }, true);
+                form.addEventListener('keyup', function (event) {
+                    if (event.key !== 'Enter' || event.target.tagName !== 'INPUT'
+                        || Date.now() - (window.boLoginSubmittedAt || 0) < 1000) {
+                        return;
+                    }
+                    var button = form.querySelector('button[type="submit"]');
+                    if (button && !button.disabled) {
+                        form.requestSubmit(button);
+                    }
+                });
+            })();</script>
         </section>
     `, 'mame', null);
 }
