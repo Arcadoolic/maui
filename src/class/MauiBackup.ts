@@ -171,3 +171,19 @@ export function restoreBackup(dataDir: string, zipData: Buffer): BackupPart[] {
     const restored = new Set(destinations.map(item => item.destination.part.id));
     return BACKUP_PARTS.filter(part => restored.has(part.id));
 }
+
+/**
+ * Deletes the files of the parts given (the BO's Danger zone, MAUI tab): the same files the
+ * export takes, so that nothing of a part is left behind. Says which parts had something.
+ */
+export function deleteBackupParts(dataDir: string, partIds: readonly BackupPartId[]): BackupPart[] {
+    const deleted: BackupPart[] = [];
+    for (const part of BACKUP_PARTS.filter(candidate => partIds.includes(candidate.id))) {
+        const paths = [...part.files, ...part.directories].map(name => join(dataDir, name)).filter(path => existsSync(path));
+        paths.forEach(path => rmSync(path, {recursive: true, force: true}));
+        if (paths.length) {
+            deleted.push(part);
+        }
+    }
+    return deleted;
+}
