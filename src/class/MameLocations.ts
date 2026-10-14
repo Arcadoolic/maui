@@ -239,3 +239,17 @@ export function getDisabledRequiredPlugins(pluginIniPath: string): string[] {
     const existing = existsSync(pluginIniPath) ? parseMameIni(readFileSync(pluginIniPath, 'utf8')) : {};
     return REQUIRED_PLUGINS.filter(name => existing[name]?.[0] !== '1');
 }
+
+/**
+ * Switches on in plugin.ini the plugins mame-awesome-ui needs (REQUIRED_PLUGINS), whatever they
+ * were set to, and only those: repairPluginIni() never touches a plugin already listed. Creates
+ * plugin.ini when mame did not. Returns the plugins switched on.
+ */
+export function enableRequiredPlugins(pluginIniPath: string): string[] {
+    const disabled = getDisabledRequiredPlugins(pluginIniPath);
+    if (disabled.length && !existsSync(pluginIniPath)) {
+        writeFileSync(pluginIniPath, '');
+    }
+    disabled.forEach(name => setMameIniValue(pluginIniPath, name, '1'));
+    return disabled;
+}

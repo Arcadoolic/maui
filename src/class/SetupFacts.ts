@@ -19,8 +19,8 @@ export interface SetupFactsInput {
     mameHomePath: string;
     // Read from the database by the caller (bo_user.secretsKey).
     passwordChanged: boolean;
-    // A configuration string was pasted (OnlineSetup.ts onlineIndicator() is not null).
-    onlineConfigured: boolean;
+    // ONLINE is on (RepositoryAuth.ts isOnlineActive()).
+    onlineActive: boolean;
 }
 
 export function readSetupFacts(input: SetupFactsInput): SetupFacts {
@@ -40,7 +40,7 @@ export function readSetupFacts(input: SetupFactsInput): SetupFacts {
         missingPlugins: getMissingPlugins(pluginIniPath, plugins),
         disabledRequiredPlugins: getDisabledRequiredPlugins(pluginIniPath),
         pluginsFound: plugins.length > 0,
-        onlineConfigured: input.onlineConfigured,
+        onlineActive: input.onlineActive,
         offlineChosen: config.setupOffline,
         missingConfPackFiles: getMissingConfPackFiles(locations),
         favoritesCount: favorites.length,

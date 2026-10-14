@@ -7,7 +7,7 @@ const NOTHING: SetupFacts = {
     missingPlugins: [],
     disabledRequiredPlugins: ['hiscore'],
     pluginsFound: false,
-    onlineConfigured: false,
+    onlineActive: false,
     offlineChosen: false,
     missingConfPackFiles: ['catver.ini', 'genre.ini', 'Multiplayer.ini'],
     favoritesCount: 0,
@@ -19,7 +19,7 @@ const READY: SetupFacts = {
     missingPlugins: [],
     disabledRequiredPlugins: [],
     pluginsFound: true,
-    onlineConfigured: true,
+    onlineActive: true,
     offlineChosen: false,
     missingConfPackFiles: [],
     favoritesCount: 12,
@@ -65,7 +65,7 @@ describe('describeSetup', () => {
     });
 
     it('leaves the packs to install by hand when the cabinet stays OFFLINE, and is then finished', () => {
-        const offline = {...READY, onlineConfigured: false, offlineChosen: true, missingConfPackFiles: ['genre.ini'], favoritesCount: 0};
+        const offline = {...READY, onlineActive: false, offlineChosen: true, missingConfPackFiles: ['genre.ini'], favoritesCount: 0};
         expect(states(offline)).toMatchObject({online: 'done', confPack: 'manual', starterPack: 'manual'});
         expect(describeSetup(offline)).toMatchObject({completed: 6, finished: true});
         // Installed by hand all the same: done.
@@ -74,7 +74,7 @@ describe('describeSetup', () => {
         });
     });
 
-    it('takes a configuration string pasted after choosing OFFLINE: the packs are back', () => {
+    it('takes ONLINE turned on after choosing OFFLINE: the packs are back', () => {
         expect(states({...READY, offlineChosen: true, favoritesCount: 0}).starterPack).toBe('current');
     });
 

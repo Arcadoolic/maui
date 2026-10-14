@@ -19,9 +19,12 @@ import bcrypt from 'bcryptjs';
 // "Module parse failed: Unexpected token" error on that file - re-check before upgrading.
 import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
+import {describeSetup, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
+import {readSetupFacts} from '@/class/SetupFacts';
+import {renderSetupNavLabel, renderSetupPage} from '@/class/SetupBoPage';
 import {
     ensureFirstDirectory, getAvailablePlugins, getFirstExistingDirectory, getMameIniValue, getMameLocations,
-    getMissingPlugins, repairPluginIni, resolveDirectoryPath, setMameIniValue,
+    getMissingPlugins, repairPluginIni, resolveDirectoryPath, setMameIniValue, enableRequiredPlugins,
 } from '@/class/MameLocations';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
@@ -145,7 +148,7 @@ declare module 'express-session' {
     }
 }
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'hiscores' | 'maui' | 'account';
+type Tab = 'setup' | 'mame' | 'screenscraper' | 'favorites' | 'users' | 'hiscores' | 'maui' | 'account';
 // Who a page is rendered for: 'basic' leaves the Advanced configuration tabs/sections out (see
 // POST /advanced), and null (signed out - the login page) gets no nav at all.
 type Viewer = 'advanced' | 'basic' | null;
@@ -1350,6 +1353,29 @@ const PROGRESS_LOG_OPEN = '<ul class="progress-log"><script>(function () {'
  * these are real page-loaded links (not a JS tab widget), so a screen reader should hear "current
  * page" the same way a sighted user sees the underline, instead of nothing at all.
  */
+/**
+ * The setup guide's state (SetupSteps.ts), read from the files. A visitor signed in with the
+ * default password is held on /account until it is changed (mustChangePassword), so everywhere
+ * else the account step is done; /setup itself is told the truth.
+ */
+function readSetup(passwordChanged: boolean = true): {facts: SetupFacts; progress: SetupProgress} {
+    const config = new Config();
+    config.load();
+    const facts = readSetupFacts({
+        config, mameHomePath: getMameHomePath(), passwordChanged, onlineActive: isOnlineActive(),
+    });
+    return {facts, progress: describeSetup(facts)};
+}
+
+/** "Getting started 3/6" while the setup is not finished; on /setup itself whatever its state. */
+function renderSetupNavTab(isActive: boolean): string {
+    const {progress} = readSetup();
+    if (progress.finished && !isActive) {
+        return '';
+    }
+    return renderNavTabLink('/setup', progress.finished ? 'Getting started' : renderSetupNavLabel(progress), isActive);
+}
+
 function renderNavTabLink(href: string, label: string, isActive: boolean): string {
     return `<a href="${href}" class="${isActive ? 'active' : ''}"${isActive ? ' aria-current="page"' : ''}>${label}</a>`;
 }
@@ -2868,6 +2894,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
     <header>
         <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
         ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
+            ${renderSetupNavTab(active === 'setup')}
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
@@ -7385,6 +7412,8 @@ function describeUserError(error: unknown): string {
  */
 function renderBrowsePage(
     target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
+    // Where the chosen folder is brought back: the MAME tab, or the setup guide.
+    returnTo: '/' | '/setup' = '/',
 ): string {
     let entries: string[] = [];
     let error: string|undefined;
@@ -7407,8 +7436,9 @@ function renderBrowsePage(
         .map(field => `${field}=${encodeURIComponent(values[field])}`)
         .join('&');
     const carryQuery = query(carried);
-    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}`;
-    const selectLink = (dir: string) => `/?${query({...carried, [target]: dir})}`;
+    const fromQuery = returnTo === '/setup' ? '&from=setup' : '';
+    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}${fromQuery}`;
+    const selectLink = (dir: string) => `${returnTo}?${query({...carried, [target]: dir})}`;
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -7425,7 +7455,7 @@ function renderBrowsePage(
                 ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Parent folder</a>` : ''}
             </p>
             <ul class="browse-list">${rows || '<li><em>No subfolder</em></li>'}</ul>
-            <p><a href="/?${carryQuery}">Cancel</a></p>
+            <p><a href="${returnTo}?${carryQuery}">Cancel</a></p>
         </section>
     `, 'mame', viewer);
 }
@@ -7654,10 +7684,21 @@ export function createBoApp(
         await boUser.save();
         req.session.mustChangePassword = false;
         await unlockSecrets(req, boUser, newPassword);
+        // A new cabinet goes on with its setup.
+        if (!readSetup().progress.finished) {
+            res.redirect(303, '/setup');
+            return;
+        }
         res.send(renderAccountPage(boUser.username, getViewer(req), false, undefined, 'Password updated.'));
     });
 
     app.get('/', (req, res) => {
+        // A new cabinet lands on its setup guide until it is done. Not when /browse brings a folder
+        // back to the MAME tab (a query).
+        if (!Object.keys(req.query).length && !readSetup().progress.finished) {
+            res.redirect('/setup');
+            return;
+        }
         const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
@@ -7670,6 +7711,115 @@ export function createBoApp(
         res.send(renderForm(
             {mamePath}, mameInfo, req.session.boAdvanced === true,
         ));
+    });
+
+    // The setup guide (Lot VI.2, SetupBoPage.ts): the steps of a new cabinet's setup, the current
+    // one's form on the page. Each action comes back here, which moves on to the next step.
+    const sendSetupPage = (
+        req: Request, res: Response,
+        message?: {step: SetupStepId; error?: string; info?: string},
+        typed: {mamePath?: string; pluginsPath?: string} = {},
+    ) => {
+        const config = new Config();
+        config.load();
+        const {facts, progress} = readSetup(req.session.mustChangePassword !== true);
+        const iniPath = getMameHomePath();
+        const pluginsPath = getMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath');
+        const queryValue = (name: string) => typeof req.query[name] === 'string' ? req.query[name] as string : undefined;
+        res.status(message?.error ? 422 : 200).send(renderPage(renderSetupPage({
+            progress, facts, message,
+            mamePath: typed.mamePath ?? queryValue('mamePath') ?? config.mamePath ?? '',
+            pluginsPath: typed.pluginsPath ?? queryValue('pluginsPath')
+                ?? (pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : ''),
+        }), 'setup', getViewer(req)));
+    };
+
+    app.get('/setup', (req, res) => sendSetupPage(req, res));
+
+    app.post('/setup/mame', (req, res) => {
+        const mamePath: string = (req.body.mamePath || '').trim();
+        let pluginsPath: string = (req.body.pluginsPath || '').trim();
+        // Left empty: the plugins folder mame ships next to its binary, when there is one.
+        if (!pluginsPath && mamePath && existsSync(join(mamePath, 'plugins'))) {
+            pluginsPath = join(mamePath, 'plugins');
+        }
+        const config = new Config();
+        config.load();
+        // A first setup launches MAME fullscreen; set up again, it keeps what mame.ini says.
+        const windowed = getMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window') === '1';
+        const applied = applyMameConfig(config, mamePath, pluginsPath, windowed);
+        if ('error' in applied) {
+            sendSetupPage(req, res, {step: 'mame', error: applied.error}, {mamePath, pluginsPath});
+            return;
+        }
+        // Init.vue then finds the configuration and goes on to the list of games.
+        reloadFront();
+        res.redirect(303, '/setup');
+    });
+
+    app.post('/setup/plugins', (req, res) => {
+        const typedPath: string = (req.body.pluginsPath || '').trim();
+        const iniPath = getMameHomePath();
+        if (typedPath) {
+            if (!existsSync(typedPath)) {
+                sendSetupPage(req, res, {step: 'plugins', error: `The folder "${typedPath}" does not exist.`}, {pluginsPath: typedPath});
+                return;
+            }
+            if (!savePluginsPath(typedPath).saved) {
+                sendSetupPage(req, res, {step: 'plugins', error: 'mame.ini not found: save the MAME step first.'}, {pluginsPath: typedPath});
+                return;
+            }
+        }
+        const pluginsPath = getMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath');
+        const available = getAvailablePlugins(pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : null);
+        if (!available.length) {
+            sendSetupPage(req, res, {
+                step: 'plugins', error: `No plugin found in "${typedPath || pluginsPath || ''}".`,
+            }, {pluginsPath: typedPath});
+            return;
+        }
+        const pluginIniPath = join(iniPath, 'plugin.ini');
+        repairPluginIni(pluginIniPath, available);
+        enableRequiredPlugins(pluginIniPath);
+        res.redirect(303, '/setup');
+    });
+
+    // Not Advanced configuration only, unlike the MAUI > Online card: a new cabinet's owner is
+    // guided here. Same-origin all the same (see refuseOnlineRequest()).
+    app.post('/setup/online', async (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const input = typeof req.body.configuration === 'string' ? req.body.configuration : '';
+        const outcome = saveConfigurationString(input);
+        if (!outcome.ok) {
+            sendSetupPage(req, res, {step: 'online', error: outcome.error});
+            return;
+        }
+        // Checked before ONLINE is turned on: a wrong string or an unreachable MAUI-API is told here.
+        const test = await testConnection();
+        if (test.level !== 'info') {
+            await online.restart();
+            sendSetupPage(req, res, {step: 'online', error: `Configuration saved, but: ${test.message}`});
+            return;
+        }
+        const blocking = playersBlockingOnline(await User.findAll());
+        const enabled = blocking ? {level: 'error' as const, message: blocking} : setOnlineEnabled(true);
+        await online.restart();
+        if (enabled.level !== 'info') {
+            sendSetupPage(req, res, {step: 'online', error: enabled.message});
+            return;
+        }
+        res.redirect(303, '/setup');
+    });
+
+    app.post('/setup/offline', (req, res) => {
+        const config = new Config();
+        config.load();
+        config.setupOffline = req.body.offline === 'on';
+        config.save();
+        res.redirect(303, '/setup');
     });
 
     // The whole ScreenScraper tab is Advanced configuration only (its link is left out of the basic nav, see
@@ -8504,8 +8654,13 @@ export function createBoApp(
         const isAdvanced = req.session.boAdvanced === true;
         const mameInfo = getMameInfo(config);
 
+        const fromSetup = req.body?.from === 'setup';
         const repository = await resolveRepository();
         if (!repository.ok) {
+            if (fromSetup) {
+                sendSetupPage(req, res, {step: withStarterPack ? 'starterPack' : 'confPack', error: describeRepositoryFailure(repository)});
+                return;
+            }
             res.status(502).send(renderForm(
                 values, mameInfo, isAdvanced, undefined, undefined, undefined, describeRepositoryFailure(repository),
             ));
@@ -8513,7 +8668,7 @@ export function createBoApp(
         }
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame', getViewer(req)));
+        res.write(renderPageHead(fromSetup ? 'setup' : 'mame', getViewer(req)));
         await runConfPackImport(res, config, repository);
         if (withStarterPack) {
             if (getMissingConfPackFiles(getMameInfo(config)).length) {
@@ -8525,11 +8680,16 @@ export function createBoApp(
             }
         }
 
-        const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo));
-        res.write(renderMameInfoCard(refreshedMameInfo));
-        if (!refreshedMameInfo.error) {
-            res.write(renderImportSection(refreshedMameInfo));
+        if (fromSetup) {
+            // The guide shows what is left; the import's log stays above for whoever reads it.
+            res.write('<section class="card"><p><a class="button-link" href="/setup">Back to Getting started</a></p></section>');
+        } else {
+            const refreshedMameInfo = getMameInfo(config);
+            res.write(renderConfigCard(values, refreshedMameInfo));
+            res.write(renderMameInfoCard(refreshedMameInfo));
+            if (!refreshedMameInfo.error) {
+                res.write(renderImportSection(refreshedMameInfo));
+            }
         }
         res.write(renderPageTail());
         res.end();
@@ -9214,8 +9374,40 @@ export function createBoApp(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req)));
+        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/'));
     });
+
+    /**
+     * Checks and saves the folder of the mame binary (MAME tab's Config card, and the setup guide's
+     * mame step): creates mame's configuration the first time, then writes pluginspath and the
+     * window setting into mame.ini. Nothing is saved on an error.
+     */
+    const applyMameConfig = (
+        config: Config, mamePath: string, pluginsPath: string, windowed: boolean,
+    ): {error: string} | {plugins: {saved: boolean; pluginsAdded: number} | null} => {
+        if (!existsSync(mamePath)) {
+            return {error: `The folder "${mamePath}" does not exist.`};
+        }
+        const mameBinaryName = findMameBinary(mamePath);
+        if (!mameBinaryName) {
+            return {error: `No mame binary found in "${mamePath}".`};
+        }
+        try {
+            ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
+        } catch (error) {
+            return {
+                error: 'Failed to initialize mame ("-createconfig"): '
+                    + `${error instanceof Error ? error.message : 'unexpected error'}.`,
+            };
+        }
+        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
+        const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
+        setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
+        config.mamePath = mamePath;
+        config.mameBinaryName = mameBinaryName;
+        config.save();
+        return {plugins};
+    };
 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
@@ -9238,40 +9430,12 @@ export function createBoApp(
             return mameInfo;
         };
 
-        if (!existsSync(mamePath)) {
-            res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdvanced,
-                `The folder "${mamePath}" does not exist.`,
-            ));
+        const applied = applyMameConfig(config, mamePath, pluginsPath, windowed);
+        if ('error' in applied) {
+            res.status(422).send(renderForm({mamePath}, typedMameInfo(), isAdvanced, applied.error));
             return;
         }
-        const mameBinaryName = findMameBinary(mamePath);
-        if (!mameBinaryName) {
-            res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdvanced,
-                `No mame binary found in "${mamePath}".`,
-            ));
-            return;
-        }
-
-        try {
-            ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
-        } catch (error) {
-            res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdvanced,
-                'Failed to initialize mame ("-createconfig"): '
-                    + `${error instanceof Error ? error.message : 'unexpected error'}.`,
-            ));
-            return;
-        }
-
-        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
-        const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
-        setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
-
-        config.mamePath = mamePath;
-        config.mameBinaryName = mameBinaryName;
-        config.save();
+        const {plugins} = applied;
 
         res.send(renderPage(
             '<section class="card"><h2>Configuration saved</h2><p>'

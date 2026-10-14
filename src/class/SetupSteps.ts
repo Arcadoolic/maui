@@ -21,8 +21,9 @@ export interface SetupFacts {
     disabledRequiredPlugins: string[];
     // At least one plugin found in mame's plugins folder: none means pluginspath is wrong.
     pluginsFound: boolean;
-    // A configuration string was pasted (ONLINE on or off), or the BO was told to stay OFFLINE.
-    onlineConfigured: boolean;
+    // ONLINE is on (a configuration string pasted and switched on: the repository is only reached
+    // then), or the BO was told to stay OFFLINE.
+    onlineActive: boolean;
     offlineChosen: boolean;
     // Files of the configuration pack not installed yet (ConfPack.ts).
     missingConfPackFiles: string[];
@@ -59,13 +60,13 @@ const RULES: StepRule[] = [
         done: facts => facts.pluginsFound && !facts.missingPlugins.length && !facts.disabledRequiredPlugins.length,
         requires: ['mame'],
     },
-    {id: 'online', done: facts => facts.onlineConfigured || facts.offlineChosen, requires: ['account']},
+    {id: 'online', done: facts => facts.onlineActive || facts.offlineChosen, requires: ['account']},
     {id: 'confPack', done: facts => !facts.missingConfPackFiles.length, requires: ['mame', 'online'], onlineOnly: true},
     {id: 'starterPack', done: facts => facts.favoritesCount > 0, requires: ['confPack'], onlineOnly: true},
 ];
 
 export function describeSetup(facts: SetupFacts): SetupProgress {
-    const offline = facts.offlineChosen && !facts.onlineConfigured;
+    const offline = facts.offlineChosen && !facts.onlineActive;
     const states = new Map<SetupStepId, SetupStepState>();
     let current = false;
     for (const rule of RULES) {

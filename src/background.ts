@@ -13,6 +13,7 @@ import {onlineIndicator} from '@/class/OnlineSetup';
 import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
 import {describeSetup, type SetupProgress} from '@/class/SetupSteps';
 import {readSetupFacts} from '@/class/SetupFacts';
+import {isOnlineActive} from '@/class/RepositoryAuth';
 import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
 import {
     LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
@@ -60,7 +61,7 @@ async function refreshSetupProgress(): Promise<void> {
             config,
             mameHomePath: getMameHomePath(),
             passwordChanged: await isDefaultPasswordReplaced(),
-            onlineConfigured: readOnlineIndicator() !== null,
+            onlineActive: isOnlineActive(),
         }));
     } catch (error) {
         console.error('[background] Reading the setup steps failed:', error);
