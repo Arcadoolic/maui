@@ -65,10 +65,21 @@ const trackStyle = computed(() => lite ? {} : duration.value
     ? {'--message-band-duration': `${duration.value}s`}
     : {visibility: 'hidden' as const});
 
+// The messages shown once (an update notice) that have been: skipped from then on, unless
+// nothing else is left.
+const shownOnce = new Set<string>();
 function next() {
-    index.value = props.messages.length ? (index.value + 1) % props.messages.length : 0;
+    const count = props.messages.length;
+    let step = 1;
+    while (step < count && isSpent(props.messages[(index.value + step) % count])) {
+        step++;
+    }
+    index.value = count ? (index.value + step) % count : 0;
     pass.value++;
     void show();
+}
+function isSpent(message: BandMessage): boolean {
+    return !!message.once && shownOnce.has(message.id);
 }
 
 // Same speed whatever the length: the time comes from the distance, the band plus the message.
@@ -78,6 +89,9 @@ async function show() {
         return;
     }
     if (current.value) {
+        if (current.value.once) {
+            shownOnce.add(current.value.id);
+        }
         emit('show', current.value);
     }
     if (lite) {
@@ -96,9 +110,10 @@ async function show() {
         : Math.max(1, (width + track.value.scrollWidth) / (width * SCREEN_WIDTHS_PER_SECOND));
 }
 
-// A new list starts from its first message.
+// A new list starts from its first message, but for one shown once already.
 watch(() => props.messages.map(message => message.id).join('\n'), () => {
-    index.value = 0;
+    const first = props.messages.findIndex(message => !isSpent(message));
+    index.value = Math.max(first, 0);
     pass.value++;
     void show();
 });
