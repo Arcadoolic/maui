@@ -1,0 +1,58 @@
+import {MAUI_RELEASES_URL, newestStableAbove} from '@/class/ReleaseList';
+
+// Whether a newer release of MAUI is out, for the idle cabinet's band (Home.vue): asked of GitHub
+// by the main process, whether the BO is loaded or not, a while after the start then every few
+// hours - well within the anonymous API's 60 requests an hour. GitHub out of reach (OFFLINE without
+// Internet, an error) changes nothing: no error, and no message until it answers.
+
+export type ReleasesFetcher = () => Promise<{tag_name: string; prerelease: boolean; draft?: boolean}[]>;
+
+const FIRST_CHECK_MS = 30 * 1000;
+const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+
+async function fetchReleases(): ReturnType<ReleasesFetcher> {
+    const response = await fetch(MAUI_RELEASES_URL, {headers: {Accept: 'application/vnd.github+json'}});
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+    }
+    return await response.json() as Awaited<ReturnType<ReleasesFetcher>>;
+}
+
+export class UpdateWatch {
+    private newest: string | null = null;
+    private timers: ReturnType<typeof setTimeout>[] = [];
+
+    public constructor(
+        private readonly currentVersion: string,
+        private readonly fetcher: ReleasesFetcher = fetchReleases,
+    ) {}
+
+    /** Not at once: the start of the application is not slowed down by it. */
+    public start(): void {
+        const first = setTimeout(() => void this.check(), FIRST_CHECK_MS);
+        const every = setInterval(() => void this.check(), CHECK_EVERY_MS);
+        // Never what keeps the process alive.
+        first.unref?.();
+        every.unref?.();
+        this.timers.push(first, every);
+    }
+
+    /** A failure keeps what was known. Never throws. */
+    public async check(): Promise<void> {
+        try {
+            this.newest = newestStableAbove(await this.fetcher(), this.currentVersion);
+        } catch {
+            // Out of reach for now: tried again at the next check.
+        }
+    }
+
+    /** The newer release, null when there is none or GitHub never answered. */
+    public available(): string | null {
+        return this.newest;
+    }
+
+    public stop(): void {
+        this.timers.forEach(timer => clearTimeout(timer));
+        this.timers = [];
+    }
+}

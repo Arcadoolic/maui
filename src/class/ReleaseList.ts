@@ -73,3 +73,25 @@ export function limitOlderReleases<T extends {tagName: string}>(
     let older = 0;
     return entries.filter(entry => !isOlderVersion(entry.tagName, currentVersion) || ++older <= max);
 }
+
+/** Where MAUI's releases are published (GitHub's /releases API, public, no auth needed). */
+export const MAUI_RELEASES_URL = 'https://api.github.com/repos/Arcadoolic/maui/releases';
+
+/**
+ * The newest stable release above `currentVersion`, null when there is none. Develop builds
+ * (prereleases) and drafts do not count: a cabinet is only told of a real release.
+ */
+export function newestStableAbove(
+    releases: readonly {tag_name: string; prerelease: boolean; draft?: boolean}[], currentVersion: string,
+): string | null {
+    let newest: string | null = null;
+    for (const release of releases) {
+        if (release.prerelease || release.draft || !isOlderVersion(currentVersion, release.tag_name)) {
+            continue;
+        }
+        if (newest === null || isOlderVersion(newest, release.tag_name)) {
+            newest = release.tag_name;
+        }
+    }
+    return newest;
+}

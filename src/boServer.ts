@@ -70,7 +70,7 @@ import {
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
-import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases} from '@/class/ReleaseList';
+import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
@@ -4750,8 +4750,6 @@ function renderForm(
     return renderSubtabbedPage('mame', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab, launchButton);
 }
 
-const GITHUB_REPO = 'Arcadoolic/maui';
-
 interface GithubReleaseAsset {
     name: string;
     browser_download_url: string;
@@ -4829,7 +4827,7 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
     if (releasesCache && Date.now() - releasesCache.fetchedAt < GITHUB_CACHE_TTL_MS) {
         return releasesCache.releases;
     }
-    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases`, {
+    const response = await fetch(MAUI_RELEASES_URL, {
         headers: {Accept: 'application/vnd.github+json'},
     });
     if (!response.ok) {
@@ -5237,6 +5235,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 </label>
                 <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
                 <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="frontIdleShowsGames" ${config.frontIdleShowsGames ? 'checked' : ''}>
+                    Behind the idle curtain, the list of games goes to the game each best score is about
+                </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
                     ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
@@ -8973,8 +8975,9 @@ export function createBoApp(
         if (Number.isInteger(boIdleMinutes) && boIdleMinutes >= 0 && boIdleMinutes <= 1440) {
             config.boIdleMinutes = boIdleMinutes;
         }
-        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}`;
+        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`;
         config.frontIdleEnabled = req.body.frontIdleEnabled === 'on';
+        config.frontIdleShowsGames = req.body.frontIdleShowsGames === 'on';
         const frontIdleMinutes = Number(req.body.frontIdleMinutes);
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
@@ -8988,7 +8991,7 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}` !== previousFrontIdle
             || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
             // The front decides its mode and its badge's look once, when it loads (App.vue), and
             // builds its carousel and starts its idle watch when Home.vue is mounted.
