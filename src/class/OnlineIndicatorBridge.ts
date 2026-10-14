@@ -7,7 +7,7 @@ export const ONLINE_INDICATOR_GLOBAL = 'mauiOnlineIndicator';
 export type OnlineIndicatorReader = () => OnlineIndicator | null;
 
 // The cabinet's name and MAUI-API's environment, which the BO's badge shows after ONLINE / OFFLINE
-// (boServer.ts). The front only shows a dot (OnlineBadge.vue).
+// (boServer.ts). The front shows ONLINE / OFFLINE with the dot, or the dot alone (OnlineBadge.vue).
 export interface OnlineIdentity {
     cabinetName: string;
     // MAUI-API's APP_ENV, null when the server did not say.

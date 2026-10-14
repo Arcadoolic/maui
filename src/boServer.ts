@@ -3419,13 +3419,35 @@ function renderLoginPage(error?: string): string {
                  username or password gracefully (401 + "Incorrect username or password
                  incorrect."), so letting the browser send an incomplete submission and having
                  the server reject it is simpler than fighting native validation here. -->
-            <form method="post" action="/login">
+            <form method="post" action="/login" id="loginForm">
                 <label for="username">Username</label>
                 <input type="text" id="username" name="username" autofocus>
                 <label for="password">Password</label>
                 <input type="password" id="password" name="password">
                 <button type="submit">Sign in</button>
             </form>
+            <!-- A password manager's menu in a field (an extension, Chrome's own suggestions) can
+                 take Enter for itself, now and then, and the form is not sent: only a click on
+                 the button was. Enter released in a field without the form having gone off in the
+                 meantime sends it. Its keyup, since what takes the keydown may also stop it. The
+                 time of the last submission is kept on window, which the page that answers it
+                 shares (document.write()): its keyup must not send it again, empty. -->
+            <script>(function () {
+                var form = document.getElementById('loginForm');
+                form.addEventListener('submit', function () {
+                    window.boLoginSubmittedAt = Date.now();
+                }, true);
+                form.addEventListener('keyup', function (event) {
+                    if (event.key !== 'Enter' || event.target.tagName !== 'INPUT'
+                        || Date.now() - (window.boLoginSubmittedAt || 0) < 1000) {
+                        return;
+                    }
+                    var button = form.querySelector('button[type="submit"]');
+                    if (button && !button.disabled) {
+                        form.requestSubmit(button);
+                    }
+                });
+            })();</script>
         </section>
     `, 'mame', null);
 }
@@ -5341,6 +5363,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 </label>
                 <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
                 <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
+                    ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
+                </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
@@ -8885,6 +8911,8 @@ export function createBoApp(
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
         }
+        const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
+        config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
@@ -8892,9 +8920,10 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle) {
-            // The front decides its mode once, when it loads (App.vue), and builds its carousel
-            // and starts its idle watch when Home.vue is mounted.
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle
+            || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
+            // The front decides its mode and its badge's look once, when it loads (App.vue), and
+            // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
