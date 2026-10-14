@@ -61,6 +61,15 @@ describe('renderSetupPage', () => {
             missingConfPackFiles: [], favoritesCount: 3});
         expect(html).toContain('Your cabinet is ready');
         expect(html).not.toContain('aria-current="step"');
+        expect(html).toContain('href="/setup/more-games"');
+    });
+
+    it('says how to add games by hand when the cabinet stayed OFFLINE', () => {
+        const html = page({...FRESH, mameReady: true, pluginsFound: true, disabledRequiredPlugins: [], offlineChosen: true,
+            missingConfPackFiles: [], favoritesCount: 3});
+        expect(html).toContain('Your cabinet is ready');
+        expect(html).not.toContain('href="/setup/more-games"');
+        expect(html).toContain('copy their roms');
     });
 
     it('shows the outcome on its step, escaped', () => {

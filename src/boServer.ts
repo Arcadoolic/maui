@@ -7927,6 +7927,14 @@ export function createBoApp(
         res.redirect(303, '/setup');
     });
 
+    // The end of the guide: the repository's packs, in Games > Repository, which only Advanced
+    // configuration shows. A link, not a form: the BO's form script follows a redirect without
+    // its #repository, which picks the subtab. It only flips the session's display setting.
+    app.get('/setup/more-games', (req, res) => {
+        req.session.boAdvanced = true;
+        res.redirect('/favorites#repository');
+    });
+
     app.post('/setup/offline', (req, res) => {
         const config = new Config();
         config.load();
