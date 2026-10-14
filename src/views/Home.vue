@@ -567,8 +567,10 @@ function stopRoll() {
 }
 
 /** The message an idle cabinet starts showing: the front goes to its game, when it has it. */
+// Switched off in the BO: the list stays where it was behind the curtain.
+const idleShowsGames = getConfiguration().frontIdleShowsGames;
 function onMessageShown(message: BandMessage) {
-    if (idle.value && message.romName) {
+    if (idle.value && idleShowsGames && message.romName) {
         void showGame(message.romName, true);
     }
 }

@@ -257,6 +257,20 @@ describe('Config ONLINE badge', () => {
 });
 
 describe('Config front idle', () => {
+    it('goes to the announced games unless switched off', () => {
+        expect(new Config().frontIdleShowsGames).toBe(true);
+        for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontIdleShowsGames = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontIdleShowsGames).toBe(expected);
+        }
+    });
+
     it('is on unless switched off', () => {
         expect(new Config().frontIdleEnabled).toBe(true);
         for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
@@ -325,6 +339,7 @@ describe('Config.save', () => {
             'displayMode',
             'frontIdleEnabled',
             'frontIdleMinutes',
+            'frontIdleShowsGames',
             'fullscreen',
             'mameBinaryName',
             'mamePath',
