@@ -1,5 +1,5 @@
 import {escapeHtml} from '@/class/EscapeHtml';
-import type {SetupFacts, SetupProgress, SetupStep, SetupStepId} from '@/class/SetupSteps';
+import {SETUP_STEP_TITLES, type SetupFacts, type SetupProgress, type SetupStep, type SetupStepId} from '@/class/SetupSteps';
 
 // The BO's "Getting started" page (/setup, Lot VI.2): the steps of a new cabinet's setup, and the
 // form of the one to do now on the page itself. Its forms post to /setup/* (boServer.ts), and the
@@ -15,14 +15,6 @@ export interface SetupPageInput {
     message?: {step: SetupStepId; error?: string; info?: string};
 }
 
-const TITLES: Record<SetupStepId, string> = {
-    account: 'BO account',
-    mame: 'MAME',
-    plugins: 'MAME plugins',
-    online: 'ONLINE',
-    confPack: 'Configuration pack',
-    starterPack: 'Starter pack',
-};
 
 const WHY: Record<SetupStepId, string> = {
     account: 'Replace the default password: anyone on the network could sign in with it, and it also '
@@ -151,7 +143,7 @@ function renderStep(step: SetupStep, index: number, input: SetupPageInput): stri
         <li class="setup-step setup-${step.state}"${step.state === 'current' ? ' aria-current="step"' : ''}>
             <div class="setup-step-head">
                 <span class="setup-number" aria-hidden="true">${step.state === 'done' ? '&#10003;' : index + 1}</span>
-                <h3>${escapeHtml(TITLES[step.id])}</h3>
+                <h3>${escapeHtml(SETUP_STEP_TITLES[step.id])}</h3>
                 <span class="setup-state">${STATE_LABELS[step.state]}</span>
             </div>
             ${body ? `<div class="setup-step-body">${body}</div>` : ''}

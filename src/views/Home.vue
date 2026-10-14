@@ -32,8 +32,11 @@
         </transition>
 
         <div class="no-games" v-if="noGames">
-            <h1>No games yet</h1>
-            <p>Add favorites in MAME, or import a starting pack from <strong>{{boUrl}}</strong></p>
+            <SetupChecklist v-if="setupProgress && !setupProgress.finished" :progress="setupProgress"/>
+            <template v-else>
+                <h1>No games yet</h1>
+                <p>Add favorites in MAME, or import a starting pack from <strong>{{boUrl}}</strong></p>
+            </template>
         </div>
 
         <transition name="games">
@@ -73,6 +76,8 @@ import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
+import {useSetupProgress} from '@/composables/useSetupProgress';
+import SetupChecklist from '@/components/SetupChecklist.vue';
 import * as remote from '@electron/remote';
 import Game from '@/model/Game.model';
 import {
@@ -169,6 +174,8 @@ const gamesLoaded = ref(false);
 const boUrl = useBoUrl();
 // No game at all: the message replaces the carousel (and its blue selection band).
 const noGames = computed(() => gamesLoaded.value && !games.value.length);
+// No game yet on a new cabinet: the setup guide's steps instead of a bare message (Lot VI.3).
+const setupProgress = useSetupProgress();
 
 // The BO's address on the local network, while it is shown (see askBackOffice()).
 const backOfficeUrl = ref('');
