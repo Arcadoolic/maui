@@ -3,7 +3,7 @@ import {existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, s
 import {join} from 'path';
 import {tmpdir} from 'os';
 import AdmZip from 'adm-zip';
-import {buildBackup, parseBackupParts, restoreBackup} from '@/class/MauiBackup';
+import {buildBackup, deleteBackupParts, parseBackupParts, restoreBackup} from '@/class/MauiBackup';
 
 const SQLITE = Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.alloc(16)]);
 
@@ -122,5 +122,21 @@ describe('MauiBackup', () => {
         const json = new AdmZip();
         json.addFile('mame-awesome-ui-config.json', Buffer.from('{oops'));
         expect(() => restoreBackup(target, json.toBuffer())).toThrow('not valid JSON');
+    });
+});
+
+describe('deleteBackupParts', () => {
+    it('deletes every file of the parts given, and only those', () => {
+        fill(source);
+        const deleted = deleteBackupParts(source, ['config', 'database']);
+
+        expect(deleted.map(part => part.id)).toEqual(['config', 'database']);
+        expect(readdirSync(source).sort()).toEqual([
+            'favorites-cache.json', 'online.json', 'online.json.staging-backup', 'roms-infos-cache.json',
+        ]);
+    });
+
+    it('says nothing was deleted when a part has no file', () => {
+        expect(deleteBackupParts(source, ['online'])).toEqual([]);
     });
 });

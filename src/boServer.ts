@@ -14,7 +14,7 @@ import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
 import Config from '@/class/Config.class';
-import {BACKUP_PARTS, buildBackup, parseBackupParts, restoreBackup} from '@/class/MauiBackup';
+import {BACKUP_PARTS, buildBackup, deleteBackupParts, parseBackupParts, restoreBackup, type BackupPartId} from '@/class/MauiBackup';
 import {describeSetup, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
 import {readSetupFacts} from '@/class/SetupFacts';
 import {renderSetupNavLabel, renderSetupPage} from '@/class/SetupBoPage';
@@ -4567,32 +4567,39 @@ function renderGameRemapCard(
  * Database.class.ts). Rendered on the "maui" tab. See renderMameDangerZoneCard() above for the
  * MAME-side counterpart on the "mame" tab.
  */
+// What each Danger zone checkbox of the MAUI tab deletes: the parts of the export (MauiBackup.ts).
+const MAUI_DELETIONS: readonly {part: BackupPartId; field: string; label: string}[] = [
+    {part: 'config', field: 'deleteConfig', label: 'the configuration (mame-awesome-ui-config.json, removed favorites)'},
+    {part: 'database', field: 'deleteDatabase', label: 'the database (games, players, scores) and the players\' avatars'},
+    {part: 'caches', field: 'deleteCaches', label: 'the ScreenScraper caches (favorites, publishers and developers)'},
+    {
+        part: 'online', field: 'deleteOnline',
+        label: 'the ONLINE session (online.json): MAUI-API then sees a new machine, which needs a new configuration string',
+    },
+];
+
 function renderMauiDangerZoneCard(info?: string): string {
     return `
         <section class="card">
             <h2>Danger zone</h2>
-            <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data. Each
-            checkbox acts independently of the others - tick what you want to delete, then
-            submit. Deleting the configuration or the database then closes the application; it
-            has to be relaunched manually (<code>just serve</code> in development) to complete
-            the operation.</p>
+            <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data
+            (~/.mame-awesome-ui). Each checkbox acts independently of the others - tick what you want
+            to delete, then submit. Deleting the configuration, the database or the ONLINE session
+            then closes the application; it has to be relaunched manually (<code>just serve</code>
+            in development) to complete the operation.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
-                if (this.deleteConfig.checked) items.push('the mame-awesome-ui configuration');
-                if (this.deleteDatabase.checked) items.push('the database (games, players, scores)');
+                this.querySelectorAll('input[data-label]:checked').forEach(function (box) { items.push(box.dataset.label); });
                 if (!items.length) { return true; }
                 return confirm('Permanently delete ' + items.join(', ') + '? This cannot be undone.');
             ">
                 <input type="hidden" name="zone" value="maui">
+                ${MAUI_DELETIONS.map(deletion => `
                 <label class="checkbox-row">
-                    <input type="checkbox" name="deleteConfig">
-                    Delete the mame-awesome-ui configuration (mame-awesome-ui-config.json)
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="deleteDatabase">
-                    Delete the database (games, players, scores)
-                </label>
+                    <input type="checkbox" name="${deletion.field}" data-label="${escapeHtml(deletion.label.split(' (')[0])}">
+                    Delete ${escapeHtml(deletion.label)}
+                </label>`).join('')}
                 <button type="submit" class="button-danger">Delete the selection</button>
             </form>
         </section>
@@ -9929,8 +9936,9 @@ export function createBoApp(
         const deleteGamesMedia = zone === 'mame' && !deleteMameHome && req.body.deleteGamesMedia === 'on';
         const deleteFavorites = zone === 'mame' && !deleteMameHome
             && req.body.deleteFavorites === 'on' && !!mameInfo.favoritesPath;
-        const deleteConfig = zone === 'maui' && req.body.deleteConfig === 'on';
-        const deleteDatabase = zone === 'maui' && req.body.deleteDatabase === 'on';
+        const mauiParts = zone === 'maui'
+            ? MAUI_DELETIONS.filter(deletion => req.body[deletion.field] === 'on').map(deletion => deletion.part)
+            : [];
 
         const deleted: string[] = [];
 
@@ -9979,17 +9987,15 @@ export function createBoApp(
             }
         }
 
-        if (deleteConfig) {
-            config.delete();
-            deleted.push('the mame-awesome-ui configuration');
-        }
-
-        if (deleteDatabase) {
+        // Every file of each part ticked, as the export takes them (MauiBackup.ts).
+        let mauiDeleted: BackupPartId[] = [];
+        if (mauiParts.length) {
             try {
-                rmSync(getDatabasePath(), {force: true});
-                deleted.push('the database');
+                const parts = deleteBackupParts(dirname(config.configPath), mauiParts);
+                mauiDeleted = parts.map(part => part.id);
+                deleted.push(...parts.map(part => part.label));
             } catch (error) {
-                console.error('[boServer] Failed to remove database file:', error);
+                console.error('[boServer] Failed to remove mame-awesome-ui files:', error);
             }
         }
 
@@ -10013,7 +10019,9 @@ export function createBoApp(
         // access, so those two don't need it. deleteMameHome does need it too: it takes
         // mame.ini/ui.ini down with it, and MameService's constructor only ever parses those
         // once, at app startup - a restart is what makes it re-bootstrap them from scratch.
-        const needsRestart = deleteConfig || deleteDatabase || deleteMameHome;
+        // The ONLINE session too: the running one keeps its credentials in memory.
+        const needsRestart = deleteMameHome
+            || mauiDeleted.some(part => part === 'config' || part === 'database' || part === 'online');
         const backHref = zone === 'mame' ? '/' : '/maui';
         const deletedInfo = `Deleted: ${deleted.join(', ')}.`;
 
