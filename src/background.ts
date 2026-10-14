@@ -4,13 +4,18 @@ import {app, BrowserWindow} from 'electron';
 import * as remoteMain from '@electron/remote/main';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import {join} from 'path';
+import {writeFileSync} from 'fs';
 import {homedir} from 'os';
-import {startCore, type StartedCore} from '@/boCore';
+import {getMameHomePath, isDefaultPasswordReplaced, startCore, type StartedCore} from '@/boCore';
 import {BO_URL_GLOBAL, BO_WAKE_GLOBAL, type BoUrlReader, type BoWaker} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
 import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
+import {describeSetup, type SetupProgress} from '@/class/SetupSteps';
+import {readSetupFacts} from '@/class/SetupFacts';
+import {isOnlineActive} from '@/class/RepositoryAuth';
+import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
 import {
     LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
@@ -21,7 +26,8 @@ import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
 import {getAppIconPath} from '@/staticPath';
 import {totalmem} from 'os';
-import {isKioskLayout} from '@/class/KioskRestart';
+import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
+import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
 import {resolveUiMode} from '@/class/UiMode';
 
@@ -38,6 +44,38 @@ let onlineSession: OnlineSession | undefined;
 // Read by the front's ONLINE badge (OnlineBadge.vue) through @electron/remote.
 const readOnlineIndicator: OnlineIndicatorReader = () => onlineIndicator(onlineSession?.getStatus());
 (global as Record<string, unknown>)[ONLINE_INDICATOR_GLOBAL] = readOnlineIndicator;
+
+// Read by the front's setup guide through @electron/remote. The password is read from the
+// database, so each call hands back the previous reading and starts the next one: the front asks
+// every few seconds, and is one call behind at most.
+let setupProgress: SetupProgress | null = null;
+let readingSetup = false;
+async function refreshSetupProgress(): Promise<void> {
+    if (readingSetup || !core) {
+        return;
+    }
+    readingSetup = true;
+    try {
+        await core.databaseReady;
+        const config = new Config();
+        config.load();
+        setupProgress = describeSetup(readSetupFacts({
+            config,
+            mameHomePath: getMameHomePath(),
+            passwordChanged: await isDefaultPasswordReplaced(),
+            onlineActive: isOnlineActive(),
+        }));
+    } catch (error) {
+        console.error('[background] Reading the setup steps failed:', error);
+    } finally {
+        readingSetup = false;
+    }
+}
+const readSetupProgress: SetupProgressReader = () => {
+    void refreshSetupProgress();
+    return setupProgress;
+};
+(global as Record<string, unknown>)[SETUP_PROGRESS_GLOBAL] = readSetupProgress;
 
 function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.ELECTRON_RENDERER_URL) {
@@ -145,14 +183,26 @@ app.on('ready', async () => {
         // import), a reset needs a real process restart: services.ts only ever builds its
         // MameService/GameService/... once (see services.ts's initServices()), so those would
         // keep serving stale data - parsed from the mame home files /reset just deleted - even
-        // after reloading to /init and going through first-run setup again.
-        //
-        // app.relaunch() is NOT used here: under `electron-vite dev` the app is a child process
-        // orchestrated by electron-vite's dev server, and relaunch()'s re-spawn doesn't reconnect
-        // to that setup - the process just exits and nothing comes back. So the /reset response
-        // tells the user to close and restart manually (`just serve` in dev; relaunching the
-        // packaged app otherwise), and this just performs the actual exit.
-        app.exit(0);
+        // after reloading to /init and going through first-run setup again. How the application
+        // comes back depends on how it runs (AppRelaunch.ts); the BO's page says the same.
+        const devRelaunchFile = process.env.MAUI_DEV_RELAUNCH_FILE;
+        void chooseRelaunch({isPackaged: app.isPackaged, kiosk: isKioskLayout(app.isPackaged), canRestartKiosk, devRelaunchFile})
+            .catch((): RelaunchMode => 'manual')
+            .then((mode) => {
+                if (mode === 'kiosk') {
+                    // The whole session goes down, this process with it.
+                    restartKiosk();
+                    return;
+                }
+                if (mode === 'self') {
+                    app.relaunch(relaunchOptions(process.env.APPIMAGE, process.argv));
+                }
+                if (mode === 'dev' && devRelaunchFile) {
+                    // Read by `just serve` once this process and its dev server are gone.
+                    writeFileSync(devRelaunchFile, '');
+                }
+                app.exit(0);
+            });
     }, (romName) => {
         // The BO's Favorites tab: the front moves to this game (Home.vue).
         if (!win || win.isDestroyed()) {

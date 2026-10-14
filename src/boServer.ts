@@ -4,7 +4,7 @@ import {
     existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
     chmodSync, renameSync, createWriteStream, statfsSync, statSync, lstatSync,
 } from 'fs';
-import {join, dirname, sep, basename, isAbsolute} from 'path';
+import {join, dirname, sep, basename} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
 import {ChildProcess, execFileSync, spawn} from 'child_process';
@@ -13,12 +13,16 @@ import {pipeline} from 'stream/promises';
 import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
-// Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
-// syntax in methods/inflater.js that the main process's webpack build (older acorn parser)
-// fails to parse. Bumping this past 0.5.16 breaks `just serve`/`just build` with a
-// "Module parse failed: Unexpected token" error on that file - re-check before upgrading.
-import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
+import {BACKUP_PARTS, buildBackup, deleteBackupParts, parseBackupParts, restoreBackup, type BackupPartId} from '@/class/MauiBackup';
+import {describeSetup, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
+import {readSetupFacts} from '@/class/SetupFacts';
+import {renderSetupNavLabel, renderSetupPage} from '@/class/SetupBoPage';
+import {
+    ensureFirstDirectory, getAvailablePlugins, getFirstExistingDirectory, getMameIniValue, getMameLocations,
+    getMissingPlugins, repairPluginIni, resolveDirectoryPath, setMameIniValue, enableRequiredPlugins,
+} from '@/class/MameLocations';
+import {buildMameBackup, listMameBackupPaths, MAME_BACKUP_PARTS, parseMameBackupParts} from '@/class/MameBackup';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
 import {parseListFull} from '@/class/MameListFull';
@@ -51,6 +55,7 @@ import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
+import {chooseRelaunch, type RelaunchMode} from '@/class/AppRelaunch';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
 import {
     describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
@@ -141,7 +146,7 @@ declare module 'express-session' {
     }
 }
 
-type Tab = 'mame' | 'screenscraper' | 'favorites' | 'users' | 'hiscores' | 'maui' | 'account';
+type Tab = 'setup' | 'mame' | 'screenscraper' | 'favorites' | 'users' | 'hiscores' | 'maui' | 'account';
 // Who a page is rendered for: 'basic' leaves the Advanced configuration tabs/sections out (see
 // POST /advanced), and null (signed out - the login page) gets no nav at all.
 type Viewer = 'advanced' | 'basic' | null;
@@ -246,228 +251,6 @@ function parseMameIniFile(fileContent: string): { [key: string]: string[] } {
     return target;
 }
 
-/**
- * Same relative-path resolution Helpers.getFirstExistingDirectory() applies to each
- * candidate: expands $HOME/~, then joins onto parentPath when the path isn't absolute.
- */
-function resolveDirectoryPath(path: string, parentPath: string): string {
-    path = path.replace(/\$HOME|~/, os.homedir);
-    // isAbsolute(), not path[0] === '/': a Windows absolute path (C:\..., \\server\share) never
-    // starts with '/', so that check let one fall through and get wrongly joined onto
-    // parentPath (e.g. pluginsPath "C:\MAME\plugins" becoming "<mame home>\C:\MAME\plugins",
-    // which never exists - silently emptying getAvailablePlugins() and skipping plugin.ini).
-    if (isAbsolute(path)) {
-        return path;
-    }
-    parentPath = parentPath.replace('$HOME', os.homedir);
-    const parentPathArray = parentPath.split(sep);
-    const pathArray = path.split(sep);
-    if (parentPathArray[parentPathArray.length - 1] === pathArray[0]) {
-        pathArray.shift();
-        path = pathArray.join(sep);
-    }
-    return join(parentPath, path);
-}
-
-/**
- * Same directory-resolution logic as Helpers.getFirstExistingDirectory(): returns the
- * first of `paths` (as declared in an ini file, e.g. ui.ini's marquees_directory) that
- * exists on disk, resolved against `parentPath` when relative. Duplicated for the same
- * reason as getMameHomePath(): avoids pulling in Helpers.class.ts's @electron/remote
- * import at module scope.
- */
-function getFirstExistingDirectory(paths: string[], parentPath: string, file?: string): string | null {
-    for (const rawPath of paths) {
-        let path = resolveDirectoryPath(rawPath, parentPath);
-        if (file) {
-            path = join(path, file);
-        }
-        if (existsSync(path)) {
-            return path;
-        }
-    }
-    return null;
-}
-
-/**
- * Same lookup as getFirstExistingDirectory(), but when none of the declared paths exist
- * yet, creates and returns the first one instead of null - so roms/marquees/flyers always
- * have a usable directory to drop assets into, right from the dedicated mame home.
- */
-function ensureFirstDirectory(paths: string[] | undefined, parentPath: string): string | null {
-    if (!paths || !paths.length) {
-        return null;
-    }
-    const existing = getFirstExistingDirectory(paths, parentPath);
-    if (existing) {
-        return existing;
-    }
-    const target = resolveDirectoryPath(paths[0], parentPath);
-    mkdirSync(target, {recursive: true});
-    return target;
-}
-
-/**
- * Resolves the directories/file ui.ini points mame-awesome-ui at: marquees, flyers, logos and
- * the categorypath folder (created if missing, see ensureFirstDirectory) - and favorites.ini /
- * genre.ini / Multiplayer.ini within it (never created themselves: mame itself writes
- * favorites.ini the first time a favorite is added, and genre.ini/Multiplayer.ini are only ever
- * written by a starting pack import (see PackImport.ts), which every pack
- * bundles a copy of both).
- */
-interface MameLocations {
-    uiIni: { [key: string]: string[] };
-    marqueePath: string | null;
-    flyerPath: string | null;
-    logoPath: string | null;
-    favoritesPath: string | null;
-    // Directory genre.ini/Multiplayer.ini live (or will be written) in - always created if
-    // missing, so a starting pack import always has somewhere to write them into.
-    categoryDir: string | null;
-    genreIniPath: string | null;
-    // Optional progettoSNAPS catver.ini: read instead of genre.ini when present (see
-    // GameService.getGameCategories()).
-    catverIniPath: string | null;
-    nplayersIniPath: string | null;
-}
-
-function getMameLocations(iniPath: string): MameLocations {
-    const uiIniPath = join(iniPath, 'ui.ini');
-    const uiIni = existsSync(uiIniPath) ? parseMameIniFile(readFileSync(uiIniPath, 'utf8')) : {};
-    const marqueePath = ensureFirstDirectory(uiIni.marquees_directory, iniPath);
-    const flyerPath = ensureFirstDirectory(uiIni.flyers_directory, iniPath);
-    // ui.ini's own name for mame's game-logo ("wheel") art directory - defaults to "logo".
-    const logoPath = ensureFirstDirectory(uiIni.logos_directory, iniPath);
-    const favoritesPath = uiIni.ui_path ? getFirstExistingDirectory(uiIni.ui_path, iniPath, 'favorites.ini') : null;
-    // ui.ini's categorypath points at the "folders" directory holding genre.ini,
-    // Multiplayer.ini, category.ini, etc. - the same per-version datasets mame-awesome-ui used
-    // to bundle stale copies of (public/data/genre_206.ini, nplayers_206.ini) instead of
-    // reading from here.
-    const categoryDir = ensureFirstDirectory(uiIni.categorypath, iniPath);
-    const genreIniPath = categoryDir && existsSync(join(categoryDir, 'genre.ini'))
-        ? join(categoryDir, 'genre.ini')
-        : null;
-    const catverIniPath = categoryDir && existsSync(join(categoryDir, 'catver.ini'))
-        ? join(categoryDir, 'catver.ini')
-        : null;
-    const nplayersIniPath = categoryDir && existsSync(join(categoryDir, 'Multiplayer.ini'))
-        ? join(categoryDir, 'Multiplayer.ini')
-        : null;
-    return {
-        uiIni, marqueePath, flyerPath, logoPath, favoritesPath, categoryDir, genreIniPath, catverIniPath,
-        nplayersIniPath,
-    };
-}
-
-/**
- * Reads a single key's current value directly out of mame.ini (not via -showconfig, so this
- * works even without the mame binary configured).
- */
-function getMameIniValue(mameIniPath: string, key: string): string | null {
-    if (!existsSync(mameIniPath)) {
-        return null;
-    }
-    const parsed = parseMameIniFile(readFileSync(mameIniPath, 'utf8'));
-    return parsed[key]?.[0] ?? null;
-}
-
-/**
- * Rewrites a single key's value in mame.ini in place (regex substitution on that one line),
- * preserving every other line, comment and ordering untouched. Returns false if mame.ini
- * doesn't exist yet (mame never bootstrapped its config).
- */
-function setMameIniValue(mameIniPath: string, key: string, value: string): boolean {
-    if (!existsSync(mameIniPath)) {
-        return false;
-    }
-    const content = readFileSync(mameIniPath, 'utf8');
-    // [ \t], not \s: -createconfig writes empty-valued keys (e.g. "ctrlr") as the key plus
-    // trailing spaces, and \s+ would run on into the next line and overwrite its key instead.
-    const lineRegex = new RegExp(`^(${key}[ \\t]+)\\S*|^${key}$`, 'm');
-    const updated = lineRegex.test(content)
-        ? content.replace(lineRegex, (_line, keyAndSpacing?: string) => `${keyAndSpacing ?? key.padEnd(26)}${value}`)
-        : `${content.replace(/\s*$/, '')}\n${key.padEnd(27)}${value}\n`;
-    writeFileSync(mameIniPath, updated);
-    return true;
-}
-
-interface AvailablePlugin {
-    name: string;
-    defaultStart: boolean;
-}
-
-/**
- * Lists every standalone (non-library) plugin mame ships under pluginsPath, by reading each
- * subdirectory's plugin.json manifest - same manifest mame itself uses to populate plugin.ini
- * via -createconfig. Skips "library" plugins (commonui, json, xml...): they're dependencies
- * other plugins require(), not something to toggle on/off themselves.
- */
-// Plugins mame-awesome-ui's own features depend on, forced enabled regardless of mame's own
-// manifest default - "hiscore" ships with start:"false" upstream, but HiscoreService.class.ts
-// needs it running to read the .hi files it writes.
-const REQUIRED_PLUGINS = ['hiscore'];
-
-function getAvailablePlugins(pluginsPath: string | null): AvailablePlugin[] {
-    if (!pluginsPath || !existsSync(pluginsPath)) {
-        return [];
-    }
-    const plugins: AvailablePlugin[] = [];
-    for (const entry of readdirSync(pluginsPath, {withFileTypes: true})) {
-        if (!entry.isDirectory()) {
-            continue;
-        }
-        const manifestPath = join(pluginsPath, entry.name, 'plugin.json');
-        if (!existsSync(manifestPath)) {
-            continue;
-        }
-        try {
-            const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-            if (manifest?.plugin?.type !== 'plugin') {
-                continue;
-            }
-            const name = manifest.plugin.name || entry.name;
-            plugins.push({
-                name,
-                defaultStart: REQUIRED_PLUGINS.includes(name) || manifest.plugin.start === 'true',
-            });
-        } catch {
-            // Malformed/unreadable manifest - skip it rather than fail the whole listing.
-        }
-    }
-    return plugins;
-}
-
-/**
- * Names of available plugins that plugin.ini doesn't mention at all yet - e.g. plugin.ini was
- * never properly generated (empty/missing) because pluginspath was wrong when mame first ran
- * -createconfig. Existing entries (whatever their value) are left alone; only gaps are reported.
- */
-function getMissingPlugins(pluginIniPath: string, availablePlugins: AvailablePlugin[]): string[] {
-    const existing = existsSync(pluginIniPath)
-        ? parseMameIniFile(readFileSync(pluginIniPath, 'utf8'))
-        : {};
-    return availablePlugins.filter(plugin => !(plugin.name in existing)).map(plugin => plugin.name);
-}
-
-/**
- * Appends one line per plugin missing from plugin.ini, using each plugin's own manifest
- * default (plugin.json's "start" field) - the same default mame's own -createconfig would
- * have written. Never touches a plugin that's already listed, however it's currently set.
- */
-function repairPluginIni(pluginIniPath: string, availablePlugins: AvailablePlugin[]): number {
-    const existing = existsSync(pluginIniPath)
-        ? parseMameIniFile(readFileSync(pluginIniPath, 'utf8'))
-        : {};
-    const missing = availablePlugins.filter(plugin => !(plugin.name in existing));
-    if (!missing.length) {
-        return 0;
-    }
-    const additions = missing.map(plugin => `${plugin.name.padEnd(27)}${plugin.defaultStart ? '1' : '0'}`);
-    const currentContent = existsSync(pluginIniPath) ? readFileSync(pluginIniPath, 'utf8') : '';
-    const updated = `${currentContent.replace(/\s*$/, '')}\n${additions.join('\n')}\n`;
-    writeFileSync(pluginIniPath, updated);
-    return missing.length;
-}
 
 interface MameInfo {
     iniPath: string;
@@ -1568,6 +1351,29 @@ const PROGRESS_LOG_OPEN = '<ul class="progress-log"><script>(function () {'
  * these are real page-loaded links (not a JS tab widget), so a screen reader should hear "current
  * page" the same way a sighted user sees the underline, instead of nothing at all.
  */
+/**
+ * The setup guide's state (SetupSteps.ts), read from the files. A visitor signed in with the
+ * default password is held on /account until it is changed (mustChangePassword), so everywhere
+ * else the account step is done; /setup itself is told the truth.
+ */
+function readSetup(passwordChanged: boolean = true): {facts: SetupFacts; progress: SetupProgress} {
+    const config = new Config();
+    config.load();
+    const facts = readSetupFacts({
+        config, mameHomePath: getMameHomePath(), passwordChanged, onlineActive: isOnlineActive(),
+    });
+    return {facts, progress: describeSetup(facts)};
+}
+
+/** "Getting started 3/6" while the setup is not finished; on /setup itself whatever its state. */
+function renderSetupNavTab(isActive: boolean): string {
+    const {progress} = readSetup();
+    if (progress.finished && !isActive) {
+        return '';
+    }
+    return renderNavTabLink('/setup', progress.finished ? 'Getting started' : renderSetupNavLabel(progress), isActive);
+}
+
 function renderNavTabLink(href: string, label: string, isActive: boolean): string {
     return `<a href="${href}" class="${isActive ? 'active' : ''}"${isActive ? ' aria-current="page"' : ''}>${label}</a>`;
 }
@@ -3086,6 +2892,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
     <header>
         <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
         ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
+            ${renderSetupNavTab(active === 'setup')}
             ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
@@ -3423,13 +3230,35 @@ function renderLoginPage(error?: string): string {
                  username or password gracefully (401 + "Incorrect username or password
                  incorrect."), so letting the browser send an incomplete submission and having
                  the server reject it is simpler than fighting native validation here. -->
-            <form method="post" action="/login">
+            <form method="post" action="/login" id="loginForm">
                 <label for="username">Username</label>
                 <input type="text" id="username" name="username" autofocus>
                 <label for="password">Password</label>
                 <input type="password" id="password" name="password">
                 <button type="submit">Sign in</button>
             </form>
+            <!-- A password manager's menu in a field (an extension, Chrome's own suggestions) can
+                 take Enter for itself, now and then, and the form is not sent: only a click on
+                 the button was. Enter released in a field without the form having gone off in the
+                 meantime sends it. Its keyup, since what takes the keydown may also stop it. The
+                 time of the last submission is kept on window, which the page that answers it
+                 shares (document.write()): its keyup must not send it again, empty. -->
+            <script>(function () {
+                var form = document.getElementById('loginForm');
+                form.addEventListener('submit', function () {
+                    window.boLoginSubmittedAt = Date.now();
+                }, true);
+                form.addEventListener('keyup', function (event) {
+                    if (event.key !== 'Enter' || event.target.tagName !== 'INPUT'
+                        || Date.now() - (window.boLoginSubmittedAt || 0) < 1000) {
+                        return;
+                    }
+                    var button = form.querySelector('button[type="submit"]');
+                    if (button && !button.disabled) {
+                        form.requestSubmit(button);
+                    }
+                });
+            })();</script>
         </section>
     `, 'mame', null);
 }
@@ -3602,7 +3431,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Genres file (genre.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.genreIniPath)}${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
-                        : '<em>Not found — import a starting pack (Import tab) to '
+                        : '<em>Not found — import a starting pack (Import / Export tab) to '
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
@@ -3616,7 +3445,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Player count file (Multiplayer.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
-                        : '<em>Not found — import a starting pack (Import tab) to '
+                        : '<em>Not found — import a starting pack (Import / Export tab) to '
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
             </dl>
@@ -3655,7 +3484,9 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
         <section class="card">
             <h2>Danger zone</h2>
             <p class="error">Targeted, irreversible deletions of MAME's own data. Each checkbox
-            acts independently of the others - tick what you want to delete, then submit.
+            acts independently of the others - tick what you want to delete, then submit. The whole
+            directory includes the three others: they are ticked while it is, and back as they were
+            when it is unticked.
             Deleting the roms/media also deletes the roms themselves, not just the artwork.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
@@ -3687,12 +3518,17 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteMameHome" onchange="
-                        this.form.deleteHiscores.checked = this.checked || this.form.deleteHiscores.checked;
-                        this.form.deleteHiscores.disabled = this.checked;
-                        this.form.deleteGamesMedia.checked = this.checked || this.form.deleteGamesMedia.checked;
-                        this.form.deleteGamesMedia.disabled = this.checked;
-                        this.form.deleteFavorites.checked = this.checked || this.form.deleteFavorites.checked;
-                        this.form.deleteFavorites.disabled = this.checked || ${mameInfo.favoritesPath ? 'false' : 'true'};
+                        var whole = this.checked;
+                        [this.form.deleteHiscores, this.form.deleteGamesMedia, this.form.deleteFavorites].forEach(function (box) {
+                            if (whole) {
+                                box.dataset.ticked = box.checked ? '1' : '';
+                                box.checked = true;
+                            } else {
+                                box.checked = box.dataset.ticked === '1';
+                            }
+                            box.disabled = whole;
+                        });
+                        this.form.deleteFavorites.disabled = whole || ${mameInfo.favoritesPath ? 'false' : 'true'};
                     ">
                         <span>
                             Delete the whole <code>${escapeHtml(mameInfo.iniPath)}</code> directory
@@ -4739,31 +4575,62 @@ function renderGameRemapCard(
  * Database.class.ts). Rendered on the "maui" tab. See renderMameDangerZoneCard() above for the
  * MAME-side counterpart on the "mame" tab.
  */
+// What each Danger zone checkbox of the MAUI tab deletes: the parts of the export (MauiBackup.ts).
+const MAUI_DELETIONS: readonly {part: BackupPartId; field: string; label: string}[] = [
+    {part: 'config', field: 'deleteConfig', label: 'the configuration (mame-awesome-ui-config.json, removed favorites)'},
+    {part: 'database', field: 'deleteDatabase', label: 'the database (games, players, scores) and the players\' avatars'},
+    {part: 'caches', field: 'deleteCaches', label: 'the ScreenScraper caches (favorites, publishers and developers)'},
+    {
+        part: 'online', field: 'deleteOnline',
+        label: 'the ONLINE session (online.json): MAUI-API then sees a new machine, which needs a new configuration string',
+    },
+];
+
+/** ~/.mame-awesome-ui as the Danger zone shows it. */
+function getMauiHomeLabel(): string {
+    return dirname(new Config().configPath);
+}
+
 function renderMauiDangerZoneCard(info?: string): string {
     return `
         <section class="card">
             <h2>Danger zone</h2>
-            <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data. Each
-            checkbox acts independently of the others - tick what you want to delete, then
-            submit. Deleting the configuration or the database then closes the application; it
-            has to be relaunched manually (<code>just serve</code> in development) to complete
-            the operation.</p>
+            <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data
+            (~/.mame-awesome-ui). Each checkbox acts independently of the others - tick what you want
+            to delete, then submit. Deleting the configuration, the database or the ONLINE session
+            then restarts the application.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
-                if (this.deleteConfig.checked) items.push('the mame-awesome-ui configuration');
-                if (this.deleteDatabase.checked) items.push('the database (games, players, scores)');
+                var boxes = this.deleteMauiHome.checked ? [this.deleteMauiHome] : this.querySelectorAll('input[data-label]:checked');
+                boxes.forEach(function (box) { items.push(box.dataset.label); });
                 if (!items.length) { return true; }
                 return confirm('Permanently delete ' + items.join(', ') + '? This cannot be undone.');
             ">
                 <input type="hidden" name="zone" value="maui">
+                ${MAUI_DELETIONS.map(deletion => `
                 <label class="checkbox-row">
-                    <input type="checkbox" name="deleteConfig">
-                    Delete the mame-awesome-ui configuration (mame-awesome-ui-config.json)
-                </label>
+                    <input type="checkbox" name="${deletion.field}" data-label="${escapeHtml(deletion.label.split(' (')[0])}">
+                    Delete ${escapeHtml(deletion.label)}
+                </label>`).join('')}
                 <label class="checkbox-row">
-                    <input type="checkbox" name="deleteDatabase">
-                    Delete the database (games, players, scores)
+                    <input type="checkbox" name="deleteMauiHome" data-label="the whole ${escapeHtml(getMauiHomeLabel())} directory" onchange="
+                        var whole = this.checked;
+                        [${MAUI_DELETIONS.map(deletion => `this.form.${deletion.field}`).join(', ')}].forEach(function (box) {
+                            if (whole) {
+                                box.dataset.ticked = box.checked ? '1' : '';
+                                box.checked = true;
+                            } else {
+                                box.checked = box.dataset.ticked === '1';
+                            }
+                            box.disabled = whole;
+                        });
+                    ">
+                    <span>
+                        Delete the whole <code>${escapeHtml(getMauiHomeLabel())}</code> directory
+                        <span class="checkbox-row-detail">Includes the options above, plus anything else
+                        left in it - the application starts again as on its first launch.</span>
+                    </span>
                 </label>
                 <button type="submit" class="button-danger">Delete the selection</button>
             </form>
@@ -4783,6 +4650,7 @@ function renderForm(
     deviceProbeState?: DeviceProbeState,
     remapState?: RemapState,
     gameRemapState?: GameRemapState,
+    exportError?: string,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
     // see /save, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
@@ -4827,8 +4695,8 @@ function renderForm(
         });
         sections.push({
             id: 'import',
-            label: 'Import',
-            html: renderImportSection(mameInfo, importError),
+            label: 'Import / Export',
+            html: renderImportSection(mameInfo, importError, exportError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
         if (isAdvanced) {
@@ -4845,7 +4713,7 @@ function renderForm(
     // of their own (missing plugins...) that would otherwise wrongly win just for
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
-        : importError !== undefined ? 'import'
+        : importError !== undefined || exportError !== undefined ? 'import'
             : (deviceProbeState !== undefined || remapState !== undefined
                 || gameRemapState !== undefined) ? 'gamepads'
                 : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
@@ -5156,6 +5024,30 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
  * answers again, then goes to `backHref` - rather than relying on the user to come back on their
  * own once it is up.
  */
+/**
+ * What happens once the application closes after a Danger zone deletion or a MAUI import (onReset
+ * in background.ts, which makes the same choice: AppRelaunch.ts), and the script that brings the
+ * page back as soon as the server answers again.
+ */
+async function renderRelaunchNotice(what: string, backHref: string): Promise<string> {
+    const mode = await chooseRelaunch({
+        isPackaged: electronApp.isPackaged, kiosk: isKioskLayout(), canRestartKiosk,
+        devRelaunchFile: process.env.MAUI_DEV_RELAUNCH_FILE,
+    })
+        .catch((): RelaunchMode => 'manual');
+    const restart = mode === 'manual'
+        ? '<p>The application will close in a moment. <strong>Relaunch it manually</strong> to '
+            + `${what} (<code>just serve</code> in development) - reloading this page or the application `
+            + 'is not enough: the screen keeps what it was built on in memory until the process has '
+            + 'fully restarted.</p>'
+        : `<p>The application restarts by itself in a moment to ${what}${mode === 'kiosk'
+            ? ': the screen goes blank, then the cabinet comes back' : ''}.</p>`;
+    return restart
+        + '<p id="restart-wait-message" class="info">Waiting for the restart… this page will automatically '
+        + 'take you back as soon as the server is available again.</p>'
+        + renderRestartWaitScript(backHref);
+}
+
 function renderRestartWaitScript(backHref: string): string {
     // Only trusts a successful response *after* one has already failed: right after the page
     // loads the old process may still be up for a moment (the exit/restart is delayed so this
@@ -5346,6 +5238,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
                 <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
                 <label class="checkbox-row">
+                    <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
+                    ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
+                </label>
+                <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
                 </label>
@@ -5363,25 +5259,33 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
     return `
         <section class="card">
             <h2>mame-awesome-ui import / export</h2>
-            <p class="info">Backs up or restores the configuration
-            (mame-awesome-ui-config.json) and/or the database (games, players, scores)
-            of mame-awesome-ui - not the roms nor mame's own data.</p>
+            <p class="info">Backs up or restores the files of mame-awesome-ui
+            (~/.mame-awesome-ui) - not the roms nor mame's own data.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="get" action="/maui/export">
                 <label class="checkbox-row">
-                    <input type="checkbox" name="json" checked>
-                    Configuration (JSON)
+                    <input type="checkbox" name="config" checked>
+                    Configuration (mame-awesome-ui-config.json, removed favorites)
                 </label>
                 <label class="checkbox-row">
-                    <input type="checkbox" name="db">
-                    Database (DB)
+                    <input type="checkbox" name="database" checked>
+                    Database (games, players, scores) and the players' avatars
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="caches" checked>
+                    ScreenScraper caches (favorites, publishers and developers)
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="online">
+                    ONLINE session (online.json): its token and this machine's identity - only to be
+                    restored on this same machine, never on another cabinet
                 </label>
                 <button type="submit">Export</button>
             </form>
             <form method="post" action="/maui/import" enctype="multipart/form-data"
-                onsubmit="return confirm('Overwrite the current configuration and/or database with this file? This cannot be undone.')">
-                <label for="mauiImportFile">File to import (.json, .sqlite/.db, or a .zip containing both)</label>
+                onsubmit="return confirm('Overwrite the files this export holds? This cannot be undone.')">
+                <label for="mauiImportFile">File to import (a .zip exported here, or a lone .json configuration or .sqlite/.db database)</label>
                 <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
                 <button type="submit">Import</button>
             </form>
@@ -6496,10 +6400,31 @@ function renderStarterPackCard(): string {
  * The MAME tab's Import section, also re-rendered after each import. `error`: a failed
  * repository action.
  */
-function renderImportSection(mameInfo: MameInfo, error?: string): string {
+function renderImportSection(mameInfo: MameInfo, error?: string, exportError?: string): string {
     return (error ? `<p class="error flash">${escapeHtml(error)}</p>` : '')
         + renderConfPackCard(mameInfo)
-        + renderStarterPackCard();
+        + renderStarterPackCard()
+        + renderMameExportCard(exportError);
+}
+
+/** The light export of mame's own files (MameBackup.ts): never the roms nor the pictures. */
+function renderMameExportCard(error?: string): string {
+    return `
+        <section class="card">
+            <h2>Export MAME's configuration</h2>
+            <p class="info">A small ZIP of what ~/.mame holds besides the games: without the roms,
+            samples, pictures nor videos. Unzipped in ~/.mame, it puts each file back in place.</p>
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            <form method="get" action="/mame/export">
+                ${MAME_BACKUP_PARTS.map(part => `
+                <label class="checkbox-row">
+                    <input type="checkbox" name="${part.id}" checked>
+                    ${escapeHtml(part.label)}
+                </label>`).join('')}
+                <button type="submit">Export</button>
+            </form>
+        </section>
+    `;
 }
 
 function humanFileSize(bytes: number): string {
@@ -7156,7 +7081,7 @@ function renderRepoImportCard(
             ${url ? `<p class="info">Repository: ${escapeHtml(url)}</p>` : ''}
             ${renderDiskSpaceInfo(mameInfo)}
             ${getMissingConfPackFiles(mameInfo).length
-                ? '<p class="info"><em>Install the configuration pack first (MAME > Import tab) to browse the game packs.</em></p>'
+                ? '<p class="info"><em>Install the configuration pack first (MAME > Import / Export tab) to browse the game packs.</em></p>'
                 : `<form method="get" action="/import/from-url/packs">
                     <button type="submit">Browse available packs</button>
                 </form>
@@ -7603,6 +7528,8 @@ function describeUserError(error: unknown): string {
  */
 function renderBrowsePage(
     target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
+    // Where the chosen folder is brought back: the MAME tab, or the setup guide.
+    returnTo: '/' | '/setup' = '/',
 ): string {
     let entries: string[] = [];
     let error: string|undefined;
@@ -7625,8 +7552,9 @@ function renderBrowsePage(
         .map(field => `${field}=${encodeURIComponent(values[field])}`)
         .join('&');
     const carryQuery = query(carried);
-    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}`;
-    const selectLink = (dir: string) => `/?${query({...carried, [target]: dir})}`;
+    const fromQuery = returnTo === '/setup' ? '&from=setup' : '';
+    const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}${fromQuery}`;
+    const selectLink = (dir: string) => `${returnTo}?${query({...carried, [target]: dir})}`;
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -7643,7 +7571,7 @@ function renderBrowsePage(
                 ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Parent folder</a>` : ''}
             </p>
             <ul class="browse-list">${rows || '<li><em>No subfolder</em></li>'}</ul>
-            <p><a href="/?${carryQuery}">Cancel</a></p>
+            <p><a href="${returnTo}?${carryQuery}">Cancel</a></p>
         </section>
     `, 'mame', viewer);
 }
@@ -7872,10 +7800,21 @@ export function createBoApp(
         await boUser.save();
         req.session.mustChangePassword = false;
         await unlockSecrets(req, boUser, newPassword);
+        // A new cabinet goes on with its setup.
+        if (!readSetup().progress.finished) {
+            res.redirect(303, '/setup');
+            return;
+        }
         res.send(renderAccountPage(boUser.username, getViewer(req), false, undefined, 'Password updated.'));
     });
 
     app.get('/', (req, res) => {
+        // A new cabinet lands on its setup guide until it is done. Not when /browse brings a folder
+        // back to the MAME tab (a query).
+        if (!Object.keys(req.query).length && !readSetup().progress.finished) {
+            res.redirect('/setup');
+            return;
+        }
         const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
@@ -7888,6 +7827,155 @@ export function createBoApp(
         res.send(renderForm(
             {mamePath}, mameInfo, req.session.boAdvanced === true,
         ));
+    });
+
+    // MAME tab > Import: the light export of ~/.mame (renderMameExportCard()).
+    app.get('/mame/export', (req, res) => {
+        const parts = parseMameBackupParts(MAME_BACKUP_PARTS.map(part => part.id).filter(id => req.query[id] === 'on'));
+        const iniPath = getMameHomePath();
+        const directory = (file: string, key: string, fallback: string) => resolveDirectoryPath(
+            getMameIniValue(join(iniPath, file), key) ?? fallback, iniPath,
+        );
+        const zip = parts.length ? buildMameBackup(iniPath, listMameBackupPaths(iniPath, parts, {
+            cfg: directory('mame.ini', 'cfg_directory', 'cfg'),
+            ctrlr: directory('mame.ini', 'ctrlrpath', 'ctrlr'),
+            nvram: directory('mame.ini', 'nvram_directory', 'nvram'),
+            ui: directory('ui.ini', 'ui_path', 'ui'),
+            categories: directory('ui.ini', 'categorypath', 'folders'),
+            hiscore: getHiscorePath(iniPath),
+        })) : null;
+        if (!zip) {
+            const config = new Config();
+            config.load();
+            const mameInfo = getMameInfo(config);
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || ''}, mameInfo, req.session.boAdvanced === true,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                parts.length ? 'Nothing to export: none of these files exists yet.' : 'Tick at least one box before exporting.',
+            ));
+            return;
+        }
+        const date = new Date().toISOString().slice(0, 10);
+        res.set('Content-Type', 'application/zip');
+        res.set('Content-Disposition', `attachment; filename="mame-config-${date}.zip"`);
+        res.send(zip);
+    });
+
+    // The setup guide (Lot VI.2, SetupBoPage.ts): the steps of a new cabinet's setup, the current
+    // one's form on the page. Each action comes back here, which moves on to the next step.
+    const sendSetupPage = (
+        req: Request, res: Response,
+        message?: {step: SetupStepId; error?: string; info?: string},
+        typed: {mamePath?: string; pluginsPath?: string} = {},
+    ) => {
+        const config = new Config();
+        config.load();
+        const {facts, progress} = readSetup(req.session.mustChangePassword !== true);
+        const iniPath = getMameHomePath();
+        const pluginsPath = getMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath');
+        const queryValue = (name: string) => typeof req.query[name] === 'string' ? req.query[name] as string : undefined;
+        res.status(message?.error ? 422 : 200).send(renderPage(renderSetupPage({
+            progress, facts, message,
+            mamePath: typed.mamePath ?? queryValue('mamePath') ?? config.mamePath ?? '',
+            pluginsPath: typed.pluginsPath ?? queryValue('pluginsPath')
+                ?? (pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : ''),
+        }), 'setup', getViewer(req)));
+    };
+
+    app.get('/setup', (req, res) => sendSetupPage(req, res));
+
+    app.post('/setup/mame', (req, res) => {
+        const mamePath: string = (req.body.mamePath || '').trim();
+        let pluginsPath: string = (req.body.pluginsPath || '').trim();
+        // Left empty: the plugins folder mame ships next to its binary, when there is one.
+        if (!pluginsPath && mamePath && existsSync(join(mamePath, 'plugins'))) {
+            pluginsPath = join(mamePath, 'plugins');
+        }
+        const config = new Config();
+        config.load();
+        // A first setup launches MAME fullscreen; set up again, it keeps what mame.ini says.
+        const windowed = getMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window') === '1';
+        const applied = applyMameConfig(config, mamePath, pluginsPath, windowed);
+        if ('error' in applied) {
+            sendSetupPage(req, res, {step: 'mame', error: applied.error}, {mamePath, pluginsPath});
+            return;
+        }
+        // Init.vue then finds the configuration and goes on to the list of games.
+        reloadFront();
+        res.redirect(303, '/setup');
+    });
+
+    app.post('/setup/plugins', (req, res) => {
+        const typedPath: string = (req.body.pluginsPath || '').trim();
+        const iniPath = getMameHomePath();
+        if (typedPath) {
+            if (!existsSync(typedPath)) {
+                sendSetupPage(req, res, {step: 'plugins', error: `The folder "${typedPath}" does not exist.`}, {pluginsPath: typedPath});
+                return;
+            }
+            if (!savePluginsPath(typedPath).saved) {
+                sendSetupPage(req, res, {step: 'plugins', error: 'mame.ini not found: save the MAME step first.'}, {pluginsPath: typedPath});
+                return;
+            }
+        }
+        const pluginsPath = getMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath');
+        const available = getAvailablePlugins(pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : null);
+        if (!available.length) {
+            sendSetupPage(req, res, {
+                step: 'plugins', error: `No plugin found in "${typedPath || pluginsPath || ''}".`,
+            }, {pluginsPath: typedPath});
+            return;
+        }
+        const pluginIniPath = join(iniPath, 'plugin.ini');
+        repairPluginIni(pluginIniPath, available);
+        enableRequiredPlugins(pluginIniPath);
+        res.redirect(303, '/setup');
+    });
+
+    // Not Advanced configuration only, unlike the MAUI > Online card: a new cabinet's owner is
+    // guided here. Same-origin all the same (see refuseOnlineRequest()).
+    app.post('/setup/online', async (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const input = typeof req.body.configuration === 'string' ? req.body.configuration : '';
+        const outcome = saveConfigurationString(input);
+        if (!outcome.ok) {
+            sendSetupPage(req, res, {step: 'online', error: outcome.error});
+            return;
+        }
+        // Checked before ONLINE is turned on: a wrong string or an unreachable MAUI-API is told here.
+        const test = await testConnection();
+        if (test.level !== 'info') {
+            await online.restart();
+            sendSetupPage(req, res, {step: 'online', error: `Configuration saved, but: ${test.message}`});
+            return;
+        }
+        const blocking = playersBlockingOnline(await User.findAll());
+        const enabled = blocking ? {level: 'error' as const, message: blocking} : setOnlineEnabled(true);
+        await online.restart();
+        if (enabled.level !== 'info') {
+            sendSetupPage(req, res, {step: 'online', error: enabled.message});
+            return;
+        }
+        res.redirect(303, '/setup');
+    });
+
+    // The end of the guide: the repository's packs, in Games > Repository, which only Advanced
+    // configuration shows. A link, not a form: the BO's form script follows a redirect without
+    // its #repository, which picks the subtab. It only flips the session's display setting.
+    app.get('/setup/more-games', (req, res) => {
+        req.session.boAdvanced = true;
+        res.redirect('/favorites#repository');
+    });
+
+    app.post('/setup/offline', (req, res) => {
+        const config = new Config();
+        config.load();
+        config.setupOffline = req.body.offline === 'on';
+        config.save();
+        res.redirect(303, '/setup');
     });
 
     // The whole ScreenScraper tab is Advanced configuration only (its link is left out of the basic nav, see
@@ -8661,7 +8749,7 @@ export function createBoApp(
 
         if (getMissingConfPackFiles(mameInfo).length) {
             res.status(422).send(await renderFavoritesTab(req, {}, {
-                error: 'Install the configuration pack first (MAME > Import tab).',
+                error: 'Install the configuration pack first (MAME > Import / Export tab).',
             }));
             return;
         }
@@ -8722,8 +8810,13 @@ export function createBoApp(
         const isAdvanced = req.session.boAdvanced === true;
         const mameInfo = getMameInfo(config);
 
+        const fromSetup = req.body?.from === 'setup';
         const repository = await resolveRepository();
         if (!repository.ok) {
+            if (fromSetup) {
+                sendSetupPage(req, res, {step: withStarterPack ? 'starterPack' : 'confPack', error: describeRepositoryFailure(repository)});
+                return;
+            }
             res.status(502).send(renderForm(
                 values, mameInfo, isAdvanced, undefined, undefined, undefined, describeRepositoryFailure(repository),
             ));
@@ -8731,7 +8824,7 @@ export function createBoApp(
         }
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
-        res.write(renderPageHead('mame', getViewer(req)));
+        res.write(renderPageHead(fromSetup ? 'setup' : 'mame', getViewer(req)));
         await runConfPackImport(res, config, repository);
         if (withStarterPack) {
             if (getMissingConfPackFiles(getMameInfo(config)).length) {
@@ -8743,11 +8836,16 @@ export function createBoApp(
             }
         }
 
-        const refreshedMameInfo = getMameInfo(config);
-        res.write(renderConfigCard(values, refreshedMameInfo));
-        res.write(renderMameInfoCard(refreshedMameInfo));
-        if (!refreshedMameInfo.error) {
-            res.write(renderImportSection(refreshedMameInfo));
+        if (fromSetup) {
+            // The guide shows what is left; the import's log stays above for whoever reads it.
+            res.write('<section class="card"><p><a class="button-link" href="/setup">Back to Getting started</a></p></section>');
+        } else {
+            const refreshedMameInfo = getMameInfo(config);
+            res.write(renderConfigCard(values, refreshedMameInfo));
+            res.write(renderMameInfoCard(refreshedMameInfo));
+            if (!refreshedMameInfo.error) {
+                res.write(renderImportSection(refreshedMameInfo));
+            }
         }
         res.write(renderPageTail());
         res.end();
@@ -8881,6 +8979,8 @@ export function createBoApp(
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
         }
+        const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
+        config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
@@ -8888,9 +8988,10 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle) {
-            // The front decides its mode once, when it loads (App.vue), and builds its carousel
-            // and starts its idle watch when Home.vue is mounted.
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle
+            || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
+            // The front decides its mode and its badge's look once, when it loads (App.vue), and
+            // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
@@ -9003,46 +9104,27 @@ export function createBoApp(
             return;
         }
         const config = new Config();
-        const exportConfigFile = req.query.json === 'on';
-        const exportDatabase = req.query.db === 'on';
+        const partIds = parseBackupParts(BACKUP_PARTS.map(part => part.id).filter(id => req.query[id] === 'on'));
 
-        if (!exportConfigFile && !exportDatabase) {
+        if (!partIds.length) {
+            config.load();
+            await sendMauiPage(req, res, config, {importExportError: 'Tick at least one box before exporting.'});
+            return;
+        }
+
+        const zip = buildBackup(dirname(config.configPath), partIds);
+        if (!zip) {
             config.load();
             await sendMauiPage(req, res, config, {
-                importExportError: 'Tick at least one box (JSON and/or DB) before exporting.',
+                importExportError: 'Nothing to export: the selected files do not exist yet.',
             });
             return;
         }
 
-        const files: {path: string; name: string}[] = [];
-        if (exportConfigFile && existsSync(config.configPath)) {
-            files.push({path: config.configPath, name: basename(config.configPath)});
-        }
-        if (exportDatabase && existsSync(getDatabasePath())) {
-            files.push({path: getDatabasePath(), name: basename(getDatabasePath())});
-        }
-
-        if (!files.length) {
-            config.load();
-            await sendMauiPage(req, res, config, {
-                importExportError: 'Nothing to export: the selected file(s) do not exist yet.',
-            });
-            return;
-        }
-
-        if (files.length === 1) {
-            // `root`, not the absolute path: send() refuses (404) paths with a dot directory such
-            // as ~/.mame-awesome-ui (see the avatars route).
-            res.download(basename(files[0].path), files[0].name, {root: dirname(files[0].path)});
-            return;
-        }
-
-        const zip = new AdmZip();
-        files.forEach(file => zip.addLocalFile(file.path));
         const date = new Date().toISOString().slice(0, 10);
         res.set('Content-Type', 'application/zip');
         res.set('Content-Disposition', `attachment; filename="mame-awesome-ui-export-${date}.zip"`);
-        res.send(zip.toBuffer());
+        res.send(zip);
     });
 
     app.post('/maui/import', upload.single('file'), async (req, res) => {
@@ -9063,27 +9145,14 @@ export function createBoApp(
 
         try {
             if (originalName.endsWith('.zip')) {
-                const zip = new AdmZip(req.file.buffer);
-                const configEntry = zip.getEntries()
-                    .find(entry => basename(entry.entryName) === 'mame-awesome-ui-config.json');
-                const dbEntry = zip.getEntries()
-                    .find(entry => basename(entry.entryName) === 'mame-awesome-ui.sqlite');
-
-                if (!configEntry && !dbEntry) {
+                const parts = restoreBackup(dirname(config.configPath), req.file.buffer);
+                if (!parts.length) {
                     await sendMauiPage(req, res, config, {
-                        importExportError: 'The ZIP contains neither mame-awesome-ui-config.json nor '
-                            + 'mame-awesome-ui.sqlite.',
+                        importExportError: 'The ZIP holds none of the files of mame-awesome-ui.',
                     });
                     return;
                 }
-                if (configEntry) {
-                    writeFileSync(config.configPath, configEntry.getData());
-                    restored.push('the configuration');
-                }
-                if (dbEntry) {
-                    writeFileSync(getDatabasePath(), dbEntry.getData());
-                    restored.push('the database');
-                }
+                restored.push(...parts.map(part => part.label));
             } else if (originalName.endsWith('.json')) {
                 // Throws on malformed JSON, caught below - avoids overwriting the current
                 // config with a file the app would then fail to load on next start.
@@ -9104,8 +9173,7 @@ export function createBoApp(
                 restored.push('the database');
             } else {
                 await sendMauiPage(req, res, config, {
-                    importExportError: 'Unrecognized format: use a .json, a .sqlite/.db or '
-                        + 'a .zip containing both.',
+                    importExportError: 'Unrecognized format: use a .zip exported here, a .json or a .sqlite/.db.',
                 });
                 return;
             }
@@ -9121,10 +9189,9 @@ export function createBoApp(
         // overwritten, so only a full process restart picks up the import.
         res.send(renderPage(
             '<section class="card"><h2>Import complete</h2>'
-            + `<p class="error">Restored: ${restored.join(', ')}. The application will close `
-            + 'in a moment. <strong>Relaunch it manually</strong> to take the imported '
-            + 'files into account (<code>just serve</code> in development, or the usual '
-            + 'executable in production).</p></section>',
+            + `<p class="error">Restored: ${restored.join(', ')}.</p>`
+            + await renderRelaunchNotice('take the imported files into account', '/maui')
+            + '</section>',
             'maui', getViewer(req),
         ));
 
@@ -9432,8 +9499,40 @@ export function createBoApp(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req)));
+        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/'));
     });
+
+    /**
+     * Checks and saves the folder of the mame binary (MAME tab's Config card, and the setup guide's
+     * mame step): creates mame's configuration the first time, then writes pluginspath and the
+     * window setting into mame.ini. Nothing is saved on an error.
+     */
+    const applyMameConfig = (
+        config: Config, mamePath: string, pluginsPath: string, windowed: boolean,
+    ): {error: string} | {plugins: {saved: boolean; pluginsAdded: number} | null} => {
+        if (!existsSync(mamePath)) {
+            return {error: `The folder "${mamePath}" does not exist.`};
+        }
+        const mameBinaryName = findMameBinary(mamePath);
+        if (!mameBinaryName) {
+            return {error: `No mame binary found in "${mamePath}".`};
+        }
+        try {
+            ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
+        } catch (error) {
+            return {
+                error: 'Failed to initialize mame ("-createconfig"): '
+                    + `${error instanceof Error ? error.message : 'unexpected error'}.`,
+            };
+        }
+        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
+        const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
+        setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
+        config.mamePath = mamePath;
+        config.mameBinaryName = mameBinaryName;
+        config.save();
+        return {plugins};
+    };
 
     app.post('/save', (req, res) => {
         const mamePath: string = (req.body.mamePath || '').trim();
@@ -9456,40 +9555,12 @@ export function createBoApp(
             return mameInfo;
         };
 
-        if (!existsSync(mamePath)) {
-            res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdvanced,
-                `The folder "${mamePath}" does not exist.`,
-            ));
+        const applied = applyMameConfig(config, mamePath, pluginsPath, windowed);
+        if ('error' in applied) {
+            res.status(422).send(renderForm({mamePath}, typedMameInfo(), isAdvanced, applied.error));
             return;
         }
-        const mameBinaryName = findMameBinary(mamePath);
-        if (!mameBinaryName) {
-            res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdvanced,
-                `No mame binary found in "${mamePath}".`,
-            ));
-            return;
-        }
-
-        try {
-            ensureMameConfigBootstrapped(join(mamePath, mameBinaryName), getMameHomePath());
-        } catch (error) {
-            res.status(422).send(renderForm(
-                {mamePath}, typedMameInfo(), isAdvanced,
-                'Failed to initialize mame ("-createconfig"): '
-                    + `${error instanceof Error ? error.message : 'unexpected error'}.`,
-            ));
-            return;
-        }
-
-        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
-        const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
-        setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
-
-        config.mamePath = mamePath;
-        config.mameBinaryName = mameBinaryName;
-        config.save();
+        const {plugins} = applied;
 
         res.send(renderPage(
             '<section class="card"><h2>Configuration saved</h2><p>'
@@ -9928,8 +9999,12 @@ export function createBoApp(
         const deleteGamesMedia = zone === 'mame' && !deleteMameHome && req.body.deleteGamesMedia === 'on';
         const deleteFavorites = zone === 'mame' && !deleteMameHome
             && req.body.deleteFavorites === 'on' && !!mameInfo.favoritesPath;
-        const deleteConfig = zone === 'maui' && req.body.deleteConfig === 'on';
-        const deleteDatabase = zone === 'maui' && req.body.deleteDatabase === 'on';
+        // The whole ~/.mame-awesome-ui includes every part: its own checkbox greys theirs, which a
+        // browser then leaves out of the form.
+        const deleteMauiHome = zone === 'maui' && req.body.deleteMauiHome === 'on';
+        const mauiParts = zone === 'maui' && !deleteMauiHome
+            ? MAUI_DELETIONS.filter(deletion => req.body[deletion.field] === 'on').map(deletion => deletion.part)
+            : [];
 
         const deleted: string[] = [];
 
@@ -9978,17 +10053,26 @@ export function createBoApp(
             }
         }
 
-        if (deleteConfig) {
-            config.delete();
-            deleted.push('the mame-awesome-ui configuration');
+        // Every file of each part ticked, as the export takes them (MauiBackup.ts).
+        if (deleteMauiHome) {
+            const mauiHome = dirname(config.configPath);
+            try {
+                rmSync(mauiHome, {recursive: true, force: true});
+                deleted.push(`the whole ${mauiHome} directory and its content (configuration, database, avatars, `
+                    + 'caches, ONLINE session...)');
+            } catch (error) {
+                console.error(`[boServer] Failed to remove mame-awesome-ui directory "${mauiHome}":`, error);
+            }
         }
 
-        if (deleteDatabase) {
+        let mauiDeleted: BackupPartId[] = [];
+        if (mauiParts.length) {
             try {
-                rmSync(getDatabasePath(), {force: true});
-                deleted.push('the database');
+                const parts = deleteBackupParts(dirname(config.configPath), mauiParts);
+                mauiDeleted = parts.map(part => part.id);
+                deleted.push(...parts.map(part => part.label));
             } catch (error) {
-                console.error('[boServer] Failed to remove database file:', error);
+                console.error('[boServer] Failed to remove mame-awesome-ui files:', error);
             }
         }
 
@@ -10012,7 +10096,9 @@ export function createBoApp(
         // access, so those two don't need it. deleteMameHome does need it too: it takes
         // mame.ini/ui.ini down with it, and MameService's constructor only ever parses those
         // once, at app startup - a restart is what makes it re-bootstrap them from scratch.
-        const needsRestart = deleteConfig || deleteDatabase || deleteMameHome;
+        // The ONLINE session too: the running one keeps its credentials in memory.
+        const needsRestart = deleteMameHome || deleteMauiHome
+            || mauiDeleted.some(part => part === 'config' || part === 'database' || part === 'online');
         const backHref = zone === 'mame' ? '/' : '/maui';
         const deletedInfo = `Deleted: ${deleted.join(', ')}.`;
 
@@ -10036,22 +10122,14 @@ export function createBoApp(
         res.send(renderPage(
             '<section class="card"><h2>Deletion complete</h2>'
             + `<p class="error">${deletedInfo}</p>`
-            + '<p>The application will close in a moment. '
-                + '<strong>Relaunch it manually</strong> to complete the operation '
-                + '(<code>just serve</code> in development, or the usual executable in '
-                + 'production) - reloading this page or the application is not enough: the '
-                + 'renderer keeps the services built on the old configuration in memory '
-                + 'until the process has fully restarted.</p>'
-                + '<p id="restart-wait-message" class="info">Waiting for the restart… '
-                + 'this page will automatically take you back to the home page as soon as the '
-                + 'server is available again.</p>'
-                + renderRestartWaitScript(backHref)
+            + await renderRelaunchNotice('complete the operation', backHref)
             + '</section>',
             zone, getViewer(req),
         ));
 
-        // Only closes the app (see onReset in background.ts) - it does NOT relaunch it. Delayed
-        // slightly so this response finishes flushing to the browser before the process exits.
+        // Closes the app, which comes back as renderRelaunchNotice() said (onReset in
+        // background.ts). Delayed slightly so this response finishes flushing to the browser
+        // before the process exits.
         setTimeout(onReset, 300);
     });
 

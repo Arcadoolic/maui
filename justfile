@@ -70,7 +70,18 @@ serve: install _check-electron-binary _check-sandbox
     #!/usr/bin/env bash
     set -euo pipefail
     source scripts/resolve-swc-cache.sh
-    npm run electron:serve
+    # A deletion from the BO's Danger zone or a MAUI import closes the application, which must start
+    # again as a new process (AppRelaunch.ts): it writes this file first, and is started again
+    # while the file is there. Closed any other way, it is not.
+    export MAUI_DEV_RELAUNCH_FILE="$(mktemp -u -t maui-relaunch.XXXXXX)"
+    trap 'rm -f "$MAUI_DEV_RELAUNCH_FILE"' EXIT
+    while true; do
+        rm -f "$MAUI_DEV_RELAUNCH_FILE"
+        status=0
+        npm run electron:serve || status=$?
+        [ -f "$MAUI_DEV_RELAUNCH_FILE" ] || exit "$status"
+        echo "MAUI closed after a reset from the BO: starting it again…"
+    done
 
 # Build production Electron app
 build: install _check-electron-binary
