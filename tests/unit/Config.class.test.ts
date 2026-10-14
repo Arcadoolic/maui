@@ -313,6 +313,7 @@ describe('Config.save', () => {
             'mameBinaryName',
             'mamePath',
             'openDevTools',
+            'setupOffline',
             'showAllGamesCategory',
             'showBeatThisCategory',
             'showHiscoresOnlyCategory',

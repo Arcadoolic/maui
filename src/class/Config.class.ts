@@ -100,6 +100,10 @@ export default class Config {
     public frontIdleEnabled: boolean = true;
     public frontIdleMinutes: number = 2;
 
+    // The setup guide was told the cabinet stays OFFLINE (SetupSteps.ts): its ONLINE step is done,
+    // and the packs are left to install by hand.
+    public setupOffline: boolean = false;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
     protected _plaintextSecrets: boolean = false;
@@ -148,6 +152,7 @@ export default class Config {
             this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
                 ? configFile.frontIdleMinutes
                 : 2;
+            this.setupOffline = configFile.setupOffline === true;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
             if (this.dataKey) {
@@ -196,6 +201,7 @@ export default class Config {
                 boIdleMinutes: this.boIdleMinutes,
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
+                setupOffline: this.setupOffline,
             }),
             {mode: FILE_MODE},
         );
