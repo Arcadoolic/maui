@@ -3483,7 +3483,9 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
         <section class="card">
             <h2>Danger zone</h2>
             <p class="error">Targeted, irreversible deletions of MAME's own data. Each checkbox
-            acts independently of the others - tick what you want to delete, then submit.
+            acts independently of the others - tick what you want to delete, then submit. The whole
+            directory includes the three others: they are ticked while it is, and back as they were
+            when it is unticked.
             Deleting the roms/media also deletes the roms themselves, not just the artwork.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
@@ -3515,12 +3517,17 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteMameHome" onchange="
-                        this.form.deleteHiscores.checked = this.checked || this.form.deleteHiscores.checked;
-                        this.form.deleteHiscores.disabled = this.checked;
-                        this.form.deleteGamesMedia.checked = this.checked || this.form.deleteGamesMedia.checked;
-                        this.form.deleteGamesMedia.disabled = this.checked;
-                        this.form.deleteFavorites.checked = this.checked || this.form.deleteFavorites.checked;
-                        this.form.deleteFavorites.disabled = this.checked || ${mameInfo.favoritesPath ? 'false' : 'true'};
+                        var whole = this.checked;
+                        [this.form.deleteHiscores, this.form.deleteGamesMedia, this.form.deleteFavorites].forEach(function (box) {
+                            if (whole) {
+                                box.dataset.ticked = box.checked ? '1' : '';
+                                box.checked = true;
+                            } else {
+                                box.checked = box.dataset.ticked === '1';
+                            }
+                            box.disabled = whole;
+                        });
+                        this.form.deleteFavorites.disabled = whole || ${mameInfo.favoritesPath ? 'false' : 'true'};
                     ">
                         <span>
                             Delete the whole <code>${escapeHtml(mameInfo.iniPath)}</code> directory
@@ -4578,6 +4585,11 @@ const MAUI_DELETIONS: readonly {part: BackupPartId; field: string; label: string
     },
 ];
 
+/** ~/.mame-awesome-ui as the Danger zone shows it. */
+function getMauiHomeLabel(): string {
+    return dirname(new Config().configPath);
+}
+
 function renderMauiDangerZoneCard(info?: string): string {
     return `
         <section class="card">
@@ -4590,7 +4602,8 @@ function renderMauiDangerZoneCard(info?: string): string {
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
-                this.querySelectorAll('input[data-label]:checked').forEach(function (box) { items.push(box.dataset.label); });
+                var boxes = this.deleteMauiHome.checked ? [this.deleteMauiHome] : this.querySelectorAll('input[data-label]:checked');
+                boxes.forEach(function (box) { items.push(box.dataset.label); });
                 if (!items.length) { return true; }
                 return confirm('Permanently delete ' + items.join(', ') + '? This cannot be undone.');
             ">
@@ -4600,6 +4613,25 @@ function renderMauiDangerZoneCard(info?: string): string {
                     <input type="checkbox" name="${deletion.field}" data-label="${escapeHtml(deletion.label.split(' (')[0])}">
                     Delete ${escapeHtml(deletion.label)}
                 </label>`).join('')}
+                <label class="checkbox-row">
+                    <input type="checkbox" name="deleteMauiHome" data-label="the whole ${escapeHtml(getMauiHomeLabel())} directory" onchange="
+                        var whole = this.checked;
+                        [${MAUI_DELETIONS.map(deletion => `this.form.${deletion.field}`).join(', ')}].forEach(function (box) {
+                            if (whole) {
+                                box.dataset.ticked = box.checked ? '1' : '';
+                                box.checked = true;
+                            } else {
+                                box.checked = box.dataset.ticked === '1';
+                            }
+                            box.disabled = whole;
+                        });
+                    ">
+                    <span>
+                        Delete the whole <code>${escapeHtml(getMauiHomeLabel())}</code> directory
+                        <span class="checkbox-row-detail">Includes the options above, plus anything else
+                        left in it - the application starts again as on its first launch.</span>
+                    </span>
+                </label>
                 <button type="submit" class="button-danger">Delete the selection</button>
             </form>
         </section>
@@ -9944,7 +9976,10 @@ export function createBoApp(
         const deleteGamesMedia = zone === 'mame' && !deleteMameHome && req.body.deleteGamesMedia === 'on';
         const deleteFavorites = zone === 'mame' && !deleteMameHome
             && req.body.deleteFavorites === 'on' && !!mameInfo.favoritesPath;
-        const mauiParts = zone === 'maui'
+        // The whole ~/.mame-awesome-ui includes every part: its own checkbox greys theirs, which a
+        // browser then leaves out of the form.
+        const deleteMauiHome = zone === 'maui' && req.body.deleteMauiHome === 'on';
+        const mauiParts = zone === 'maui' && !deleteMauiHome
             ? MAUI_DELETIONS.filter(deletion => req.body[deletion.field] === 'on').map(deletion => deletion.part)
             : [];
 
@@ -9996,6 +10031,17 @@ export function createBoApp(
         }
 
         // Every file of each part ticked, as the export takes them (MauiBackup.ts).
+        if (deleteMauiHome) {
+            const mauiHome = dirname(config.configPath);
+            try {
+                rmSync(mauiHome, {recursive: true, force: true});
+                deleted.push(`the whole ${mauiHome} directory and its content (configuration, database, avatars, `
+                    + 'caches, ONLINE session...)');
+            } catch (error) {
+                console.error(`[boServer] Failed to remove mame-awesome-ui directory "${mauiHome}":`, error);
+            }
+        }
+
         let mauiDeleted: BackupPartId[] = [];
         if (mauiParts.length) {
             try {
@@ -10028,7 +10074,7 @@ export function createBoApp(
         // mame.ini/ui.ini down with it, and MameService's constructor only ever parses those
         // once, at app startup - a restart is what makes it re-bootstrap them from scratch.
         // The ONLINE session too: the running one keeps its credentials in memory.
-        const needsRestart = deleteMameHome
+        const needsRestart = deleteMameHome || deleteMauiHome
             || mauiDeleted.some(part => part === 'config' || part === 'database' || part === 'online');
         const backHref = zone === 'mame' ? '/' : '/maui';
         const deletedInfo = `Deleted: ${deleted.join(', ')}.`;
