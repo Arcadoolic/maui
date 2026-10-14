@@ -5,9 +5,14 @@ const allowed = async () => true;
 const refused = async () => false;
 
 describe('chooseRelaunch', () => {
-    it('leaves development to `just serve`', async () => {
+    it('leaves development to `just serve`, which relaunches it when it gave its file', async () => {
         expect(await chooseRelaunch({isPackaged: false, kiosk: false, canRestartKiosk: allowed})).toBe('manual');
         expect(await chooseRelaunch({isPackaged: false, kiosk: true, canRestartKiosk: allowed})).toBe('manual');
+        expect(await chooseRelaunch({isPackaged: false, kiosk: false, canRestartKiosk: allowed, devRelaunchFile: '/tmp/x'}))
+            .toBe('dev');
+        // An installed application never reads it.
+        expect(await chooseRelaunch({isPackaged: true, kiosk: false, canRestartKiosk: allowed, devRelaunchFile: '/tmp/x'}))
+            .toBe('self');
     });
 
     it('restarts the kiosk session on a dedicated cabinet, when sudo allows it', async () => {
