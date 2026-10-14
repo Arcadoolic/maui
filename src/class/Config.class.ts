@@ -104,6 +104,10 @@ export default class Config {
     // dot, or the dot alone, more discreet.
     public onlineBadgeDotOnly: boolean = false;
 
+    // The setup guide was told the cabinet stays OFFLINE (SetupSteps.ts): its ONLINE step is done,
+    // and the packs are left to install by hand.
+    public setupOffline: boolean = false;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
     protected _plaintextSecrets: boolean = false;
@@ -153,6 +157,7 @@ export default class Config {
                 ? configFile.frontIdleMinutes
                 : 2;
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
+            this.setupOffline = configFile.setupOffline === true;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
             if (this.dataKey) {
@@ -202,6 +207,7 @@ export default class Config {
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
+                setupOffline: this.setupOffline,
             }),
             {mode: FILE_MODE},
         );

@@ -330,6 +330,7 @@ describe('Config.save', () => {
             'mamePath',
             'onlineBadgeDotOnly',
             'openDevTools',
+            'setupOffline',
             'showAllGamesCategory',
             'showBeatThisCategory',
             'showHiscoresOnlyCategory',
