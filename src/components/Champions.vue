@@ -2,8 +2,8 @@
     <div class="champions">
         <div class="championsContainer" :class="{astride: astride}" v-if="champions.length">
             <div v-for="(champion, index) of champions" :key="champion.key" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%'}">
-                <img v-if="champion.avatar" :src="champion.avatar" alt="">
-                <img v-else src="../assets/defaultPlayer.png" alt="">
+                <img v-if="champion.avatar" :src="champion.avatar" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
+                <img v-else src="../assets/defaultPlayer.png" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
             </div>
         </div>
         <img v-else class="default" src="../assets/hiscores.svg" alt="">
@@ -15,6 +15,7 @@ import {ref, computed, watch, onMounted, onUnmounted} from 'vue';
 import Game from '@/model/Game.model';
 import {emitter} from '@/emitter';
 import {loadChampions, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
+import {avatarColor} from '@/class/AvatarColor';
 
 const props = defineProps<{game: Game}>();
 
@@ -103,6 +104,9 @@ onUnmounted(() => {
            marquee is tall (about 3px on the selected one), thinner on the small ones. */
         box-sizing: border-box;
         border: max(1px, 1.2cqh) solid transparent;
+        /* Each player's own color (AvatarColor.ts), seen through the transparent parts of the
+           picture; set on the element. */
+        background-clip: padding-box;
     }
 
     /* Gold, silver, bronze: tells the overlapping avatars apart. */
