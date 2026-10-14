@@ -1,3 +1,25 @@
+## [2.14.0](https://github.com/Arcadoolic/maui/compare/2.13.0...2.14.0) (2026-10-14)
+
+### Features
+
+* an installed application relaunches itself after a reset or an import ([190faf8](https://github.com/Arcadoolic/maui/commit/190faf8dc1e4ba502e12b7d93a0541027fbff1b5))
+* **bo:** "Getting started", the setup guide of a new cabinet ([0081a38](https://github.com/Arcadoolic/maui/commit/0081a3881a13683cb37f7644f5bc253d8e8e7689))
+* **bo:** delete the whole ~/.mame-awesome-ui from the MAUI Danger zone ([2f4c2ef](https://github.com/Arcadoolic/maui/commit/2f4c2ef64e2f11f9b68c088250eac8383b94c983))
+* **bo:** export and import every file of mame-awesome-ui ([cc36108](https://github.com/Arcadoolic/maui/commit/cc361085ca524d6e020681b57286e5ee94422e7b))
+* **bo:** light export of MAME's configuration ([33768ab](https://github.com/Arcadoolic/maui/commit/33768abed7735939706f3fd3001a416db26cd9d1))
+* **bo:** MAME's Import subtab becomes Import / Export ([e0b37ec](https://github.com/Arcadoolic/maui/commit/e0b37ec261d5b6144114027fd8ce92492616c6a3))
+* **bo:** the MAUI Danger zone deletes every file of a part ([675aabf](https://github.com/Arcadoolic/maui/commit/675aabfdcaef8e9c60642b7dec0a7928f80b7e7f))
+* **dev:** `just serve` starts MAUI again after a reset from the BO ([e7fcd3c](https://github.com/Arcadoolic/maui/commit/e7fcd3c3e780f5f105f9eff2a57e21aab313c047))
+* **front:** ONLINE / OFFLINE back on the badge, the dot alone as a BO option ([1795d47](https://github.com/Arcadoolic/maui/commit/1795d4712e225e5374e56b19ec81929ef5aee1b5))
+* **front:** the setup guide's steps on the cabinet's screen ([666cea4](https://github.com/Arcadoolic/maui/commit/666cea4c9c7ab8cf6e63d711d05b48f67fe14c5a))
+* **setup:** the end of the guide offers more games from the repository ([6f6c69e](https://github.com/Arcadoolic/maui/commit/6f6c69eb550197e56e476d7f5b674b5a23fa5d8a)), closes [#repository](https://github.com/Arcadoolic/maui/issues/repository)
+* **setup:** the steps of a new cabinet's setup, read without the BO ([1a762a3](https://github.com/Arcadoolic/maui/commit/1a762a3249bef5e66f72a850c28df12ffe9bc1f6))
+
+### Bug Fixes
+
+* **bo:** send the sign-in form when Enter is taken by a password manager ([d4aa3ff](https://github.com/Arcadoolic/maui/commit/d4aa3ffb96c4b192c93ac86320c3b5663359ac61))
+* **bo:** unticking the whole .mame directory gives the other boxes back ([45ad4f7](https://github.com/Arcadoolic/maui/commit/45ad4f75044341eea57a1c1030c40a72a6ef221f))
+
 ## [2.13.0](https://github.com/Arcadoolic/maui/compare/2.12.0...2.13.0) (2026-10-11)
 
 ### Features
