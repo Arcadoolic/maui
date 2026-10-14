@@ -3603,7 +3603,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Genres file (genre.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.genreIniPath)}${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
-                        : '<em>Not found — import a starting pack (Import tab) to '
+                        : '<em>Not found — import a starting pack (Import / Export tab) to '
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
@@ -3617,7 +3617,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Player count file (Multiplayer.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
-                        : '<em>Not found — import a starting pack (Import tab) to '
+                        : '<em>Not found — import a starting pack (Import / Export tab) to '
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
             </dl>
@@ -4829,7 +4829,7 @@ function renderForm(
         });
         sections.push({
             id: 'import',
-            label: 'Import',
+            label: 'Import / Export',
             html: renderImportSection(mameInfo, importError, exportError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
@@ -7179,7 +7179,7 @@ function renderRepoImportCard(
             ${url ? `<p class="info">Repository: ${escapeHtml(url)}</p>` : ''}
             ${renderDiskSpaceInfo(mameInfo)}
             ${getMissingConfPackFiles(mameInfo).length
-                ? '<p class="info"><em>Install the configuration pack first (MAME > Import tab) to browse the game packs.</em></p>'
+                ? '<p class="info"><em>Install the configuration pack first (MAME > Import / Export tab) to browse the game packs.</em></p>'
                 : `<form method="get" action="/import/from-url/packs">
                     <button type="submit">Browse available packs</button>
                 </form>
@@ -8716,7 +8716,7 @@ export function createBoApp(
 
         if (getMissingConfPackFiles(mameInfo).length) {
             res.status(422).send(await renderFavoritesTab(req, {}, {
-                error: 'Install the configuration pack first (MAME > Import tab).',
+                error: 'Install the configuration pack first (MAME > Import / Export tab).',
             }));
             return;
         }
