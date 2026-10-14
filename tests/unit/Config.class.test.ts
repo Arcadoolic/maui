@@ -240,6 +240,22 @@ describe('Config boIdleMinutes', () => {
     });
 });
 
+describe('Config ONLINE badge', () => {
+    it('shows ONLINE / OFFLINE unless the dot alone is asked for', () => {
+        expect(new Config().onlineBadgeDotOnly).toBe(false);
+        for (const [written, expected] of [[true, true], [false, false], [undefined, false], ['yes', false]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.onlineBadgeDotOnly = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.onlineBadgeDotOnly).toBe(expected);
+        }
+    });
+});
+
 describe('Config front idle', () => {
     it('is on unless switched off', () => {
         expect(new Config().frontIdleEnabled).toBe(true);
@@ -312,6 +328,7 @@ describe('Config.save', () => {
             'fullscreen',
             'mameBinaryName',
             'mamePath',
+            'onlineBadgeDotOnly',
             'openDevTools',
             'setupOffline',
             'showAllGamesCategory',

@@ -13,12 +13,8 @@ import {pipeline} from 'stream/promises';
 import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
-// Pinned (see package.json) to the last 0.5.x release: 0.5.17+/0.6.x ship optional-chaining
-// syntax in methods/inflater.js that the main process's webpack build (older acorn parser)
-// fails to parse. Bumping this past 0.5.16 breaks `just serve`/`just build` with a
-// "Module parse failed: Unexpected token" error on that file - re-check before upgrading.
-import AdmZip from 'adm-zip';
 import Config from '@/class/Config.class';
+import {BACKUP_PARTS, buildBackup, parseBackupParts, restoreBackup} from '@/class/MauiBackup';
 import {describeSetup, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
 import {readSetupFacts} from '@/class/SetupFacts';
 import {renderSetupNavLabel, renderSetupPage} from '@/class/SetupBoPage';
@@ -3232,13 +3228,35 @@ function renderLoginPage(error?: string): string {
                  username or password gracefully (401 + "Incorrect username or password
                  incorrect."), so letting the browser send an incomplete submission and having
                  the server reject it is simpler than fighting native validation here. -->
-            <form method="post" action="/login">
+            <form method="post" action="/login" id="loginForm">
                 <label for="username">Username</label>
                 <input type="text" id="username" name="username" autofocus>
                 <label for="password">Password</label>
                 <input type="password" id="password" name="password">
                 <button type="submit">Sign in</button>
             </form>
+            <!-- A password manager's menu in a field (an extension, Chrome's own suggestions) can
+                 take Enter for itself, now and then, and the form is not sent: only a click on
+                 the button was. Enter released in a field without the form having gone off in the
+                 meantime sends it. Its keyup, since what takes the keydown may also stop it. The
+                 time of the last submission is kept on window, which the page that answers it
+                 shares (document.write()): its keyup must not send it again, empty. -->
+            <script>(function () {
+                var form = document.getElementById('loginForm');
+                form.addEventListener('submit', function () {
+                    window.boLoginSubmittedAt = Date.now();
+                }, true);
+                form.addEventListener('keyup', function (event) {
+                    if (event.key !== 'Enter' || event.target.tagName !== 'INPUT'
+                        || Date.now() - (window.boLoginSubmittedAt || 0) < 1000) {
+                        return;
+                    }
+                    var button = form.querySelector('button[type="submit"]');
+                    if (button && !button.disabled) {
+                        form.requestSubmit(button);
+                    }
+                });
+            })();</script>
         </section>
     `, 'mame', null);
 }
@@ -5155,6 +5173,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
                 <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
                 <label class="checkbox-row">
+                    <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
+                    ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
+                </label>
+                <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
                 </label>
@@ -5172,25 +5194,33 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
     return `
         <section class="card">
             <h2>mame-awesome-ui import / export</h2>
-            <p class="info">Backs up or restores the configuration
-            (mame-awesome-ui-config.json) and/or the database (games, players, scores)
-            of mame-awesome-ui - not the roms nor mame's own data.</p>
+            <p class="info">Backs up or restores the files of mame-awesome-ui
+            (~/.mame-awesome-ui) - not the roms nor mame's own data.</p>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="get" action="/maui/export">
                 <label class="checkbox-row">
-                    <input type="checkbox" name="json" checked>
-                    Configuration (JSON)
+                    <input type="checkbox" name="config" checked>
+                    Configuration (mame-awesome-ui-config.json, removed favorites)
                 </label>
                 <label class="checkbox-row">
-                    <input type="checkbox" name="db">
-                    Database (DB)
+                    <input type="checkbox" name="database" checked>
+                    Database (games, players, scores) and the players' avatars
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="caches" checked>
+                    ScreenScraper caches (favorites, publishers and developers)
+                </label>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="online">
+                    ONLINE session (online.json): its token and this machine's identity - only to be
+                    restored on this same machine, never on another cabinet
                 </label>
                 <button type="submit">Export</button>
             </form>
             <form method="post" action="/maui/import" enctype="multipart/form-data"
-                onsubmit="return confirm('Overwrite the current configuration and/or database with this file? This cannot be undone.')">
-                <label for="mauiImportFile">File to import (.json, .sqlite/.db, or a .zip containing both)</label>
+                onsubmit="return confirm('Overwrite the files this export holds? This cannot be undone.')">
+                <label for="mauiImportFile">File to import (a .zip exported here, or a lone .json configuration or .sqlite/.db database)</label>
                 <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
                 <button type="submit">Import</button>
             </form>
@@ -8823,6 +8853,8 @@ export function createBoApp(
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
         }
+        const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
+        config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
@@ -8830,9 +8862,10 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle) {
-            // The front decides its mode once, when it loads (App.vue), and builds its carousel
-            // and starts its idle watch when Home.vue is mounted.
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle
+            || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
+            // The front decides its mode and its badge's look once, when it loads (App.vue), and
+            // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
@@ -8945,46 +8978,27 @@ export function createBoApp(
             return;
         }
         const config = new Config();
-        const exportConfigFile = req.query.json === 'on';
-        const exportDatabase = req.query.db === 'on';
+        const partIds = parseBackupParts(BACKUP_PARTS.map(part => part.id).filter(id => req.query[id] === 'on'));
 
-        if (!exportConfigFile && !exportDatabase) {
+        if (!partIds.length) {
+            config.load();
+            await sendMauiPage(req, res, config, {importExportError: 'Tick at least one box before exporting.'});
+            return;
+        }
+
+        const zip = buildBackup(dirname(config.configPath), partIds);
+        if (!zip) {
             config.load();
             await sendMauiPage(req, res, config, {
-                importExportError: 'Tick at least one box (JSON and/or DB) before exporting.',
+                importExportError: 'Nothing to export: the selected files do not exist yet.',
             });
             return;
         }
 
-        const files: {path: string; name: string}[] = [];
-        if (exportConfigFile && existsSync(config.configPath)) {
-            files.push({path: config.configPath, name: basename(config.configPath)});
-        }
-        if (exportDatabase && existsSync(getDatabasePath())) {
-            files.push({path: getDatabasePath(), name: basename(getDatabasePath())});
-        }
-
-        if (!files.length) {
-            config.load();
-            await sendMauiPage(req, res, config, {
-                importExportError: 'Nothing to export: the selected file(s) do not exist yet.',
-            });
-            return;
-        }
-
-        if (files.length === 1) {
-            // `root`, not the absolute path: send() refuses (404) paths with a dot directory such
-            // as ~/.mame-awesome-ui (see the avatars route).
-            res.download(basename(files[0].path), files[0].name, {root: dirname(files[0].path)});
-            return;
-        }
-
-        const zip = new AdmZip();
-        files.forEach(file => zip.addLocalFile(file.path));
         const date = new Date().toISOString().slice(0, 10);
         res.set('Content-Type', 'application/zip');
         res.set('Content-Disposition', `attachment; filename="mame-awesome-ui-export-${date}.zip"`);
-        res.send(zip.toBuffer());
+        res.send(zip);
     });
 
     app.post('/maui/import', upload.single('file'), async (req, res) => {
@@ -9005,27 +9019,14 @@ export function createBoApp(
 
         try {
             if (originalName.endsWith('.zip')) {
-                const zip = new AdmZip(req.file.buffer);
-                const configEntry = zip.getEntries()
-                    .find(entry => basename(entry.entryName) === 'mame-awesome-ui-config.json');
-                const dbEntry = zip.getEntries()
-                    .find(entry => basename(entry.entryName) === 'mame-awesome-ui.sqlite');
-
-                if (!configEntry && !dbEntry) {
+                const parts = restoreBackup(dirname(config.configPath), req.file.buffer);
+                if (!parts.length) {
                     await sendMauiPage(req, res, config, {
-                        importExportError: 'The ZIP contains neither mame-awesome-ui-config.json nor '
-                            + 'mame-awesome-ui.sqlite.',
+                        importExportError: 'The ZIP holds none of the files of mame-awesome-ui.',
                     });
                     return;
                 }
-                if (configEntry) {
-                    writeFileSync(config.configPath, configEntry.getData());
-                    restored.push('the configuration');
-                }
-                if (dbEntry) {
-                    writeFileSync(getDatabasePath(), dbEntry.getData());
-                    restored.push('the database');
-                }
+                restored.push(...parts.map(part => part.label));
             } else if (originalName.endsWith('.json')) {
                 // Throws on malformed JSON, caught below - avoids overwriting the current
                 // config with a file the app would then fail to load on next start.
@@ -9046,8 +9047,7 @@ export function createBoApp(
                 restored.push('the database');
             } else {
                 await sendMauiPage(req, res, config, {
-                    importExportError: 'Unrecognized format: use a .json, a .sqlite/.db or '
-                        + 'a .zip containing both.',
+                    importExportError: 'Unrecognized format: use a .zip exported here, a .json or a .sqlite/.db.',
                 });
                 return;
             }

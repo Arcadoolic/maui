@@ -4,8 +4,9 @@ import {dirname, join} from 'path';
 import * as os from 'os';
 
 // ONLINE credentials live in their own owner-only file, not in mame-awesome-ui-config.json: the
-// BO export/import (/maui/export, /maui/import) copies that config file around, and copying the
-// token to another cabinet would leak it. localUuid is half of the machine fingerprint (see
+// BO export/import (/maui/export, /maui/import, MauiBackup.ts) copies that config file around, and
+// copying the token to another cabinet would leak it. The export only takes this file when its own
+// box is ticked (unticked by default), to restore it on the same machine. localUuid is half of the machine fingerprint (see
 // MachineFingerprint.ts): regenerating it makes the API see a new machine, hence the corrupt-file
 // error below instead of a silent reset.
 
