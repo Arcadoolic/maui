@@ -1,3 +1,11 @@
+## [2.15.0](https://github.com/Arcadoolic/maui/compare/2.14.0...2.15.0) (2026-10-14)
+
+### Features
+
+* **bo:** a setting for the idle list going to the announced games ([7615a75](https://github.com/Arcadoolic/maui/commit/7615a7540a0e43e17d37dff43892b854c239e981))
+* **front:** a colored background behind each champion's avatar ([d91964f](https://github.com/Arcadoolic/maui/commit/d91964f7b49c7e2f5871217d9cb41772a8462fc9))
+* **front:** the idle band announces a newer release of MAUI ([6514515](https://github.com/Arcadoolic/maui/commit/6514515654d3300cc0cbaf1ad9fcf80703875e06))
+
 ## [2.14.0](https://github.com/Arcadoolic/maui/compare/2.13.0...2.14.0) (2026-10-14)
 
 ### Features
