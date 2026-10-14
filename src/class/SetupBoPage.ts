@@ -158,11 +158,26 @@ function renderStep(step: SetupStep, index: number, input: SetupPageInput): stri
         </li>`;
 }
 
+// Once the setup is done: more packs and games, from the repository (Games > Repository, which
+// only Advanced configuration shows). The repository is only reached ONLINE.
+function renderMoreGames(facts: SetupFacts): string {
+    if (!facts.onlineActive) {
+        return `<p>More games: copy their roms into mame's roms folder and add them to the favorites from
+            MAME's own menu. Connected to MAUI-API, the cabinet would get them from its repository.</p>`;
+    }
+    return `
+            <div class="setup-more">
+                <p>More games? The repository holds more packs to pick from, game by game. They are in the
+                Games tab, with the Advanced configuration on.</p>
+                <p><a class="button-link" href="/setup/more-games">Add more games</a></p>
+            </div>`;
+}
+
 export function renderSetupPage(input: SetupPageInput): string {
     const {progress} = input;
     const intro = progress.finished
         ? `<p class="info flash">Your cabinet is ready. Gamepads are set up from the MAME tab, the look of
-            the cabinet from the MAUI tab.</p>`
+            the cabinet from the MAUI tab.</p>${renderMoreGames(input.facts)}`
         : `<p>The minimal setup of the cabinet, one step after the other: ${progress.completed} of
             ${progress.total} done. The other tabs stay open meanwhile.</p>`;
     return `
