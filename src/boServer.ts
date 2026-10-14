@@ -55,6 +55,7 @@ import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
+import {chooseRelaunch, type RelaunchMode} from '@/class/AppRelaunch';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
 import {
     describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
@@ -4585,8 +4586,7 @@ function renderMauiDangerZoneCard(info?: string): string {
             <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data
             (~/.mame-awesome-ui). Each checkbox acts independently of the others - tick what you want
             to delete, then submit. Deleting the configuration, the database or the ONLINE session
-            then closes the application; it has to be relaunched manually (<code>just serve</code>
-            in development) to complete the operation.</p>
+            then restarts the application (by hand in development: <code>just serve</code>).</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
@@ -4992,6 +4992,27 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
  * answers again, then goes to `backHref` - rather than relying on the user to come back on their
  * own once it is up.
  */
+/**
+ * What happens once the application closes after a Danger zone deletion or a MAUI import (onReset
+ * in background.ts, which makes the same choice: AppRelaunch.ts), and the script that brings the
+ * page back as soon as the server answers again.
+ */
+async function renderRelaunchNotice(what: string, backHref: string): Promise<string> {
+    const mode = await chooseRelaunch({isPackaged: electronApp.isPackaged, kiosk: isKioskLayout(), canRestartKiosk})
+        .catch((): RelaunchMode => 'manual');
+    const restart = mode === 'manual'
+        ? '<p>The application will close in a moment. <strong>Relaunch it manually</strong> to '
+            + `${what} (<code>just serve</code> in development) - reloading this page or the application `
+            + 'is not enough: the screen keeps what it was built on in memory until the process has '
+            + 'fully restarted.</p>'
+        : `<p>The application restarts by itself in a moment to ${what}${mode === 'kiosk'
+            ? ': the screen goes blank, then the cabinet comes back' : ''}.</p>`;
+    return restart
+        + '<p id="restart-wait-message" class="info">Waiting for the restart… this page will automatically '
+        + 'take you back as soon as the server is available again.</p>'
+        + renderRestartWaitScript(backHref);
+}
+
 function renderRestartWaitScript(backHref: string): string {
     // Only trusts a successful response *after* one has already failed: right after the page
     // loads the old process may still be up for a moment (the exit/restart is delayed so this
@@ -9125,10 +9146,9 @@ export function createBoApp(
         // overwritten, so only a full process restart picks up the import.
         res.send(renderPage(
             '<section class="card"><h2>Import complete</h2>'
-            + `<p class="error">Restored: ${restored.join(', ')}. The application will close `
-            + 'in a moment. <strong>Relaunch it manually</strong> to take the imported '
-            + 'files into account (<code>just serve</code> in development, or the usual '
-            + 'executable in production).</p></section>',
+            + `<p class="error">Restored: ${restored.join(', ')}.</p>`
+            + await renderRelaunchNotice('take the imported files into account', '/maui')
+            + '</section>',
             'maui', getViewer(req),
         ));
 
@@ -10045,22 +10065,14 @@ export function createBoApp(
         res.send(renderPage(
             '<section class="card"><h2>Deletion complete</h2>'
             + `<p class="error">${deletedInfo}</p>`
-            + '<p>The application will close in a moment. '
-                + '<strong>Relaunch it manually</strong> to complete the operation '
-                + '(<code>just serve</code> in development, or the usual executable in '
-                + 'production) - reloading this page or the application is not enough: the '
-                + 'renderer keeps the services built on the old configuration in memory '
-                + 'until the process has fully restarted.</p>'
-                + '<p id="restart-wait-message" class="info">Waiting for the restart… '
-                + 'this page will automatically take you back to the home page as soon as the '
-                + 'server is available again.</p>'
-                + renderRestartWaitScript(backHref)
+            + await renderRelaunchNotice('complete the operation', backHref)
             + '</section>',
             zone, getViewer(req),
         ));
 
-        // Only closes the app (see onReset in background.ts) - it does NOT relaunch it. Delayed
-        // slightly so this response finishes flushing to the browser before the process exits.
+        // Closes the app, which comes back as renderRelaunchNotice() said (onReset in
+        // background.ts). Delayed slightly so this response finishes flushing to the browser
+        // before the process exits.
         setTimeout(onReset, 300);
     });
 
