@@ -3483,7 +3483,9 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
         <section class="card">
             <h2>Danger zone</h2>
             <p class="error">Targeted, irreversible deletions of MAME's own data. Each checkbox
-            acts independently of the others - tick what you want to delete, then submit.
+            acts independently of the others - tick what you want to delete, then submit. The whole
+            directory includes the three others: they are ticked while it is, and back as they were
+            when it is unticked.
             Deleting the roms/media also deletes the roms themselves, not just the artwork.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
@@ -3515,12 +3517,17 @@ function renderMameDangerZoneCard(mameInfo: MameInfo, info?: string): string {
                 </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="deleteMameHome" onchange="
-                        this.form.deleteHiscores.checked = this.checked || this.form.deleteHiscores.checked;
-                        this.form.deleteHiscores.disabled = this.checked;
-                        this.form.deleteGamesMedia.checked = this.checked || this.form.deleteGamesMedia.checked;
-                        this.form.deleteGamesMedia.disabled = this.checked;
-                        this.form.deleteFavorites.checked = this.checked || this.form.deleteFavorites.checked;
-                        this.form.deleteFavorites.disabled = this.checked || ${mameInfo.favoritesPath ? 'false' : 'true'};
+                        var whole = this.checked;
+                        [this.form.deleteHiscores, this.form.deleteGamesMedia, this.form.deleteFavorites].forEach(function (box) {
+                            if (whole) {
+                                box.dataset.ticked = box.checked ? '1' : '';
+                                box.checked = true;
+                            } else {
+                                box.checked = box.dataset.ticked === '1';
+                            }
+                            box.disabled = whole;
+                        });
+                        this.form.deleteFavorites.disabled = whole || ${mameInfo.favoritesPath ? 'false' : 'true'};
                     ">
                         <span>
                             Delete the whole <code>${escapeHtml(mameInfo.iniPath)}</code> directory
