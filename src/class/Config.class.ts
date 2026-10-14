@@ -99,6 +99,8 @@ export default class Config {
     // many minutes without a key on the list of games.
     public frontIdleEnabled: boolean = true;
     public frontIdleMinutes: number = 2;
+    // While idle, the list goes to the game each message is about (Home.vue onMessageShown()).
+    public frontIdleShowsGames: boolean = true;
 
     // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
     // dot, or the dot alone, more discreet.
@@ -153,6 +155,7 @@ export default class Config {
                 ? configFile.boIdleMinutes
                 : 15;
             this.frontIdleEnabled = configFile.frontIdleEnabled !== false;
+            this.frontIdleShowsGames = configFile.frontIdleShowsGames !== false;
             this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
                 ? configFile.frontIdleMinutes
                 : 2;
@@ -206,6 +209,7 @@ export default class Config {
                 boIdleMinutes: this.boIdleMinutes,
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
+                frontIdleShowsGames: this.frontIdleShowsGames,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
                 setupOffline: this.setupOffline,
             }),

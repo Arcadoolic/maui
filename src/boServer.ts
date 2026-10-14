@@ -5238,6 +5238,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
                 <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
                 <label class="checkbox-row">
+                    <input type="checkbox" name="frontIdleShowsGames" ${config.frontIdleShowsGames ? 'checked' : ''}>
+                    Behind the idle curtain, the list of games goes to the game each best score is about
+                </label>
+                <label class="checkbox-row">
                     <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
                     ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
                 </label>
@@ -8973,8 +8977,9 @@ export function createBoApp(
         if (Number.isInteger(boIdleMinutes) && boIdleMinutes >= 0 && boIdleMinutes <= 1440) {
             config.boIdleMinutes = boIdleMinutes;
         }
-        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}`;
+        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`;
         config.frontIdleEnabled = req.body.frontIdleEnabled === 'on';
+        config.frontIdleShowsGames = req.body.frontIdleShowsGames === 'on';
         const frontIdleMinutes = Number(req.body.frontIdleMinutes);
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
@@ -8988,7 +8993,7 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}` !== previousFrontIdle
             || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
             // The front decides its mode and its badge's look once, when it loads (App.vue), and
             // builds its carousel and starts its idle watch when Home.vue is mounted.
