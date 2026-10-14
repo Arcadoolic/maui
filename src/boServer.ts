@@ -5346,6 +5346,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
                 <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
                 <label class="checkbox-row">
+                    <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
+                    ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
+                </label>
+                <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
                 </label>
@@ -8881,6 +8885,8 @@ export function createBoApp(
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
         }
+        const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
+        config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
@@ -8888,9 +8894,10 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle) {
-            // The front decides its mode once, when it loads (App.vue), and builds its carousel
-            // and starts its idle watch when Home.vue is mounted.
+            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}` !== previousFrontIdle
+            || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
+            // The front decides its mode and its badge's look once, when it loads (App.vue), and
+            // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
         await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
