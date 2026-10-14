@@ -120,6 +120,14 @@ export function saveLocalAvatar(pseudo3: string, png: Uint8Array): void {
  * Database.class.ts, which pulls in GameService.class -> MameService.class ->
  * Helpers.class.ts's @electron/remote import at module scope.
  */
+/**
+ * Whether the BO's default password was replaced: bo_user.secretsKey is only set by a sign-in, or
+ * a password change, with another password (boServer.ts unlockSecrets()). For the setup guide.
+ */
+export async function isDefaultPasswordReplaced(): Promise<boolean> {
+    return (await BoUser.findAll()).some(user => !!user.secretsKey);
+}
+
 export function createSequelize(): Sequelize {
     return new Sequelize({
         dialect: 'sqlite',

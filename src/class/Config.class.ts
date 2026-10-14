@@ -100,6 +100,14 @@ export default class Config {
     public frontIdleEnabled: boolean = true;
     public frontIdleMinutes: number = 2;
 
+    // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
+    // dot, or the dot alone, more discreet.
+    public onlineBadgeDotOnly: boolean = false;
+
+    // The setup guide was told the cabinet stays OFFLINE (SetupSteps.ts): its ONLINE step is done,
+    // and the packs are left to install by hand.
+    public setupOffline: boolean = false;
+
     public configPath!: string;
     protected _configLoaded: boolean = false;
     protected _plaintextSecrets: boolean = false;
@@ -148,6 +156,8 @@ export default class Config {
             this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
                 ? configFile.frontIdleMinutes
                 : 2;
+            this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
+            this.setupOffline = configFile.setupOffline === true;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
             if (this.dataKey) {
@@ -196,6 +206,8 @@ export default class Config {
                 boIdleMinutes: this.boIdleMinutes,
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
+                onlineBadgeDotOnly: this.onlineBadgeDotOnly,
+                setupOffline: this.setupOffline,
             }),
             {mode: FILE_MODE},
         );

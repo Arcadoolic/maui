@@ -1,17 +1,21 @@
 <template>
-    <div v-if="display" class="online-badge" :class="indicator" :title="display.title"></div>
+    <div v-if="display" class="online-badge" :class="[indicator, {'dot-only': dotOnly}]" :title="display.title">{{ dotOnly ? '' : display.label }}</div>
 </template>
 
 <script setup lang="ts">
-// A dot in the top right corner, the BO header badge's states and colors without its text: the
-// only sign of the connection to MAUI-API while the cabinet runs fullscreen, kept discreet.
+// ONLINE / OFFLINE and a dot in the top right corner, the BO header badge's states and colors
+// without the cabinet's name: the only sign of the connection to MAUI-API while the cabinet runs
+// fullscreen. The BO can leave only the dot, more discreet (Config.onlineBadgeDotOnly).
 import {computed, onMounted, onUnmounted, ref} from 'vue';
 import * as remote from '@electron/remote';
 import type {OnlineIndicator} from '@/class/OnlineSetup';
 import {describeFrontIndicator, ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
+import {getConfiguration} from '@/services';
 
 const REFRESH_MS = 5000;
 
+// Read once: the BO reloads the front when the setting changes.
+const dotOnly = getConfiguration().onlineBadgeDotOnly;
 const indicator = ref<OnlineIndicator | null>(null);
 const display = computed(() => describeFrontIndicator(indicator.value));
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -40,7 +44,19 @@ onUnmounted(() => clearInterval(timer));
         right: 0.8vw;
         z-index: 1000;
         display: flex;
+        align-items: center;
+        gap: 0.4vw;
+        font-family: 'Arcade_N', sans-serif;
+        font-size: 0.7vw;
+        padding: 0.3vw 0.5vw;
+        border-radius: 0.3vw;
+        background-color: rgba(0, 0, 0, 0.6);
         pointer-events: none;
+    }
+
+    .online-badge.dot-only {
+        padding: 0;
+        background-color: transparent;
     }
 
     .online-badge::before {

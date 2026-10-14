@@ -5,12 +5,16 @@ import * as remoteMain from '@electron/remote/main';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import {join} from 'path';
 import {homedir} from 'os';
-import {startCore, type StartedCore} from '@/boCore';
+import {getMameHomePath, isDefaultPasswordReplaced, startCore, type StartedCore} from '@/boCore';
 import {BO_URL_GLOBAL, BO_WAKE_GLOBAL, type BoUrlReader, type BoWaker} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
 import {ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
+import {describeSetup, type SetupProgress} from '@/class/SetupSteps';
+import {readSetupFacts} from '@/class/SetupFacts';
+import {isOnlineActive} from '@/class/RepositoryAuth';
+import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
 import {
     LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
@@ -38,6 +42,38 @@ let onlineSession: OnlineSession | undefined;
 // Read by the front's ONLINE badge (OnlineBadge.vue) through @electron/remote.
 const readOnlineIndicator: OnlineIndicatorReader = () => onlineIndicator(onlineSession?.getStatus());
 (global as Record<string, unknown>)[ONLINE_INDICATOR_GLOBAL] = readOnlineIndicator;
+
+// Read by the front's setup guide through @electron/remote. The password is read from the
+// database, so each call hands back the previous reading and starts the next one: the front asks
+// every few seconds, and is one call behind at most.
+let setupProgress: SetupProgress | null = null;
+let readingSetup = false;
+async function refreshSetupProgress(): Promise<void> {
+    if (readingSetup || !core) {
+        return;
+    }
+    readingSetup = true;
+    try {
+        await core.databaseReady;
+        const config = new Config();
+        config.load();
+        setupProgress = describeSetup(readSetupFacts({
+            config,
+            mameHomePath: getMameHomePath(),
+            passwordChanged: await isDefaultPasswordReplaced(),
+            onlineActive: isOnlineActive(),
+        }));
+    } catch (error) {
+        console.error('[background] Reading the setup steps failed:', error);
+    } finally {
+        readingSetup = false;
+    }
+}
+const readSetupProgress: SetupProgressReader = () => {
+    void refreshSetupProgress();
+    return setupProgress;
+};
+(global as Record<string, unknown>)[SETUP_PROGRESS_GLOBAL] = readSetupProgress;
 
 function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.ELECTRON_RENDERER_URL) {
