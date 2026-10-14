@@ -22,6 +22,7 @@ import {
     ensureFirstDirectory, getAvailablePlugins, getFirstExistingDirectory, getMameIniValue, getMameLocations,
     getMissingPlugins, repairPluginIni, resolveDirectoryPath, setMameIniValue, enableRequiredPlugins,
 } from '@/class/MameLocations';
+import {buildMameBackup, listMameBackupPaths, MAME_BACKUP_PARTS, parseMameBackupParts} from '@/class/MameBackup';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
 import {parseListFull} from '@/class/MameListFull';
@@ -3429,7 +3430,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Genres file (genre.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.genreIniPath)}${mameInfo.genreIniPath
                         ? escapeHtml(mameInfo.genreIniPath)
-                        : '<em>Not found — import a starting pack (Import tab) to '
+                        : '<em>Not found — import a starting pack (Import / Export tab) to '
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
                 <div class="info-field">
@@ -3443,7 +3444,7 @@ function renderMameInfoCard(mameInfo: MameInfo, info?: string): string {
                     <dt>Player count file (Multiplayer.ini, categorypath)</dt>
                     <dd>${renderFoundIcon(!!mameInfo.nplayersIniPath)}${mameInfo.nplayersIniPath
                         ? escapeHtml(mameInfo.nplayersIniPath)
-                        : '<em>Not found — import a starting pack (Import tab) to '
+                        : '<em>Not found — import a starting pack (Import / Export tab) to '
                             + 'install it at the path given by categorypath in ui.ini.</em>'}</dd>
                 </div>
             </dl>
@@ -4610,6 +4611,7 @@ function renderForm(
     deviceProbeState?: DeviceProbeState,
     remapState?: RemapState,
     gameRemapState?: GameRemapState,
+    exportError?: string,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
     // see /save, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
@@ -4654,8 +4656,8 @@ function renderForm(
         });
         sections.push({
             id: 'import',
-            label: 'Import',
-            html: renderImportSection(mameInfo, importError),
+            label: 'Import / Export',
+            html: renderImportSection(mameInfo, importError, exportError),
         });
         // Destructive/irreversible - only shown (and only actionable, see /reset) in Advanced configuration.
         if (isAdvanced) {
@@ -4672,7 +4674,7 @@ function renderForm(
     // of their own (missing plugins...) that would otherwise wrongly win just for
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
-        : importError !== undefined ? 'import'
+        : importError !== undefined || exportError !== undefined ? 'import'
             : (deviceProbeState !== undefined || remapState !== undefined
                 || gameRemapState !== undefined) ? 'gamepads'
                 : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
@@ -6335,10 +6337,31 @@ function renderStarterPackCard(): string {
  * The MAME tab's Import section, also re-rendered after each import. `error`: a failed
  * repository action.
  */
-function renderImportSection(mameInfo: MameInfo, error?: string): string {
+function renderImportSection(mameInfo: MameInfo, error?: string, exportError?: string): string {
     return (error ? `<p class="error flash">${escapeHtml(error)}</p>` : '')
         + renderConfPackCard(mameInfo)
-        + renderStarterPackCard();
+        + renderStarterPackCard()
+        + renderMameExportCard(exportError);
+}
+
+/** The light export of mame's own files (MameBackup.ts): never the roms nor the pictures. */
+function renderMameExportCard(error?: string): string {
+    return `
+        <section class="card">
+            <h2>Export MAME's configuration</h2>
+            <p class="info">A small ZIP of what ~/.mame holds besides the games: without the roms,
+            samples, pictures nor videos. Unzipped in ~/.mame, it puts each file back in place.</p>
+            ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
+            <form method="get" action="/mame/export">
+                ${MAME_BACKUP_PARTS.map(part => `
+                <label class="checkbox-row">
+                    <input type="checkbox" name="${part.id}" checked>
+                    ${escapeHtml(part.label)}
+                </label>`).join('')}
+                <button type="submit">Export</button>
+            </form>
+        </section>
+    `;
 }
 
 function humanFileSize(bytes: number): string {
@@ -6995,7 +7018,7 @@ function renderRepoImportCard(
             ${url ? `<p class="info">Repository: ${escapeHtml(url)}</p>` : ''}
             ${renderDiskSpaceInfo(mameInfo)}
             ${getMissingConfPackFiles(mameInfo).length
-                ? '<p class="info"><em>Install the configuration pack first (MAME > Import tab) to browse the game packs.</em></p>'
+                ? '<p class="info"><em>Install the configuration pack first (MAME > Import / Export tab) to browse the game packs.</em></p>'
                 : `<form method="get" action="/import/from-url/packs">
                     <button type="submit">Browse available packs</button>
                 </form>
@@ -7741,6 +7764,38 @@ export function createBoApp(
         res.send(renderForm(
             {mamePath}, mameInfo, req.session.boAdvanced === true,
         ));
+    });
+
+    // MAME tab > Import: the light export of ~/.mame (renderMameExportCard()).
+    app.get('/mame/export', (req, res) => {
+        const parts = parseMameBackupParts(MAME_BACKUP_PARTS.map(part => part.id).filter(id => req.query[id] === 'on'));
+        const iniPath = getMameHomePath();
+        const directory = (file: string, key: string, fallback: string) => resolveDirectoryPath(
+            getMameIniValue(join(iniPath, file), key) ?? fallback, iniPath,
+        );
+        const zip = parts.length ? buildMameBackup(iniPath, listMameBackupPaths(iniPath, parts, {
+            cfg: directory('mame.ini', 'cfg_directory', 'cfg'),
+            ctrlr: directory('mame.ini', 'ctrlrpath', 'ctrlr'),
+            nvram: directory('mame.ini', 'nvram_directory', 'nvram'),
+            ui: directory('ui.ini', 'ui_path', 'ui'),
+            categories: directory('ui.ini', 'categorypath', 'folders'),
+            hiscore: getHiscorePath(iniPath),
+        })) : null;
+        if (!zip) {
+            const config = new Config();
+            config.load();
+            const mameInfo = getMameInfo(config);
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath || ''}, mameInfo, req.session.boAdvanced === true,
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+                parts.length ? 'Nothing to export: none of these files exists yet.' : 'Tick at least one box before exporting.',
+            ));
+            return;
+        }
+        const date = new Date().toISOString().slice(0, 10);
+        res.set('Content-Type', 'application/zip');
+        res.set('Content-Disposition', `attachment; filename="mame-config-${date}.zip"`);
+        res.send(zip);
     });
 
     // The setup guide (Lot VI.2, SetupBoPage.ts): the steps of a new cabinet's setup, the current
@@ -8623,7 +8678,7 @@ export function createBoApp(
 
         if (getMissingConfPackFiles(mameInfo).length) {
             res.status(422).send(await renderFavoritesTab(req, {}, {
-                error: 'Install the configuration pack first (MAME > Import tab).',
+                error: 'Install the configuration pack first (MAME > Import / Export tab).',
             }));
             return;
         }
