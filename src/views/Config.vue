@@ -1,27 +1,25 @@
 <template>
     <div class="first-run">
-        <p>Configure the App</p>
-        <p class="url"><a href="#" @click.prevent="openConfigUrl">{{configUrl}}</a></p>
+        <SetupChecklist :progress="progress"/>
     </div>
 </template>
 
 <script setup lang="ts">
 import * as remote from '@electron/remote';
-import {useBoUrl} from '@/composables/useBoUrl';
+import SetupChecklist from '@/components/SetupChecklist.vue';
+import {useSetupProgress} from '@/composables/useSetupProgress';
 
-// This machine's address on a dedicated cabinet, whose BO is opened from another one.
-const configUrl = useBoUrl();
+// No configuration yet: the setup guide's steps, done from the BO on another screen. Init.vue's
+// splash window is too small for them.
+remote.getCurrentWindow().setSize(640, 560);
+remote.getCurrentWindow().center();
 
-// Opened in the OS's default browser (not navigated to in this frameless kiosk window) - the
-// whole point is to configure the app from a real browser, per the message above.
-function openConfigUrl() {
-    remote.shell.openExternal(configUrl.value);
-}
+const progress = useSetupProgress();
 </script>
 
 <style scoped>
-    /* Shown in Init.vue's small square splash window (346x354): centered in it, with side
-       padding and wrapping so nothing gets cut. */
+    /* The window is made 640x560 above: centered in it, with side padding and wrapping so nothing
+       gets cut. */
     .first-run {
         position: relative;
         display: flex;
@@ -31,9 +29,10 @@ function openConfigUrl() {
         box-sizing: border-box;
         width: 100%;
         height: 100vh;
-        padding: 0 16px;
+        padding: 0 24px;
         background-color: #000000;
         text-align: center;
+        font-size: 17px;
     }
     /* The splash logo behind the message: faint, but still recognizable. */
     .first-run::before {
@@ -44,21 +43,7 @@ function openConfigUrl() {
         opacity: 0.18;
         pointer-events: none;
     }
-    p {
+    .first-run > * {
         position: relative;
-        margin: 6px 0;
-        text-shadow: 0 1px 4px #000000;
-    }
-    * {
-        color: white
-    }
-    .url {
-        font-weight: bold;
-        font-size: 0.85em;
-        overflow-wrap: anywhere;
-    }
-    /* Same yellow as Home's game titles. */
-    .url a {
-        color: #fff513;
     }
 </style>

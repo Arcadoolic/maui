@@ -4,6 +4,16 @@
 
 export type SetupStepId = 'account' | 'mame' | 'plugins' | 'online' | 'confPack' | 'starterPack';
 
+// The steps' names, on the BO's page and on the cabinet's screen alike.
+export const SETUP_STEP_TITLES: Record<SetupStepId, string> = {
+    account: 'BO account',
+    mame: 'MAME',
+    plugins: 'MAME plugins',
+    online: 'ONLINE',
+    confPack: 'Configuration pack',
+    starterPack: 'Starter pack',
+};
+
 // done: nothing left to do. current: the one to do now (one at most). todo: can be done, after
 // the current one. blocked: waits for an earlier step. manual: OFFLINE, to install by hand (the
 // packs are only downloaded from the repository ONLINE).
