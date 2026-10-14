@@ -107,7 +107,8 @@ import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
 import {IdleWatch} from '@/class/IdleWatch';
-import {scoreEventMessages, type BandMessage} from '@/class/CabinetMessages';
+import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
+import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
 import {createOnlineClient} from '@/class/OnlineClient';
 
 let gameService: GameService;
@@ -194,17 +195,30 @@ const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     }
 });
 
+function readAvailableUpdate(): string | null {
+    try {
+        const read = remote.getGlobal(UPDATE_NOTICE_GLOBAL) as UpdateNoticeReader | undefined;
+        return read ? read() : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Read each time the cabinet turns idle: MAUI-API's latest score events in ONLINE mode, else, or
- * when there is none to read, the cabinet's own latest best scores. Never throws.
+ * when there is none to read, the cabinet's own latest best scores. A newer release of MAUI
+ * (UpdateWatch.ts) is announced first, once per idle band. Never throws.
  */
 async function loadIdleMessages() {
     try {
         const client = await createOnlineClient();
         const events = client ? await client.getScoreEvents(IDLE_MESSAGES) : null;
-        idleMessages.value = events?.kind === 'ok' && events.value.length
+        const scores = events?.kind === 'ok' && events.value.length
             ? scoreEventMessages(events.value)
             : await getHiscoreService().loadLatestBests(IDLE_MESSAGES);
+        // A newer release of MAUI opens the band, once, before the scores.
+        const update = readAvailableUpdate();
+        idleMessages.value = update ? [updateNoticeMessage(update), ...scores] : scores;
     } catch (err) {
         idleMessages.value = [];
         Log.warn('[Home] Messages not loaded: ' + (err instanceof Error ? err.message : String(err)));

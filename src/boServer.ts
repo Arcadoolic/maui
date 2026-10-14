@@ -70,7 +70,7 @@ import {
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
-import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases} from '@/class/ReleaseList';
+import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {
@@ -4750,8 +4750,6 @@ function renderForm(
     return renderSubtabbedPage('mame', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab, launchButton);
 }
 
-const GITHUB_REPO = 'Arcadoolic/maui';
-
 interface GithubReleaseAsset {
     name: string;
     browser_download_url: string;
@@ -4829,7 +4827,7 @@ async function fetchGithubReleases(): Promise<GithubRelease[]> {
     if (releasesCache && Date.now() - releasesCache.fetchedAt < GITHUB_CACHE_TTL_MS) {
         return releasesCache.releases;
     }
-    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases`, {
+    const response = await fetch(MAUI_RELEASES_URL, {
         headers: {Accept: 'application/vnd.github+json'},
     });
     if (!response.ok) {
