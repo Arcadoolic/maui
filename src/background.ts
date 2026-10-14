@@ -25,7 +25,8 @@ import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
 import {getAppIconPath} from '@/staticPath';
 import {totalmem} from 'os';
-import {isKioskLayout} from '@/class/KioskRestart';
+import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
+import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
 import {resolveUiMode} from '@/class/UiMode';
 
@@ -181,14 +182,21 @@ app.on('ready', async () => {
         // import), a reset needs a real process restart: services.ts only ever builds its
         // MameService/GameService/... once (see services.ts's initServices()), so those would
         // keep serving stale data - parsed from the mame home files /reset just deleted - even
-        // after reloading to /init and going through first-run setup again.
-        //
-        // app.relaunch() is NOT used here: under `electron-vite dev` the app is a child process
-        // orchestrated by electron-vite's dev server, and relaunch()'s re-spawn doesn't reconnect
-        // to that setup - the process just exits and nothing comes back. So the /reset response
-        // tells the user to close and restart manually (`just serve` in dev; relaunching the
-        // packaged app otherwise), and this just performs the actual exit.
-        app.exit(0);
+        // after reloading to /init and going through first-run setup again. How the application
+        // comes back depends on how it runs (AppRelaunch.ts); the BO's page says the same.
+        void chooseRelaunch({isPackaged: app.isPackaged, kiosk: isKioskLayout(app.isPackaged), canRestartKiosk})
+            .catch((): RelaunchMode => 'manual')
+            .then((mode) => {
+                if (mode === 'kiosk') {
+                    // The whole session goes down, this process with it.
+                    restartKiosk();
+                    return;
+                }
+                if (mode === 'self') {
+                    app.relaunch(relaunchOptions(process.env.APPIMAGE, process.argv));
+                }
+                app.exit(0);
+            });
     }, (romName) => {
         // The BO's Favorites tab: the front moves to this game (Home.vue).
         if (!win || win.isDestroyed()) {
