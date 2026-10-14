@@ -16,6 +16,7 @@ import {describeSetup, type SetupProgress} from '@/class/SetupSteps';
 import {readSetupFacts} from '@/class/SetupFacts';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
+import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
 import {
     LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
@@ -76,6 +77,10 @@ const readSetupProgress: SetupProgressReader = () => {
     return setupProgress;
 };
 (global as Record<string, unknown>)[SETUP_PROGRESS_GLOBAL] = readSetupProgress;
+
+// Read by the idle band (Home.vue) through @electron/remote.
+const readAvailableUpdate: UpdateNoticeReader = () => core?.availableUpdate() ?? null;
+(global as Record<string, unknown>)[UPDATE_NOTICE_GLOBAL] = readAvailableUpdate;
 
 function loadPath(winVar: BrowserWindow, path: string) {
     if (process.env.ELECTRON_RENDERER_URL) {

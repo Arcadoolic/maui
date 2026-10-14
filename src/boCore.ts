@@ -23,6 +23,7 @@ import {readMameVersion} from '@/class/MameVersion';
 import {BoOnDemand, type BoApp} from '@/class/BoOnDemand';
 import {CABINET_BO_PORT, describeBoUrl} from '@/class/BoUrl';
 import {isKioskLayout} from '@/class/KioskRestart';
+import {UpdateWatch} from '@/class/UpdateWatch';
 // Same *TS import shape as Database.class.ts, which is not imported: it pulls in
 // GameService.class -> MameService.class -> Helpers.class.ts's @electron/remote import at module
 // scope, which would break the main process. The models themselves are electron-free.
@@ -163,6 +164,8 @@ export interface StartedCore extends BoCore {
     bo: BoOnDemand;
     // Where the BO is reached from, as the front shows it (BoUrl.ts).
     getUrl(): string;
+    // A newer release of MAUI, announced by the idle band (UpdateWatch.ts); null without one.
+    availableUpdate(): string | null;
     // Closes the BO's port(s).
     close(): void;
 }
@@ -279,11 +282,15 @@ export function startCore(
     // Neither keeps the process alive, nor outlives the port.
     idleCheck.unref();
     server.on('close', () => clearInterval(idleCheck));
+    const updates = new UpdateWatch(getRunningVersion());
+    updates.start();
+    server.on('close', () => updates.stop());
     return {
         ...core,
         databaseReady,
         bo,
         getUrl: () => describeBoUrl({cabinet, lanAddress: getLanAddress(), onCabinetPort, port}),
+        availableUpdate: () => updates.available(),
         close: () => {
             server.close();
             cabinetServer?.close();

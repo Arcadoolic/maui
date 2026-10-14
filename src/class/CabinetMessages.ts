@@ -15,6 +15,21 @@ export interface BandMessage {
     kind: 'score' | 'system';
     // The game the message is about, when it is about one: the front goes to it (Home.vue).
     romName?: string;
+    // Shown once, when the band comes on; the band then goes round the others only.
+    once?: boolean;
+}
+
+/**
+ * A newer release of MAUI (UpdateWatch.ts): the first message of each idle band. Short enough to
+ * stop in its middle: in the band's Arcade font, about 42 characters fit in 90% of its width.
+ */
+export function updateNoticeMessage(version: string): BandMessage {
+    return {
+        id: `maui-update-${version}`,
+        text: `MAUI **${plain(version)}** is out: update from the BO`,
+        kind: 'system',
+        once: true,
+    };
 }
 
 export interface MessageSegment {
