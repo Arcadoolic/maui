@@ -4,6 +4,7 @@ import {app, BrowserWindow} from 'electron';
 import * as remoteMain from '@electron/remote/main';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import {join} from 'path';
+import {writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {getMameHomePath, isDefaultPasswordReplaced, startCore, type StartedCore} from '@/boCore';
 import {BO_URL_GLOBAL, BO_WAKE_GLOBAL, type BoUrlReader, type BoWaker} from '@/class/BoWakeBridge';
@@ -184,7 +185,8 @@ app.on('ready', async () => {
         // keep serving stale data - parsed from the mame home files /reset just deleted - even
         // after reloading to /init and going through first-run setup again. How the application
         // comes back depends on how it runs (AppRelaunch.ts); the BO's page says the same.
-        void chooseRelaunch({isPackaged: app.isPackaged, kiosk: isKioskLayout(app.isPackaged), canRestartKiosk})
+        const devRelaunchFile = process.env.MAUI_DEV_RELAUNCH_FILE;
+        void chooseRelaunch({isPackaged: app.isPackaged, kiosk: isKioskLayout(app.isPackaged), canRestartKiosk, devRelaunchFile})
             .catch((): RelaunchMode => 'manual')
             .then((mode) => {
                 if (mode === 'kiosk') {
@@ -194,6 +196,10 @@ app.on('ready', async () => {
                 }
                 if (mode === 'self') {
                     app.relaunch(relaunchOptions(process.env.APPIMAGE, process.argv));
+                }
+                if (mode === 'dev' && devRelaunchFile) {
+                    // Read by `just serve` once this process and its dev server are gone.
+                    writeFileSync(devRelaunchFile, '');
                 }
                 app.exit(0);
             });

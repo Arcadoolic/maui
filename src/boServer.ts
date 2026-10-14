@@ -4598,7 +4598,7 @@ function renderMauiDangerZoneCard(info?: string): string {
             <p class="error">Targeted, irreversible deletions of mame-awesome-ui's own data
             (~/.mame-awesome-ui). Each checkbox acts independently of the others - tick what you want
             to delete, then submit. Deleting the configuration, the database or the ONLINE session
-            then restarts the application (by hand in development: <code>just serve</code>).</p>
+            then restarts the application.</p>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/reset" onsubmit="
                 var items = [];
@@ -5030,7 +5030,10 @@ async function runUpdateInstall(res: Response, title: string, downloadUrl: strin
  * page back as soon as the server answers again.
  */
 async function renderRelaunchNotice(what: string, backHref: string): Promise<string> {
-    const mode = await chooseRelaunch({isPackaged: electronApp.isPackaged, kiosk: isKioskLayout(), canRestartKiosk})
+    const mode = await chooseRelaunch({
+        isPackaged: electronApp.isPackaged, kiosk: isKioskLayout(), canRestartKiosk,
+        devRelaunchFile: process.env.MAUI_DEV_RELAUNCH_FILE,
+    })
         .catch((): RelaunchMode => 'manual');
     const restart = mode === 'manual'
         ? '<p>The application will close in a moment. <strong>Relaunch it manually</strong> to '
