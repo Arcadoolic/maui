@@ -48,7 +48,7 @@
     },
     "devDependencies": {
         "@arcadoolic/mhiex": "github:Arcadoolic/mhiex#2.2.6",
-        "@electron/rebuild": "^4.2.0",
+        "@electron/rebuild": "^4.2.1",
         "@eslint/js": "^10.0.1",
         "@semantic-release/changelog": "^7.0.0",
         "@semantic-release/commit-analyzer": "^13.0.1",
