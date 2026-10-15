@@ -1,4 +1,5 @@
 import ControllerMappingJson from '../assets/controllers.json';
+import {SharedJoysticks, type PolledPad} from './SharedJoysticks';
 
 export default class Gamepads {
     // Threshold an axis must cross to count as "pressed", and fall back under to count as
@@ -21,6 +22,10 @@ export default class Gamepads {
     // window getting its focus back or a controller being plugged in.
     protected static suspended: boolean = false;
     protected static warnedUnmappedGamepadIds: Set<string> = new Set();
+    // Linux only: the joysticks Chromium merges into one gamepad (a two-player arcade encoder),
+    // read from /dev/input/js* instead of the Gamepad API - see SharedJoysticks.ts.
+    public static sharedJoysticks: SharedJoysticks|null =
+        typeof process !== 'undefined' && process.platform === 'linux' ? new SharedJoysticks() : null;
 
     // Bound once and reused for both addEventListener and removeEventListener - passing
     // `this.onGamepadconnected.bind(this)` at each call site (as this used to) creates a new
@@ -44,7 +49,11 @@ export default class Gamepads {
             window.addEventListener('gamepadconnected', this.boundOnGamepadconnected);
             window.addEventListener('gamepaddisconnected', this.boundOnGamepaddisconnected);
         }
-        if (this.gamepadsIndex.length) {
+        this.sharedJoysticks?.refresh();
+        // Chromium only reports a gamepad once one of its buttons was pressed: player 1's joystick
+        // of a shared encoder, which it never reports, must start the polling on its own.
+        if (this.gamepadsIndex.length || this.sharedJoysticks?.list().length) {
+            this.emitGamepadCountUpdate();
             this.resumePolling();
         }
     }
@@ -81,34 +90,21 @@ export default class Gamepads {
             return;
         }
 
-        for (const navigatorGamepadsKey in navigator.getGamepads()) {
-            if (!navigatorGamepadsKey) {
-                continue;
-            }
-            const gamepad: Gamepad|null = navigator.getGamepads()[navigatorGamepadsKey];
-            if (!gamepad || !gamepad.connected || !gamepad.buttons) {
-                continue;
-            }
+        for (const gamepad of this.connectedPads(true)) {
             const gamepadsKey = gamepad.index;
 
             if (!this.gamepadKeyPressed[gamepadsKey]) {
                 this.gamepadKeyPressed[gamepadsKey] = {axes: [], buttons: []};
             }
 
-            // Many gamepads/arcade encoders - especially on Linux - never get tagged
-            // mapping: "standard" by the browser and aren't in controllers.json either, so
-            // fall back to the standard layout instead of silently dropping their input:
-            // most of them follow it in practice regardless of what the browser reports.
-            let mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
-            if (!mapping) {
-                mapping = this.controllerMapping.standard;
-                if (!this.warnedUnmappedGamepadIds.has(gamepad.id)) {
-                    this.warnedUnmappedGamepadIds.add(gamepad.id);
-                    console.warn(
-                        `[Gamepads] No mapping found for gamepad "${gamepad.id}" `
-                        + `(mapping: "${gamepad.mapping}") - falling back to the standard layout.`,
-                    );
-                }
+            const mapping = this.mappingFor(gamepad);
+            if (mapping === this.controllerMapping.standard && !gamepad.mapping
+                && !this.warnedUnmappedGamepadIds.has(gamepad.id)) {
+                this.warnedUnmappedGamepadIds.add(gamepad.id);
+                console.warn(
+                    `[Gamepads] No mapping found for gamepad "${gamepad.id}" `
+                    + `(mapping: "${gamepad.mapping}") - falling back to the standard layout.`,
+                );
             }
 
             // Joysticks
@@ -149,7 +145,7 @@ export default class Gamepads {
                 }
             });
 
-            gamepad.buttons.forEach((button: GamepadButton, index: number) => {
+            gamepad.buttons.forEach((button, index: number) => {
                 let eventName: string|null = null;
                 if (mapping.buttons[index]) {
                     const wasPressed = this.gamepadKeyPressed[gamepadsKey].buttons[index];
@@ -178,6 +174,35 @@ export default class Gamepads {
     }
 
     /**
+     * The gamepads to poll: the Gamepad API's, less those of a model read from /dev/input/js*,
+     * plus those joysticks (read first when `read`).
+     */
+    protected static connectedPads(read = false): PolledPad[] {
+        const pads: PolledPad[] = [];
+        for (const gamepad of navigator.getGamepads?.() ?? []) {
+            if (!gamepad || !gamepad.connected || !gamepad.buttons) {
+                continue;
+            }
+            if (this.sharedJoysticks?.handles(gamepad.id)) {
+                continue;
+            }
+            pads.push(gamepad);
+        }
+        if (this.sharedJoysticks) {
+            pads.push(...(read ? this.sharedJoysticks.read() : this.sharedJoysticks.list()));
+        }
+        return pads;
+    }
+
+    // Many gamepads/arcade encoders - especially on Linux - never get tagged
+    // mapping: "standard" by the browser and aren't in controllers.json either, so
+    // fall back to the standard layout instead of silently dropping their input:
+    // most of them follow it in practice regardless of what the browser reports.
+    protected static mappingFor(gamepad: PolledPad): ControllerMapping {
+        return this.controllerMapping[gamepad.mapping || gamepad.id] ?? this.controllerMapping.standard;
+    }
+
+    /**
      * Pauses the polling loop (e.g. on window blur, or once the last gamepad disconnects) and
      * flushes a gamepadKeyup for anything still held, so no view is left thinking a key stayed
      * pressed forever. Deliberately leaves the gamepadconnected/gamepaddisconnected listeners
@@ -189,15 +214,8 @@ export default class Gamepads {
         this.stop = true;
         this.running = false;
         cancelAnimationFrame(this.animationFrameRequest);
-        if (!navigator.getGamepads()) {
-            return;
-        }
-        for (let gamepadIndex = 0; gamepadIndex < navigator.getGamepads().length; gamepadIndex++) {
-            const gamepad = navigator.getGamepads()[gamepadIndex];
-            if (!gamepad) {
-                continue;
-            }
-            return this.stopGamepadListeners(gamepad, gamepadIndex);
+        for (const gamepad of this.connectedPads()) {
+            this.stopGamepadListeners(gamepad, gamepad.index);
         }
     }
 
@@ -206,9 +224,9 @@ export default class Gamepads {
      * @param gamepad
      * @param gamepadIndex
      */
-    public static stopGamepadListeners(gamepad: Gamepad, gamepadIndex: number) {
-        const mapping = this.controllerMapping[gamepad.mapping || gamepad.id];
-        if (!mapping || !this.gamepadKeyPressed[gamepadIndex]) {
+    public static stopGamepadListeners(gamepad: PolledPad, gamepadIndex: number) {
+        const mapping = this.mappingFor(gamepad);
+        if (!this.gamepadKeyPressed[gamepadIndex]) {
             return;
         }
         for (let axesIndex = 0; axesIndex < this.gamepadKeyPressed[gamepadIndex].axes.length; axesIndex++) {
@@ -236,6 +254,7 @@ export default class Gamepads {
         if (this.gamepadsIndex.indexOf(event.gamepad.index) === -1) {
             this.gamepadsIndex.push(event.gamepad.index);
         }
+        this.sharedJoysticks?.refresh();
         this.emitGamepadCountUpdate();
         // Resumes polling if it was paused (e.g. this is the first gamepad reconnecting after
         // the previous one dropped out) - a no-op via the running guard otherwise.
@@ -244,13 +263,20 @@ export default class Gamepads {
 
     protected static onGamepaddisconnected(e: Event) {
         const event: GamepadEvent = e as GamepadEvent;
+        // A shared encoder unplugged: its joysticks go, with a keyup for whatever was held.
+        const sharedBefore = this.sharedJoysticks?.list() ?? [];
+        this.sharedJoysticks?.refresh();
+        const sharedAfter = this.sharedJoysticks?.list() ?? [];
+        for (const pad of sharedBefore.filter((before) => !sharedAfter.includes(before))) {
+            this.stopGamepadListeners(pad, pad.index);
+        }
         if (this.gamepadsIndex.indexOf(event.gamepad.index) === -1) {
             this.emitGamepadCountUpdate();
             return;
         }
         this.gamepadsIndex.splice(this.gamepadsIndex.indexOf(event.gamepad.index), 1);
         this.stopGamepadListeners((e as GamepadEvent).gamepad, (e as GamepadEvent).gamepad.index);
-        if (!this.gamepadsIndex.length) {
+        if (!this.gamepadsIndex.length && !this.sharedJoysticks?.list().length) {
             this.stopGamepadsListeners();
         }
         this.emitGamepadCountUpdate();
@@ -259,7 +285,7 @@ export default class Gamepads {
     protected static emitGamepadCountUpdate() {
         window.dispatchEvent(new CustomEvent(
             'gamepadCountUpdate',
-            { detail: {gamepadCount: this.gamepadsIndex.length }},
+            { detail: {gamepadCount: this.connectedPads().length }},
         ));
     }
 }
