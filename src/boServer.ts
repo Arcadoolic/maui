@@ -24,7 +24,10 @@ import {
 } from '@/class/MameLocations';
 import {buildMameBackup, listMameBackupPaths, MAME_BACKUP_PARTS, parseMameBackupParts} from '@/class/MameBackup';
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
-import {parseUiSeqs, removeTokenFromSeq} from '@/class/MameInputSeq';
+import {
+    addSeqAlternative, browserKeyTokens, browserMouseToken, describeSeqAlternative, parseInputDefaults, parseUiSeqs, removeSeqAlternative, removeTokenFromSeq,
+    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults,
+} from '@/class/MameInputSeq';
 import {parseListFull} from '@/class/MameListFull';
 import {
     compareGameFields,
@@ -1766,7 +1769,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         /* Subtabs on the left, the page's action (see renderSubtabbedPage()'s navAction) pinned to
            the right of the same row; wraps under them on a narrow screen. */
         /* Sticky: the MAME launch/close button stays in reach while scrolling a long subtab (the
-           Gamepads tables especially). */
+           Controls tables especially). */
         .subtabs-bar {
             position: sticky;
             top: 0;
@@ -2618,7 +2621,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .subtabs a.active:hover {
             background-color: var(--accent);
         }
-        /* Player switcher inside the Gamepads cards (see renderPlayerTabs()) - same pill look as
+        /* Player switcher inside the Controls cards (see renderPlayerTabs()) - same pill look as
            .subtabs above, one level down. */
         .player-tabs {
             display: inline-flex;
@@ -2714,7 +2717,70 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             grid-column: 1 / -1;
             margin: 0;
         }
-        /* Gamepads tab's "Detected devices": one card per device MAME reports, same inset look
+        /* Controls card: what triggers an action, one pill per key/button, its device in front. */
+        .control-form {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 0;
+        }
+        .control-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+        .control-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 100%;
+            padding: 2px 4px 2px 8px;
+            font-size: 0.9em;
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-subtle);
+            border-radius: 999px;
+            overflow-wrap: anywhere;
+        }
+        .control-kind {
+            font-size: 0.75em;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .control-chip-joystick .control-kind {
+            color: var(--accent);
+        }
+        .control-chip-keyboard .control-kind {
+            color: var(--warn);
+        }
+        .control-chips .control-remove {
+            margin: 0;
+            padding: 0 6px;
+            line-height: 1.6;
+            color: var(--text-muted);
+            background-color: transparent;
+            border-radius: 999px;
+        }
+        .control-chips .control-remove:hover:not(:disabled) {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        .control-none {
+            font-size: 0.9em;
+            font-style: italic;
+            color: var(--text-muted);
+        }
+        .control-form button.listening {
+            color: var(--bg);
+            background-color: var(--warn);
+        }
+        .control-reread {
+            margin-top: 16px;
+        }
+        /* Controls tab's "Detected devices": one card per device MAME reports, same inset look
            as the binding cards. */
         .device-grid {
             display: grid;
@@ -3137,7 +3203,74 @@ function renderPageTail(): string {
             } catch (error) { /* nothing to restore */ }
         })();
 
-        // Player switchers of the Gamepads cards (see renderPlayerTabs()). Opens on the tab the
+        // The Controls card's "Add a key or mouse button": the next key pressed or mouse button
+        // clicked in the page is sent as MAME's token for it (control-listen-codes, built from what
+        // MAME listed). Clicking the same button again, or 15 seconds without a press, cancels.
+        (function () {
+            var data = document.getElementById('control-listen-codes');
+            if (!data) {
+                return;
+            }
+            var codes = JSON.parse(data.textContent);
+            var listening = null;
+            function stop() {
+                if (!listening) {
+                    return;
+                }
+                clearTimeout(listening.timer);
+                listening.button.classList.remove('listening');
+                listening.button.textContent = listening.label;
+                document.removeEventListener('keydown', onKey, true);
+                document.removeEventListener('mousedown', onMouse, true);
+                // The menu a right click opens comes after its mousedown: still blocked a moment.
+                setTimeout(function () {
+                    document.removeEventListener('contextmenu', onContextMenu, true);
+                }, 1000);
+                listening = null;
+            }
+            function send(token, event) {
+                event.preventDefault();
+                event.stopPropagation();
+                var form = listening.button.form;
+                if (!token) {
+                    listening.button.textContent = 'Not known to MAME - try another';
+                    return;
+                }
+                stop();
+                form.elements.code.value = token;
+                form.requestSubmit(form.querySelector('[data-control-add]'));
+            }
+            function onKey(event) {
+                send(codes.keys[event.code], event);
+            }
+            function onMouse(event) {
+                if (event.target === listening.button) {
+                    return; // its click handler cancels
+                }
+                send(codes.mouse[event.button], event);
+            }
+            function onContextMenu(event) {
+                event.preventDefault();
+            }
+            document.querySelectorAll('[data-control-listen]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var again = listening && listening.button === button;
+                    stop();
+                    if (again) {
+                        return;
+                    }
+                    listening = {button: button, label: button.textContent, timer: setTimeout(stop, 15000)};
+                    button.classList.add('listening');
+                    button.textContent = 'Press a key or click…';
+                    document.addEventListener('keydown', onKey, true);
+                    document.addEventListener('mousedown', onMouse, true);
+                    // A right click opens no menu while listening.
+                    document.addEventListener('contextmenu', onContextMenu, true);
+                });
+            });
+        })();
+
+        // Player switchers of the Controls cards (see renderPlayerTabs()). Opens on the tab the
         // server asks for (data-active: the one holding the command just captured/reset), else
         // the last one picked in this card (kept across the page swaps every form submission
         // does), else the first.
@@ -3174,7 +3307,7 @@ function renderPageTail(): string {
             });
         })();
 
-        // While a MAME config session runs (the Gamepads tab marks it with data-mame-session),
+        // While a MAME config session runs (the Controls tab marks it with data-mame-session),
         // ask the server every couple of seconds whether it's still alive, and reload the page
         // once it isn't - MAME can be closed from its own window, which the server-rendered
         // "Close MAME" buttons and "running" status would otherwise keep showing. The interval
@@ -3587,7 +3720,7 @@ function joycodeNumber(joycode: string): number {
 }
 
 /**
- * The controller file (see MameCtrlr.ts) the Gamepads tab pins devices to their JOYCODE number
+ * The controller file (see MameCtrlr.ts) the Controls tab pins devices to their JOYCODE number
  * in: whichever one mame.ini's `ctrlr` already names, else "maui" (set in mame.ini on the first
  * pin, so every MAME launch - kiosk, BO probes and sessions - loads it). Resolved under the first
  * entry of `ctrlrpath`, relative to the mame home like every launch's cwd.
@@ -3777,14 +3910,18 @@ interface RemapAction {
 }
 
 /**
- * Global (default.cfg, not per-game) remap actions offered on the Gamepads tab, grouped for
- * display. Grows over time (see renderRemapCard()'s own comment) - starts with just enough to
- * make the cabinet joystick-only usable: quitting a game, and P1's coin/start (the two inputs
- * every driver needs before its own P1 directions/buttons even come into play).
+ * Global (default.cfg, not per-game) actions offered on the Controls tab, grouped for display.
+ * Grows over time (see renderControlsCard()'s own comment): MAME's system commands a cabinet
+ * needs, then each player's coin, start, directions and buttons.
  */
 const REMAP_GROUPS: { title: string; actions: RemapAction[] }[] = [
     {title: 'System', actions: [
         {portType: 'UI_CANCEL', label: 'Quit MAME'},
+        {portType: 'UI_PAUSE', label: 'Pause'},
+        {portType: 'UI_MENU', label: 'MAME menu'},
+        {portType: 'SERVICE', label: 'Service mode'},
+        {portType: 'UI_SOFT_RESET', label: 'Soft reset'},
+        {portType: 'UI_RESET_MACHINE', label: 'Hard reset'},
     ]},
     {title: 'Player 1', actions: [
         {portType: 'COIN1', label: 'Insert coin'},
@@ -3825,11 +3962,13 @@ const REMAP_ACTIONS_BY_TYPE = new Map<string, RemapAction>(
 );
 
 interface RemapState {
-    // Which action this state is about - renderRemapCard() only shows a flash message on the one
-    // form just submitted, not every action's form at once.
+    // Which action this state is about - renderControlsCard() only shows a flash message on the one
+    // form just submitted, not every action's form at once. Empty for the card as a whole (reading
+    // MAME's defaults).
     portType: string;
     error?: string;
-    capturedToken?: string;
+    // The other actions the control just added also triggers.
+    sharedWith?: string[];
     // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
     // binds it to them by default - shown so the user knows why e.g. the menu key changed.
     releasedFrom?: string[];
@@ -3867,7 +4006,7 @@ interface AdoptedMame extends CaptureTarget {
 }
 
 // Module-scope: at most one config session at a time, explicitly started/stopped by a BO user from
-// the Gamepads tab (see startMameConfigSession()/stopMameConfigSession()/captureOnePress() below) -
+// the Controls tab (see startMameConfigSession()/stopMameConfigSession()/captureOnePress() below) -
 // there's only one cabinet (one MAME window) to configure, so users signed in at the same time
 // share it rather than each getting their own.
 let mameConfigSession: MameConfigSession | undefined;
@@ -3879,7 +4018,7 @@ function isMameConfigSessionAlive(): boolean {
 let adoptedMame: AdoptedMame | undefined;
 
 /**
- * Picks up the capture-ready game MAUI is running, if any. Called wherever the Gamepads cards are
+ * Picks up the capture-ready game MAUI is running, if any. Called wherever the Controls cards are
  * rendered or act, so the per-game card works on it without a launch from here.
  */
 function refreshAdoptedMame(config: Config, romNames: string[]): void {
@@ -4084,7 +4223,7 @@ function hasPendingCfgEdits(): boolean {
 }
 
 /**
- * Warning shown on the Gamepads cards once a capture/reset is saved but not yet in effect in the
+ * Warning shown on the Controls cards once a capture/reset is saved but not yet in effect in the
  * running MAME - the relaunch button itself sits at the top of the page (see renderForm()).
  */
 function renderPendingRelaunchNotice(): string {
@@ -4176,21 +4315,18 @@ const UI_PORT_LABELS: Record<string, string> = {
  * press then feeds both. (Observed on 0.289: UI_CANCEL on JOYCODE_1_BUTTON9 also opened UI_MENU's
  * config menu, its default binding.) So for every IN_GAME_UI_PORTS entry other than `portType`
  * whose effective sequence holds `token` - default.cfg's override if any, else what MAME reported
- * at session start (capture-daemon.lua's ui-seqs.txt) - writes that sequence back without it.
- * Returns the ports it changed.
+ * at session start (capture-daemon.lua's ui-seqs.txt), else MAME's defaults when the Controls
+ * card read them (`defaults`) - writes that sequence back without it. Returns the ports it changed.
  */
-function releaseTokenFromInGameUiPorts(cfgPath: string, portType: string, token: string): string[] {
+function releaseTokenFromInGameUiPorts(cfgPath: string, portType: string, token: string, defaults?: InputDefaults): string[] {
     const target = getCaptureTarget();
-    if (!target) {
-        return [];
-    }
-    const seqsPath = join(target.dir, 'ui-seqs.txt');
-    const sessionSeqs = existsSync(seqsPath) ? parseUiSeqs(readFileSync(seqsPath, 'utf8')) : new Map<string, string>();
+    const seqsPath = target ? join(target.dir, 'ui-seqs.txt') : undefined;
+    const sessionSeqs = seqsPath && existsSync(seqsPath) ? parseUiSeqs(readFileSync(seqsPath, 'utf8')) : new Map<string, string>();
     const overrides = readDefaultCfgUiInputs(cfgPath);
 
     const released: string[] = [];
     for (const otherPort of IN_GAME_UI_PORTS) {
-        const effective = overrides.get(otherPort) ?? sessionSeqs.get(otherPort);
+        const effective = overrides.get(otherPort) ?? sessionSeqs.get(otherPort) ?? defaults?.seqs.get(otherPort);
         if (otherPort === portType || !effective) {
             continue;
         }
@@ -4222,7 +4358,7 @@ function getDefaultCfgPath(iniPath: string): string {
 /**
  * Reads the <port type="..."><newseq type="standard">TOKEN</newseq></port> entries directly under
  * <system name="default"><input> - the same regex setDefaultCfgUiInput() below uses to avoid
- * clobbering them, exposed separately so renderRemapCard() can show what's actually persisted for
+ * clobbering them, exposed separately so renderControlsCard() can show what's actually persisted for
  * every action, not just whichever one a request just captured.
  */
 function readDefaultCfgUiInputs(cfgPath: string): Map<string, string> {
@@ -4294,69 +4430,252 @@ function removeDefaultCfgUiInput(cfgPath: string, portType: string): void {
 }
 
 /**
- * Global input remap: "Launch MAME"/"Close MAME" control the shared config session
- * (startMameConfigSession()/stopMameConfigSession() above), and one "Capture a press" form per
- * REMAP_GROUPS action arms it for one press (captureOnePress() above) - the resulting token is
- * written straight into default.cfg's matching <port> entry (setDefaultCfgUiInput() above).
- * "Reset" drops that entry again (removeDefaultCfgUiInput() above).
+ * MAME's own bindings (before default.cfg) and the keyboard/mouse codes it knows, read by
+ * input-defaults.lua (runInputDefaultsProbe() below) and kept in mame-input-defaults.json next to
+ * MAUI's config: booting MAME for them takes seconds, and they only change with the MAME binary.
+ */
+interface InputDefaultsCache {
+    binary: string;
+    mtimeMs: number;
+    seqs: Record<string, string>;
+    codes: Record<string, string>;
+}
+
+function getInputDefaultsCachePath(): string {
+    return join(dirname(new Config().configPath), 'mame-input-defaults.json');
+}
+
+function getBinaryMtime(mameBinary: string): number | undefined {
+    try {
+        return statSync(mameBinary).mtimeMs;
+    } catch {
+        return undefined;
+    }
+}
+
+/** The cached defaults, undefined when missing or read from another (or since replaced) binary. */
+function readInputDefaults(mameBinary: string): InputDefaults | undefined {
+    const cachePath = getInputDefaultsCachePath();
+    if (!existsSync(cachePath)) {
+        return undefined;
+    }
+    try {
+        const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as InputDefaultsCache;
+        if (cache.binary !== mameBinary || cache.mtimeMs !== getBinaryMtime(mameBinary)) {
+            return undefined;
+        }
+        return {seqs: new Map(Object.entries(cache.seqs)), codes: new Map(Object.entries(cache.codes))};
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Boots `romName` headlessly, like runDeviceProbe(), on an empty cfg directory: MAME then loads no
+ * default.cfg, so the sequences input-defaults.lua prints are MAME's own (its Lua has no other way
+ * to tell them once default.cfg changed one). Caches what it read, see readInputDefaults().
+ */
+function runInputDefaultsProbe(mameBinary: string, iniPath: string, romName: string): InputDefaults {
+    const cfgDirectory = mkdtempSync(join(os.tmpdir(), 'maui-input-defaults-'));
+    try {
+        const stdout = execFileSync(
+            mameBinary,
+            [
+                romName,
+                '-video', 'none',
+                '-sound', 'none',
+                '-skip_gameinfo',
+                '-autoboot_delay', '0',
+                '-autoboot_script', join(getStaticPath(), 'lua', 'input-defaults.lua'),
+                '-inipath', iniPath,
+                '-homepath', iniPath,
+                '-cfg_directory', cfgDirectory,
+            ],
+            {
+                cwd: iniPath,
+                encoding: 'utf8',
+                timeout: 15000,
+                killSignal: 'SIGKILL',
+                maxBuffer: 4 * 1024 * 1024,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            },
+        );
+        const defaults = parseInputDefaults(stdout);
+        if (!defaults.seqs.size) {
+            throw new Error('MAME reported no input.');
+        }
+        const cache: InputDefaultsCache = {
+            binary: mameBinary,
+            mtimeMs: getBinaryMtime(mameBinary) ?? 0,
+            seqs: Object.fromEntries(defaults.seqs),
+            codes: Object.fromEntries(defaults.codes),
+        };
+        writeFileSync(getInputDefaultsCachePath(), JSON.stringify(cache), 'utf8');
+        return defaults;
+    } finally {
+        rmSync(cfgDirectory, {recursive: true, force: true});
+    }
+}
+
+/** What MAME uses for `portType`: default.cfg's sequence if it has one, else MAME's own. */
+function getControlSeq(portType: string, persisted: Map<string, string>, defaults: InputDefaults): string {
+    return persisted.get(portType) ?? defaults.seqs.get(portType) ?? '';
+}
+
+/**
+ * Saves `seq` as `portType`'s binding in default.cfg, or drops its entry when `seq` is MAME's own
+ * binding again: default.cfg then only holds what differs from MAME.
+ */
+function saveControlSeq(cfgPath: string, portType: string, seq: string, defaults: InputDefaults): void {
+    const normalized = seqFromAlternatives(seqAlternatives(seq));
+    const isDefault = normalized === seqFromAlternatives(seqAlternatives(defaults.seqs.get(portType) ?? ''));
+    applyCfgEdit(() => isDefault
+        ? removeDefaultCfgUiInput(cfgPath, portType)
+        : setDefaultCfgUiInput(cfgPath, portType, normalized));
+}
+
+/** The other actions of the Controls card `alternative` already triggers. */
+function findControlsSharing(
+    portType: string, alternative: string, persisted: Map<string, string>, defaults: InputDefaults,
+): string[] {
+    return REMAP_GROUPS.flatMap(group => group.actions
+        .filter(action => action.portType !== portType
+            && seqAlternatives(getControlSeq(action.portType, persisted, defaults)).includes(alternative))
+        .map(action => (group.title === 'System' ? action.label : `${group.title} ${action.label}`)));
+}
+
+const CONTROL_KIND_LABELS: Record<string, string> = {
+    keyboard: 'Keyboard',
+    mouse: 'Mouse',
+    joystick: 'Gamepad',
+    lightgun: 'Light gun',
+    other: 'Other',
+};
+
+/**
+ * Global controls: every REMAP_GROUPS action with everything that triggers it in MAME (keyboard
+ * keys, mouse buttons, gamepad buttons and directions), MAME's own binding unless default.cfg
+ * changed it. Each one can be removed (its cross), and new ones added - pressed while MAME runs
+ * (captureOnePress() above, which adds to what is there instead of replacing it), or picked from
+ * the keyboard keys and mouse buttons MAME itself listed. Written straight into default.cfg
+ * (saveControlSeq() above). "Back to MAME's default" drops the action's entry again.
  * Groups/actions are meant to keep growing in REMAP_GROUPS - this only renders whatever's in it,
  * no other change needed to add more.
  */
-function renderRemapCard(romNames: string[], persisted: Map<string, string>, state?: RemapState): string {
+function renderControlsCard(
+    romNames: string[], persisted: Map<string, string>, defaults: InputDefaults | undefined, state?: RemapState,
+): string {
     if (!romNames.length) {
         return '';
     }
-    const sessionRunning = isMameConfigSessionAlive();
-    // Both buttons only make sense with MAME open: a capture needs it to see the press, and a
-    // reset is kept consistent with it (the route rejects both while MAME is closed).
-    const disabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
-    const renderActionItems = (actions: RemapAction[]): string => actions.map(action => {
-        const actionState = state?.portType === action.portType ? state : undefined;
-        const currentToken = actionState?.capturedToken ?? persisted.get(action.portType);
+    const cardError = state && !state.portType && state.error
+        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '';
+    if (!defaults) {
         return `
-            <div class="binding">
-                ${renderBindingLabel(action.portType, action.label)}
-                <dl class="binding-values">
-                    <dt>Currently</dt>
-                    <dd>${currentToken ? `<code>${escapeHtml(currentToken)}</code>` : '<em>MAME default</em>'}</dd>
-                </dl>
-                <form method="post" action="/input-probe/remap" class="binding-actions">
-                    <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                    <button type="submit" name="action" value="capture"${disabled}>Capture a press</button>
-                    ${persisted.has(action.portType) ? `<button type="submit" name="action" value="reset"${disabled}>Reset</button>` : ''}
+            <section class="card">
+                <h2>Global controls</h2>
+                <p class="info">Shows which keys, mouse buttons and gamepad buttons do what in MAME,
+                for every game, and lets you add or remove them. MAUI first reads MAME's own
+                controls: it starts MAME in the background (no window) for a few seconds, once for
+                this MAME.</p>
+                ${cardError}
+                <form method="post" action="/input-probe/controls/defaults">
+                    <button type="submit">Read MAME's controls</button>
                 </form>
-                ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
-                ${actionState?.releasedFrom?.length ? `
-                    <p class="info flash">This button was also bound by default to
-                    ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
-                    MAME - it was removed from there to avoid a double trigger.</p>
-                ` : ''}
-            </div>
+            </section>
         `;
-    }).join('');
+    }
+    const sessionRunning = !!getCaptureTarget();
+    // A gamepad press is only seen by a running MAME; a key or a mouse button is taken by the page
+    // itself, and removing needs nothing.
+    const captureDisabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
+    // What the page may send for a key or a mouse button: only tokens MAME itself listed.
+    const listenKeys = Object.fromEntries(Object.entries(browserKeyTokens()).filter(([, token]) => defaults.codes.has(token)));
+    const listenMouse = [0, 1, 2, 3, 4].map(button => browserMouseToken(button))
+        .map(token => (token && defaults.codes.has(token) ? token : ''));
+
+    const renderActionItems = (actions: RemapAction[]): string => actions
+        .filter(action => defaults.seqs.has(action.portType))
+        .map(action => {
+            const actionState = state?.portType === action.portType ? state : undefined;
+            const alternatives = seqAlternatives(getControlSeq(action.portType, persisted, defaults));
+            const chips = alternatives.map(alternative => {
+                const kind = seqAlternativeKind(alternative);
+                const label = describeSeqAlternative(alternative, defaults.codes);
+                return `
+                    <li class="control-chip control-chip-${kind}" title="${escapeHtml(alternative)}">
+                        <span class="control-kind">${escapeHtml(CONTROL_KIND_LABELS[kind])}</span>
+                        <span>${escapeHtml(label)}</span>
+                        <button type="submit" name="remove" value="${escapeHtml(alternative)}"
+                            class="control-remove" aria-label="Remove ${escapeHtml(label)}">✕</button>
+                    </li>
+                `;
+            }).join('');
+            return `
+                <div class="binding">
+                    ${renderBindingLabel(action.portType, action.label)}
+                    <form method="post" action="/input-probe/remap" class="control-form">
+                        <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
+                        <ul class="control-chips">
+                            ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
+                        </ul>
+                        <div class="binding-actions">
+                            <button type="submit" name="action" value="capture"${captureDisabled}>Add a gamepad button</button>
+                            <button type="button" data-control-listen>Add a key or mouse button</button>
+                            <input type="hidden" name="code" value="">
+                            <button type="submit" name="action" value="add" hidden data-control-add></button>
+                        </div>
+                        ${persisted.has(action.portType) ? `
+                            <div class="binding-actions">
+                                <button type="submit" name="action" value="reset">Back to MAME's default</button>
+                            </div>
+                        ` : ''}
+                    </form>
+                    ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
+                    ${actionState?.sharedWith?.length ? `
+                        <p class="warn flash">Also used by ${escapeHtml(actionState.sharedWith.join(', '))}: it
+                        triggers both. Remove it there if that isn't wanted.</p>
+                    ` : ''}
+                    ${actionState?.releasedFrom?.length ? `
+                        <p class="info flash">This button was also bound to
+                        ${escapeHtml(actionState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
+                        MAME - it was removed from there to avoid a double trigger.</p>
+                    ` : ''}
+                </div>
+            `;
+        }).join('');
 
     return `
         <section class="card">
-            <h2>Global input configuration</h2>
-            <p class="info">Binds a gamepad button to a command. <strong>1.</strong>
-            Launch MAME with the button at the top of the page and leave it open
-            for the whole configuration - all captures then share the same startup, so the
-            same gamepad indexes from start to finish.
-            <strong>2.</strong> Click "Capture a press" for the wanted command, then press the
-            button on the gamepad within 30 seconds (MAME picks it up even when its window is
-            not the one in front). Each press is saved at once to <code>default.cfg</code> (valid
-            for all games, unless a specific game has its own override). <strong>3.</strong>
-            Close MAME when done, from the top button or from its own window: either way keeps the
-            changes. <strong>Currently</strong> reflects what is really saved
-            in the file, not just the last capture; <strong>Reset</strong> removes a command from
-            the file, so MAME's own default binding applies again. Both buttons stay disabled
-            until MAME is launched.</p>
+            <h2>Global controls</h2>
+            <p class="info">What triggers each MAME action, in every game (unless a game has its own
+            controls, below). Each one is a key, a mouse button or a gamepad button: its
+            <strong>✕</strong> removes it, and the others keep working.</p>
+            <ul class="info">
+                <li><strong>Add a gamepad button</strong>: launch MAME with the button at the top of
+                the page first, then click and press the gamepad button (or push the direction)
+                within 30 seconds - MAME picks it up even when its window is not the one in front.</li>
+                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                the mouse button (anywhere in the page) on the keyboard and mouse of this computer.
+                No need to launch MAME. Keys are named after their place on a US keyboard, the way
+                MAME does: on an AZERTY keyboard, the A key shows as Q.</li>
+                <li><strong>Back to MAME's default</strong> gives the action MAME's own controls again.</li>
+            </ul>
+            <p class="info">Saved at once in <code>default.cfg</code>; a running MAME uses the change
+            from its next start.</p>
+            ${cardError}
             ${renderPendingRelaunchNotice()}
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
                 html: `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
-            })), state ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
+            })), state?.portType ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
+            <script type="application/json" id="control-listen-codes">${
+                JSON.stringify({keys: listenKeys, mouse: listenMouse}).replace(/</g, '\\u003c')
+            }</script>
+            <form method="post" action="/input-probe/controls/defaults" class="control-reread">
+                <button type="submit">Read MAME's controls again</button>
+            </form>
         </section>
     `;
 }
@@ -4370,7 +4689,7 @@ interface PlayerPanel {
 
 /**
  * One tab per player (plus "System"/"Other" where there is one) instead of every player's table
- * stacked one after the other - the Gamepads cards grow long otherwise. Switched client side (see
+ * stacked one after the other - the Controls cards grow long otherwise. Switched client side (see
  * renderPageTail()); `activeId` is the panel to open on, e.g. the one holding the command just
  * captured, so a capture on Player 2 doesn't land back on Player 1.
  */
@@ -4682,11 +5001,12 @@ function renderForm(
         const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
         refreshAdoptedMame(config, romNames);
         sections.push({
-            id: 'gamepads',
-            label: 'Gamepads',
-            html: renderRemapCard(
+            id: 'controls',
+            label: 'Controls',
+            html: renderControlsCard(
                 romNames,
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
+                config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined,
                 remapState,
             )
                 + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
@@ -4715,12 +5035,12 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : importError !== undefined || exportError !== undefined ? 'import'
             : (deviceProbeState !== undefined || remapState !== undefined
-                || gameRemapState !== undefined) ? 'gamepads'
+                || gameRemapState !== undefined) ? 'controls'
                 : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
                     : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
-    // launches/closes the shared MAME config session the Gamepads cards capture through - see
-    // startMameConfigSession(). Shown to every signed-in user, like the Gamepads tab itself.
+    // launches/closes the shared MAME config session the Controls cards capture through - see
+    // startMameConfigSession(). Shown to every signed-in user, like the Controls tab itself.
     // data-mame-session lets the page notice MAME being closed from its own window (see
     // renderPageTail()). A MAME the BO didn't start (a game launched from MAUI...) counts too:
     // closing it is what the button then offers.
@@ -5377,7 +5697,7 @@ function renderMauiControlsCard(): string {
             same keys do not have the same role depending on the screen. A gamepad produces these keys via
             <code>controllers.json</code>: an entry reading <em>no input</em> means the
             command is only reachable from the keyboard with this layout. Not to be confused with the MAME
-            &gt; Gamepads tab, which sets MAME's inputs (in games) and not MAUI's.</p>
+            &gt; Controls tab, which sets MAME's inputs (in games) and not MAUI's.</p>
             ${contextTables}
             ${specificPadsHtml}
         </section>
@@ -6298,14 +6618,14 @@ const CATEGORY_ICONS: {[key: string]: string} = Object.fromEntries(
         .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
 );
 
-// The Gamepads tab's input icons (see src/assets/input-icons/LICENSE.txt), embedded the same way as
+// The Controls tab's input icons (see src/assets/input-icons/LICENSE.txt), embedded the same way as
 // CATEGORY_ICONS above: keyed by file name without extension, i.e. by inputIconKey().
 const INPUT_ICONS: {[key: string]: string} = Object.fromEntries(
     Object.entries(import.meta.glob('./assets/input-icons/*.svg', {query: '?raw', import: 'default', eager: true}))
         .map(([path, svg]) => [basename(path, '.svg'), svg as string]),
 );
 
-/** Name of a command in the Gamepads cards, after its icon when it has one (see inputIconKey()). */
+/** Name of a command in the Controls cards, after its icon when it has one (see inputIconKey()). */
 function renderBindingLabel(portType: string, label: string): string {
     const iconKey = inputIconKey(portType);
     const icon = iconKey && iconKey in INPUT_ICONS
@@ -8069,7 +8389,7 @@ export function createBoApp(
         }
         if (isMameConfigSessionAlive()) {
             res.status(409).send(await renderFavoritesTab(req, {
-                warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
+                warning: 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
         }
@@ -8102,7 +8422,7 @@ export function createBoApp(
         }
         if (isMameConfigSessionAlive()) {
             res.status(409).send(await renderFavoritesTab(req, {
-                warning: 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini.',
+                warning: 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini.',
             }));
             return;
         }
@@ -8175,7 +8495,7 @@ export function createBoApp(
         if (vote === VOTE_DOWN && config.thumbsDownRemovesFavorite && favoritesPath
             && getFavoriteRomNames(favoritesPath).includes(romName)) {
             if (isMameConfigSessionAlive()) {
-                flash.warning = 'MAME is open (Gamepads tab): close it first, it would rewrite favorites.ini. '
+                flash.warning = 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini. '
                     + 'The game stays in the favorites for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
                 flash.notice += ' Removed from the favorites (restorable from the removed favorites, below the favorites list).'
@@ -9774,6 +10094,37 @@ export function createBoApp(
         res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
     });
 
+    // Reads MAME's own controls for the Controls card (see runInputDefaultsProbe()).
+    app.post('/input-probe/controls/defaults', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        const romName = mameInfo.romPath ? listRomNames(mameInfo.romPath)[0] : undefined;
+        const renderWith = (remapState?: RemapState) => renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined,
+            undefined,
+            remapState ?? {portType: ''},
+        );
+
+        if (mameInfo.error || !romName) {
+            // Same "stale form" case as /input-probe/devices.
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            runInputDefaultsProbe(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
+            res.send(renderWith());
+        } catch (error) {
+            console.error('[boServer] Reading MAME\'s controls failed:', error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderWith({portType: '', error: `Reading MAME's controls failed: ${message}`}));
+        }
+    });
+
+    // One action of the Controls card: add a control (pressed, or picked from MAME's keys and mouse
+    // buttons), remove one (its cross posts `remove`), or go back to MAME's default.
     app.post('/input-probe/remap', (req, res) => {
         const config = new Config();
         config.load();
@@ -9782,10 +10133,11 @@ export function createBoApp(
 
         const portType: string = (req.body.portType || '').trim();
         const action = REMAP_ACTIONS_BY_TYPE.get(portType);
-        // Defaults to capture: a form rendered before the Reset button existed posts no action.
-        const formAction: string = (req.body.action || 'capture').trim();
+        const removed: string = typeof req.body.remove === 'string' ? req.body.remove.trim() : '';
+        const formAction: string = removed ? 'remove' : (req.body.action || '').trim();
+        const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
 
-        if (mameInfo.error || !action || !['capture', 'reset'].includes(formAction)) {
+        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'reset'].includes(formAction)) {
             // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe/devices
             // above - the form only renders once mameInfo.error is unset. !action: portType isn't in
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
@@ -9795,81 +10147,74 @@ export function createBoApp(
             ));
             return;
         }
-
-        // Both actions need MAME open (their buttons are disabled otherwise) - only reachable from a
-        // page rendered before MAME was closed.
-        if (!isMameConfigSessionAlive()) {
-            res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                undefined, undefined, undefined, undefined, undefined,
-                undefined,
-                {portType, error: 'MAME is not running - click "Launch MAME" first.'},
-            ));
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined,
+            undefined,
+            remapState,
+        ));
+        // The MAME binary changed since the page was rendered: its controls must be read again.
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read again first.'}, 409);
             return;
         }
 
-        if (formAction === 'reset') {
-            // Edits default.cfg directly - the running MAME is only needed so the edit is
-            // replayed once it exits (see applyCfgEdit()).
-            try {
-                const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
-                applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
-                res.send(renderForm(
-                    {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                    undefined, undefined, undefined, undefined, undefined,
-                    undefined,
-                    {portType},
-                ));
-            } catch (error) {
-                console.error(`[boServer] Remap reset failed for "${portType}":`, error);
-                const message = error instanceof Error ? error.message : 'unexpected error';
-                res.status(500).send(renderForm(
-                    {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                    undefined, undefined, undefined, undefined, undefined,
-                    undefined,
-                    {portType, error: `Reset failed: ${message}`},
-                ));
-            }
-            return;
-        }
-
+        const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
         try {
-            const token = captureOnePress();
-            const remapState: RemapState = token
-                ? {portType, capturedToken: token}
-                : {portType, error: 'No press detected within the allotted time (30s) - try again ' +
-                    '(is the gamepad connected, and MAME still open?).'};
-            if (token) {
-                const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
-                applyCfgEdit(() => setDefaultCfgUiInput(cfgPath, portType, token));
-                const released = releaseTokenFromInGameUiPorts(cfgPath, portType, token);
-                if (released.length) {
-                    remapState.releasedFrom = released;
+            const persisted = readDefaultCfgUiInputs(cfgPath);
+            const current = getControlSeq(portType, persisted, defaults);
+
+            if (formAction === 'reset') {
+                applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
+                renderWith({portType});
+                return;
+            }
+            if (formAction === 'remove') {
+                // Only what the card showed: a value posted from elsewhere changes nothing.
+                if (seqAlternatives(current).includes(seqAlternatives(removed).join(' '))) {
+                    saveControlSeq(cfgPath, portType, removeSeqAlternative(current, removed), defaults);
+                }
+                renderWith({portType});
+                return;
+            }
+
+            let token: string | null;
+            if (formAction === 'add') {
+                const code: string = (req.body.code || '').trim();
+                // Only a token MAME itself listed: one it doesn't know would make it drop the whole
+                // <input> block of default.cfg.
+                if (!defaults.codes.has(code)) {
+                    renderWith({portType, error: 'MAME has no such key or mouse button.'});
+                    return;
+                }
+                token = code;
+            } else {
+                // Only reachable from a page rendered before MAME was closed.
+                if (!getCaptureTarget()) {
+                    renderWith({portType, error: 'MAME is not running - click "Launch MAME" first.'});
+                    return;
+                }
+                token = captureOnePress();
+                if (!token) {
+                    renderWith({portType, error: 'No press detected within the allotted time (30s) - try again ' +
+                        '(is MAME still open? A key or a mouse button needs its window in front).'});
+                    return;
                 }
             }
-            res.send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                undefined, // error
-                undefined, // info
-                undefined, // mameInfoMessage
-                undefined, // importError
-                undefined, // dangerZoneInfo
-                undefined, // deviceProbeState
-                remapState,
-            ));
+
+            const sharedWith = findControlsSharing(portType, token, persisted, defaults);
+            saveControlSeq(cfgPath, portType, addSeqAlternative(current, token), defaults);
+            const releasedFrom = releaseTokenFromInGameUiPorts(cfgPath, portType, token, defaults);
+            renderWith({
+                portType,
+                // Already told by releasedFrom: the action it was taken away from.
+                sharedWith: sharedWith.filter(label => !releasedFrom.some(port => REMAP_ACTIONS_BY_TYPE.get(port)?.label === label)),
+                releasedFrom,
+            });
         } catch (error) {
-            console.error(`[boServer] Remap capture failed for "${portType}":`, error);
+            console.error(`[boServer] Controls ${formAction} failed for "${portType}":`, error);
             const message = error instanceof Error ? error.message : 'unexpected error';
-            res.status(500).send(renderForm(
-                {mamePath: config.mamePath}, mameInfo, isAdvanced,
-                undefined, // error
-                undefined, // info
-                undefined, // mameInfoMessage
-                undefined, // importError
-                undefined, // dangerZoneInfo
-                undefined, // deviceProbeState
-                {portType, error: `Capture failed: ${message}`},
-            ));
+            renderWith({portType, error: `Saving failed: ${message}`}, 500);
         }
     });
 

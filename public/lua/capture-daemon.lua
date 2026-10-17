@@ -65,6 +65,22 @@ if joystick_class then
     end
 end
 
+-- Keyboard keys and mouse buttons too (not the mouse's axes: moving it to reach a window would be
+-- taken for the press). Unlike a gamepad, they only reach MAME while its window is in front:
+-- -background_input doesn't cover them on SDL (Linux, macOS).
+for _, class_name in ipairs({'keyboard', 'mouse'}) do
+    local class = input.device_classes[class_name]
+    if class then
+        for _, device in pairs(class.devices) do
+            for _, item in pairs(device.items) do
+                if class_name == 'keyboard' or item.token:find('^BUTTON%d+$') then
+                    table.insert(candidates, {code = item.code})
+                end
+            end
+        end
+    end
+end
+
 local function read_file(path)
     local f = io.open(path, 'r')
     if not f then

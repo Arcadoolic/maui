@@ -69,14 +69,25 @@ export function portTypePlayer(portType: string): number {
     return match ? Number(match[1]) : 0;
 }
 
+// MAME's system commands on the Controls tab, by port type.
+const SYSTEM_ICON_KEYS: Record<string, string> = {
+    UI_CANCEL: 'quit',
+    UI_PAUSE: 'pause',
+    UI_MENU: 'menu',
+    SERVICE: 'service',
+    UI_SOFT_RESET: 'soft_reset',
+    UI_RESET_MACHINE: 'hard_reset',
+};
+
 /**
  * Which of the BO's input icons (src/assets/input-icons/<key>.svg) illustrates a port type, or
  * undefined for one without an icon. Buttons past 9 get the plain button, with no number: the
  * icon set only has single digits.
  */
 export function inputIconKey(portType: string): string | undefined {
-    if (portType === 'UI_CANCEL') {
-        return 'quit';
+    const system = SYSTEM_ICON_KEYS[portType];
+    if (system) {
+        return system;
     }
     if (/^COIN\d$/.test(portType)) {
         return 'coin';

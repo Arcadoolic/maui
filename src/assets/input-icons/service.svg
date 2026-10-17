@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: open-end wrench -->
+<defs>
+<mask id="service-jaw">
+<rect width="64" height="64" fill="#FFFFFF"/>
+<rect x="28" y="2" width="8" height="17" rx="1" fill="#000000"/>
+</mask>
+</defs>
+<g transform="rotate(45 32 32)">
+<path d="M32 30 V56" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+<circle cx="32" cy="19" r="12" fill="#E73246" mask="url(#service-jaw)"/>
+</g>
+</svg>
