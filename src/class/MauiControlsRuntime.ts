@@ -35,7 +35,12 @@ export function controlKey(e: Event, isGamepad: boolean): string {
 }
 
 // A mouse button bound to a MAUI key goes the gamepads' way: a gamepadKeydown/gamepadKeyup event.
+// Not over the windowed front's list of games or categories, which take the mouse themselves
+// (Games.vue, Categories.vue): a click there would also act as the bound key.
 function onMouse(e: MouseEvent, eventName: 'gamepadKeydown' | 'gamepadKeyup'): void {
+    if (e.target instanceof Element && e.target.closest('[data-mouse-nav].mouse')) {
+        return;
+    }
     const key = bindings.mouse[String(e.button)];
     if (key) {
         window.dispatchEvent(new CustomEvent(eventName, {detail: {key, value: eventName === 'gamepadKeydown' ? 1 : 0}}));

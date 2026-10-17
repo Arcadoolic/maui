@@ -1,10 +1,11 @@
 <template>
-    <div class="categories">
+    <div class="categories" :class="{mouse}" data-mouse-nav>
         <div
             class="category"
             v-for="(category, index) in categories"
             :key="category.id_category"
             :class="getCategoryClasses(index)"
+            @click="mouse && emit('pick', index)"
         ></div>
     </div>
 </template>
@@ -16,7 +17,11 @@ import {getCategoryIconKey} from '@/class/CarouselCategories';
 const props = withDefaults(defineProps<{
     categories: CarouselCategory[];
     selectedCategoryIndex?: number;
-}>(), {selectedCategoryIndex: 0});
+    // Windowed mode: a click on a category goes to it (Home.vue).
+    mouse?: boolean;
+}>(), {selectedCategoryIndex: 0, mouse: false});
+
+const emit = defineEmits<{pick: [index: number]}>();
 
 function getCategoryClasses(index: number) {
     const catLen = props.categories.length;
@@ -52,6 +57,15 @@ function getCategoryClasses(index: number) {
 </script>
 
 <style scoped>
+    /* Windowed mode: the categories take the mouse instead of moving the window (App.vue's drag). */
+    .categories.mouse {
+        -webkit-app-region: no-drag;
+    }
+
+    .categories.mouse .category {
+        cursor: pointer;
+    }
+
     .categories {
         width: 25%;
         height: 0;
