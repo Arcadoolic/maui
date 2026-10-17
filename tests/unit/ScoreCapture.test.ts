@@ -97,6 +97,43 @@ describe('ScoreCapture, on a game writing no name', () => {
         expect(flushed).toBe(1);
     });
 
+    it('joins the report on the game to the score (maui-api D87)', async () => {
+        const store = new MemoryStore();
+        const reportDir = mkdtempSync(join(tmpdir(), 'maui-report-'));
+        writeFileSync(join(reportDir, 'session-report.json'), JSON.stringify({
+            version: 1, mame_version: '0.289', duration_s: 120, emulated_s: 119.5,
+            options: {cheat: false, throttle: true, speed: 1.0}, plugins: ['hiscore'],
+            dips: [{name: 'Lives', value: '5', default: '3'}],
+            events: {state_loads: 1, state_saves: 0, pauses: 0, pause_s: 0, resets: 0},
+            speed: {average_percent: 99.8},
+        }));
+        const scores = new ScoreCapture({
+            store,
+            mameHome: () => mameHome,
+            enabled: () => true,
+            players: async () => [player('NOB')],
+            startupId: () => 'startup-1',
+            flush: () => { flushed++; },
+            checkRom: async () => 'good',
+            mauiVersion: () => '2.16.0',
+            newSessionId: () => 'session-1',
+        });
+        await scores.started('scobra', reportDir);
+        write([23450, 10000, 9000, 8000]);
+        await scores.ended('scobra');
+        rmSync(reportDir, {recursive: true, force: true});
+
+        expect(store.added).toHaveLength(1);
+        expect(store.added[0].integrity).toEqual({
+            version: 1, session_id: 'session-1', maui_version: '2.16.0', rom: 'good', mame_version: '0.289',
+            duration_s: 120, emulated_s: 119.5,
+            options: {cheat: false, throttle: true, speed: 1.0}, plugins: ['hiscore'],
+            dips: [{name: 'Lives', value: '5', default: '3'}],
+            events: {state_loads: 1, state_saves: 0, pauses: 0, pause_s: 0, resets: 0},
+            speed: {average_percent: 99.8},
+        });
+    });
+
     it('asks nothing when the game added no score', async () => {
         const store = new MemoryStore();
         const scores = capture(store, [player('SAJ'), player('NOB')]);

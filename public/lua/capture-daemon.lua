@@ -324,3 +324,191 @@ emu.register_periodic(function()
         io.stderr:write('[capture-daemon] periodic callback error: ' .. tostring(err) .. '\n')
     end
 end)
+
+-- The report on the game (docs: maui-api D87): what could make it easier than the arcade made it,
+-- for each score found during it (ScoreCapture.ts joins it to the score). Rewritten as
+-- session-report.json every second, on each event and when the game stops, so that it always
+-- covers the game up to now. Node adds what it knows itself (ROM verification, versions).
+local REPORT_PATH = CAPTURE_DIR .. '/session-report.json'
+local ARRAY = {}
+
+local function encode(value)
+    local kind = type(value)
+    if kind == 'table' then
+        local parts = {}
+        if getmetatable(value) == ARRAY then
+            for _, item in ipairs(value) do
+                table.insert(parts, encode(item))
+            end
+            return '[' .. table.concat(parts, ',') .. ']'
+        end
+        local keys = {}
+        for key in pairs(value) do
+            table.insert(keys, key)
+        end
+        table.sort(keys)
+        for _, key in ipairs(keys) do
+            table.insert(parts, encode(tostring(key)) .. ':' .. encode(value[key]))
+        end
+        return '{' .. table.concat(parts, ',') .. '}'
+    elseif kind == 'string' then
+        return '"' .. value:gsub('[%c"\\]', function(c)
+            return string.format('\\u%04x', c:byte())
+        end) .. '"'
+    elseif kind == 'number' then
+        if math.type(value) == 'integer' then
+            return tostring(value)
+        end
+        return string.format('%.2f', value)
+    elseif kind == 'boolean' then
+        return tostring(value)
+    end
+    return 'null'
+end
+
+local function array(items)
+    return setmetatable(items, ARRAY)
+end
+
+local report_started = os.time()
+local events = {state_loads = 0, state_saves = 0, pauses = 0, pause_s = 0, resets = 0}
+local paused_at = nil
+local speed = {samples = 0, percent_sum = 0, below_95_s = 0, unthrottled_s = 0, fast_forward_s = 0}
+local last_second = os.time()
+
+local function option(name)
+    local ok, value = pcall(function() return manager.options.entries[name]:value() end)
+    if ok then
+        return value
+    end
+    return nil
+end
+
+local function running_plugins()
+    local names = {}
+    for name, plugin in pairs(manager.plugins) do
+        if plugin.start then
+            table.insert(names, name)
+        end
+    end
+    table.sort(names)
+    return array(names)
+end
+
+-- The DIP switches set otherwise than the game's default, by their labels.
+local function changed_dips()
+    local dips = {}
+    for _, port in pairs(manager.machine.ioport.ports) do
+        for name, field in pairs(port.fields) do
+            if field.type_class == 'dipswitch' and field.user_value ~= field.defvalue then
+                local settings = field.settings
+                table.insert(dips, {
+                    name = name,
+                    value = settings[field.user_value] or tostring(field.user_value),
+                    default = settings[field.defvalue] or tostring(field.defvalue),
+                })
+            end
+        end
+    end
+    table.sort(dips, function(a, b) return a.name < b.name end)
+    return array(dips)
+end
+
+local function write_report()
+    local now = os.time()
+    local emulated = 0
+    pcall(function() emulated = manager.machine.time:as_double() end)
+    local report = {
+        version = 1,
+        mame_version = emu.app_version(),
+        duration_s = now - report_started,
+        emulated_s = emulated,
+        options = {
+            cheat = option('cheat'), rewind = option('rewind'), autosave = option('autosave'),
+            console = option('console'), throttle = option('throttle'), speed = option('speed'),
+        },
+        plugins = running_plugins(),
+        dips = changed_dips(),
+        events = {
+            state_loads = events.state_loads, state_saves = events.state_saves, pauses = events.pauses,
+            pause_s = events.pause_s + (paused_at and now - paused_at or 0), resets = events.resets,
+        },
+        speed = {
+            average_percent = speed.samples > 0 and speed.percent_sum / speed.samples or 100.0,
+            below_95_s = speed.below_95_s, unthrottled_s = speed.unthrottled_s, fast_forward_s = speed.fast_forward_s,
+        },
+    }
+    write_file(REPORT_PATH, encode(report))
+end
+
+local function guarded(callback)
+    return function(...)
+        local ok, err = pcall(callback, ...)
+        if not ok then
+            io.stderr:write('[capture-daemon] report error: ' .. tostring(err) .. '\n')
+        end
+    end
+end
+
+-- A MAME without one of these (older than the 0.289 this was checked against) only loses that
+-- part of the report: the rest of this script must keep working.
+local function subscribe(name, callback)
+    local add = emu[name]
+    return add and add(guarded(callback)) or false
+end
+
+-- Kept in a global: a notifier subscription is dropped once nothing references it, and a local
+-- of this chunk that no function uses is collected once the chunk has run.
+maui_report_subscriptions = {
+    subscribe('add_machine_post_load_notifier', function()
+        events.state_loads = events.state_loads + 1
+        write_report()
+    end),
+    subscribe('add_machine_pre_save_notifier', function()
+        events.state_saves = events.state_saves + 1
+        write_report()
+    end),
+    subscribe('add_machine_pause_notifier', function()
+        if not paused_at then
+            events.pauses = events.pauses + 1
+            paused_at = os.time()
+        end
+    end),
+    subscribe('add_machine_resume_notifier', function()
+        if paused_at then
+            events.pause_s = events.pause_s + (os.time() - paused_at)
+            paused_at = nil
+        end
+    end),
+    subscribe('add_machine_reset_notifier', function()
+        events.resets = events.resets + 1
+    end),
+    subscribe('add_machine_stop_notifier', write_report),
+}
+
+-- One sample of the speed per second of real time, out of pauses: emulated speed in percent of
+-- real time, and whether throttling was on. Fast forward runs as fast as the machine can, far
+-- above 150 %; a second just after a pause or a loaded state may catch up a little above 100 %.
+local FAST_FORWARD_PERCENT = 150
+emu.register_periodic(guarded(function()
+    local now = os.time()
+    if now == last_second then
+        return
+    end
+    last_second = now
+    if not paused_at and not manager.machine.paused then
+        local video = manager.machine.video
+        local percent = video.speed_percent * 100
+        speed.samples = speed.samples + 1
+        speed.percent_sum = speed.percent_sum + percent
+        if percent < 95 then
+            speed.below_95_s = speed.below_95_s + 1
+        elseif percent > FAST_FORWARD_PERCENT then
+            speed.fast_forward_s = speed.fast_forward_s + 1
+        end
+        if not video.throttled then
+            speed.unthrottled_s = speed.unthrottled_s + 1
+        end
+    end
+    write_report()
+end))

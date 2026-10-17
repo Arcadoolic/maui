@@ -199,12 +199,12 @@ export default class MameService {
      * Start game on mame
      * @param romName
      */
-    public startGame(romName: string): Promise<ChildProcess> {
+    public startGame(romName: string, capture = this.prepareCapture()): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
             // With the BO's capture daemon, so the BO can list and rebind this game's controls
-            // while it's being played (see CaptureDaemon.ts).
-            const capture = this.prepareCapture();
+            // while it's being played (see CaptureDaemon.ts), and which reports on the game for its
+            // scores (ScoreCapture.ts): `capture` prepared beforehand to say where.
             this.gameProcess = execFile(this.mameBinary, [
                 '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS,
                 ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
@@ -234,7 +234,7 @@ export default class MameService {
      * The game still launches without it (the BO then can't configure it live) if the script
      * can't be set up.
      */
-    protected prepareCapture(): {dir: string; scriptPath: string} | null {
+    public prepareCapture(): {dir: string; scriptPath: string} | null {
         try {
             return prepareCaptureDir(getRendererPublicPath());
         } catch (error) {

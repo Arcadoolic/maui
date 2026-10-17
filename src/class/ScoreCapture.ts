@@ -1,4 +1,5 @@
-import {existsSync, mkdirSync, watch} from 'fs';
+import {existsSync, mkdirSync, readFileSync, watch} from 'fs';
+import {randomUUID} from 'crypto';
 import {join} from 'path';
 import {MameHiExtractor} from '@arcadoolic/mhiex';
 import {PlaySession} from '@/class/PlaySession';
@@ -6,6 +7,7 @@ import {queueScores, type PublishablePlayer, type ScoreStore} from '@/class/Scor
 import {ScoreDeclarations} from '@/class/ScoreDeclaration';
 import type {PendingAttribution} from '@/class/ScoreCaptureBridge';
 import type {TableRow} from '@/class/ScoreDiff';
+import {buildGameReport, type GameIntegrityReport, type RomCheck} from '@/class/GameIntegrity';
 
 // The games played on this cabinet, in ONLINE mode (maui-api Lot 2.3): one PlaySession per game,
 // started and ended by the front (Home.vue, through background.ts). The scores it finds go to the
@@ -22,6 +24,19 @@ export interface ScoreCaptureDeps {
     startupId(): string | null;
     // Sends what the outbox holds (OnlineSession.flushScoresNow()).
     flush(): void;
+    // For the report on each game (GameIntegrity.ts): what MAME makes of the game's ROM set, and
+    // the version of MAUI running.
+    checkRom?(romname: string): Promise<RomCheck>;
+    mauiVersion?(): string;
+    newSessionId?(): string;
+}
+
+/** What the report on a game being played is made of, besides capture-daemon.lua's file. */
+interface GameReporting {
+    // The daemon's directory (MameService.prepareCapture()), null when the game runs without it.
+    dir: string | null;
+    sessionId: string;
+    rom: RomCheck;
 }
 
 /** The default table of a game, [] before its first file exists, null when it cannot be read. */
@@ -52,17 +67,27 @@ export class ScoreCapture {
     private readonly sessions = new Map<string, PlaySession>();
     // How to read the table of each game being played, for a last look when it ends.
     private readonly readers = new Map<string, () => Promise<TableRow[] | null>>();
+    private readonly reporting = new Map<string, GameReporting>();
     private readonly declarations: ScoreDeclarations;
 
     public constructor(private readonly deps: ScoreCaptureDeps) {
         this.declarations = new ScoreDeclarations({store: deps.store, players: deps.players});
     }
 
-    /** A game starts: the table as it is now is the baseline. Never throws. */
-    public async started(romname: string): Promise<void> {
+    /**
+     * A game starts: the table as it is now is the baseline. `reportDir`: where the game's
+     * capture-daemon.lua writes its report. Never throws.
+     */
+    public async started(romname: string, reportDir: string | null = null): Promise<void> {
         if (!this.deps.enabled() || this.sessions.has(romname)) {
             return;
         }
+        const reporting: GameReporting = {dir: reportDir, sessionId: (this.deps.newSessionId ?? randomUUID)(), rom: 'unknown'};
+        this.reporting.set(romname, reporting);
+        // Answers in a fraction of a second, long before the game writes a score.
+        void this.deps.checkRom?.(romname).then((rom) => {
+            reporting.rom = rom;
+        }, () => undefined);
         this.declarations.reset(romname);
         const mameHome = this.deps.mameHome();
         const extractor = new MameHiExtractor(mameHome);
@@ -98,6 +123,7 @@ export class ScoreCapture {
         await session?.end();
         const read = this.readers.get(romname);
         this.readers.delete(romname);
+        this.reporting.delete(romname);
         try {
             // The table as the game left it: what it held on the way up is not asked about.
             const {queued, ask} = await this.declarations.settle(romname, await read?.() ?? null);
@@ -118,8 +144,30 @@ export class ScoreCapture {
         }
     }
 
+    /** The report on the game up to now, undefined for a game started before this capture. */
+    private report(romname: string): GameIntegrityReport | undefined {
+        const reporting = this.reporting.get(romname);
+        if (!reporting) {
+            return undefined;
+        }
+        let daemonJson: string | null = null;
+        if (reporting.dir) {
+            try {
+                daemonJson = readFileSync(join(reporting.dir, 'session-report.json'), 'utf8');
+            } catch {
+                // Not written yet, or the game's directory gone: the cabinet's facts alone.
+            }
+        }
+        return buildGameReport(daemonJson, {
+            sessionId: reporting.sessionId,
+            mauiVersion: this.deps.mauiVersion?.() ?? '',
+            rom: reporting.rom,
+        });
+    }
+
     private async queue(romname: string, rows: TableRow[]): Promise<void> {
-        const context = {achievedAt: new Date().toISOString(), startupId: this.deps.startupId()};
+        const integrity = this.report(romname);
+        const context = {achievedAt: new Date().toISOString(), startupId: this.deps.startupId(), ...(integrity ? {integrity} : {})};
         this.declarations.hold(romname, rows, context);
         const queued = await queueScores(this.deps.store, await this.deps.players(), rows, {romname, ...context});
         this.sent(romname, queued.length);

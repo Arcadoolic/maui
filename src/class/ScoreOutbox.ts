@@ -2,6 +2,7 @@ import {randomUUID} from 'crypto';
 import type {ApiFailure, MauiApiClient, ScoreResult, ScoreSubmission} from '@/class/MauiApiClient';
 import {scorePseudo3} from '@/class/HiscoreSupport';
 import type {TableRow} from '@/class/ScoreDiff';
+import type {GameIntegrityReport} from '@/class/GameIntegrity';
 
 // Scores waiting for MAUI-API (maui-api D50, Lot 2.3). A score is queued once found (PlaySession),
 // with its own UUID, and leaves the outbox once MAUI-API answered for it, whatever the answer:
@@ -54,6 +55,8 @@ export interface QueueContext {
     achievedAt: string;
     startupId: string | null;
     newId?: () => string;
+    // The report on the game up to now (GameIntegrity.ts), joined to each score.
+    integrity?: GameIntegrityReport;
 }
 
 /**
@@ -80,6 +83,7 @@ export async function queueScores(
         queued.push({
             id: (context.newId ?? randomUUID)(), playerId, romname: context.romname, score: row.score,
             rankOnCabinet: row.rank, achievedAt: context.achievedAt, startupId: context.startupId,
+            ...(context.integrity ? {integrity: context.integrity} : {}),
         });
     }
     if (queued.length > 0) {
@@ -103,6 +107,7 @@ export async function queueDeclaredScore(
         id: (context.newId ?? randomUUID)(), playerId, romname: context.romname, score: row.score,
         rankOnCabinet: row.rank, achievedAt: context.achievedAt, startupId: context.startupId,
         attribution: 'declared',
+        ...(context.integrity ? {integrity: context.integrity} : {}),
     };
     await store.add([submission]);
     return submission;

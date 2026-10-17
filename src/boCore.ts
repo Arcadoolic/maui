@@ -4,6 +4,7 @@ import {join} from 'path';
 import * as os from 'os';
 import {app as electronApp, nativeImage} from 'electron';
 import Config from '@/class/Config.class';
+import {verifyRoms} from '@/class/MameVerifyRoms';
 import {runMigrations} from '@/class/Migrations';
 import {OnlineSession} from '@/class/OnlineSession';
 import {flushOutbox} from '@/class/ScoreOutbox';
@@ -240,6 +241,17 @@ export function startCore(
         startupId: () => online.getStatus().startupId,
         flush: () => void online.flushScoresNow(),
         log: message => console.warn(message),
+        // For the report on each game (maui-api D87).
+        checkRom: async (romname) => {
+            const config = new Config();
+            config.load();
+            if (!config.mamePath) {
+                return 'unknown';
+            }
+            const verdict = (await verifyRoms(join(config.mamePath, config.mameBinaryName), getMameHomePath(), [romname]))?.get(romname);
+            return verdict?.status ?? 'unknown';
+        },
+        mauiVersion: getRunningVersion,
     });
     const core: BoCore = {sequelize, online, scores, scoreStore, leaderboards, refusedAvatars};
 

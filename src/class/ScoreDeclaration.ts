@@ -1,4 +1,5 @@
 import {isPublishable, queueDeclaredScore, type PublishablePlayer, type ScoreStore} from '@/class/ScoreOutbox';
+import type {GameIntegrityReport} from '@/class/GameIntegrity';
 import type {PendingAttribution} from '@/class/ScoreCaptureBridge';
 import type {TableRow} from '@/class/ScoreDiff';
 
@@ -17,6 +18,8 @@ export interface ScoreDeclarationsDeps {
 export interface HoldContext {
     achievedAt: string;
     startupId: string | null;
+    // The report on the game when the score was found (GameIntegrity.ts).
+    integrity?: GameIntegrityReport;
 }
 
 interface HeldScore extends HoldContext {
@@ -138,6 +141,7 @@ export class ScoreDeclarations {
         game.given.set(playerId, held.row.score);
         const queued = await queueDeclaredScore(this.deps.store, playerId, held.row, {
             romname, achievedAt: held.achievedAt, startupId: held.startupId, newId: this.deps.newId,
+            ...(held.integrity ? {integrity: held.integrity} : {}),
         });
         return queued !== null;
     }
