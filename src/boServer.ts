@@ -2768,6 +2768,25 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--text);
             background-color: rgba(255, 255, 255, 0.12);
         }
+        .analog-devices {
+            display: grid;
+            gap: 12px;
+            justify-items: start;
+        }
+        .analog-device {
+            display: grid;
+            grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+            gap: 12px;
+            align-items: center;
+            width: 100%;
+            max-width: 600px;
+        }
+        @media (max-width: 600px) {
+            .analog-device {
+                grid-template-columns: 1fr;
+                gap: 4px;
+            }
+        }
         .control-origin {
             margin: 0;
             font-size: 0.8em;
@@ -4734,6 +4753,69 @@ function renderPlayerTabs(cardId: string, panels: PlayerPanel[], activeId?: stri
     `;
 }
 
+/**
+ * The device MAME reads each family of analog controls from (mame.ini's <family>_device): with
+ * MAME's own default, `keyboard`, a spinner game like Arkanoid only moves with the arrow keys,
+ * even though its dial is bound to the mouse's X axis - MAME doesn't read the mouse at all. USB
+ * spinners and trackballs show up as a mouse. `mouse` here only enables it for the games that
+ * have that kind of control, unlike mame.ini's `mouse 1` (every game).
+ */
+const ANALOG_DEVICE_OPTIONS: readonly {key: string; label: string; examples: string}[] = [
+    {key: 'dial_device', label: 'Spinner (dial)', examples: 'Arkanoid, Tempest'},
+    {key: 'trackball_device', label: 'Trackball', examples: 'Centipede, Marble Madness'},
+    {key: 'paddle_device', label: 'Paddle', examples: 'Breakout, Super Breakout'},
+];
+
+const ANALOG_DEVICE_VALUES: readonly {value: string; label: string}[] = [
+    {value: 'keyboard', label: 'Keyboard only (MAME default)'},
+    {value: 'mouse', label: 'Mouse, USB spinner or trackball'},
+    {value: 'joystick', label: 'Gamepad stick'},
+];
+
+interface AnalogDevicesState {
+    error?: string;
+    saved?: boolean;
+}
+
+function renderAnalogDevicesCard(romNames: string[], mameIniPath: string, state?: AnalogDevicesState): string {
+    if (!romNames.length) {
+        return '';
+    }
+    const rows = ANALOG_DEVICE_OPTIONS.map(option => {
+        const current = getMameIniValue(mameIniPath, option.key) || 'keyboard';
+        // A value set by hand that isn't one of ours stays selected rather than silently changed.
+        const values = ANALOG_DEVICE_VALUES.some(value => value.value === current)
+            ? ANALOG_DEVICE_VALUES
+            : [...ANALOG_DEVICE_VALUES, {value: current, label: current}];
+        return `
+            <label class="analog-device">
+                <span>${escapeHtml(option.label)} <span class="checkbox-row-detail">${escapeHtml(option.examples)}</span></span>
+                <select name="${escapeHtml(option.key)}">
+                    ${values.map(value => `
+                        <option value="${escapeHtml(value.value)}"${value.value === current ? ' selected' : ''}>${escapeHtml(value.label)}</option>
+                    `).join('')}
+                </select>
+            </label>
+        `;
+    }).join('');
+    return `
+        <section class="card">
+            <h2>Spinner, trackball, paddle</h2>
+            <p class="info">What MAME reads the analog controls of games like Arkanoid (spinner) or
+            Centipede (trackball) from. With the keyboard, they only move with the arrow keys:
+            pick <strong>Mouse</strong> for a mouse or a USB spinner or trackball (they show up as a
+            mouse), only in the games that have such a control. Saved in <code>mame.ini</code>; a
+            running MAME uses it from its next start.</p>
+            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.saved ? '<p class="info flash">Saved.</p>' : ''}
+            <form method="post" action="/input-probe/analog-devices" class="analog-devices">
+                ${rows}
+                <button type="submit">Save</button>
+            </form>
+        </section>
+    `;
+}
+
 interface GameRemapState {
     // Which game/field this state is about - like RemapState, only that field's row shows the
     // flash message rather than every row at once.
@@ -5007,6 +5089,7 @@ function renderForm(
     remapState?: RemapState,
     gameRemapState?: GameRemapState,
     exportError?: string,
+    analogDevicesState?: AnalogDevicesState,
 ): string {
     // Loaded fresh rather than threaded through every renderForm() call site (there are many -
     // see /save, /mame-options/repair-plugins, /reset, etc.) purely for the repo card's
@@ -5047,6 +5130,7 @@ function renderForm(
                 inputDefaults,
                 remapState,
             )
+                + renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState)
                 + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
                     findOtherMameRom(config, romNames), inputDefaults)
                 + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
@@ -5073,7 +5157,7 @@ function renderForm(
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : importError !== undefined || exportError !== undefined ? 'import'
             : (deviceProbeState !== undefined || remapState !== undefined
-                || gameRemapState !== undefined) ? 'controls'
+                || gameRemapState !== undefined || analogDevicesState !== undefined) ? 'controls'
                 : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
                     : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
@@ -10130,6 +10214,38 @@ export function createBoApp(
         startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
         waitForSessionGameFields(10000);
         res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
+    });
+
+    // The Spinner, trackball, paddle card: mame.ini's <family>_device values.
+    app.post('/input-probe/analog-devices', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        const renderWith = (state: AnalogDevicesState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+            state,
+        ));
+        if (mameInfo.error) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const changes = ANALOG_DEVICE_OPTIONS.map(option => [option.key, String(req.body[option.key] ?? '').trim()] as const);
+        // Ours, or the value already there (kept by the card when set by hand).
+        const invalid = changes.find(([key, value]) => !ANALOG_DEVICE_VALUES.some(known => known.value === value)
+            && value !== getMameIniValue(mameInfo.mameIniPath, key));
+        if (invalid) {
+            renderWith({error: `Unknown device "${invalid[1]}".`}, 422);
+            return;
+        }
+        for (const [key, value] of changes) {
+            if (!setMameIniValue(mameInfo.mameIniPath, key, value)) {
+                renderWith({error: `"${mameInfo.mameIniPath}" not found.`}, 500);
+                return;
+            }
+        }
+        renderWith({saved: true});
     });
 
     // Reads MAME's own controls for the Controls card (see runInputDefaultsProbe()).
