@@ -37,8 +37,10 @@ import {
     portTypePlayer,
     readGameCfgInputSeqs,
     removeGameCfgInputSeq,
+    GAME_SEQ_TYPES,
     setGameCfgInputSeq,
     type GameField,
+    type GameSeqType,
 } from '@/class/MameCfg';
 import {addFavorite} from '@/class/MameIniParser';
 import {
@@ -422,7 +424,8 @@ function listRomsWithInputCfg(iniPath: string, romNames: string[]): Set<string> 
     for (const romName of romNames) {
         const cfgPath = getGameCfgPath(iniPath, romName);
         try {
-            if (existsSync(cfgPath) && readGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')).size) {
+            const xml = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : '';
+            if (xml && GAME_SEQ_TYPES.some(seqType => readGameCfgInputSeqs(xml, seqType).size)) {
                 withCfg.add(romName);
             }
         } catch {
@@ -2787,6 +2790,15 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
                 gap: 4px;
             }
         }
+        .control-seq-title {
+            margin: 0;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        .control-form + .control-form {
+            padding-top: 8px;
+            border-top: 1px solid var(--border-subtle);
+        }
         .control-origin {
             margin: 0;
             font-size: 0.8em;
@@ -4121,16 +4133,17 @@ function applyCfgEdit(edit: () => void, appliedLive = false): void {
 /**
  * Rebinds one of the running game's fields right away (capture-daemon.lua's apply.txt), so a
  * per-game capture/reset is usable without relaunching MAME - which then also keeps it when it
- * saves the game's cfg on exit. `seq` empty: back to the field's default. False when the daemon
- * didn't confirm in time or failed (logged): the edit then waits for MAME's next start.
+ * saves the game's cfg on exit. `seq` empty: back to the field's default. `seqType`: which of an
+ * analog field's sequences. False when the daemon didn't confirm in time or failed (logged): the
+ * edit then waits for MAME's next start.
  */
-function applyGameFieldLive(field: GameField, seq: string): boolean {
+function applyGameFieldLive(field: GameField, seq: string, seqType: GameSeqType = 'standard'): boolean {
     const target = getCaptureTarget();
     if (!target) {
         return false;
     }
     const nonce = nextNonce(target);
-    writeFileSync(join(target.dir, 'apply.txt'), `${nonce}|${field.tag}|${field.mask}|${seq}`, 'utf8');
+    writeFileSync(join(target.dir, 'apply.txt'), `${nonce}|${field.tag}|${field.mask}|${seq}|${seqType}`, 'utf8');
     const appliedPath = join(target.dir, 'applied.txt');
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline && getCaptureTarget() === target) {
@@ -4293,15 +4306,16 @@ function stopMameConfigSession(): void {
  * syscall - until it reports a result or CAPTURE_WAIT_MS runs out (generous: the user may need
  * to walk over to the cabinet's pad; the session runs with -background_input, see
  * startMameConfigSession(), so MAME doesn't need the focus). Returns the exact token MAME resolved the press to (e.g. "JOYCODE_1_BUTTON5"), null
- * if no session is running or nothing was captured in time.
+ * if no session is running or nothing was captured in time. `axis`: waits for an axis moved
+ * instead (a spinner, a mouse, a stick: e.g. "MOUSECODE_1_XAXIS"), for an analog control.
  */
-function captureOnePress(): string | null {
+function captureOnePress(axis = false): string | null {
     const session = getCaptureTarget();
     if (!session) {
         return null;
     }
     const nonce = nextNonce(session);
-    writeFileSync(join(session.dir, 'request.txt'), nonce, 'utf8');
+    writeFileSync(join(session.dir, 'request.txt'), axis ? `${nonce}|axis` : nonce, 'utf8');
 
     const CAPTURE_WAIT_MS = 30000;
     const resultPath = join(session.dir, 'result.txt');
@@ -4842,8 +4856,13 @@ function readSessionGameFields(): GameField[] | undefined {
         return undefined;
     }
     const fieldsPath = join(target.dir, 'game-fields.txt');
+    // Written just before game-fields.txt (absent with a daemon from before analog controls).
+    const analogPath = join(target.dir, 'game-analog.txt');
     return existsSync(fieldsPath)
-        ? parseGameFields(readFileSync(fieldsPath, 'utf8')).sort(compareGameFields)
+        ? parseGameFields(
+            readFileSync(fieldsPath, 'utf8'),
+            existsSync(analogPath) ? readFileSync(analogPath, 'utf8') : '',
+        ).sort(compareGameFields)
         : undefined;
 }
 
@@ -4860,22 +4879,42 @@ function waitForSessionGameFields(timeoutMs: number): void {
     }
 }
 
-function readGameCfgOverrides(cfgPath: string): Map<string, string> {
-    return existsSync(cfgPath) ? readGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')) : new Map<string, string>();
+/**
+ * Which way an analog control's `increment`/`decrement` keys move it: MAME increments rightwards
+ * on a horizontal axis (a spinner turned clockwise), downwards on a vertical one.
+ */
+function analogKeyDirection(portType: string, seqType: GameSeqType): string {
+    const increment = seqType === 'increment';
+    if (/_(?:V|Y)$/.test(portType)) {
+        return increment ? 'down' : 'up';
+    }
+    if (/_(?:PEDAL\d?|Z)$/.test(portType)) {
+        return increment ? 'more' : 'less';
+    }
+    return increment ? 'right' : 'left';
 }
 
-function setGameCfgOverride(cfgPath: string, romName: string, field: GameField, token: string): void {
+/** What a game's field uses for `seqType` without an entry of its own in the game's cfg. */
+function getInheritedGameSeq(field: GameField, seqType: GameSeqType): string {
+    return seqType === 'standard' ? field.defaultSeq : field.analog?.[seqType] ?? '';
+}
+
+function readGameCfgOverrides(cfgPath: string, seqType: GameSeqType = 'standard'): Map<string, string> {
+    return existsSync(cfgPath) ? readGameCfgInputSeqs(readFileSync(cfgPath, 'utf8'), seqType) : new Map<string, string>();
+}
+
+function setGameCfgOverride(cfgPath: string, romName: string, field: GameField, token: string, seqType: GameSeqType = 'standard'): void {
     const existing = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : undefined;
     mkdirSync(dirname(cfgPath), {recursive: true});
-    writeFileSync(cfgPath, setGameCfgInputSeq(existing, romName, field, token), 'utf8');
+    writeFileSync(cfgPath, setGameCfgInputSeq(existing, romName, field, token, seqType), 'utf8');
 }
 
-function removeGameCfgOverride(cfgPath: string, field: GameField): void {
+function removeGameCfgOverride(cfgPath: string, field: GameField, seqType: GameSeqType = 'standard'): void {
     if (!existsSync(cfgPath)) {
         return;
     }
     const existing = readFileSync(cfgPath, 'utf8');
-    const updated = removeGameCfgInputSeq(existing, field);
+    const updated = removeGameCfgInputSeq(existing, field, seqType);
     if (updated !== existing) {
         writeFileSync(cfgPath, updated, 'utf8');
     }
@@ -4914,30 +4953,48 @@ function renderGameRemapCard(
             click the button above again in a few seconds to show its commands.</p>`;
         }
         if (!fields.length) {
-            return '<p class="info flash">This game exposes no remappable command (directions, buttons, coin, start).</p>';
+            return '<p class="info flash">This game exposes no remappable command (directions, buttons, coin, start, spinner...).</p>';
         }
-        const overrides = readGameCfgOverrides(getGameCfgPath(iniPath, romName));
+        const cfgPath = getGameCfgPath(iniPath, romName);
+        const overrides = new Map(GAME_SEQ_TYPES.map(seqType => [seqType, readGameCfgOverrides(cfgPath, seqType)]));
         const players = Array.from(new Set(fields.map(field => portTypePlayer(field.portType))));
+
+        // One sequence of a command: the only one of a button, one of the three of an analog control.
+        const renderSeqForm = (field: GameField, seqType: GameSeqType): string => {
+            const id = gameFieldId(field);
+            const override = overrides.get(seqType)?.get(id);
+            const axis = !!field.analog && seqType === 'standard';
+            const title = !field.analog ? '' : axis ? 'Movement (spinner, mouse, stick)'
+                : `Keys: ${analogKeyDirection(field.portType, seqType)}`;
+            return `
+                <form method="post" action="/input-probe/game/remap" class="control-form">
+                    <input type="hidden" name="romName" value="${escapeHtml(romName)}">
+                    <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
+                    <input type="hidden" name="seqType" value="${seqType}">
+                    ${title ? `<p class="control-seq-title">${title}</p>` : ''}
+                    <p class="control-origin">${override !== undefined ? 'This game only' : 'From the global controls'}</p>
+                    ${renderControlChips(override ?? getInheritedGameSeq(field, seqType), defaults?.codes ?? new Map<string, string>())}
+                    ${axis ? `
+                        <div class="binding-actions">
+                            <button type="submit" name="action" value="capture-axis">Add a movement</button>
+                        </div>
+                    ` : renderControlAddButtons('', !!defaults)}
+                    ${override !== undefined ? `
+                        <div class="binding-actions">
+                            <button type="submit" name="action" value="reset">Back to the global controls</button>
+                        </div>
+                    ` : ''}
+                </form>
+            `;
+        };
 
         const renderItems = (playerFields: GameField[]): string => playerFields.map(field => {
             const id = gameFieldId(field);
             const rowState = state?.fieldId === id ? state : undefined;
-            const override = overrides.get(id);
             return `
                 <div class="binding">
                     ${renderBindingLabel(field.portType, field.name || field.portType)}
-                    <form method="post" action="/input-probe/game/remap" class="control-form">
-                        <input type="hidden" name="romName" value="${escapeHtml(romName)}">
-                        <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
-                        <p class="control-origin">${override !== undefined ? 'This game only' : 'From the global controls'}</p>
-                        ${renderControlChips(override ?? field.defaultSeq, defaults?.codes ?? new Map<string, string>())}
-                        ${renderControlAddButtons('', !!defaults)}
-                        ${override !== undefined ? `
-                            <div class="binding-actions">
-                                <button type="submit" name="action" value="reset">Back to the global controls</button>
-                            </div>
-                        ` : ''}
-                    </form>
+                    ${(field.analog ? GAME_SEQ_TYPES : ['standard' as const]).map(seqType => renderSeqForm(field, seqType)).join('')}
                     ${rowState?.error ? `<p class="error flash">${escapeHtml(rowState.error)}</p>` : ''}
                     ${rowState?.sharedWith?.length ? `
                         <p class="warn flash">Also used by ${escapeHtml(rowState.sharedWith.join(', '))} in this game:
@@ -4975,6 +5032,11 @@ function renderGameRemapCard(
                     direction) on the gamepad within 30 seconds - MAME picks it up even when its window
                     is not the one in front. <strong>Add a key or mouse button</strong>: click, then
                     press the key or click the mouse button in this page.</li>
+                    <li>A spinner, trackball or paddle (Arkanoid's <em>Dial</em>...) has a
+                    <strong>Movement</strong>: <strong>Add a movement</strong>, then wait a second
+                    and turn the spinner, move the mouse or push the stick. Its keys move it each
+                    way. MAME only reads the mouse or a USB spinner when the
+                    <strong>Spinner, trackball, paddle</strong> card above says so.</li>
                     <li>Each change is saved and works in the running game at once.</li>
                     <li><strong>Back to the global controls</strong> drops what this game had of its
                     own for a command. ${fromMaui
@@ -10422,10 +10484,13 @@ export function createBoApp(
         // A pill's cross posts `remove` (the alternative to drop) instead of an action.
         const removed: string = typeof req.body.remove === 'string' ? req.body.remove.trim() : '';
         const action: string = removed ? 'remove' : (req.body.action || '').trim();
+        // Which of the command's sequences (the axis and the two keys of an analog control).
+        const seqType = GAME_SEQ_TYPES.find(type => type === (req.body.seqType || 'standard'));
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
         // roms actually present - never a client-supplied path fragment.
-        if (mameInfo.error || !romNames.includes(romName) || !['capture', 'add', 'remove', 'reset'].includes(action)) {
+        if (mameInfo.error || !romNames.includes(romName) || !seqType
+            || !['capture', 'capture-axis', 'add', 'remove', 'reset'].includes(action)) {
             res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
@@ -10444,30 +10509,38 @@ export function createBoApp(
             return;
         }
 
+        // An axis is only captured for an analog control's movement, and only an analog control
+        // has keys of its own for each way: anything else was posted outside the card.
+        const axis = !!field.analog && seqType === 'standard';
+        if ((seqType !== 'standard' && !field.analog) || (action === 'capture-axis') !== (axis && action.startsWith('capture'))
+            || (axis && action === 'add')) {
+            res.status(422).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId, error: 'Not possible for this command.'}));
+            return;
+        }
         const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
         try {
             const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
-            const overrides = readGameCfgOverrides(cfgPath);
+            const overrides = readGameCfgOverrides(cfgPath, seqType);
             // What the command uses now: the game's own sequence, else what it inherits (the
             // global controls, as MAME reported them for this field when it started).
-            const current = overrides.get(fieldId) ?? field.defaultSeq;
-            const inherited = seqFromAlternatives(seqAlternatives(field.defaultSeq));
+            const current = overrides.get(fieldId) ?? getInheritedGameSeq(field, seqType);
+            const inherited = seqFromAlternatives(seqAlternatives(getInheritedGameSeq(field, seqType)));
             // Saves `seq` for this game, live in the running MAME too - or drops the game's own
             // entry when `seq` is what it inherits anyway.
             const save = (seq: string) => {
                 const normalized = seqFromAlternatives(seqAlternatives(seq));
                 if (normalized === inherited) {
-                    const live = applyGameFieldLive(field, '');
-                    applyCfgEdit(() => removeGameCfgOverride(cfgPath, field), live);
+                    const live = applyGameFieldLive(field, '', seqType);
+                    applyCfgEdit(() => removeGameCfgOverride(cfgPath, field, seqType), live);
                 } else {
-                    const live = applyGameFieldLive(field, normalized);
-                    applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, normalized), live);
+                    const live = applyGameFieldLive(field, normalized, seqType);
+                    applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, normalized, seqType), live);
                 }
             };
 
             if (action === 'reset') {
-                const live = applyGameFieldLive(field, '');
-                applyCfgEdit(() => removeGameCfgOverride(cfgPath, field), live);
+                const live = applyGameFieldLive(field, '', seqType);
+                applyCfgEdit(() => removeGameCfgOverride(cfgPath, field, seqType), live);
                 res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }
@@ -10492,21 +10565,31 @@ export function createBoApp(
                     return;
                 }
             } else {
-                token = captureOnePress();
+                token = captureOnePress(axis);
                 if (!token) {
                     res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
-                        romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
-                            '(is the gamepad connected, and MAME still open?).',
+                        romName, fieldId, error: axis
+                            ? 'No movement detected within the allotted time (30s) - try again (turn the spinner, move the '
+                                + 'mouse or push the stick well after clicking; is MAME still open?).'
+                            : 'No press detected within the allotted time (30s) - try again '
+                                + '(is the gamepad connected, and MAME still open?).',
                     }));
                     return;
                 }
             }
 
-            const sharedWith = (readSessionGameFields() ?? [])
-                .filter(other => gameFieldId(other) !== fieldId
-                    && seqAlternatives(overrides.get(gameFieldId(other)) ?? other.defaultSeq).includes(token))
-                .map(other => other.name || other.portType);
             save(addSeqAlternative(current, token));
+            if (axis) {
+                // An axis triggers no other command: nothing shared, nothing to release.
+                res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
+                return;
+            }
+            // Every sequence of the game's other commands, its own or inherited.
+            const allOverrides = new Map(GAME_SEQ_TYPES.map(type => [type, readGameCfgOverrides(cfgPath, type)]));
+            const sharedWith = (readSessionGameFields() ?? [])
+                .filter(other => gameFieldId(other) !== fieldId && GAME_SEQ_TYPES.some(type =>
+                    seqAlternatives(allOverrides.get(type)?.get(gameFieldId(other)) ?? getInheritedGameSeq(other, type)).includes(token)))
+                .map(other => other.name || other.portType);
             const releasedFrom = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token, defaults);
             res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId, sharedWith, releasedFrom}));
         } catch (error) {

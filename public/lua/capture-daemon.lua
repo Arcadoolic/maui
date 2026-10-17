@@ -14,15 +14,16 @@
 -- File-based request/response, polled once a frame (no way to signal an already-running MAME
 -- process from Node otherwise short of a full IPC layer, which felt like overkill here):
 --   request.txt - written by captureOnePress() with a fresh nonce every time an admin clicks
---                 "Capturer" on some action's row. Read every frame; a nonce different from the
+--                 "Capturer" on some action's row, followed by "|axis" when what is wanted is an
+--                 axis moved (a spinner, a mouse, a stick) rather than a button pressed. Read every frame; a nonce different from the
 --                 last one seen arms the daemon for the very next press, whatever it turns out to
 --                 be (the daemon has no idea which cfg action a nonce is for - only Node does, via
 --                 its own nonce -> portType bookkeeping).
 --   result.txt  - written by this script as "<nonce>|<token>" the moment the armed press happens;
 --                 captureOnePress() polls for this and deletes it once consumed.
---   apply.txt   - written by applyGameFieldLive() as "<nonce>|<tag>|<mask>|<sequence>" to rebind one
---                 of the running game's fields right away (empty sequence: back to its default,
---                 NONE: no control at all),
+--   apply.txt   - written by applyGameFieldLive() as "<nonce>|<tag>|<mask>|<sequence>|<type>" to
+--                 rebind one of the running game's fields right away (empty sequence: back to its
+--                 default, NONE: no control at all; type: standard, increment or decrement),
 --                 so a capture works without relaunching MAME - which also saves it to the game's
 --                 cfg on exit, like a change made from its own menu.
 --   applied.txt - "<nonce>|ok" or "<nonce>|<error>", this script's answer to apply.txt.
@@ -48,6 +49,9 @@ local ANALOG_AXIS_TOKENS = {
 local input = manager.machine.input
 local joystick_class = input.device_classes.joystick
 local candidates = {}
+-- What an "|axis" capture watches: every joystick axis (absolute, -65536..65536) and the mouse's
+-- X/Y (relative: how far it moved since the last frame, 512 per pixel).
+local axis_candidates = {}
 
 if joystick_class then
     for device_index, device in pairs(joystick_class.devices) do
@@ -61,6 +65,9 @@ if joystick_class then
                 if ok and code then
                     table.insert(candidates, {token = token, code = code})
                 end
+            end
+            if ANALOG_AXIS_TOKENS[item.token] then
+                table.insert(axis_candidates, {code = item.code, relative = false})
             end
         end
     end
@@ -76,6 +83,8 @@ for _, class_name in ipairs({'keyboard', 'mouse'}) do
             for _, item in pairs(device.items) do
                 if class_name == 'keyboard' or item.token:find('^BUTTON%d+$') then
                     table.insert(candidates, {code = item.code})
+                elseif item.token == 'XAXIS' or item.token == 'YAXIS' then
+                    table.insert(axis_candidates, {code = item.code, relative = true})
                 end
             end
         end
@@ -137,12 +146,32 @@ end
 -- comes from ioport.types, keyed by numeric type + player.
 local GAME_FIELDS_PATH = CAPTURE_DIR .. '/game-fields.txt'
 
+-- Same list as MameCfg.ts's ANALOG_PORT_TYPE.
+local ANALOG_TYPES = {
+    'DIAL', 'DIAL_V', 'PADDLE', 'PADDLE_V', 'TRACKBALL_X', 'TRACKBALL_Y', 'POSITIONAL', 'POSITIONAL_V',
+    'AD_STICK_X', 'AD_STICK_Y', 'AD_STICK_Z', 'PEDAL', 'PEDAL2', 'PEDAL3',
+}
+
+local function is_analog_type(token)
+    for _, analog in ipairs(ANALOG_TYPES) do
+        if token:find('^P[1-4]_' .. analog .. '$') then
+            return true
+        end
+    end
+    return false
+end
+
 local function is_remappable(token)
     return token:find('^P[1-4]_JOYSTICK_UP$') or token:find('^P[1-4]_JOYSTICK_DOWN$')
         or token:find('^P[1-4]_JOYSTICK_LEFT$') or token:find('^P[1-4]_JOYSTICK_RIGHT$')
         or token:find('^P[1-4]_BUTTON%d+$')
         or token:find('^COIN[1-4]$') or token:find('^START[1-4]$')
+        or is_analog_type(token)
 end
+
+-- Analog fields also get a "<tag>|<mask>|<increment sequence>|<decrement sequence>" line in
+-- game-analog.txt: the keys that move them each way.
+local GAME_ANALOG_PATH = CAPTURE_DIR .. '/game-analog.txt'
 
 local function dump_game_fields()
     local tokens = {}
@@ -150,6 +179,7 @@ local function dump_game_fields()
         tokens[port_type.type .. '/' .. (port_type.player or 0)] = tostring(port_type.token)
     end
     local lines = {}
+    local analog_lines = {}
     for _, port in pairs(manager.machine.ioport.ports) do
         for name, field in pairs(port.fields) do
             local token = tokens[field.type .. '/' .. field.player]
@@ -159,9 +189,21 @@ local function dump_game_fields()
                 end)
                 table.insert(lines, string.format('%s|%s|%d|%d|%s|%s',
                     token, port.tag, field.mask, field.defvalue, ok and default_seq or '', name))
+                if field.is_analog then
+                    local seqs = {}
+                    for _, seq_type in ipairs({'increment', 'decrement'}) do
+                        local seq_ok, seq = pcall(function()
+                            return input:seq_to_tokens(field:default_input_seq(seq_type))
+                        end)
+                        table.insert(seqs, seq_ok and seq or '')
+                    end
+                    table.insert(analog_lines, string.format('%s|%d|%s|%s', port.tag, field.mask, seqs[1], seqs[2]))
+                end
             end
         end
     end
+    -- Before game-fields.txt: Node reads both once game-fields.txt is there.
+    write_file(GAME_ANALOG_PATH, table.concat(analog_lines, '\n') .. '\n')
     write_file(GAME_FIELDS_PATH, table.concat(lines, '\n') .. '\n')
 end
 
@@ -172,10 +214,22 @@ end
 
 local last_seen_request = nil
 local armed_nonce = nil
+-- An "|axis" capture: the axes' values when it was armed, and how far each mouse axis moved since.
+local armed_axis = false
+local axis_baseline = {}
+local axis_travel = {}
+-- A stick pushed past half its range, or a mouse/spinner moved ~150 pixels: not a slight touch.
+-- MAME reads the mouse even while its window is in the background, and the hand that just clicked
+-- the BO's button still moves it: nothing counts for the first AXIS_GRACE_TICKS callbacks
+-- (~1.5 s at 60 Hz) after arming.
+local ABSOLUTE_AXIS_THRESHOLD = 32768
+local RELATIVE_AXIS_THRESHOLD = 512 * 150
+local AXIS_GRACE_TICKS = 90
+local axis_ticks = 0
 local last_seen_apply = nil
 local frame = 0
 
-local function apply_field(tag, mask, seq_tokens)
+local function apply_field(tag, mask, seq_tokens, seq_type)
     local port = manager.machine.ioport.ports[tag]
     if not port then
         return 'unknown port ' .. tag
@@ -189,7 +243,7 @@ local function apply_field(tag, mask, seq_tokens)
             -- seq_from_tokens() only gets from an empty string.
             local tokens = seq_tokens == '' and 'DEFAULT' or (seq_tokens == 'NONE' and '' or seq_tokens)
             local seq = input:seq_from_tokens(tokens)
-            field:set_input_seq('standard', seq)
+            field:set_input_seq(seq_type, seq)
             return 'ok'
         end
     end
@@ -202,11 +256,14 @@ local function handle_apply()
         return
     end
     last_seen_apply = request
-    local nonce, tag, mask, seq_tokens = request:match('^([^|]*)|([^|]*)|(%d+)|([^|\n]*)')
+    local nonce, tag, mask, seq_tokens, seq_type = request:match('^([^|]*)|([^|]*)|(%d+)|([^|\n]*)|?(%a*)')
     if not nonce then
         return
     end
-    local ok, result = pcall(apply_field, tag, tonumber(mask), seq_tokens)
+    if seq_type ~= 'increment' and seq_type ~= 'decrement' then
+        seq_type = 'standard'
+    end
+    local ok, result = pcall(apply_field, tag, tonumber(mask), seq_tokens, seq_type)
     write_file(APPLIED_PATH, nonce .. '|' .. (ok and result or tostring(result)))
 end
 
@@ -221,12 +278,39 @@ emu.register_periodic(function()
             local request = read_file(REQUEST_PATH)
             if request and request ~= last_seen_request then
                 last_seen_request = request
-                armed_nonce = request
+                local nonce, mode = request:match('^([^|]*)|?(%a*)')
+                armed_nonce = nonce
+                armed_axis = mode == 'axis'
+                axis_ticks = 0
             end
             handle_apply()
         end
 
-        if armed_nonce then
+        if armed_nonce and armed_axis and axis_ticks < AXIS_GRACE_TICKS then
+            axis_ticks = axis_ticks + 1
+            if axis_ticks == AXIS_GRACE_TICKS then
+                for index, candidate in ipairs(axis_candidates) do
+                    axis_baseline[index] = input:code_value(candidate.code)
+                    axis_travel[index] = 0
+                end
+            end
+        elseif armed_nonce and armed_axis then
+            for index, candidate in ipairs(axis_candidates) do
+                local value = input:code_value(candidate.code)
+                local moved
+                if candidate.relative then
+                    axis_travel[index] = axis_travel[index] + math.abs(value)
+                    moved = axis_travel[index] > RELATIVE_AXIS_THRESHOLD
+                else
+                    moved = math.abs(value - axis_baseline[index]) > ABSOLUTE_AXIS_THRESHOLD
+                end
+                if moved then
+                    write_file(RESULT_PATH, armed_nonce .. '|' .. input:code_to_token(candidate.code))
+                    armed_nonce = nil
+                    break
+                end
+            end
+        elseif armed_nonce then
             for _, candidate in ipairs(candidates) do
                 if input:code_pressed(candidate.code) then
                     write_file(RESULT_PATH, armed_nonce .. '|' .. input:code_to_token(candidate.code))
