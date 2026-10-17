@@ -1,3 +1,21 @@
+## [2.16.0](https://github.com/Arcadoolic/maui/compare/2.15.0...2.16.0) (2026-10-17)
+
+### Features
+
+* **bo:** analog controls (spinner, trackball, paddle) in the per-game card ([95fc5a4](https://github.com/Arcadoolic/maui/commit/95fc5a4d112de1e78d69d1b0fa137bdb43e83e69))
+* **bo:** choose the device MAME reads spinners, trackballs and paddles from ([2bbb31d](https://github.com/Arcadoolic/maui/commit/2bbb31d1d259dec2236723c388b9dfbe4e364448))
+* **bo:** MAME controls tab with keyboard, mouse and gamepad bindings ([0e7bf72](https://github.com/Arcadoolic/maui/commit/0e7bf72aabccdc75044760d15eb5752b35477e2c))
+* **bo:** per-game controls as pills, keyboard and mouse too ([7068c39](https://github.com/Arcadoolic/maui/commit/7068c3950e6ef6a3d5e39294be573c7085da4a7e))
+* **front:** launch games without cheats, rewind, autosave nor autofire ([40343a6](https://github.com/Arcadoolic/maui/commit/40343a6cb45cdd9d886206e31966cab87e7fc19e))
+* **front:** mouse wheel and clicks on the games and categories in windowed mode ([85e9b86](https://github.com/Arcadoolic/maui/commit/85e9b86f78671b990afefaabea8754d02fe8adcc))
+* **front:** vote with the mouse in windowed mode ([1142cca](https://github.com/Arcadoolic/maui/commit/1142ccad6e5c155406f38ca0a3bbf000f40fab77))
+* **maui:** MAUI controls set from the BO, several inputs per action ([711e2c3](https://github.com/Arcadoolic/maui/commit/711e2c3a3bffe9a20b4bb5cadb3faacda3361b21))
+* **scores:** report on each game joined to its scores (maui-api D87) ([92b5941](https://github.com/Arcadoolic/maui/commit/92b5941adbbc0418bae35e5fbf60de9e880ee4be))
+
+### Bug Fixes
+
+* **gamepads:** read both joysticks of a two-player encoder on Linux ([909de57](https://github.com/Arcadoolic/maui/commit/909de570fcf30ab90f0db8c1ace275d50e84e832))
+
 ## [2.15.0](https://github.com/Arcadoolic/maui/compare/2.14.0...2.15.0) (2026-10-14)
 
 ### Features
