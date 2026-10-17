@@ -29,7 +29,7 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
     {
         id: 'config',
         label: 'the configuration',
-        files: ['mame-awesome-ui-config.json', 'removed-favorites.json'],
+        files: ['mame-awesome-ui-config.json', 'removed-favorites.json', 'maui-controls.json'],
         directories: [],
     },
     {

@@ -32,6 +32,7 @@
 import {ref, onMounted, onUnmounted} from 'vue';
 import {useControllable} from '@/composables/useControllable';
 import {MAUI_KEYS} from '@/class/MauiControls';
+import {controlKey} from '@/class/MauiControlsRuntime';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
 import Modal from '@/components/Modal.vue';
 
@@ -58,7 +59,7 @@ onUnmounted(() => clearTimeout(autoSkip));
 const {onKeydown, onKeyup} = useControllable();
 
 onKeydown((e, isGamepad) => {
-    const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+    const key = controlKey(e, isGamepad);
     switch (key) {
     case MAUI_KEYS.left:
         selected.value = Math.max(0, selected.value - 1);

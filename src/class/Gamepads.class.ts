@@ -22,6 +22,9 @@ export default class Gamepads {
     // window getting its focus back or a controller being plugged in.
     protected static suspended: boolean = false;
     protected static warnedUnmappedGamepadIds: Set<string> = new Set();
+    // While the BO waits for a gamepad input to bind (see captureNext()): the loop above keeps
+    // track of what is held but sends nothing, so the press doesn't also act on the screen.
+    protected static capturing = false;
     // Linux only: the joysticks Chromium merges into one gamepad (a two-player arcade encoder),
     // read from /dev/input/js* instead of the Gamepad API - see SharedJoysticks.ts.
     public static sharedJoysticks: SharedJoysticks|null =
@@ -133,7 +136,7 @@ export default class Gamepads {
                         axe.wasPressed = false;
                     }
 
-                    if (eventName) {
+                    if (eventName && !this.capturing) {
                         const event = new CustomEvent(eventName, {
                             detail: {
                                 key: axe.lastPressedKey,
@@ -157,7 +160,7 @@ export default class Gamepads {
                         this.gamepadKeyPressed[gamepadsKey].buttons[index] = false;
                     }
 
-                    if (eventName) {
+                    if (eventName && !this.capturing) {
                         const event = new CustomEvent(eventName, {
                             detail: {
                                 key: mapping.buttons[index],
@@ -171,6 +174,56 @@ export default class Gamepads {
         }
 
         this.animationFrameRequest = requestAnimationFrame(this.startGamepadListeners.bind(this));
+    }
+
+    public static isSuspended(): boolean {
+        return this.suspended;
+    }
+
+    /**
+     * Resolves with the next button pressed or axis pushed past AXIS_DEADZONE on any pad, mapped
+     * or not, null after `timeoutMs`. Polls on its own timer rather than the loop above, which
+     * stops whenever the window loses its focus (the BO open in a browser on the same machine).
+     * What is already held when it starts only counts once released and pressed again.
+     */
+    public static captureNext(timeoutMs: number): Promise<{pad: PolledPad, button?: number, axis?: number, direction?: 0 | 1} | null> {
+        this.capturing = true;
+        this.sharedJoysticks?.refresh();
+        const held = new Map<string, Set<string>>();
+        const padKey = (pad: PolledPad) => `${pad.index}|${pad.id}`;
+        const pressedInputs = (pad: PolledPad): string[] => [
+            ...pad.buttons.flatMap((button, index) => (button.pressed ? [`b${index}`] : [])),
+            ...pad.axes.flatMap((value, index) => (Math.abs(value) > this.AXIS_DEADZONE ? [`a${index}${value > 0 ? '+' : '-'}`] : [])),
+        ];
+        for (const pad of this.connectedPads(true)) {
+            held.set(padKey(pad), new Set(pressedInputs(pad)));
+        }
+        return new Promise((resolve) => {
+            const finish = (result: {pad: PolledPad, button?: number, axis?: number, direction?: 0 | 1} | null) => {
+                clearInterval(timer);
+                clearTimeout(deadline);
+                this.capturing = false;
+                resolve(result);
+            };
+            const deadline = setTimeout(() => finish(null), timeoutMs);
+            const timer = setInterval(() => {
+                for (const pad of this.connectedPads(true)) {
+                    const pressed = pressedInputs(pad);
+                    const before = held.get(padKey(pad)) ?? new Set<string>();
+                    const fresh = pressed.find(input => !before.has(input));
+                    // Released inputs may count again.
+                    held.set(padKey(pad), new Set(pressed.filter(input => before.has(input))));
+                    if (!fresh) {
+                        continue;
+                    }
+                    const axis = /^a(\d+)([+-])$/.exec(fresh);
+                    finish(axis
+                        ? {pad, axis: Number(axis[1]), direction: axis[2] === '+' ? 1 : 0}
+                        : {pad, button: Number(fresh.slice(1))});
+                    return;
+                }
+            }, 16);
+        });
     }
 
     /**
