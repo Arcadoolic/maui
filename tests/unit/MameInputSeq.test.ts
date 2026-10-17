@@ -1,5 +1,8 @@
 import {describe, it, expect} from 'vitest';
-import {removeTokenFromSeq, parseUiSeqs} from '@/class/MameInputSeq';
+import {
+    addSeqAlternative, browserKeyToken, browserKeyTokens, browserMouseToken, describeInputCode, describeSeqAlternative, inputCodeKind, parseInputDefaults, parseUiSeqs,
+    removeSeqAlternative, removeTokenFromSeq, seqAlternativeKind, seqAlternatives, seqFromAlternatives,
+} from '@/class/MameInputSeq';
 
 describe('removeTokenFromSeq', () => {
     const uiMenu = 'KEYCODE_TAB NOT KEYCODE_LALT NOT KEYCODE_RALT OR JOYCODE_1_BUTTON9';
@@ -40,5 +43,143 @@ describe('parseUiSeqs', () => {
 
     it('skips ports with an empty sequence and blank lines, and tolerates CRLF', () => {
         expect(parseUiSeqs('COIN10|\r\n\r\nUI_HOME|KEYCODE_HOME\r\n')).toEqual(new Map([['UI_HOME', 'KEYCODE_HOME']]));
+    });
+});
+
+describe('seqAlternatives', () => {
+    it('splits on OR and keeps combinations whole', () => {
+        expect(seqAlternatives('KEYCODE_F3 KEYCODE_LSHIFT OR KEYCODE_F3  KEYCODE_RSHIFT')).toEqual([
+            'KEYCODE_F3 KEYCODE_LSHIFT', 'KEYCODE_F3 KEYCODE_RSHIFT',
+        ]);
+    });
+
+    it('has none for an empty sequence or NONE', () => {
+        expect(seqAlternatives('')).toEqual([]);
+        expect(seqAlternatives(' NONE ')).toEqual([]);
+    });
+});
+
+describe('seqFromAlternatives', () => {
+    it('joins with OR, NONE when empty', () => {
+        expect(seqFromAlternatives(['KEYCODE_ESC', 'JOYCODE_1_BUTTON7'])).toBe('KEYCODE_ESC OR JOYCODE_1_BUTTON7');
+        expect(seqFromAlternatives([])).toBe('NONE');
+    });
+});
+
+describe('addSeqAlternative', () => {
+    it('adds after what is there instead of replacing it', () => {
+        expect(addSeqAlternative('KEYCODE_ESC', 'JOYCODE_1_BUTTON7')).toBe('KEYCODE_ESC OR JOYCODE_1_BUTTON7');
+    });
+
+    it('adds to an empty sequence', () => {
+        expect(addSeqAlternative('NONE', 'KEYCODE_ESC')).toBe('KEYCODE_ESC');
+    });
+
+    it('does not add twice', () => {
+        expect(addSeqAlternative('KEYCODE_ESC OR JOYCODE_1_BUTTON7', 'JOYCODE_1_BUTTON7')).toBe('KEYCODE_ESC OR JOYCODE_1_BUTTON7');
+    });
+});
+
+describe('removeSeqAlternative', () => {
+    it('removes one alternative and keeps the others', () => {
+        expect(removeSeqAlternative('KEYCODE_UP OR JOYCODE_1_YAXIS_UP_SWITCH OR JOYCODE_1_HAT1UP', 'JOYCODE_1_YAXIS_UP_SWITCH'))
+            .toBe('KEYCODE_UP OR JOYCODE_1_HAT1UP');
+    });
+
+    it('removes a combination as a whole', () => {
+        expect(removeSeqAlternative('KEYCODE_TAB NOT KEYCODE_LALT NOT KEYCODE_RALT OR JOYCODE_1_BUTTON9',
+            'KEYCODE_TAB NOT KEYCODE_LALT NOT KEYCODE_RALT')).toBe('JOYCODE_1_BUTTON9');
+    });
+
+    it('gives NONE when the last one goes', () => {
+        expect(removeSeqAlternative('KEYCODE_ESC', 'KEYCODE_ESC')).toBe('NONE');
+    });
+
+    it('does not remove a combination holding the code', () => {
+        expect(removeSeqAlternative('KEYCODE_F3 KEYCODE_LSHIFT OR KEYCODE_F3', 'KEYCODE_F3')).toBe('KEYCODE_F3 KEYCODE_LSHIFT');
+    });
+});
+
+describe('parseInputDefaults', () => {
+    it('reads the marked lines only', () => {
+        const parsed = parseInputDefaults([
+            'Warning: something',
+            'MAUI_SEQ|UI_CANCEL|KEYCODE_ESC',
+            'MAUI_SEQ|UI_PAUSE|',
+            'MAUI_CODE|KEYCODE_ESC|Escape',
+            'MAUI_CODE|KEYCODE_KEYPAD,|Keypad ,',
+            'MAUI_CODE|MOUSECODE_1_BUTTON1|Button 1',
+        ].join('\n'));
+        expect(parsed.seqs).toEqual(new Map([['UI_CANCEL', 'KEYCODE_ESC'], ['UI_PAUSE', '']]));
+        expect(parsed.codes).toEqual(new Map([
+            ['KEYCODE_ESC', 'Escape'], ['KEYCODE_KEYPAD,', 'Keypad ,'], ['MOUSECODE_1_BUTTON1', 'Button 1'],
+        ]));
+    });
+});
+
+describe('describeInputCode', () => {
+    const names = new Map([['KEYCODE_ESC', 'Escape'], ['MOUSECODE_1_BUTTON1', 'Button 1']]);
+
+    it('uses MAME\'s key names', () => {
+        expect(describeInputCode('KEYCODE_ESC', names)).toBe('Escape');
+    });
+
+    it('cuts down the other tokens', () => {
+        expect(describeInputCode('JOYCODE_1_BUTTON7', names)).toBe('Joy 1 Button 7');
+        expect(describeInputCode('MOUSECODE_1_BUTTON1', names)).toBe('Mouse 1 Button 1');
+        expect(describeInputCode('JOYCODE_2_YAXIS_UP_SWITCH', names)).toBe('Joy 2 Yaxis Up Switch');
+        expect(describeInputCode('KEYCODE_LSHIFT', new Map())).toBe('Key Lshift');
+    });
+});
+
+describe('describeSeqAlternative', () => {
+    const names = new Map([['KEYCODE_F5', 'F5'], ['KEYCODE_LSHIFT', 'Left Shift'], ['KEYCODE_RSHIFT', 'Right Shift'], ['KEYCODE_F3', 'F3']]);
+
+    it('names combinations and NOT modifiers', () => {
+        expect(describeSeqAlternative('KEYCODE_F5 NOT KEYCODE_LSHIFT NOT KEYCODE_RSHIFT', names)).toBe('F5 without Left Shift, Right Shift');
+        expect(describeSeqAlternative('KEYCODE_F3 KEYCODE_LSHIFT', names)).toBe('F3 + Left Shift');
+    });
+});
+
+describe('inputCodeKind / seqAlternativeKind', () => {
+    it('tells the device from the token', () => {
+        expect(inputCodeKind('KEYCODE_A')).toBe('keyboard');
+        expect(inputCodeKind('MOUSECODE_1_BUTTON1')).toBe('mouse');
+        expect(inputCodeKind('JOYCODE_1_BUTTON1')).toBe('joystick');
+        expect(inputCodeKind('GUNCODE_1_BUTTON1')).toBe('lightgun');
+        expect(seqAlternativeKind('KEYCODE_F3 KEYCODE_LSHIFT')).toBe('keyboard');
+    });
+});
+
+describe('browserKeyToken', () => {
+    it('maps browser key codes to MAME tokens', () => {
+        expect(browserKeyToken('KeyA')).toBe('KEYCODE_A');
+        expect(browserKeyToken('Digit5')).toBe('KEYCODE_5');
+        expect(browserKeyToken('Numpad5')).toBe('KEYCODE_5PAD');
+        expect(browserKeyToken('F12')).toBe('KEYCODE_F12');
+        expect(browserKeyToken('Escape')).toBe('KEYCODE_ESC');
+        expect(browserKeyToken('ControlLeft')).toBe('KEYCODE_LCONTROL');
+        expect(browserKeyToken('Period')).toBe('KEYCODE_STOP');
+        expect(browserKeyToken('NumpadComma')).toBe('KEYCODE_KEYPAD,');
+    });
+
+    it('knows nothing of keys MAME has no token for', () => {
+        expect(browserKeyToken('AudioVolumeUp')).toBeUndefined();
+        expect(browserKeyToken('F25')).toBeUndefined();
+    });
+
+    it('lists every code it knows', () => {
+        const tokens = browserKeyTokens();
+        expect(tokens.KeyZ).toBe('KEYCODE_Z');
+        expect(Object.values(tokens).every(token => token.startsWith('KEYCODE_'))).toBe(true);
+    });
+});
+
+describe('browserMouseToken', () => {
+    it('numbers buttons left, middle, right like MAME', () => {
+        expect(browserMouseToken(0)).toBe('MOUSECODE_1_BUTTON1');
+        expect(browserMouseToken(1)).toBe('MOUSECODE_1_BUTTON2');
+        expect(browserMouseToken(2)).toBe('MOUSECODE_1_BUTTON3');
+        expect(browserMouseToken(5)).toBeUndefined();
     });
 });

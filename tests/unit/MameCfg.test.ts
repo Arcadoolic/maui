@@ -171,6 +171,11 @@ describe('removeGameCfgInputSeq', () => {
 describe('inputIconKey', () => {
     it('maps every remappable port type to its icon', () => {
         expect(inputIconKey('UI_CANCEL')).toBe('quit');
+        expect(inputIconKey('UI_PAUSE')).toBe('pause');
+        expect(inputIconKey('UI_MENU')).toBe('menu');
+        expect(inputIconKey('SERVICE')).toBe('service');
+        expect(inputIconKey('UI_SOFT_RESET')).toBe('soft_reset');
+        expect(inputIconKey('UI_RESET_MACHINE')).toBe('hard_reset');
         expect(inputIconKey('COIN2')).toBe('coin');
         expect(inputIconKey('START1')).toBe('start');
         expect(inputIconKey('P2_JOYSTICK_LEFT')).toBe('joystick_left');
@@ -180,7 +185,7 @@ describe('inputIconKey', () => {
 
     it('falls back to the plain button past 9, and to nothing for anything else', () => {
         expect(inputIconKey('P1_BUTTON12')).toBe('button');
-        expect(inputIconKey('UI_MENU')).toBeUndefined();
+        expect(inputIconKey('UI_CONFIGURE')).toBeUndefined();
         expect(inputIconKey('P1_JOYSTICKLEFT_UP')).toBeUndefined();
     });
 });
