@@ -3,6 +3,7 @@ import {
     compareGameFields,
     gameFieldId,
     inputIconKey,
+    isAnalogPortType,
     isRemappablePortType,
     parseGameFields,
     readGameCfgInputSeqs,
@@ -41,9 +42,47 @@ describe('parseGameFields', () => {
 });
 
 describe('isRemappablePortType', () => {
-    it('accepts directions, buttons, coin and start only', () => {
-        expect(['P1_JOYSTICK_UP', 'P2_BUTTON8', 'COIN2', 'START1', 'P4_BUTTON12'].every(isRemappablePortType)).toBe(true);
-        expect(['UI_CANCEL', 'DIPSWITCH', 'P1_PADDLE', 'SERVICE1', 'P5_BUTTON1'].some(isRemappablePortType)).toBe(false);
+    it('accepts directions, buttons, coin, start and analog controls only', () => {
+        expect(['P1_JOYSTICK_UP', 'P2_BUTTON8', 'COIN2', 'START1', 'P4_BUTTON12', 'P1_DIAL', 'P2_TRACKBALL_Y', 'P1_PADDLE']
+            .every(isRemappablePortType)).toBe(true);
+        expect(['UI_CANCEL', 'DIPSWITCH', 'SERVICE1', 'P5_BUTTON1', 'P1_DIALX'].some(isRemappablePortType)).toBe(false);
+    });
+
+    it('tells the analog ones', () => {
+        expect(isAnalogPortType('P1_DIAL')).toBe(true);
+        expect(isAnalogPortType('P1_BUTTON1')).toBe(false);
+    });
+});
+
+describe('analog fields', () => {
+    const dial: GameField = {
+        portType: 'P1_DIAL', tag: ':P1', mask: 255, defvalue: 0, defaultSeq: 'MOUSECODE_1_XAXIS', name: 'Dial',
+        analog: {increment: 'KEYCODE_RIGHT', decrement: 'KEYCODE_LEFT'},
+    };
+
+    it('takes the increment and decrement sequences from game-analog.txt', () => {
+        const fields = parseGameFields(
+            'P1_DIAL|:P1|255|0|MOUSECODE_1_XAXIS OR JOYCODE_1_XAXIS|Dial\nP1_BUTTON1|:BUTTONS|1|1|KEYCODE_LCONTROL|P1 Button 1\n',
+            ':P1|255|KEYCODE_RIGHT|KEYCODE_LEFT\n',
+        );
+        expect(fields[0].analog).toEqual({increment: 'KEYCODE_RIGHT', decrement: 'KEYCODE_LEFT'});
+        expect(fields[1].analog).toBeUndefined();
+    });
+
+    it('sets, reads and removes each sequence type on its own', () => {
+        let xml = setGameCfgInputSeq(undefined, 'arkanoid', dial, 'KEYCODE_D', 'increment');
+        xml = setGameCfgInputSeq(xml, 'arkanoid', dial, 'NONE', 'decrement');
+        xml = setGameCfgInputSeq(xml, 'arkanoid', dial, 'JOYCODE_1_XAXIS', 'standard');
+        expect(xml.match(/<port /g)).toHaveLength(1);
+        expect(readGameCfgInputSeqs(xml, 'increment').get(gameFieldId(dial))).toBe('KEYCODE_D');
+        expect(readGameCfgInputSeqs(xml, 'decrement').get(gameFieldId(dial))).toBe('NONE');
+        expect(readGameCfgInputSeqs(xml).get(gameFieldId(dial))).toBe('JOYCODE_1_XAXIS');
+
+        xml = removeGameCfgInputSeq(xml, dial, 'increment');
+        expect(readGameCfgInputSeqs(xml, 'increment').size).toBe(0);
+        expect(readGameCfgInputSeqs(xml, 'decrement').get(gameFieldId(dial))).toBe('NONE');
+        xml = removeGameCfgInputSeq(removeGameCfgInputSeq(xml, dial, 'decrement'), dial);
+        expect(xml).not.toContain('<input>');
     });
 });
 
