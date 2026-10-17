@@ -11,6 +11,7 @@ import {reportOpinions} from '@/class/OpinionReport';
 import {SqliteOpinionStore} from '@/class/SqliteOpinionStore';
 import {ScoreCapture} from '@/class/ScoreCapture';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
+import type {FrontControls} from '@/class/FrontControlsBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {AvatarLedgerFile} from '@/class/AvatarLedger';
@@ -176,10 +177,12 @@ const IDLE_CHECK_MS = 60 * 1000;
 /**
  * Starts what always runs, and opens the BO's port. `databaseReady` resolves once the database
  * exists and is migrated (see bootstrapDatabase()); BO requests arriving before wait for it.
- * `reloadFront`, `onReset` and `showGameOnFront` are handed to the BO when it is loaded (see createBoApp()).
+ * `reloadFront`, `onReset`, `showGameOnFront` and `frontControls` are handed to the BO when it is
+ * loaded (see createBoApp()).
  */
 export function startCore(
     port: number, reloadFront: () => void, onReset: () => void, showGameOnFront: FrontGameShower,
+    frontControls: FrontControls,
 ): StartedCore {
     const refusedAvatars = new Set<string>();
     // Default avatars written as SVG by an earlier version become PNGs (see DefaultAvatar.ts). A
@@ -245,7 +248,7 @@ export function startCore(
         // from the disk before this.
         load: async (): Promise<BoApp> => {
             const {createBoApp} = await import('@/boServer');
-            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront);
+            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront, frontControls);
         },
         idleMs: () => {
             const config = new Config();

@@ -89,6 +89,7 @@ import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, LONG_PRESS_MS, HOLD_MS} from '@/class/MauiControls';
+import {controlKey} from '@/class/MauiControlsRuntime';
 import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
 import * as Log from 'electron-log';
@@ -756,7 +757,7 @@ function registerKeyMapping() {
         if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
-        const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        const key = controlKey(e, isGamepad);
         if (key === MAUI_KEYS.space || key === MAUI_KEYS.p) {
             heldKeys.add(key);
             if (heldKeys.has(MAUI_KEYS.space) && heldKeys.has(MAUI_KEYS.p)) {
@@ -803,7 +804,7 @@ function registerKeyMapping() {
         if (gameRunning) {
             return;
         }
-        const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        const key = controlKey(e, isGamepad);
         // Before anything else: a list left moving behind a modal would never stop.
         if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
             stopHold();

@@ -28,6 +28,7 @@
 import {ref, computed, onMounted, onUnmounted} from 'vue';
 import {useControllable} from '@/composables/useControllable';
 import {MAUI_KEYS} from '@/class/MauiControls';
+import {controlKey} from '@/class/MauiControlsRuntime';
 import Modal from '@/components/Modal.vue';
 
 // A score the game wrote without a name (ScoreDeclaration.ts): who made it is picked as the
@@ -80,7 +81,7 @@ onKeydown((e, isGamepad) => {
     }
     // Someone is answering: going through a long list must not run out of time.
     restartAutoExpire();
-    const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+    const key = controlKey(e, isGamepad);
     switch (key) {
     case MAUI_KEYS.up:
         move(-1);

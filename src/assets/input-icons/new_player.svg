@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: player with a plus -->
+<circle cx="26" cy="22" r="10" fill="#FFFFFF"/>
+<path fill="#FFFFFF" d="M8 54 Q8 36 26 36 Q44 36 44 54 Z"/>
+<path d="M50 18 V34 M42 26 H58" fill="none" stroke="#E73246" stroke-width="6" stroke-linecap="round"/>
+</svg>

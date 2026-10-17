@@ -9,6 +9,7 @@
 import {ref, onMounted} from 'vue';
 import * as remote from '@electron/remote';
 import Gamepads from '@/class/Gamepads.class';
+import {startMauiControls} from '@/class/MauiControlsRuntime';
 import OnlineBadge from '@/components/OnlineBadge.vue';
 import {totalmem} from 'os';
 import {resolveUiMode, type UiModeHardware} from '@/class/UiMode';
@@ -36,6 +37,8 @@ setUiMode(uiMode);
 document.documentElement.classList.toggle('lite', uiMode === 'lite');
 
 onMounted(() => {
+    // The keys, mouse buttons and gamepad inputs set in the BO's MAUI > Controls tab.
+    startMauiControls();
     // Electron event
     remote.getCurrentWindow().on('blur', () => {
         Gamepads.stopGamepadsListeners();

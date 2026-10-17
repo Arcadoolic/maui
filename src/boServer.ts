@@ -78,14 +78,17 @@ import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVot
 import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
+import {MAUI_KEYS, MAUI_CONTROL_CONTEXTS} from '@/class/MauiControls';
 import {
-    MAUI_KEYS, MAUI_CONTROL_CONTEXTS, STANDARD_BUTTON_NAMES, keyLabel, describeGamepadInputs,
-} from '@/class/MauiControls';
+    addInput, describeMauiInput, inputsOfKey, isDefaultKey, mauiInputId, parseMauiBindings, parseMauiInputId,
+    removeInput, resetKey, serializeMauiBindings, type MauiBindings, type MauiInput,
+} from '@/class/MauiControlBindings';
 import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
+import type {FrontControls} from '@/class/FrontControlsBridge';
 import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
     describeFailure, describeOnlineStatus, getOnlineView, onlineIndicator, type OnlineIndicator, resetOnlineSettings, saveConfigurationString, setOnlineEnabled,
@@ -116,7 +119,6 @@ import {
     type BluetoothDevice, type BluetoothState,
 } from '@/class/BluetoothControl';
 import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, setWifiRadio, type NetworkState} from '@/class/WifiControl';
-import ControllerMappings from '@/assets/controllers.json';
 import {getStaticPath} from '@/staticPath';
 import {
     getDatabasePath, getMameHomePath, getRunningVersion, type BoCore,
@@ -2799,6 +2801,19 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             padding-top: 8px;
             border-top: 1px solid var(--border-subtle);
         }
+        .control-layout {
+            font-size: 0.85em;
+            color: var(--text-muted);
+        }
+        .control-roles {
+            grid-column: 1 / -1;
+            font-size: 0.85em;
+            color: var(--text-muted);
+        }
+        .control-roles ul {
+            margin: 4px 0 0;
+            padding-left: 18px;
+        }
         .control-origin {
             margin: 0;
             font-size: 0.8em;
@@ -3243,11 +3258,9 @@ function renderPageTail(): string {
         // clicked in the page is sent as MAME's token for it (control-listen-codes, built from what
         // MAME listed). Clicking the same button again, or 15 seconds without a press, cancels.
         (function () {
+            // MAME's tab gives its tokens; MAUI's tab takes the browser's own codes (data-control-listen="raw").
             var data = document.getElementById('control-listen-codes');
-            if (!data) {
-                return;
-            }
-            var codes = JSON.parse(data.textContent);
+            var codes = data ? JSON.parse(data.textContent) : {keys: {}, mouse: []};
             var listening = null;
             function stop() {
                 if (!listening) {
@@ -3277,13 +3290,13 @@ function renderPageTail(): string {
                 form.requestSubmit(form.querySelector('[data-control-add]'));
             }
             function onKey(event) {
-                send(codes.keys[event.code], event);
+                send(listening.raw ? 'key|' + event.code : codes.keys[event.code], event);
             }
             function onMouse(event) {
                 if (event.target === listening.button) {
                     return; // its click handler cancels
                 }
-                send(codes.mouse[event.button], event);
+                send(listening.raw ? (event.button <= 4 ? 'mouse|' + event.button : '') : codes.mouse[event.button], event);
             }
             function onContextMenu(event) {
                 event.preventDefault();
@@ -3295,7 +3308,10 @@ function renderPageTail(): string {
                     if (again) {
                         return;
                     }
-                    listening = {button: button, label: button.textContent, timer: setTimeout(stop, 15000)};
+                    listening = {
+                        button: button, label: button.textContent, raw: button.dataset.controlListen === 'raw',
+                        timer: setTimeout(stop, 15000),
+                    };
                     button.classList.add('listening');
                     button.textContent = 'Press a key or click…';
                     document.addEventListener('keydown', onKey, true);
@@ -4617,14 +4633,15 @@ function renderControlChips(seq: string, names: Map<string, string>): string {
 /**
  * The two ways to add a control: a gamepad press caught by MAME (`capture`), and a key or mouse
  * button caught by the page (renderPageTail()'s data-control-listen script, which posts `add` with
- * the token in `code`) - only offered once MAME's keys are known (`canListen`).
+ * the token in `code`) - only offered once MAME's keys are known (`canListen`). `rawCodes`: the
+ * page posts the browser's own codes ("key|KeyA", "mouse|2") instead of MAME tokens (MAUI's tab).
  */
-function renderControlAddButtons(captureDisabled: string, canListen: boolean): string {
+function renderControlAddButtons(captureDisabled: string, canListen: boolean, rawCodes = false): string {
     return `
         <div class="binding-actions">
             <button type="submit" name="action" value="capture"${captureDisabled}>Add a gamepad button</button>
             ${canListen ? `
-                <button type="button" data-control-listen>Add a key or mouse button</button>
+                <button type="button" data-control-listen${rawCodes ? '="raw"' : ''}>Add a key or mouse button</button>
                 <input type="hidden" name="code" value="">
                 <button type="submit" name="action" value="add" hidden data-control-add></button>
             ` : ''}
@@ -5077,7 +5094,7 @@ function renderGameRemapCard(
  */
 // What each Danger zone checkbox of the MAUI tab deletes: the parts of the export (MauiBackup.ts).
 const MAUI_DELETIONS: readonly {part: BackupPartId; field: string; label: string}[] = [
-    {part: 'config', field: 'deleteConfig', label: 'the configuration (mame-awesome-ui-config.json, removed favorites)'},
+    {part: 'config', field: 'deleteConfig', label: 'the configuration (mame-awesome-ui-config.json, removed favorites, MAUI controls)'},
     {part: 'database', field: 'deleteDatabase', label: 'the database (games, players, scores) and the players\' avatars'},
     {part: 'caches', field: 'deleteCaches', label: 'the ScreenScraper caches (favorites, publishers and developers)'},
     {
@@ -5818,72 +5835,119 @@ interface MauiPageMessages {
     bluetoothError?: string;
     // What a search for Bluetooth devices just found.
     bluetoothFound?: BluetoothDevice[];
+    controls?: MauiControlsState;
+}
+
+/** MAUI's keys as the MAUI > Controls tab shows them, one card each. */
+const MAUI_ACTIONS: readonly {key: string; label: string; icon: string}[] = [
+    {key: MAUI_KEYS.up, label: 'Up', icon: 'joystick_up'},
+    {key: MAUI_KEYS.down, label: 'Down', icon: 'joystick_down'},
+    {key: MAUI_KEYS.left, label: 'Left', icon: 'joystick_left'},
+    {key: MAUI_KEYS.right, label: 'Right', icon: 'joystick_right'},
+    {key: MAUI_KEYS.enter, label: 'Confirm', icon: 'confirm'},
+    {key: MAUI_KEYS.space, label: 'Scores / back', icon: 'scores'},
+    {key: MAUI_KEYS.p, label: 'New player', icon: 'new_player'},
+];
+
+function mauiActionLabel(key: string): string {
+    return MAUI_ACTIONS.find(action => action.key === key)?.label ?? key;
+}
+
+/** maui-controls.json (MauiControlBindings.ts), next to MAUI's config like the other files of the tab. */
+function getMauiControlsPath(): string {
+    return join(dirname(new Config().configPath), 'maui-controls.json');
+}
+
+function readMauiBindings(): MauiBindings {
+    const path = getMauiControlsPath();
+    return parseMauiBindings(existsSync(path) ? readFileSync(path, 'utf8') : undefined);
+}
+
+interface MauiControlsState {
+    // Which action's card shows the message.
+    key: string;
+    error?: string;
+    info?: string;
+}
+
+/** A gamepad layout's name as a pill shows it: the pad's name, without its USB ids. */
+function shortLayoutName(layout: string): string {
+    return layout.replace(/\s*\(Vendor:.*$/, '');
 }
 
 /**
- * Read-only list of the controls MAUI itself understands (see MauiControls.ts, which the screens
- * switch on too), per screen, with what each does. The controller column follows the "standard"
- * layout of controllers.json - what Gamepads.class.ts falls back to for any pad it has no entry
- * for - and any pad with an entry of its own is listed under it.
+ * MAUI's controls, laid out like the MAME > Controls tab so that both read the same: one card per
+ * MAUI key with every keyboard key, mouse button and gamepad input producing it as pills, each
+ * removable, and the same two ways to add one - a gamepad press caught by MAUI's window on the
+ * cabinet (FrontControlsBridge.ts), a key or a mouse button caught by this page. Saved in
+ * maui-controls.json; what each key does on each screen comes from MauiControls.ts, which the
+ * screens switch on too.
  */
-function renderMauiControlsCard(): string {
-    const mappings = ControllerMappings as unknown as Record<string, ControllerMapping>;
-    const standard = mappings.standard;
-    const renderInputs = (inputs: string[]): string => inputs.length
-        ? inputs.map(input => `<code>${escapeHtml(input)}</code>`).join(' ')
-        : '<em>no input</em>';
-
-    const renderLongPress = (ms?: number): string => ms === undefined ? '' : ` <em>long press (${ms / 1000} s)</em>`;
-
-    const contextTables = MAUI_CONTROL_CONTEXTS.map(context => `
-        <h3>${escapeHtml(context.title)}</h3>
-        <div class="table-wrap">
-            <table class="favorites-table">
-                <thead>
-                    <tr><th>Key</th><th>Role</th><th>Gamepad (standard layout)</th></tr>
-                </thead>
-                <tbody>${context.controls.map(control => `
-                    <tr>
-                        <td><code>${escapeHtml(keyLabel(control.key))}</code>${renderLongPress(control.longPressMs)}</td>
-                        <td>${escapeHtml(control.role)}</td>
-                        <td>${renderInputs(describeGamepadInputs(standard, control.key, STANDARD_BUTTON_NAMES))}</td>
-                    </tr>`).join('')}
-                </tbody>
-            </table>
-        </div>
-    `).join('');
-
-    const specificPads = Object.entries(mappings).filter(([name]) => name !== 'standard');
-    const specificPadsHtml = specificPads.length ? `
-        <details>
-            <summary>Gamepads with their own layout (${specificPads.length})</summary>
-            ${specificPads.map(([name, mapping]) => `
-                <h3>${escapeHtml(name)}</h3>
-                <div class="table-wrap">
-                    <table class="favorites-table">
-                        <thead><tr><th>Key</th><th>Gamepad inputs</th></tr></thead>
-                        <tbody>${Object.values(MAUI_KEYS).map(key => `
-                            <tr>
-                                <td><code>${escapeHtml(keyLabel(key))}</code></td>
-                                <td>${renderInputs(describeGamepadInputs(mapping, key))}</td>
-                            </tr>`).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            `).join('')}
-        </details>
-    ` : '';
+function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsState): string {
+    const cards = MAUI_ACTIONS.map(action => {
+        const actionState = state?.key === action.key ? state : undefined;
+        const chips = inputsOfKey(bindings, action.key).map((input: MauiInput) => {
+            const kind = input.device === 'pad' ? 'joystick' : input.device;
+            const label = describeMauiInput(input);
+            const layout = input.device === 'pad' && input.layout !== 'standard' ? shortLayoutName(input.layout) : '';
+            return `
+                <li class="control-chip control-chip-${kind}"${layout ? ` title="${escapeHtml(input.device === 'pad' ? input.layout : '')}"` : ''}>
+                    <span class="control-kind">${escapeHtml(CONTROL_KIND_LABELS[kind])}</span>
+                    <span>${escapeHtml(label)}${layout ? ` <span class="control-layout">${escapeHtml(layout)}</span>` : ''}</span>
+                    <button type="submit" name="remove" value="${escapeHtml(mauiInputId(input))}"
+                        class="control-remove" aria-label="Remove ${escapeHtml(label)}">✕</button>
+                </li>
+            `;
+        }).join('');
+        const roles = MAUI_CONTROL_CONTEXTS.flatMap(context => context.controls
+            .filter(control => control.key === action.key)
+            .map(control => `${context.title}: ${control.role}${control.longPressMs ? ` (held ${control.longPressMs / 1000} s)` : ''}`));
+        return `
+            <div class="binding">
+                ${renderIconLabel(action.icon, action.label)}
+                <form method="post" action="/maui/controls" class="control-form">
+                    <input type="hidden" name="key" value="${escapeHtml(action.key)}">
+                    <ul class="control-chips">
+                        ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
+                    </ul>
+                    ${renderControlAddButtons('', true, true)}
+                    ${isDefaultKey(bindings, action.key) ? '' : `
+                        <div class="binding-actions">
+                            <button type="submit" name="action" value="reset">Back to MAUI's default</button>
+                        </div>
+                    `}
+                </form>
+                ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
+                ${actionState?.info ? `<p class="warn flash">${escapeHtml(actionState.info)}</p>` : ''}
+                <details class="control-roles">
+                    <summary>What it does</summary>
+                    <ul>${roles.map(role => `<li>${escapeHtml(role)}</li>`).join('')}</ul>
+                </details>
+            </div>
+        `;
+    }).join('');
 
     return `
         <section class="card">
             <h2>MAUI controls</h2>
-            <p class="info">The keys the cabinet interface understands, with their role. The
-            same keys do not have the same role depending on the screen. A gamepad produces these keys via
-            <code>controllers.json</code>: an entry reading <em>no input</em> means the
-            command is only reachable from the keyboard with this layout. Not to be confused with the MAME
-            &gt; Controls tab, which sets MAME's inputs (in games) and not MAUI's.</p>
-            ${contextTables}
-            ${specificPadsHtml}
+            <p class="info">What moves around MAUI on the cabinet (the game list, player creation,
+            the vote after a game), not to be confused with the MAME &gt; Controls tab, which sets
+            what the keys do in the games. Each action is triggered by a key, a mouse button or a
+            gamepad button: its <strong>✕</strong> removes it, and the others keep working.</p>
+            <ul class="info">
+                <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                stick) on the cabinet within 30 seconds - MAUI's window catches it, and the press
+                does nothing else meanwhile. A pad with a layout of its own (named on its pills)
+                gets the button for itself, any other pad for every pad without one.</li>
+                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                the mouse button in this page. Keys are named after their place on a US keyboard:
+                on an AZERTY keyboard, the A key shows as Q.</li>
+                <li>A key or a button does one thing in MAUI: added to an action, it leaves the one
+                it had.</li>
+                <li><strong>Back to MAUI's default</strong> gives the action its controls of origin
+                again. Every change is used by the cabinet at once.</li>
+            </ul>
+            <div class="binding-grid">${cards}</div>
         </section>
     `;
 }
@@ -5980,7 +6044,7 @@ function renderMauiPage(
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
-        {id: 'controls', label: 'Controls', html: renderMauiControlsCard()},
+        {id: 'controls', label: 'Controls', html: renderMauiControlsCard(readMauiBindings(), messages.controls)},
     ];
     if (network) {
         sections.push({
@@ -6030,7 +6094,8 @@ function renderMauiPage(
                     : (messages.networkError ?? messages.networkInfo) !== undefined || messages.networkRescan ? 'network'
                         : (messages.bluetoothError ?? messages.bluetoothInfo ?? messages.bluetoothFound) !== undefined ? 'bluetooth'
                             : messages.mauiInfo !== undefined ? 'general'
-                                : undefined;
+                                : messages.controls !== undefined ? 'controls'
+                                    : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -6811,7 +6876,10 @@ const INPUT_ICONS: {[key: string]: string} = Object.fromEntries(
 
 /** Name of a command in the Controls cards, after its icon when it has one (see inputIconKey()). */
 function renderBindingLabel(portType: string, label: string): string {
-    const iconKey = inputIconKey(portType);
+    return renderIconLabel(inputIconKey(portType), label);
+}
+
+function renderIconLabel(iconKey: string | undefined, label: string): string {
     const icon = iconKey && iconKey in INPUT_ICONS
         ? `<img class="binding-icon" src="/input-icons/${escapeHtml(iconKey)}.svg" alt="">`
         : '';
@@ -8124,6 +8192,7 @@ function refuseCabinetSystemRequest(req: Request, res: Response): boolean {
 export function createBoApp(
     core: BoCore, databaseReady: Promise<void>, reloadFront: () => void, onReset: () => void,
     showGameOnFront: FrontGameShower,
+    frontControls: FrontControls,
 ): BoApp {
     const {online, scoreStore} = core;
     onlineSession = online;
@@ -10276,6 +10345,67 @@ export function createBoApp(
         startMameConfigSession(join(config.mamePath, config.mameBinaryName), mameInfo.iniPath, romName);
         waitForSessionGameFields(10000);
         res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName}));
+    });
+
+    // MAUI > Controls: add an input to one of MAUI's keys (a gamepad press caught by the front, a key
+    // or mouse button caught by the page), remove one (a pill's cross posts `remove`), or reset.
+    app.post('/maui/controls', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const key: string = (req.body.key || '').trim();
+        const removed: string = typeof req.body.remove === 'string' ? req.body.remove : '';
+        const action: string = removed ? 'remove' : (req.body.action || '').trim();
+        const send = (controls: MauiControlsState) => sendMauiPage(req, res, config, {controls});
+        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'reset'].includes(action)) {
+            res.status(422);
+            await send({key, error: 'Unknown action.'});
+            return;
+        }
+
+        let bindings = readMauiBindings();
+        let info: string | undefined;
+        if (action === 'reset') {
+            bindings = resetKey(bindings, key);
+        } else if (action === 'remove') {
+            const input = parseMauiInputId(removed);
+            // Only an input the card showed for this key.
+            if (!input || !inputsOfKey(bindings, key).some(shown => mauiInputId(shown) === removed)) {
+                await send({key});
+                return;
+            }
+            bindings = removeInput(bindings, input);
+        } else {
+            let input: MauiInput | undefined;
+            if (action === 'add') {
+                input = parseMauiInputId(String(req.body.code || ''));
+                if (!input || input.device === 'pad') {
+                    await send({key, error: 'Not a key or a mouse button.'});
+                    return;
+                }
+            } else {
+                const caught = await frontControls.capturePad(30000);
+                if ('error' in caught) {
+                    await send({key, error: caught.error});
+                    return;
+                }
+                input = caught.axis !== undefined
+                    ? {device: 'pad', layout: caught.layout, axis: caught.axis, direction: caught.direction ?? 0}
+                    : {device: 'pad', layout: caught.layout, button: caught.button ?? 0};
+            }
+            const added = addInput(bindings, key, input);
+            bindings = added.bindings;
+            if (added.takenFrom) {
+                info = `${describeMauiInput(input)} was used for ${mauiActionLabel(added.takenFrom)}: it now does ${mauiActionLabel(key)} only.`;
+            }
+        }
+        try {
+            writeFileSync(getMauiControlsPath(), serializeMauiBindings(bindings), 'utf8');
+        } catch (error) {
+            await send({key, error: `Saving failed: ${(error as Error).message}`});
+            return;
+        }
+        frontControls.controlsChanged();
+        await send({key, info});
     });
 
     // The Spinner, trackball, paddle card: mame.ini's <family>_device values.
