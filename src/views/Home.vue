@@ -40,7 +40,8 @@
         </div>
 
         <transition name="games">
-            <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"></Games>
+            <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"
+                   :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
         </transition>
 
         <transition name="alpha-jump">
@@ -55,7 +56,8 @@
             </div>
         </transition>
 
-        <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"></Categories>
+        <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
+                    :mouse="mouseNav" @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
@@ -352,6 +354,12 @@ async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
 }
 
 function onCategoryChange(previous: boolean) {
+    goToCategory(previous ?
+        ((selectedCategoryIndex.value <= 0) ? categories.value.length - 1 : selectedCategoryIndex.value - 1) :
+        ((selectedCategoryIndex.value >= categories.value.length - 1) ? 0 : selectedCategoryIndex.value + 1));
+}
+
+function goToCategory(index: number) {
     stopHold();
     const showGameFn = async () => {
         // The title finished sliding out (showTitle is false since the switch started): swap its
@@ -375,9 +383,80 @@ function onCategoryChange(previous: boolean) {
     showGames.value = false;
     clearTimeout(timeouts.showGame);
     timeouts.showGame = window.setTimeout(showGameFn, SLIDE_OUT_MS);
-    selectedCategoryIndex.value = previous ?
-        ((selectedCategoryIndex.value <= 0) ? categories.value.length - 1 : selectedCategoryIndex.value - 1) :
-        ((selectedCategoryIndex.value >= categories.value.length - 1) ? 0 : selectedCategoryIndex.value + 1);
+    selectedCategoryIndex.value = index;
+}
+
+/**
+ * Windowed mode only (a cabinet's fullscreen front is played with its controls): the mouse
+ * wheel over the list of games or over the categories moves them, a click picks a game (and
+ * launches the one already selected) or a category. Nothing while a game or a question is up;
+ * the first touch of an idle front only wakes it, like a key.
+ */
+const mouseNav = !getConfiguration().fullscreen;
+// Wheel travel not yet turned into a move, per area, and when each last moved: a trackpad sends
+// many small deltas, a wheel notch one big one.
+const wheel = {games: {travel: 0, at: 0}, categories: {travel: 0, at: 0}};
+const WHEEL_STEP_PX = 60;
+// The categories slide out and back in: one move at a time is enough.
+const WHEEL_INTERVAL_MS = {games: 60, categories: SLIDE_OUT_MS};
+
+function mouseAllowed(): boolean {
+    if (idleWatch.activity()) {
+        stopRoll();
+        return false;
+    }
+    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !backOfficeUrl.value;
+}
+
+/** -1 (up), 1 (down) or 0 once `e` adds up to a step for `area`. */
+function wheelStep(e: WheelEvent, area: 'games' | 'categories'): number {
+    const state = wheel[area];
+    // Lines (a mouse on some systems) or pixels (most).
+    state.travel += e.deltaMode === 1 ? e.deltaY * 20 : e.deltaY;
+    if (Math.abs(state.travel) < WHEEL_STEP_PX || Date.now() - state.at < WHEEL_INTERVAL_MS[area]) {
+        return 0;
+    }
+    const step = Math.sign(state.travel);
+    state.travel = 0;
+    state.at = Date.now();
+    return step;
+}
+
+function onGamesWheel(e: WheelEvent) {
+    if (!mouseNav || !mouseAllowed() || games.value.length < 2) {
+        return;
+    }
+    const step = wheelStep(e, 'games');
+    if (step) {
+        onGameChange(step < 0);
+    }
+}
+
+function onCategoriesWheel(e: WheelEvent) {
+    if (!mouseNav || !mouseAllowed() || !hasCategories.value) {
+        return;
+    }
+    const step = wheelStep(e, 'categories');
+    if (step) {
+        onCategoryChange(step < 0);
+    }
+}
+
+function onGamePick(index: number) {
+    if (!mouseAllowed()) {
+        return;
+    }
+    if (index === selectedGameIndex.value) {
+        startGame();
+    } else {
+        selectGame(index);
+    }
+}
+
+function onCategoryPick(index: number) {
+    if (mouseAllowed() && index !== selectedCategoryIndex.value) {
+        goToCategory(index);
+    }
 }
 
 /** Never throws: ONLINE must never keep a game from starting. */
@@ -886,6 +965,8 @@ if (!getIsInit()) {
         position: absolute;
         width: 100%;
         z-index: 2;
+        /* Shown over the list and the categories, which take the mouse in windowed mode. */
+        pointer-events: none;
         text-align: center;
         background: linear-gradient(to bottom, rgb(35, 10, 0) -30%, rgba(0, 0, 0, 0.3) 70%, transparent 100%);
         color: #fff513;
