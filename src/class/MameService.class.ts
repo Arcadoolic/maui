@@ -5,6 +5,7 @@ import Config from '@/class/Config.class';
 import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
+import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
 
 export default class MameService {
     public mameIni: { [key: string]: string[] } = {};
@@ -205,7 +206,8 @@ export default class MameService {
             // while it's being played (see CaptureDaemon.ts).
             const capture = this.prepareCapture();
             this.gameProcess = execFile(this.mameBinary, [
-                '-skip_gameinfo', romName, ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
+                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS,
+                ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
             ], {
                 killSignal: 'SIGQUIT',
                 cwd: this.iniPath,
