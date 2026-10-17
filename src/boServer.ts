@@ -2648,7 +2648,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--bg);
             background-color: var(--accent);
         }
-        /* One small card per command in the Gamepads input configuration cards: as many per row
+        /* One small card per command in the Controls cards: as many per row
            as fit (2-3 on a desktop window), down to one per row on a phone. min(100%, ...) keeps
            a lone column from overflowing a screen narrower than the minimum. */
         .binding-grid {
@@ -2767,6 +2767,11 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .control-chips .control-remove:hover:not(:disabled) {
             color: var(--text);
             background-color: rgba(255, 255, 255, 0.12);
+        }
+        .control-origin {
+            margin: 0;
+            font-size: 0.8em;
+            color: var(--text-muted);
         }
         .control-none {
             font-size: 0.9em;
@@ -4160,7 +4165,7 @@ function startMameConfigSession(
             romName,
             '-skip_gameinfo',
             // -background_input among them: checked with a virtual uinput pad against 0.289, no
-            // press seen unfocused without it (the click on "Capture a press" gives the focus to
+            // press seen unfocused without it (the click on "Add a gamepad button" gives the focus to
             // the browser when the BO runs on the same machine).
             ...captureLaunchArgs(scriptPath),
             '-inipath', iniPath,
@@ -4553,6 +4558,48 @@ const CONTROL_KIND_LABELS: Record<string, string> = {
 };
 
 /**
+ * What triggers an action, one pill per `OR` alternative of `seq` with its device in front and a
+ * cross posting `remove` - shared by the global and per-game Controls cards, inside their form.
+ */
+function renderControlChips(seq: string, names: Map<string, string>): string {
+    const chips = seqAlternatives(seq).map(alternative => {
+        const kind = seqAlternativeKind(alternative);
+        const label = describeSeqAlternative(alternative, names);
+        return `
+            <li class="control-chip control-chip-${kind}" title="${escapeHtml(alternative)}">
+                <span class="control-kind">${escapeHtml(CONTROL_KIND_LABELS[kind])}</span>
+                <span>${escapeHtml(label)}</span>
+                <button type="submit" name="remove" value="${escapeHtml(alternative)}"
+                    class="control-remove" aria-label="Remove ${escapeHtml(label)}">✕</button>
+            </li>
+        `;
+    }).join('');
+    return `
+        <ul class="control-chips">
+            ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
+        </ul>
+    `;
+}
+
+/**
+ * The two ways to add a control: a gamepad press caught by MAME (`capture`), and a key or mouse
+ * button caught by the page (renderPageTail()'s data-control-listen script, which posts `add` with
+ * the token in `code`) - only offered once MAME's keys are known (`canListen`).
+ */
+function renderControlAddButtons(captureDisabled: string, canListen: boolean): string {
+    return `
+        <div class="binding-actions">
+            <button type="submit" name="action" value="capture"${captureDisabled}>Add a gamepad button</button>
+            ${canListen ? `
+                <button type="button" data-control-listen>Add a key or mouse button</button>
+                <input type="hidden" name="code" value="">
+                <button type="submit" name="action" value="add" hidden data-control-add></button>
+            ` : ''}
+        </div>
+    `;
+}
+
+/**
  * Global controls: every REMAP_GROUPS action with everything that triggers it in MAME (keyboard
  * keys, mouse buttons, gamepad buttons and directions), MAME's own binding unless default.cfg
  * changed it. Each one can be removed (its cross), and new ones added - pressed while MAME runs
@@ -4598,33 +4645,13 @@ function renderControlsCard(
         .filter(action => defaults.seqs.has(action.portType))
         .map(action => {
             const actionState = state?.portType === action.portType ? state : undefined;
-            const alternatives = seqAlternatives(getControlSeq(action.portType, persisted, defaults));
-            const chips = alternatives.map(alternative => {
-                const kind = seqAlternativeKind(alternative);
-                const label = describeSeqAlternative(alternative, defaults.codes);
-                return `
-                    <li class="control-chip control-chip-${kind}" title="${escapeHtml(alternative)}">
-                        <span class="control-kind">${escapeHtml(CONTROL_KIND_LABELS[kind])}</span>
-                        <span>${escapeHtml(label)}</span>
-                        <button type="submit" name="remove" value="${escapeHtml(alternative)}"
-                            class="control-remove" aria-label="Remove ${escapeHtml(label)}">✕</button>
-                    </li>
-                `;
-            }).join('');
             return `
                 <div class="binding">
                     ${renderBindingLabel(action.portType, action.label)}
                     <form method="post" action="/input-probe/remap" class="control-form">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
-                        <ul class="control-chips">
-                            ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
-                        </ul>
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="capture"${captureDisabled}>Add a gamepad button</button>
-                            <button type="button" data-control-listen>Add a key or mouse button</button>
-                            <input type="hidden" name="code" value="">
-                            <button type="submit" name="action" value="add" hidden data-control-add></button>
-                        </div>
+                        ${renderControlChips(getControlSeq(action.portType, persisted, defaults), defaults.codes)}
+                        ${renderControlAddButtons(captureDisabled, true)}
                         ${persisted.has(action.portType) ? `
                             <div class="binding-actions">
                                 <button type="submit" name="action" value="reset">Back to MAME's default</button>
@@ -4713,7 +4740,8 @@ interface GameRemapState {
     romName: string;
     fieldId?: string;
     error?: string;
-    capturedToken?: string;
+    // The game's other commands the control just added also triggers.
+    sharedWith?: string[];
     releasedFrom?: string[];
 }
 
@@ -4772,9 +4800,10 @@ function removeGameCfgOverride(cfgPath: string, field: GameField): void {
 }
 
 /**
- * Per-game input remap - same flow as the global card above (shared MAME config session,
- * "Capture a press" per command), but written to cfg/<rom>.cfg instead of default.cfg, so it only
- * applies to that game and wins over the global bindings. The commands listed are the ones the
+ * Per-game controls - same pills as the global card above (renderControlChips(), add by gamepad
+ * press or by key/mouse in the page, remove one), but written to cfg/<rom>.cfg instead of
+ * default.cfg and applied live, so it only applies to that game and wins over the global
+ * bindings. A command left with what it inherits loses its entry. The commands listed are the ones the
  * game really has (from the running MAME itself, see capture-daemon.lua's game-fields.txt), not a
  * fixed list: a 2-button game shows 2 buttons.
  */
@@ -4782,6 +4811,8 @@ function renderGameRemapCard(
     romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, iniPath: string, state?: GameRemapState,
     // A game running in a MAME the BO didn't start (launched from MAUI): picked by default.
     otherRom?: string,
+    // MAME's key names and the keys the page may add (see the global card), once read.
+    defaults?: InputDefaults,
 ): string {
     if (!romNames.length) {
         return '';
@@ -4809,23 +4840,27 @@ function renderGameRemapCard(
         const renderItems = (playerFields: GameField[]): string => playerFields.map(field => {
             const id = gameFieldId(field);
             const rowState = state?.fieldId === id ? state : undefined;
-            const override = rowState?.capturedToken ?? overrides.get(id);
+            const override = overrides.get(id);
             return `
                 <div class="binding">
                     ${renderBindingLabel(field.portType, field.name || field.portType)}
-                    <dl class="binding-values">
-                        <dt>MAME default</dt>
-                        <dd><code>${escapeHtml(field.defaultSeq)}</code></dd>
-                        <dt>This game</dt>
-                        <dd>${override ? `<code>${escapeHtml(override)}</code>` : '<em>global</em>'}</dd>
-                    </dl>
-                    <form method="post" action="/input-probe/game/remap" class="binding-actions">
+                    <form method="post" action="/input-probe/game/remap" class="control-form">
                         <input type="hidden" name="romName" value="${escapeHtml(romName)}">
                         <input type="hidden" name="fieldId" value="${escapeHtml(id)}">
-                        <button type="submit" name="action" value="capture">Capture a press</button>
-                        ${overrides.has(id) ? '<button type="submit" name="action" value="reset">Reset</button>' : ''}
+                        <p class="control-origin">${override !== undefined ? 'This game only' : 'From the global controls'}</p>
+                        ${renderControlChips(override ?? field.defaultSeq, defaults?.codes ?? new Map<string, string>())}
+                        ${renderControlAddButtons('', !!defaults)}
+                        ${override !== undefined ? `
+                            <div class="binding-actions">
+                                <button type="submit" name="action" value="reset">Back to the global controls</button>
+                            </div>
+                        ` : ''}
                     </form>
                     ${rowState?.error ? `<p class="error flash">${escapeHtml(rowState.error)}</p>` : ''}
+                    ${rowState?.sharedWith?.length ? `
+                        <p class="warn flash">Also used by ${escapeHtml(rowState.sharedWith.join(', '))} in this game:
+                        it triggers both. Remove it there if that isn't wanted.</p>
+                    ` : ''}
                     ${rowState?.releasedFrom?.length ? `
                         <p class="info flash">This button was also bound by default to
                         ${escapeHtml(rowState.releasedFrom.map(port => UI_PORT_LABELS[port] ?? port).join(', '))} in
@@ -4845,20 +4880,22 @@ function renderGameRemapCard(
 
     return `
         <section class="card">
-            <h2>Per-game input configuration</h2>
-            <p class="info">Changes which gamepad button does what in <strong>one game only</strong>
+            <h2>Per-game controls</h2>
+            <p class="info">Changes what triggers a command in <strong>one game only</strong>
             (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
-            configuration above.</p>
+            controls above.</p>
             ${targetRom && targetRom === selectedRom ? `
                 <ol class="info">
-                    <li>Below, each row is a command of this game. <strong>This game</strong> reads
-                    <em>global</em> as long as you haven't changed it.</li>
-                    <li>Click <strong>Capture a press</strong> on the command to change: the page then
-                    waits up to 30 seconds.</li>
-                    <li><strong>Press the button</strong> (or push the direction) wanted on the gamepad -
-                    MAME picks it up even when its window is not the one in front. The result shows
-                    here, is saved and works in the running game at once.</li>
-                    <li><strong>Reset</strong> gives a command back its global binding. ${fromMaui
+                    <li>Below, each card is a command of this game, with what triggers it: <em>From the
+                    global controls</em> as long as you haven't changed it for this game. Its
+                    <strong>✕</strong> removes one, and the others keep working.</li>
+                    <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                    direction) on the gamepad within 30 seconds - MAME picks it up even when its window
+                    is not the one in front. <strong>Add a key or mouse button</strong>: click, then
+                    press the key or click the mouse button in this page.</li>
+                    <li>Each change is saved and works in the running game at once.</li>
+                    <li><strong>Back to the global controls</strong> drops what this game had of its
+                    own for a command. ${fromMaui
                         ? 'Keep playing when you are done: the changes are kept.'
                         : `When you are done, close MAME with the button at the top of the page or
                         from its own window: either way keeps the changes.`}</li>
@@ -5000,17 +5037,18 @@ function renderForm(
             : new Map<string, string>();
         const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
         refreshAdoptedMame(config, romNames);
+        const inputDefaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
         sections.push({
             id: 'controls',
             label: 'Controls',
             html: renderControlsCard(
                 romNames,
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
-                config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined,
+                inputDefaults,
                 remapState,
             )
                 + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
-                    findOtherMameRom(config, romNames))
+                    findOtherMameRom(config, romNames), inputDefaults)
                 + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
         });
         sections.push({
@@ -10265,11 +10303,13 @@ export function createBoApp(
 
         const romName: string = (req.body.romName || '').trim();
         const fieldId: string = (req.body.fieldId || '').trim();
-        const action: string = (req.body.action || '').trim();
+        // A pill's cross posts `remove` (the alternative to drop) instead of an action.
+        const removed: string = typeof req.body.remove === 'string' ? req.body.remove.trim() : '';
+        const action: string = removed ? 'remove' : (req.body.action || '').trim();
         const romNames = mameInfo.romPath ? listRomNames(mameInfo.romPath) : [];
         // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
         // roms actually present - never a client-supplied path fragment.
-        if (mameInfo.error || !romNames.includes(romName) || !['capture', 'reset'].includes(action)) {
+        if (mameInfo.error || !romNames.includes(romName) || !['capture', 'add', 'remove', 'reset'].includes(action)) {
             res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
@@ -10288,36 +10328,78 @@ export function createBoApp(
             return;
         }
 
+        const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
         try {
             const cfgPath = getGameCfgPath(mameInfo.iniPath, romName);
+            const overrides = readGameCfgOverrides(cfgPath);
+            // What the command uses now: the game's own sequence, else what it inherits (the
+            // global controls, as MAME reported them for this field when it started).
+            const current = overrides.get(fieldId) ?? field.defaultSeq;
+            const inherited = seqFromAlternatives(seqAlternatives(field.defaultSeq));
+            // Saves `seq` for this game, live in the running MAME too - or drops the game's own
+            // entry when `seq` is what it inherits anyway.
+            const save = (seq: string) => {
+                const normalized = seqFromAlternatives(seqAlternatives(seq));
+                if (normalized === inherited) {
+                    const live = applyGameFieldLive(field, '');
+                    applyCfgEdit(() => removeGameCfgOverride(cfgPath, field), live);
+                } else {
+                    const live = applyGameFieldLive(field, normalized);
+                    applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, normalized), live);
+                }
+            };
+
             if (action === 'reset') {
                 const live = applyGameFieldLive(field, '');
                 applyCfgEdit(() => removeGameCfgOverride(cfgPath, field), live);
                 res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }
+            if (action === 'remove') {
+                // Only what the card showed: a value posted from elsewhere changes nothing.
+                if (seqAlternatives(current).includes(seqAlternatives(removed).join(' '))) {
+                    save(removeSeqAlternative(current, removed));
+                }
+                res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
+                return;
+            }
 
-            const token = captureOnePress();
-            const gameRemapState: GameRemapState = token
-                ? {romName, fieldId, capturedToken: token}
-                : {romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
-                    '(is the gamepad connected, and MAME still open?).'};
-            if (token) {
-                const live = applyGameFieldLive(field, token);
-                applyCfgEdit(() => setGameCfgOverride(cfgPath, romName, field, token), live);
-                const released = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token);
-                if (released.length) {
-                    gameRemapState.releasedFrom = released;
+            let token: string | null;
+            if (action === 'add') {
+                const code: string = (req.body.code || '').trim();
+                // Same rule as the global card: only a token MAME itself listed.
+                token = defaults?.codes.has(code) ? code : null;
+                if (!token) {
+                    res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+                        romName, fieldId, error: 'MAME has no such key or mouse button.',
+                    }));
+                    return;
+                }
+            } else {
+                token = captureOnePress();
+                if (!token) {
+                    res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+                        romName, fieldId, error: 'No press detected within the allotted time (30s) - try again ' +
+                            '(is the gamepad connected, and MAME still open?).',
+                    }));
+                    return;
                 }
             }
-            res.send(renderGameRemapPage(config, mameInfo, isAdvanced, gameRemapState));
+
+            const sharedWith = (readSessionGameFields() ?? [])
+                .filter(other => gameFieldId(other) !== fieldId
+                    && seqAlternatives(overrides.get(gameFieldId(other)) ?? other.defaultSeq).includes(token))
+                .map(other => other.name || other.portType);
+            save(addSeqAlternative(current, token));
+            const releasedFrom = releaseTokenFromInGameUiPorts(getDefaultCfgPath(mameInfo.iniPath), field.portType, token, defaults);
+            res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId, sharedWith, releasedFrom}));
         } catch (error) {
-            console.error(`[boServer] Game remap failed for "${romName}" / "${field.portType}":`, error);
+            console.error(`[boServer] Game controls ${action} failed for "${romName}" / "${field.portType}":`, error);
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {
                 romName,
                 fieldId,
-                error: `${action === 'reset' ? 'Reset' : 'Capture'} failed: ${message}`,
+                error: `Saving failed: ${message}`,
             }));
         }
     });

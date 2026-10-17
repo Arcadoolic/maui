@@ -21,7 +21,8 @@
 --   result.txt  - written by this script as "<nonce>|<token>" the moment the armed press happens;
 --                 captureOnePress() polls for this and deletes it once consumed.
 --   apply.txt   - written by applyGameFieldLive() as "<nonce>|<tag>|<mask>|<sequence>" to rebind one
---                 of the running game's fields right away (empty sequence: back to its default),
+--                 of the running game's fields right away (empty sequence: back to its default,
+--                 NONE: no control at all),
 --                 so a capture works without relaunching MAME - which also saves it to the game's
 --                 cfg on exit, like a change made from its own menu.
 --   applied.txt - "<nonce>|ok" or "<nonce>|<error>", this script's answer to apply.txt.
@@ -184,7 +185,10 @@ local function apply_field(tag, mask, seq_tokens)
             -- Reset: DEFAULT makes the field follow its type's binding (default.cfg's, i.e. the global
             -- configuration) again, and MAME then leaves it out of the game's cfg on exit.
             -- field:default_input_seq() would be saved as an override (checked against 0.289).
-            local seq = input:seq_from_tokens(seq_tokens ~= '' and seq_tokens or 'DEFAULT')
+            -- NONE (every control removed) is how a cfg writes an empty sequence, which
+            -- seq_from_tokens() only gets from an empty string.
+            local tokens = seq_tokens == '' and 'DEFAULT' or (seq_tokens == 'NONE' and '' or seq_tokens)
+            local seq = input:seq_from_tokens(tokens)
             field:set_input_seq('standard', seq)
             return 'ok'
         end
