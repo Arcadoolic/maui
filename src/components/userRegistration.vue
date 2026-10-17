@@ -72,6 +72,7 @@
     import {ref, computed} from 'vue';
     import {useControllable} from '@/composables/useControllable';
     import {MAUI_KEYS} from '@/class/MauiControls';
+    import {controlKey} from '@/class/MauiControlsRuntime';
     import {getUserService} from '@/services';
     import {createOnlineClient} from '@/class/OnlineClient';
     import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
@@ -223,7 +224,7 @@
     const {onKeydown, onKeyup} = useControllable();
 
     onKeydown((e, isGamepad) => {
-        const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+        const key = controlKey(e, isGamepad);
         switch (key) {
         case MAUI_KEYS.up:
             changeCharacter(-1);

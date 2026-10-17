@@ -3,6 +3,7 @@
 // LOCAL mode. Branches on the problem `code`, never on `title` or `detail`, as the contract asks.
 
 import type {GameOpinion} from '@/class/OpinionReport';
+import type {GameIntegrityReport} from '@/class/GameIntegrity';
 
 export interface MauiApiCredentials {
     // Full API base, `/api/v1` included (see toApiBaseUrl() in ConfigurationString.ts).
@@ -90,6 +91,8 @@ export interface ScoreSubmission {
     startupId?: string | null;
     // Set when the game wrote no name and the player was picked on the cabinet (maui-api D61).
     attribution?: 'declared';
+    // What the cabinet saw of the game, up to the score (maui-api D87).
+    integrity?: GameIntegrityReport;
 }
 
 export type ScoreStatus = 'accepted' | 'not_improved' | 'rejected';
@@ -430,6 +433,7 @@ export class MauiApiClient {
                 achieved_at: score.achievedAt,
                 startup_id: score.startupId ?? null,
                 ...(score.attribution ? {attribution: score.attribution} : {}),
+                ...(score.integrity ? {integrity: score.integrity} : {}),
             }))},
         );
     }

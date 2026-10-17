@@ -19,14 +19,30 @@ export interface GameField {
     defaultSeq: string;
     // MAME's display name for the field, e.g. "P1 Button 1", "1 Player Start".
     name: string;
+    // An analog control (spinner, trackball, paddle...): `defaultSeq` is then the axis that moves
+    // it, and these the keys that move it each way (capture-daemon.lua's game-analog.txt).
+    analog?: {increment: string; decrement: string};
 }
 
+/**
+ * The sequences of a field a cfg can hold: `standard` for every field (the axis, for an analog
+ * one), `increment`/`decrement` for an analog one only.
+ */
+export type GameSeqType = 'standard' | 'increment' | 'decrement';
+
+export const GAME_SEQ_TYPES: readonly GameSeqType[] = ['standard', 'increment', 'decrement'];
+
 // The fields worth remapping per game: directions, buttons, coin and start (same subset as the
-// global remap card, extended to the 4 players some drivers have).
-const REMAPPABLE_PORT_TYPE = /^(?:P[1-4]_(?:JOYSTICK_(?:UP|DOWN|LEFT|RIGHT)|BUTTON\d+)|COIN[1-4]|START[1-4])$/;
+// global remap card, extended to the 4 players some drivers have), and the analog controls.
+const DIGITAL_PORT_TYPE = /^(?:P[1-4]_(?:JOYSTICK_(?:UP|DOWN|LEFT|RIGHT)|BUTTON\d+)|COIN[1-4]|START[1-4])$/;
+const ANALOG_PORT_TYPE = /^P[1-4]_(?:DIAL(?:_V)?|PADDLE(?:_V)?|TRACKBALL_[XY]|POSITIONAL(?:_V)?|AD_STICK_[XYZ]|PEDAL[23]?)$/;
 
 export function isRemappablePortType(portType: string): boolean {
-    return REMAPPABLE_PORT_TYPE.test(portType);
+    return DIGITAL_PORT_TYPE.test(portType) || ANALOG_PORT_TYPE.test(portType);
+}
+
+export function isAnalogPortType(portType: string): boolean {
+    return ANALOG_PORT_TYPE.test(portType);
 }
 
 /** Stable identifier of a field, also what an override in the cfg is matched by. */
@@ -37,9 +53,17 @@ export function gameFieldId(field: Pick<GameField, 'portType' | 'tag' | 'mask' |
 /**
  * Parses capture-daemon.lua's game-fields.txt, one
  * `<PORT_TYPE>|<tag>|<mask>|<defvalue>|<default sequence>|<field name>` line per field. Anything
- * malformed or not remappable is skipped.
+ * malformed or not remappable is skipped. `analogContent` is its game-analog.txt, one
+ * `<tag>|<mask>|<increment sequence>|<decrement sequence>` line per analog field.
  */
-export function parseGameFields(content: string): GameField[] {
+export function parseGameFields(content: string, analogContent = ''): GameField[] {
+    const analogSeqs = new Map<string, {increment: string; decrement: string}>();
+    for (const line of analogContent.split(/\r?\n/)) {
+        const [tag, mask, increment, decrement] = line.split('|');
+        if (tag && mask !== undefined && decrement !== undefined) {
+            analogSeqs.set(`${tag}|${Number(mask)}`, {increment: increment.trim(), decrement: decrement.trim()});
+        }
+    }
     const fields: GameField[] = [];
     for (const line of content.split(/\r?\n/)) {
         const [portType, tag, mask, defvalue, defaultSeq, ...nameParts] = line.split('|');
@@ -51,6 +75,9 @@ export function parseGameFields(content: string): GameField[] {
         if (!Number.isInteger(maskNumber) || !Number.isInteger(defvalueNumber)) {
             continue;
         }
+        const analog = isAnalogPortType(portType)
+            ? analogSeqs.get(`${tag}|${maskNumber}`) ?? {increment: '', decrement: ''}
+            : undefined;
         fields.push({
             portType,
             tag,
@@ -58,6 +85,7 @@ export function parseGameFields(content: string): GameField[] {
             defvalue: defvalueNumber,
             defaultSeq: (defaultSeq ?? '').trim(),
             name: nameParts.join('|').trim(),
+            ...(analog ? {analog} : {}),
         });
     }
     return fields;
@@ -69,14 +97,25 @@ export function portTypePlayer(portType: string): number {
     return match ? Number(match[1]) : 0;
 }
 
+// MAME's system commands on the Controls tab, by port type.
+const SYSTEM_ICON_KEYS: Record<string, string> = {
+    UI_CANCEL: 'quit',
+    UI_PAUSE: 'pause',
+    UI_MENU: 'menu',
+    SERVICE: 'service',
+    UI_SOFT_RESET: 'soft_reset',
+    UI_RESET_MACHINE: 'hard_reset',
+};
+
 /**
  * Which of the BO's input icons (src/assets/input-icons/<key>.svg) illustrates a port type, or
  * undefined for one without an icon. Buttons past 9 get the plain button, with no number: the
  * icon set only has single digits.
  */
 export function inputIconKey(portType: string): string | undefined {
-    if (portType === 'UI_CANCEL') {
-        return 'quit';
+    const system = SYSTEM_ICON_KEYS[portType];
+    if (system) {
+        return system;
     }
     if (/^COIN\d$/.test(portType)) {
         return 'coin';
@@ -95,9 +134,12 @@ export function inputIconKey(portType: string): string | undefined {
     return undefined;
 }
 
-/** Display order within a player: directions, buttons by number, then start and coin. */
+/** Display order within a player: directions, analog controls, buttons by number, then start and coin. */
 export function compareGameFields(a: GameField, b: GameField): number {
     const rank = (portType: string): number => {
+        if (isAnalogPortType(portType)) {
+            return 5;
+        }
         const direction = ['UP', 'RIGHT', 'DOWN', 'LEFT'].findIndex(name => portType.endsWith(`_JOYSTICK_${name}`));
         if (direction !== -1) {
             return direction;
@@ -116,7 +158,9 @@ export function compareGameFields(a: GameField, b: GameField): number {
 
 const INPUT_BLOCK = /<input>([\s\S]*?)<\/input>/;
 const PORT_ELEMENT = /<port\b([^>]*?)(?:\/>|>([\s\S]*?)<\/port>)/g;
-const STANDARD_NEWSEQ = /<newseq type="standard">([\s\S]*?)<\/newseq>/;
+function newSeqRegex(seqType: GameSeqType): RegExp {
+    return new RegExp(`<newseq type="${seqType}">([\\s\\S]*?)<\\/newseq>`);
+}
 
 function parseAttributes(raw: string): Map<string, string> {
     const attributes = new Map<string, string>();
@@ -145,15 +189,15 @@ function portAttributesId(attributes: Map<string, string>): string {
     });
 }
 
-/** `<port>`'s standard `<newseq>` overrides, by gameFieldId(). Ports without one are ignored. */
-export function readGameCfgInputSeqs(xml: string): Map<string, string> {
+/** `<port>`'s `<newseq>` overrides of one type, by gameFieldId(). Ports without one are ignored. */
+export function readGameCfgInputSeqs(xml: string, seqType: GameSeqType = 'standard'): Map<string, string> {
     const seqs = new Map<string, string>();
     const inputBlock = INPUT_BLOCK.exec(xml);
     if (!inputBlock) {
         return seqs;
     }
     for (const port of inputBlock[1].matchAll(PORT_ELEMENT)) {
-        const seq = STANDARD_NEWSEQ.exec(port[2] ?? '');
+        const seq = newSeqRegex(seqType).exec(port[2] ?? '');
         if (seq) {
             seqs.set(portAttributesId(parseAttributes(port[1])), seq[1].trim());
         }
@@ -161,25 +205,28 @@ export function readGameCfgInputSeqs(xml: string): Map<string, string> {
     return seqs;
 }
 
-function newSeqElement(seq: string): string {
-    return '<newseq type="standard">\n'
+function newSeqElement(seq: string, seqType: GameSeqType): string {
+    return `<newseq type="${seqType}">\n`
         + `                    ${seq}\n`
         + '                </newseq>';
 }
 
-function newPortElement(field: GameField, seq: string): string {
+function newPortElement(field: GameField, seq: string, seqType: GameSeqType): string {
     return `            <port type="${escapeAttribute(field.portType)}" tag="${escapeAttribute(field.tag)}"`
         + ` mask="${field.mask}" defvalue="${field.defvalue}">\n`
-        + `                ${newSeqElement(seq)}\n`
+        + `                ${newSeqElement(seq, seqType)}\n`
         + '            </port>\n';
 }
 
 /**
- * Sets `field`'s standard sequence in `xml` (a game's existing cfg, or undefined to start a fresh
+ * Sets `field`'s `seqType` sequence in `xml` (a game's existing cfg, or undefined to start a fresh
  * one for `systemName`), replacing an existing override for that field or adding one. Throws if
  * the file has no `<system>` element to attach an `<input>` block to - better than clobbering it.
  */
-export function setGameCfgInputSeq(xml: string | undefined, systemName: string, field: GameField, seq: string): string {
+export function setGameCfgInputSeq(
+    xml: string | undefined, systemName: string, field: GameField, seq: string, seqType: GameSeqType = 'standard',
+): string {
+    const seqRegex = newSeqRegex(seqType);
     const source = xml ?? `<?xml version="1.0"?>
 <mameconfig version="10">
     <system name="${escapeAttribute(systemName)}">
@@ -195,7 +242,7 @@ export function setGameCfgInputSeq(xml: string | undefined, systemName: string, 
             throw new Error('No <system> element found in the game cfg.');
         }
         const at = systemOpen.index + systemOpen[0].length;
-        return `${source.slice(0, at)}        <input>\n${newPortElement(field, seq)}        </input>\n${source.slice(at)}`;
+        return `${source.slice(0, at)}        <input>\n${newPortElement(field, seq, seqType)}        </input>\n${source.slice(at)}`;
     }
 
     let replaced = false;
@@ -205,23 +252,24 @@ export function setGameCfgInputSeq(xml: string | undefined, systemName: string, 
         }
         replaced = true;
         const children = inner ?? '';
-        const updatedChildren = STANDARD_NEWSEQ.test(children)
-            ? children.replace(STANDARD_NEWSEQ, () => newSeqElement(seq))
-            : `${children.replace(/\s+$/, '')}\n                ${newSeqElement(seq)}\n            `;
+        const updatedChildren = seqRegex.test(children)
+            ? children.replace(seqRegex, () => newSeqElement(seq, seqType))
+            : `${children.replace(/\s+$/, '')}\n                ${newSeqElement(seq, seqType)}\n            `;
         return `<port${rawAttributes.replace(/\/\s*$/, '')}>${updatedChildren}</port>`;
     });
     const newInner = replaced
         ? updatedInner
-        : `${updatedInner.replace(/\s+$/, '')}\n${newPortElement(field, seq)}        `;
+        : `${updatedInner.replace(/\s+$/, '')}\n${newPortElement(field, seq, seqType)}        `;
     return source.slice(0, inputBlock.index) + `<input>${newInner}</input>` + source.slice(inputBlock.index + inputBlock[0].length);
 }
 
 /**
- * Drops `field`'s standard sequence override so the global/default binding applies again. A port
+ * Drops `field`'s `seqType` sequence override so the global/default binding applies again. A port
  * left with nothing else in it is removed altogether, and so is an emptied `<input>` block. Returns
  * `xml` unchanged if there was no such override.
  */
-export function removeGameCfgInputSeq(xml: string, field: GameField): string {
+export function removeGameCfgInputSeq(xml: string, field: GameField, seqType: GameSeqType = 'standard'): string {
+    const seqRegex = newSeqRegex(seqType);
     const inputBlock = INPUT_BLOCK.exec(xml);
     if (!inputBlock) {
         return xml;
@@ -229,11 +277,11 @@ export function removeGameCfgInputSeq(xml: string, field: GameField): string {
     const id = gameFieldId(field);
     let removed = false;
     const updatedInner = inputBlock[1].replace(PORT_ELEMENT, (whole, rawAttributes: string, inner: string | undefined) => {
-        if (portAttributesId(parseAttributes(rawAttributes)) !== id || !inner || !STANDARD_NEWSEQ.test(inner)) {
+        if (portAttributesId(parseAttributes(rawAttributes)) !== id || !inner || !seqRegex.test(inner)) {
             return whole;
         }
         removed = true;
-        const remaining = inner.replace(STANDARD_NEWSEQ, '');
+        const remaining = inner.replace(seqRegex, '');
         return remaining.trim() ? `<port${rawAttributes}>${remaining}</port>` : '';
     });
     if (!removed) {

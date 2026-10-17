@@ -1,13 +1,16 @@
 /**
- * The controls MAUI itself understands (as opposed to MAME's own inputs, see the BO's Manettes
- * tab): a handful of keyboard codes that Gamepads.class.ts also produces from a controller's
- * buttons/axes via src/assets/controllers.json. Single source of truth for both the screens
- * (Home.vue, userRegistration.vue switch on MAUI_KEYS, Home.vue's long presses use LONG_PRESS_MS)
- * and the BO's MAUI tab, which lists them with their role - so the tab can't drift from what the
- * screens actually do.
+ * The controls MAUI itself understands (as opposed to MAME's own inputs, see the BO's MAME >
+ * Controls tab): a handful of keys, which the keyboard keys, mouse buttons and gamepad inputs set
+ * in the BO's MAUI > Controls tab produce (MauiControlBindings.ts, MauiControlsRuntime.ts). Single
+ * source of truth for both the screens (Home.vue, userRegistration.vue switch on MAUI_KEYS,
+ * Home.vue's long presses use LONG_PRESS_MS) and that tab, which lists them with their role - so
+ * the tab can't drift from what the screens actually do.
  */
 
-/** KeyboardEvent.code values, and the same strings controllers.json maps gamepad inputs to. */
+/**
+ * MAUI's keys, named after the KeyboardEvent.code that produces each by default, and the strings
+ * controllers.json and maui-controls.json map inputs to.
+ */
 export const MAUI_KEYS = {
     up: 'ArrowUp',
     down: 'ArrowDown',
@@ -93,49 +96,9 @@ export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
     },
 ];
 
-const KEY_LABELS: Record<string, string> = {
-    [MAUI_KEYS.up]: '↑',
-    [MAUI_KEYS.down]: '↓',
-    [MAUI_KEYS.left]: '←',
-    [MAUI_KEYS.right]: '→',
-    [MAUI_KEYS.enter]: 'Enter',
-    [MAUI_KEYS.space]: 'Space',
-    [MAUI_KEYS.p]: 'P',
-};
-
-export function keyLabel(key: string): string {
-    return KEY_LABELS[key] ?? key;
-}
-
 /** Button names of the W3C "standard" Gamepad layout, the one controllers.json's "standard" entry follows. */
 export const STANDARD_BUTTON_NAMES: Record<number, string> = {
     0: 'A', 1: 'B', 2: 'X', 3: 'Y', 4: 'LB', 5: 'RB', 6: 'LT', 7: 'RT',
     8: 'Back', 9: 'Start', 10: 'L3', 11: 'R3',
     12: 'd-pad up', 13: 'd-pad down', 14: 'd-pad left', 15: 'd-pad right', 16: 'Guide',
 };
-
-/**
- * Every physical input of `mapping` (a controllers.json entry) that produces `key`, e.g.
- * ["Button 0 (A)", "Axis 1 −"]. Axis entries are keyed by direction, as in Gamepads.class.ts:
- * "0" is the negative half of the axis, "1" the positive half. Buttons are numbered from 0, like
- * the Gamepad API (and unlike MAME's JOYCODE_x_BUTTONn, which counts from 1).
- */
-export function describeGamepadInputs(
-    mapping: ControllerMapping, key: string, buttonNames: Record<number, string> = {},
-): string[] {
-    const inputs: string[] = [];
-    for (const [index, mappedKey] of Object.entries(mapping.buttons)) {
-        if (mappedKey === key) {
-            const name = buttonNames[Number(index)];
-            inputs.push(name ? `Button ${index} (${name})` : `Button ${index}`);
-        }
-    }
-    for (const [index, directions] of Object.entries(mapping.axes)) {
-        for (const [direction, mappedKey] of Object.entries(directions)) {
-            if (mappedKey === key) {
-                inputs.push(`Axis ${index} ${direction === '0' ? '−' : '+'}`);
-            }
-        }
-    }
-    return inputs;
-}

@@ -1,12 +1,12 @@
 <template>
     <modal>
-        <div class="vote">
+        <div class="vote" :class="{mouse}" data-mouse-nav>
             <p>Did you like this game?</p>
             <div class="choices">
-                <div class="choice down" :class="{selected: selected === 0}">
+                <div class="choice down" :class="{selected: selected === 0}" @mouseenter="hover(0)" @click="pick(0)">
                     <svg viewBox="0 0 24 24" aria-hidden="true" class="flipped"><path :d="THUMB_PATH"/></svg>
                 </div>
-                <div class="choice neutral" :class="{selected: selected === 1}">
+                <div class="choice neutral" :class="{selected: selected === 1}" @mouseenter="hover(1)" @click="pick(1)">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
                         <circle cx="8.5" cy="9.5" r="1.4"/>
@@ -14,15 +14,17 @@
                         <path d="M8 15.5h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
                 </div>
-                <div class="choice up" :class="{selected: selected === 2}">
+                <div class="choice up" :class="{selected: selected === 2}" @mouseenter="hover(2)" @click="pick(2)">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="THUMB_PATH"/></svg>
                 </div>
             </div>
             <div class="hint">
                 <span class="arcadeButton"></span>
                 to vote
-                <span class="arcadeButton rectangle"></span>
-                to decide later
+                <span class="later" @click="mouse && emit('skip')">
+                    <span class="arcadeButton rectangle"></span>
+                    to decide later
+                </span>
             </div>
         </div>
     </modal>
@@ -32,8 +34,10 @@
 import {ref, onMounted, onUnmounted} from 'vue';
 import {useControllable} from '@/composables/useControllable';
 import {MAUI_KEYS} from '@/class/MauiControls';
+import {controlKey} from '@/class/MauiControlsRuntime';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
 import Modal from '@/components/Modal.vue';
+import {getConfiguration} from '@/services';
 
 // Nobody may be standing at the cabinet anymore: the prompt goes away by itself, like a skip.
 const AUTO_SKIP_MS = 20000;
@@ -49,6 +53,22 @@ const emit = defineEmits<{vote: [vote: Vote], skip: []}>();
 // Neutral first: an accidental double press on the confirm key never removes a game.
 const selected = ref(CHOICES.indexOf(VOTE_NEUTRAL));
 
+// Windowed mode, like the list of games (Home.vue): pointing at a choice selects it, a click votes
+// it, a click on "to decide later" decides later.
+const mouse = !getConfiguration().fullscreen;
+
+function hover(index: number) {
+    if (mouse) {
+        selected.value = index;
+    }
+}
+
+function pick(index: number) {
+    if (mouse) {
+        emit('vote', CHOICES[index]);
+    }
+}
+
 let autoSkip: number | undefined;
 onMounted(() => {
     autoSkip = window.setTimeout(() => emit('skip'), AUTO_SKIP_MS);
@@ -58,7 +78,7 @@ onUnmounted(() => clearTimeout(autoSkip));
 const {onKeydown, onKeyup} = useControllable();
 
 onKeydown((e, isGamepad) => {
-    const key = isGamepad ? (e as CustomEvent).detail.key : (e as KeyboardEvent).code;
+    const key = controlKey(e, isGamepad);
     switch (key) {
     case MAUI_KEYS.left:
         selected.value = Math.max(0, selected.value - 1);
@@ -120,6 +140,15 @@ onKeyup(() => {
     }
     .choice.down.selected {
         color: #ff5b4d;
+    }
+    /* Windowed mode: the choices take the mouse instead of moving the window (App.vue's drag). */
+    .vote.mouse .choice, .vote.mouse .later {
+        -webkit-app-region: no-drag;
+        cursor: pointer;
+    }
+    .later {
+        display: inline-flex;
+        align-items: center;
     }
     .hint {
         display: flex;

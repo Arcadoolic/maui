@@ -4,7 +4,8 @@
 export const PLAY_STARTED_GLOBAL = 'mauiPlayStarted';
 export const PLAY_ENDED_GLOBAL = 'mauiPlayEnded';
 
-export type PlayNotifier = (romName: string) => Promise<void>;
+/** `reportDir`: the game's capture-daemon.lua directory, where it writes its report (maui-api D87). */
+export type PlayNotifier = (romName: string, reportDir?: string | null) => Promise<void>;
 
 // Scores the game wrote without a name, when several players of the cabinet could have made them
 // (ScoreDeclaration.ts): asked one by one, best first (WhoPlayedModal.vue).

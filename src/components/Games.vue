@@ -1,10 +1,11 @@
 <template>
-    <div class="gamesContainer">
+    <div class="gamesContainer" :class="{mouse}" data-mouse-nav>
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList">
                 <li v-if="windowStart > 0" aria-hidden="true" :style="{height: (windowStart * 10) + '%'}"></li>
-                <li v-for="{game, index} in visibleGames" :key="game.id_game" :class="{selected: selectedGameIndex === index}">
+                <li v-for="{game, index} in visibleGames" :key="game.id_game" :class="{selected: selectedGameIndex === index}"
+                    @click="mouse && emit('pick', index)">
                     <div class="marquee"
                          :style="{
                              marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
@@ -38,7 +39,11 @@ const props = withDefaults(defineProps<{
     games: Game[];
     selectedGameIndex?: number;
     focused?: boolean;
-}>(), {selectedGameIndex: 0, focused: true});
+    // Windowed mode: a click picks a game (Home.vue launches the one already selected).
+    mouse?: boolean;
+}>(), {selectedGameIndex: 0, focused: true, mouse: false});
+
+const emit = defineEmits<{pick: [index: number]}>();
 
 const gameListRef = useTemplateRef<HTMLUListElement>('gameList');
 
@@ -109,6 +114,15 @@ function hasFlyerLogoFallback(romName: string): boolean {
 </script>
 
 <style scoped>
+    /* Windowed mode: the list takes the mouse instead of moving the window (App.vue's drag). */
+    .gamesContainer.mouse {
+        -webkit-app-region: no-drag;
+    }
+
+    .gamesContainer.mouse li {
+        cursor: pointer;
+    }
+
     .gamesContainer {
         width: 100%;
         height: 100%;

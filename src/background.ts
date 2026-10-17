@@ -1,6 +1,6 @@
 'use strict';
 
-import {app, BrowserWindow} from 'electron';
+import {app, BrowserWindow, ipcMain} from 'electron';
 import * as remoteMain from '@electron/remote/main';
 import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOptions;
 import {join} from 'path';
@@ -22,6 +22,9 @@ import {
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {
+    CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type FrontControls, type PadCaptureReply,
+} from '@/class/FrontControlsBridge';
 import Config from '@/class/Config.class';
 import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
@@ -178,6 +181,37 @@ app.on('activate', () => {
 app.on('ready', async () => {
     integrateAppImage();
     setCabinetDisplayMode();
+    // The BO's MAUI > Controls tab: a gamepad input caught by the front, and new bindings to read.
+    const pendingCaptures = new Map<string, (reply: PadCaptureReply) => void>();
+    ipcMain.on(PAD_CAPTURED_CHANNEL, (_event, reply: PadCaptureReply) => {
+        pendingCaptures.get(reply.nonce)?.(reply);
+    });
+    let captureCount = 0;
+    const frontControls: FrontControls = {
+        capturePad: timeoutMs => new Promise((resolve) => {
+            if (!win || win.isDestroyed()) {
+                resolve({error: 'MAUI\'s window is not open.'});
+                return;
+            }
+            const nonce = `${Date.now()}-${++captureCount}`;
+            // A little longer than the front's own wait, which answers first.
+            const timer = setTimeout(() => {
+                pendingCaptures.delete(nonce);
+                resolve({error: 'MAUI\'s window did not answer.'});
+            }, timeoutMs + 5000);
+            pendingCaptures.set(nonce, (reply) => {
+                clearTimeout(timer);
+                pendingCaptures.delete(nonce);
+                resolve(reply.capture ?? {error: reply.error ?? 'Nothing caught.'});
+            });
+            win.webContents.send(CAPTURE_PAD_CHANNEL, nonce);
+        }),
+        controlsChanged: () => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(CONTROLS_CHANGED_CHANNEL);
+            }
+        },
+    };
     // What always runs, and the BO's port: the BO itself is loaded by its first request (boCore.ts).
     const bo = startCore(BO_SERVER_PORT, () => {
         if (win) {
@@ -215,14 +249,14 @@ app.on('ready', async () => {
         }
         win.webContents.send(SHOW_GAME_CHANNEL, romName);
         return true;
-    });
+    }, frontControls);
     core = bo;
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
     onlineSession = bo.online;
     // Games started and ended by the front (Home.vue): their new scores go to MAUI-API.
-    const playStarted: PlayNotifier = romName => bo.scores.started(romName);
+    const playStarted: PlayNotifier = (romName, reportDir) => bo.scores.started(romName, reportDir ?? null);
     const playEnded: PlayEndNotifier = async (romName) => {
         const ask = await bo.scores.ended(romName);
         return ask ? JSON.stringify(ask) : null;

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: pause bars in a ring -->
+<circle cx="32" cy="32" r="22" fill="none" stroke="#FFFFFF" stroke-width="5"/>
+<path d="M26.5 23 V41 M37.5 23 V41" fill="none" stroke="#E73246" stroke-width="6" stroke-linecap="round"/>
+</svg>
