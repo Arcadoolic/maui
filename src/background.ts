@@ -256,7 +256,7 @@ app.on('ready', async () => {
     await bo.databaseReady;
     onlineSession = bo.online;
     // Games started and ended by the front (Home.vue): their new scores go to MAUI-API.
-    const playStarted: PlayNotifier = romName => bo.scores.started(romName);
+    const playStarted: PlayNotifier = (romName, reportDir) => bo.scores.started(romName, reportDir ?? null);
     const playEnded: PlayEndNotifier = async (romName) => {
         const ask = await bo.scores.ended(romName);
         return ask ? JSON.stringify(ask) : null;

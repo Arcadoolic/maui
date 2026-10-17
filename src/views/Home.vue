@@ -460,10 +460,10 @@ function onCategoryPick(index: number) {
 }
 
 /** Never throws: ONLINE must never keep a game from starting. */
-async function notifyScoreCapture(romName: string): Promise<void> {
+async function notifyScoreCapture(romName: string, reportDir: string | null): Promise<void> {
     try {
         const notify = remote.getGlobal(PLAY_STARTED_GLOBAL) as PlayNotifier | undefined;
-        await notify?.(romName);
+        await notify?.(romName, reportDir);
     } catch (err) {
         Log.warn('[Home] Score capture not notified: ' + (err instanceof Error ? err.message : String(err)));
     }
@@ -546,7 +546,9 @@ function startGame() {
     }
     lockFront();
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
-    void notifyScoreCapture(game.romName).then(() => mameService.startGame(game.romName)).then(
+    // The capture daemon's directory first: the game's report on itself goes with its scores.
+    const capture = mameService.prepareCapture();
+    void notifyScoreCapture(game.romName, capture?.dir ?? null).then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
