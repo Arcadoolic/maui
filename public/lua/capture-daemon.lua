@@ -214,6 +214,11 @@ end
 
 local last_seen_request = nil
 local armed_nonce = nil
+-- A button capture: the candidates already pressed when it was armed, by index. One only counts
+-- once released and pressed again: a button still held, or one a device reports as pressed all
+-- along (a virtual joystick such as vJoy on Windows, seen holding twenty buttons at rest), would
+-- otherwise be taken at once, before anything is pressed.
+local held = {}
 -- An "|axis" capture: the axes' values when it was armed, and how far each mouse axis moved since.
 local armed_axis = false
 local axis_baseline = {}
@@ -282,6 +287,14 @@ emu.register_periodic(function()
                 armed_nonce = nonce
                 armed_axis = mode == 'axis'
                 axis_ticks = 0
+                held = {}
+                if not armed_axis then
+                    for index, candidate in ipairs(candidates) do
+                        if input:code_pressed(candidate.code) then
+                            held[index] = true
+                        end
+                    end
+                end
             end
             handle_apply()
         end
@@ -311,8 +324,10 @@ emu.register_periodic(function()
                 end
             end
         elseif armed_nonce then
-            for _, candidate in ipairs(candidates) do
-                if input:code_pressed(candidate.code) then
+            for index, candidate in ipairs(candidates) do
+                if not input:code_pressed(candidate.code) then
+                    held[index] = nil
+                elseif not held[index] then
                     write_file(RESULT_PATH, armed_nonce .. '|' .. input:code_to_token(candidate.code))
                     armed_nonce = nil
                     break
