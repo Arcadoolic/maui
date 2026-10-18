@@ -25,6 +25,8 @@ export default class Gamepads {
     // While the BO waits for a gamepad input to bind (see captureNext()): the loop above keeps
     // track of what is held but sends nothing, so the press doesn't also act on the screen.
     protected static capturing = false;
+    // Ends the capture under way as cancelled (cancelCapture()).
+    protected static cancelCurrentCapture: (() => void) | null = null;
     // Linux only: the joysticks Chromium merges into one gamepad (a two-player arcade encoder),
     // read from /dev/input/js* instead of the Gamepad API - see SharedJoysticks.ts.
     public static sharedJoysticks: SharedJoysticks|null =
@@ -182,11 +184,11 @@ export default class Gamepads {
 
     /**
      * Resolves with the next button pressed or axis pushed past AXIS_DEADZONE on any pad, mapped
-     * or not, null after `timeoutMs`. Polls on its own timer rather than the loop above, which
+     * or not, null after `timeoutMs`, 'cancelled' after cancelCapture(). Polls on its own timer rather than the loop above, which
      * stops whenever the window loses its focus (the BO open in a browser on the same machine).
      * What is already held when it starts only counts once released and pressed again.
      */
-    public static captureNext(timeoutMs: number): Promise<{pad: PolledPad, button?: number, axis?: number, direction?: 0 | 1} | null> {
+    public static captureNext(timeoutMs: number): Promise<{pad: PolledPad, button?: number, axis?: number, direction?: 0 | 1} | null | 'cancelled'> {
         this.capturing = true;
         this.sharedJoysticks?.refresh();
         const held = new Map<string, Set<string>>();
@@ -199,12 +201,14 @@ export default class Gamepads {
             held.set(padKey(pad), new Set(pressedInputs(pad)));
         }
         return new Promise((resolve) => {
-            const finish = (result: {pad: PolledPad, button?: number, axis?: number, direction?: 0 | 1} | null) => {
+            const finish = (result: {pad: PolledPad, button?: number, axis?: number, direction?: 0 | 1} | null | 'cancelled') => {
                 clearInterval(timer);
                 clearTimeout(deadline);
                 this.capturing = false;
+                this.cancelCurrentCapture = null;
                 resolve(result);
             };
+            this.cancelCurrentCapture = () => finish('cancelled');
             const deadline = setTimeout(() => finish(null), timeoutMs);
             const timer = setInterval(() => {
                 for (const pad of this.connectedPads(true)) {
@@ -224,6 +228,11 @@ export default class Gamepads {
                 }
             }, 16);
         });
+    }
+
+    /** Ends the capture under way, if any: captureNext() resolves with 'cancelled'. */
+    public static cancelCapture(): void {
+        this.cancelCurrentCapture?.();
     }
 
     /**
