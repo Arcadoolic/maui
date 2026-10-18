@@ -3322,6 +3322,76 @@ function renderPageTail(): string {
             });
         })();
 
+        // MAUI's Controls card's "Add a gamepad button": while MAUI's window waits for the press
+        // (the form's own POST), the page reads the gamepads too, the way Gamepads.captureNext()
+        // does, and posts what it catches as \`add\`. Windows only hands an Xbox-type pad's presses
+        // to the window in front, and the click just gave it to this page; a page opened on
+        // another device sees no pad, the front then catches it. Only where the browser gives the
+        // Gamepad API (localhost or HTTPS).
+        (function () {
+            var DEADZONE = 0.4;
+            if (!navigator.getGamepads) {
+                return;
+            }
+            function pads() {
+                return Array.prototype.filter.call(navigator.getGamepads(), function (pad) {
+                    return pad && pad.connected;
+                });
+            }
+            function pressed(pad) {
+                var inputs = [];
+                pad.buttons.forEach(function (button, index) {
+                    if (button.pressed) {
+                        inputs.push('button|' + index);
+                    }
+                });
+                pad.axes.forEach(function (value, index) {
+                    if (Math.abs(value) > DEADZONE) {
+                        inputs.push('axis|' + index + '|' + (value > 0 ? 1 : 0));
+                    }
+                });
+                return inputs;
+            }
+            function key(pad) {
+                return pad.index + '|' + pad.id;
+            }
+            document.querySelectorAll('[data-pad-listen]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var form = button.form;
+                    // What is held already only counts once released and pressed again.
+                    var held = {};
+                    pads().forEach(function (pad) {
+                        held[key(pad)] = pressed(pad);
+                    });
+                    var deadline = Date.now() + 30000;
+                    var timer = setInterval(function () {
+                        if (Date.now() > deadline) {
+                            clearInterval(timer);
+                            return;
+                        }
+                        pads().some(function (pad) {
+                            var now = pressed(pad);
+                            var before = held[key(pad)] || [];
+                            var fresh = now.filter(function (input) {
+                                return before.indexOf(input) === -1;
+                            })[0];
+                            held[key(pad)] = now.filter(function (input) {
+                                return before.indexOf(input) !== -1;
+                            });
+                            if (!fresh) {
+                                return false;
+                            }
+                            clearInterval(timer);
+                            // The layout the front would pick: "standard", else the pad's own.
+                            form.elements.code.value = fresh + '|' + (pad.mapping === 'standard' ? 'standard' : pad.id);
+                            form.requestSubmit(form.querySelector('[data-control-add]'));
+                            return true;
+                        });
+                    }, 16);
+                });
+            });
+        })();
+
         // Player switchers of the Controls cards (see renderPlayerTabs()). Opens on the tab the
         // server asks for (data-active: the one holding the command just captured/reset), else
         // the last one picked in this card (kept across the page swaps every form submission
@@ -4634,12 +4704,13 @@ function renderControlChips(seq: string, names: Map<string, string>): string {
  * The two ways to add a control: a gamepad press caught by MAME (`capture`), and a key or mouse
  * button caught by the page (renderPageTail()'s data-control-listen script, which posts `add` with
  * the token in `code`) - only offered once MAME's keys are known (`canListen`). `rawCodes`: the
- * page posts the browser's own codes ("key|KeyA", "mouse|2") instead of MAME tokens (MAUI's tab).
+ * page posts the browser's own codes ("key|KeyA", "mouse|2") instead of MAME tokens (MAUI's tab),
+ * and also listens to the gamepads itself while the front catches the press (data-pad-listen).
  */
 function renderControlAddButtons(captureDisabled: string, canListen: boolean, rawCodes = false): string {
     return `
         <div class="binding-actions">
-            <button type="submit" name="action" value="capture"${captureDisabled}>Add a gamepad button</button>
+            <button type="submit" name="action" value="capture"${captureDisabled}${rawCodes ? ' data-pad-listen' : ''}>Add a gamepad button</button>
             ${canListen ? `
                 <button type="button" data-control-listen${rawCodes ? '="raw"' : ''}>Add a key or mouse button</button>
                 <input type="hidden" name="code" value="">
@@ -5937,8 +6008,9 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
             <ul class="info">
                 <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
                 stick) on the cabinet within 30 seconds - MAUI's window catches it, and the press
-                does nothing else meanwhile. A pad with a layout of its own (named on its pills)
-                gets the button for itself, any other pad for every pad without one.</li>
+                does nothing else meanwhile. When this page is open on the computer the gamepad is
+                plugged in, the page catches it too. A pad with a layout of its own (named on its
+                pills) gets the button for itself, any other pad for every pad without one.</li>
                 <li><strong>Add a key or mouse button</strong>: click, then press the key or click
                 the mouse button in this page. Keys are named after their place on a US keyboard:
                 on an AZERTY keyboard, the A key shows as Q.</li>
@@ -10364,6 +10436,7 @@ export function createBoApp(
 
         let bindings = readMauiBindings();
         let info: string | undefined;
+        let caughtByPage = false;
         if (action === 'reset') {
             bindings = resetKey(bindings, key);
         } else if (action === 'remove') {
@@ -10378,12 +10451,25 @@ export function createBoApp(
             let input: MauiInput | undefined;
             if (action === 'add') {
                 input = parseMauiInputId(String(req.body.code || ''));
-                if (!input || input.device === 'pad') {
-                    await send({key, error: 'Not a key or a mouse button.'});
+                if (!input) {
+                    await send({key, error: 'Not a key, a mouse button or a gamepad input.'});
                     return;
+                }
+                if (input.device === 'pad') {
+                    // Caught by the page itself (the gamepad plugged in the computer it runs on):
+                    // the front stops waiting once it is saved. The pad's own layout, as the front
+                    // picks it, else the standard one: the page can't make up a layout.
+                    caughtByPage = true;
+                    input = {...input, layout: bindings.pads[input.layout] ? input.layout : 'standard'};
                 }
             } else {
                 const caught = await frontControls.capturePad(30000);
+                // The page caught the press and posted it on its own: the card as it now is, the
+                // browser showing whichever of both answers comes last.
+                if ('cancelled' in caught) {
+                    await send({key});
+                    return;
+                }
                 if ('error' in caught) {
                     await send({key, error: caught.error});
                     return;
@@ -10405,6 +10491,9 @@ export function createBoApp(
             return;
         }
         frontControls.controlsChanged();
+        if (caughtByPage) {
+            frontControls.cancelCapture();
+        }
         await send({key, info});
     });
 

@@ -5,7 +5,7 @@ import Config from './Config.class';
 import Gamepads from './Gamepads.class';
 import {parseMauiBindings, type MauiBindings} from './MauiControlBindings';
 import {
-    CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type PadCaptureReply,
+    CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type PadCaptureReply,
 } from './FrontControlsBridge';
 
 /**
@@ -53,8 +53,12 @@ async function onCapturePad(_event: unknown, nonce: string): Promise<void> {
         reply.error = 'A game is running on the cabinet: quit it first.';
     } else {
         const caught = await Gamepads.captureNext(30000);
-        if (!caught) {
-            reply.error = 'No gamepad input within the allotted time (30s) - try again (is the gamepad connected?).';
+        if (caught === 'cancelled') {
+            reply.cancelled = true;
+        } else if (!caught) {
+            reply.error = 'No gamepad input within the allotted time (30s) - try again (is the gamepad connected?).'
+                // Windows.Gaming.Input only hands an Xbox-type pad's presses to the focused window.
+                + (process.platform === 'win32' ? ' On Windows, click MAUI\'s window before pressing the button.' : '');
         } else {
             const own = caught.pad.mapping || caught.pad.id;
             reply.capture = {
@@ -86,4 +90,5 @@ export function startMauiControls(): void {
     });
     ipcRenderer.on(CONTROLS_CHANGED_CHANNEL, load);
     ipcRenderer.on(CAPTURE_PAD_CHANNEL, (event, nonce: string) => void onCapturePad(event, nonce));
+    ipcRenderer.on(CANCEL_CAPTURE_CHANNEL, () => Gamepads.cancelCapture());
 }
