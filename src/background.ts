@@ -23,7 +23,8 @@ import {
 } from '@/class/ScoreCaptureBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {
-    CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type FrontControls, type PadCaptureReply,
+    CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type FrontControls,
+    type PadCaptureReply,
 } from '@/class/FrontControlsBridge';
 import Config from '@/class/Config.class';
 import {integrateDesktop} from '@/class/DesktopIntegration';
@@ -202,13 +203,18 @@ app.on('ready', async () => {
             pendingCaptures.set(nonce, (reply) => {
                 clearTimeout(timer);
                 pendingCaptures.delete(nonce);
-                resolve(reply.capture ?? {error: reply.error ?? 'Nothing caught.'});
+                resolve(reply.capture ?? (reply.cancelled ? {cancelled: true} : {error: reply.error ?? 'Nothing caught.'}));
             });
             win.webContents.send(CAPTURE_PAD_CHANNEL, nonce);
         }),
         controlsChanged: () => {
             if (win && !win.isDestroyed()) {
                 win.webContents.send(CONTROLS_CHANGED_CHANNEL);
+            }
+        },
+        cancelCapture: () => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(CANCEL_CAPTURE_CHANNEL);
             }
         },
     };
