@@ -1,3 +1,10 @@
+## [2.16.1](https://github.com/Arcadoolic/maui/compare/2.16.0...2.16.1) (2026-10-18)
+
+### Bug Fixes
+
+* **bo:** catch MAUI's gamepad buttons in the BO page too ([332afc9](https://github.com/Arcadoolic/maui/commit/332afc9f6744be531a90485e8e000f3cf5d1932c))
+* **mame:** ignore inputs already pressed when a capture starts ([f4f4e89](https://github.com/Arcadoolic/maui/commit/f4f4e89bbb0dac4a16a131d00ddad978bb4d5f0c))
+
 ## [2.16.0](https://github.com/Arcadoolic/maui/compare/2.15.0...2.16.0) (2026-10-17)
 
 ### Features
