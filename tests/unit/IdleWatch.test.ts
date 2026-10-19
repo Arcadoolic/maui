@@ -81,4 +81,63 @@ describe('IdleWatch', () => {
         vi.advanceTimersByTime(5000);
         expect(changes).toEqual([]);
     });
+
+    describe('sleep', () => {
+        let sleeps: boolean[];
+        const sleepy = (delayMs = 1000, sleepMs = 5000) => new IdleWatch(delayMs, idle => changes.push(idle), {
+            delayMs: sleepMs, onChange: asleep => sleeps.push(asleep),
+        });
+
+        beforeEach(() => {
+            sleeps = [];
+        });
+
+        it('falls asleep once idle for the sleep delay', () => {
+            const idle = sleepy();
+            idle.start();
+            vi.advanceTimersByTime(1000 + 4999);
+            expect(sleeps).toEqual([]);
+            vi.advanceTimersByTime(1);
+            expect(changes).toEqual([true]);
+            expect(sleeps).toEqual([true]);
+        });
+
+        it('tells the key that wakes it from sleep apart, and starts both delays again', () => {
+            const idle = sleepy();
+            idle.start();
+            vi.advanceTimersByTime(6000);
+            expect(idle.activity()).toBe(true);
+            expect(sleeps).toEqual([true, false]);
+            expect(changes).toEqual([true, false]);
+            vi.advanceTimersByTime(1000);
+            expect(changes).toEqual([true, false, true]);
+            expect(sleeps).toEqual([true, false]);
+        });
+
+        it('falls asleep from the last key when the front never turns idle', () => {
+            const idle = sleepy(0, 5000);
+            idle.start();
+            vi.advanceTimersByTime(5000);
+            expect(changes).toEqual([]);
+            expect(sleeps).toEqual([true]);
+            expect(idle.activity()).toBe(true);
+            expect(sleeps).toEqual([true, false]);
+        });
+
+        it('never falls asleep with a sleep delay of 0, nor while blocked', () => {
+            const never = sleepy(1000, 0);
+            never.start();
+            vi.advanceTimersByTime(3_600_000);
+            expect(changes).toEqual([true]);
+            expect(sleeps).toEqual([]);
+
+            const idle = sleepy();
+            idle.start();
+            vi.advanceTimersByTime(6000);
+            idle.block(true);
+            expect(sleeps).toEqual([true, false]);
+            vi.advanceTimersByTime(3_600_000);
+            expect(sleeps).toEqual([true, false]);
+        });
+    });
 });

@@ -101,6 +101,11 @@ export default class Config {
     public frontIdleMinutes: number = 2;
     // While idle, the list goes to the game each message is about (Home.vue onMessageShown()).
     public frontIdleShowsGames: boolean = true;
+    // Left alone this many minutes more, the front falls asleep (IdleWatch.ts): a black screen, and
+    // the screen switched off on a dedicated cabinet when frontSleepScreenOff (ScreenPower.ts). 0 =
+    // never. Counted from the last key when the idle curtain is switched off.
+    public frontSleepMinutes: number = 30;
+    public frontSleepScreenOff: boolean = true;
 
     // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
     // dot, or the dot alone, more discreet.
@@ -159,6 +164,10 @@ export default class Config {
             this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
                 ? configFile.frontIdleMinutes
                 : 2;
+            this.frontSleepMinutes = Number.isInteger(configFile.frontSleepMinutes) && configFile.frontSleepMinutes >= 0
+                ? configFile.frontSleepMinutes
+                : 30;
+            this.frontSleepScreenOff = configFile.frontSleepScreenOff !== false;
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
             this.setupOffline = configFile.setupOffline === true;
 
@@ -210,6 +219,8 @@ export default class Config {
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
                 frontIdleShowsGames: this.frontIdleShowsGames,
+                frontSleepMinutes: this.frontSleepMinutes,
+                frontSleepScreenOff: this.frontSleepScreenOff,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
                 setupOffline: this.setupOffline,
             }),

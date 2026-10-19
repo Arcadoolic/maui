@@ -1,5 +1,5 @@
 <template>
-    <div class="home" :class="{empty: noGames}">
+    <div class="home" :class="{empty: noGames, asleep}">
         <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -63,7 +63,7 @@
             <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
-        <message-band v-if="idle && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
+        <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
     </div>
 
 </template>
@@ -110,6 +110,7 @@ import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
 import {IdleWatch} from '@/class/IdleWatch';
+import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
 import {createOnlineClient} from '@/class/OnlineClient';
@@ -191,11 +192,30 @@ const idle = ref(false);
 const idleMessages = ref<BandMessage[]>([]);
 // Switched off in the BO: a delay of 0, the cabinet never turns idle.
 const idleDelayMs = getConfiguration().frontIdleEnabled ? getConfiguration().frontIdleMinutes * 60_000 : 0;
+// Left alone longer, the cabinet falls asleep: a black screen, nothing left moving, and the screen
+// itself off on a dedicated cabinet (ScreenPower.ts) unless the BO says not to.
+const asleep = ref(false);
+const screenOff = getConfiguration().frontSleepScreenOff && canSwitchScreenOff(remote.app.isPackaged);
 const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     idle.value = isIdle;
     if (isIdle) {
         void loadIdleMessages();
     }
+}, {
+    delayMs: getConfiguration().frontSleepMinutes * 60_000,
+    onChange: (isAsleep) => {
+        asleep.value = isAsleep;
+        if (isAsleep) {
+            stopRoll();
+        }
+        if (screenOff) {
+            // A keyboard key wakes the screen by itself, a gamepad button only through this.
+            setScreenPower(!isAsleep).catch((err: unknown) => {
+                Log.warn('[Home] Screen not switched ' + (isAsleep ? 'off' : 'on') + ': '
+                    + (err instanceof Error ? err.message : String(err)));
+            });
+        }
+    },
 });
 
 function readAvailableUpdate(): string | null {
@@ -805,7 +825,13 @@ function cancelBackOffice() {
 const {onKeydown, onKeyup} = useControllable();
 
 let stopLeaderboardsListener: (() => void) | undefined;
-const onShowGame = (_event: unknown, romName: string) => void showGame(romName);
+const onShowGame = (_event: unknown, romName: string) => {
+    // Asked from the BO: a sleeping cabinet wakes up to show it.
+    if (asleep.value) {
+        idleWatch.activity();
+    }
+    void showGame(romName);
+};
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
@@ -961,6 +987,15 @@ if (!getIsInit()) {
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
+    }
+
+    /* Asleep: nothing shown, so nothing left to animate or to paint. */
+    .home.asleep {
+        background: #000000;
+    }
+
+    .home.asleep > * {
+        display: none !important;
     }
 
     .gameTitle, .categoryTitle {
