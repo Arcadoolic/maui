@@ -5831,6 +5831,12 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                     <input type="checkbox" name="frontIdleShowsGames" ${config.frontIdleShowsGames ? 'checked' : ''}>
                     Behind the idle curtain, the list of games goes to the game each best score is about
                 </label>
+                <label for="frontSleepMinutes">Minutes of idle curtain before the cabinet goes to sleep - a black screen until the next key press (0 = never; counted from the last key press when the idle curtain is off)</label>
+                <input type="number" id="frontSleepMinutes" name="frontSleepMinutes" min="0" max="1440" step="1" value="${config.frontSleepMinutes}">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="frontSleepScreenOff" ${config.frontSleepScreenOff ? 'checked' : ''}>
+                    Asleep, also switch the screen off (DPMS, dedicated cabinet only) - untick it if the screen does not come back on, or keeps showing "no signal"
+                </label>
                 <label class="checkbox-row">
                     <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
                     ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
@@ -9620,13 +9626,20 @@ export function createBoApp(
         if (Number.isInteger(boIdleMinutes) && boIdleMinutes >= 0 && boIdleMinutes <= 1440) {
             config.boIdleMinutes = boIdleMinutes;
         }
-        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`;
+        const frontIdleKey = () => `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`
+            + `/${config.frontSleepMinutes}/${config.frontSleepScreenOff}`;
+        const previousFrontIdle = frontIdleKey();
         config.frontIdleEnabled = req.body.frontIdleEnabled === 'on';
         config.frontIdleShowsGames = req.body.frontIdleShowsGames === 'on';
         const frontIdleMinutes = Number(req.body.frontIdleMinutes);
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
         }
+        const frontSleepMinutes = Number(req.body.frontSleepMinutes);
+        if (Number.isInteger(frontSleepMinutes) && frontSleepMinutes >= 0 && frontSleepMinutes <= 1440) {
+            config.frontSleepMinutes = frontSleepMinutes;
+        }
+        config.frontSleepScreenOff = req.body.frontSleepScreenOff === 'on';
         const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
@@ -9636,7 +9649,7 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}` !== previousFrontIdle
+            || frontIdleKey() !== previousFrontIdle
             || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
             // The front decides its mode and its badge's look once, when it loads (App.vue), and
             // builds its carousel and starts its idle watch when Home.vue is mounted.

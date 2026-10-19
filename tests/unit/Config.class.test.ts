@@ -298,6 +298,34 @@ describe('Config front idle', () => {
             expect(config.frontIdleMinutes).toBe(expected);
         }
     });
+
+    it('falls asleep after 30 minutes by default, 0 for never, a whole number of minutes', () => {
+        expect(new Config().frontSleepMinutes).toBe(30);
+        for (const [written, expected] of [[0, 0], [45, 45], [-1, 30], [1.5, 30], ['5', 30], [undefined, 30]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontSleepMinutes = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontSleepMinutes).toBe(expected);
+        }
+    });
+
+    it('switches the screen off asleep unless told not to', () => {
+        expect(new Config().frontSleepScreenOff).toBe(true);
+        for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontSleepScreenOff = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontSleepScreenOff).toBe(expected);
+        }
+    });
 });
 
 describe('Config.save', () => {
@@ -340,6 +368,8 @@ describe('Config.save', () => {
             'frontIdleEnabled',
             'frontIdleMinutes',
             'frontIdleShowsGames',
+            'frontSleepMinutes',
+            'frontSleepScreenOff',
             'fullscreen',
             'mameBinaryName',
             'mamePath',
