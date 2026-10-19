@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
+    renderPinReveal,
     type OnlineUserView,
 } from '@/class/OnlinePlayersBo';
 
@@ -61,9 +62,20 @@ describe('renderCreateOnlineFields', () => {
     });
 });
 
+describe('renderPinReveal', () => {
+    it('shows one tile per digit, leading zeros kept', () => {
+        const html = renderPinReveal('SAJ', '0042');
+        expect(html.match(/class="pin-digit"/g)).toHaveLength(4);
+        expect(html).toContain('<span class="pin-digit">0</span><span class="pin-digit">0</span>');
+        expect(html).toContain('SAJ');
+    });
+});
+
 describe('describeOutcomeForBo', () => {
-    it('shows the new PIN once', () => {
-        expect(describeOutcomeForBo('SAJ', {kind: 'created', pin: '0042'}).info).toContain('0042');
+    it('hands the new PIN over for the player\'s row, not in the message', () => {
+        const message = describeOutcomeForBo('SAJ', {kind: 'created', pin: '0042'});
+        expect(message.pin).toBe('0042');
+        expect(message.info).not.toContain('0042');
     });
 
     it('asks for the PIN of initials taken', () => {

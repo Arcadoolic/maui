@@ -80,11 +80,17 @@ export function renderCreateOnlineFields(): string {
         <input type="text" id="pin" name="pin" inputmode="numeric" maxlength="4" pattern="[0-9]{4}">`;
 }
 
-export function describeOutcomeForBo(pseudo3: string, outcome: RegistrationOutcome): {info?: string; error?: string} {
+/** A BO action's outcome; `pin` is shown in the player's row (renderPinReveal()), not in the message. */
+export interface OnlineBoMessage {
+    info?: string;
+    error?: string;
+    pin?: string;
+}
+
+export function describeOutcomeForBo(pseudo3: string, outcome: RegistrationOutcome): OnlineBoMessage {
     switch (outcome.kind) {
         case 'created':
-            return {info: `Player "${pseudo3}" reserved in MAUI-API. PIN: ${outcome.pin}. Give it to the player: `
-            + 'it is needed to play as them on another cabinet. If lost, a MAUI-API administrator can read it.'};
+            return {info: `Player "${pseudo3}" reserved in MAUI-API: give them the PIN shown under their row.`, pin: outcome.pin};
         case 'pin_required':
             return {error: `"${pseudo3}" already plays on another cabinet: enter their PIN to link them here.`};
         case 'linked':
@@ -92,4 +98,35 @@ export function describeOutcomeForBo(pseudo3: string, outcome: RegistrationOutco
         case 'error':
             return {error: outcome.message};
     }
+}
+
+/**
+ * The PIN a player was just given, in the row under theirs: one tile per digit, large enough to be
+ * read out from across the room, and a copy button (the BO is plain HTTP on the LAN, where
+ * navigator.clipboard does not exist: the digits are selected and copied the old way instead).
+ */
+export function renderPinReveal(pseudo3: string, pin: string): string {
+    const digits = [...pin].map(digit => `<span class="pin-digit">${escapeHtml(digit)}</span>`).join('');
+    return `
+        <div class="pin-reveal" role="status">
+            <div class="pin-reveal-label">PIN of <strong>${escapeHtml(pseudo3)}</strong></div>
+            <div class="pin-digits" aria-label="PIN ${escapeHtml([...pin].join(' '))}">${digits}</div>
+            <span class="pin-value" hidden>${escapeHtml(pin)}</span>
+            <button type="button" class="pin-copy" onclick="(function (button) {
+                var value = button.parentNode.querySelector('.pin-value').textContent;
+                var done = function () { button.textContent = 'Copied'; };
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(value).then(done);
+                    return;
+                }
+                var field = document.createElement('textarea');
+                field.value = value;
+                document.body.appendChild(field);
+                field.select();
+                if (document.execCommand('copy')) { done(); }
+                field.remove();
+            })(this)">Copy</button>
+            <p class="pin-reveal-help">Give it to the player: it is needed to play as them on another
+            cabinet. It is not shown again here; if lost, a MAUI-API administrator can read it.</p>
+        </div>`;
 }

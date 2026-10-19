@@ -101,6 +101,7 @@ import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
 import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
+    renderPinReveal, type OnlineBoMessage,
 } from '@/class/OnlinePlayersBo';
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
@@ -1981,6 +1982,59 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         table.favorites-table tr.row-deleted td:last-child {
             opacity: 1;
+        }
+        /* The player just created or given a new PIN (see renderUsersListCard()): an accent
+           band that fades to a lasting tint, and their PIN under it. */
+        table.favorites-table tr.row-highlight td {
+            background-color: rgba(138, 180, 248, 0.16);
+            animation: row-highlight-flash 2.4s ease-out;
+        }
+        table.favorites-table tr.row-highlight td:first-child {
+            box-shadow: inset 4px 0 0 var(--accent);
+        }
+        @keyframes row-highlight-flash {
+            0%, 30% { background-color: rgba(138, 180, 248, 0.45); }
+            100% { background-color: rgba(138, 180, 248, 0.16); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            table.favorites-table tr.row-highlight td { animation: none; }
+        }
+        table.favorites-table tr.row-pin td {
+            background-color: rgba(138, 180, 248, 0.08);
+            box-shadow: inset 4px 0 0 var(--accent);
+        }
+        .pin-reveal {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: var(--space-2) var(--space-3);
+            padding: var(--space-2) 0;
+        }
+        .pin-reveal-label {
+            font-size: 1.1em;
+        }
+        .pin-digits {
+            display: inline-flex;
+            gap: var(--space-2);
+        }
+        .pin-digit {
+            display: inline-block;
+            min-width: 1.4em;
+            padding: 6px 4px;
+            border: 2px solid var(--warn);
+            border-radius: var(--radius-md);
+            background: var(--surface-inset);
+            color: var(--warn);
+            font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+            font-size: 2.2em;
+            font-weight: bold;
+            line-height: 1;
+            text-align: center;
+        }
+        .pin-reveal-help {
+            flex-basis: 100%;
+            margin: 0;
+            color: var(--text-muted);
         }
         .row-actions {
             display: inline-flex;
@@ -7772,6 +7826,14 @@ interface UsersListExtras {
     // ONLINE configured, on or not: MAUI-API column and actions, to get the players ready before
     // turning it on (OnlineReconciliation.ts).
     onlineColumn?: boolean;
+    // The player just created or given a new PIN: their row is highlighted and scrolled to, with
+    // the PIN, if any, in a row of its own under it.
+    highlight?: PlayerHighlight;
+}
+
+interface PlayerHighlight {
+    id_user: number;
+    pin?: string;
 }
 
 /**
@@ -7802,8 +7864,10 @@ function renderUsersListCard(
         const hasCustomAvatar = hasAvatar && !avatarFromOrigin && !isDefaultAvatar(avatarsPath, user.pseudo_3);
         // What the status filter goes by: disabled in MAUI-API counts as inactive.
         const status = user.active && !disabledUpstream ? 'active' : 'inactive';
+        const highlighted = extras.highlight?.id_user === user.id_user;
+        const pin = highlighted ? extras.highlight?.pin : undefined;
         return `
-        <tr data-status="${status}">
+        <tr id="player-${user.id_user}" data-status="${status}"${highlighted ? ' class="row-highlight"' : ''}>
             <td class="center">
                 ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
                     ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
@@ -7852,6 +7916,9 @@ function renderUsersListCard(
                 </div>
             </td>
         </tr>
+        ${pin ? `<tr class="row-pin" data-status="${status}">
+            <td colspan="${extras.onlineColumn ? 6 : 5}">${renderPinReveal(user.pseudo_3, pin)}</td>
+        </tr>` : ''}
     `;
     }).join('');
 
@@ -7943,6 +8010,12 @@ function renderUsersListCard(
                         status.value = stored;
                     }
                 } catch (error) { /* storage blocked: all the players are shown */ }
+                // The player just created or given a PIN is always shown: a filter that hides them
+                // goes back to all the players.
+                var highlighted = document.querySelector('#playersTable tr.row-highlight');
+                if (highlighted && status.value !== '*' && highlighted.dataset.status !== status.value) {
+                    status.value = '*';
+                }
                 function render() {
                     var shown = 0;
                     rows.forEach(function (row) {
@@ -7956,6 +8029,17 @@ function renderUsersListCard(
                     render();
                 });
                 render();
+            })();
+            (function () {
+                // After the page's own scroll restore (renderPageTail(), and the AJAX submit's
+                // scrollTo() once the document is written), hence the timeout.
+                var highlighted = document.querySelector('#playersTable tr.row-highlight');
+                if (!highlighted) { return; }
+                setTimeout(function () {
+                    var pinRow = highlighted.nextElementSibling;
+                    var target = pinRow && pinRow.classList.contains('row-pin') ? pinRow : highlighted;
+                    target.scrollIntoView({block: 'center', behavior: 'smooth'});
+                }, 0);
             })();</script>
         </section>
     `;
@@ -8885,12 +8969,13 @@ export function createBoApp(
      */
     const usersPage = async (
         req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
-        createError?: string,
+        createError?: string, highlight?: PlayerHighlight,
     ): Promise<string> => {
         const isAdvanced = req.session.boAdvanced === true;
         const deleted = isAdvanced ? await listDeletedUsers().catch(() => []) : [];
         return renderUsersPage(users, avatarFilenames, error, info, createError, {
             isAdvanced, deleted, online: isOnlineActive(), onlineColumn: getOnlineView().state === 'configured',
+            highlight,
         });
     };
 
@@ -8998,7 +9083,7 @@ export function createBoApp(
             // once the API said yes. Checked locally first, so the API never reserves initials
             // this cabinet cannot store.
             const client = await createOnlineClient();
-            let onlineMessage: {info?: string; error?: string} | undefined;
+            let onlineMessage: OnlineBoMessage | undefined;
             if (client) {
                 if (await User.findOne({where: {pseudo_3: pseudo3}})) {
                     throw new Error('A player with this nickname already exists.');
@@ -9019,6 +9104,7 @@ export function createBoApp(
             } else {
                 await User.create(fields as User);
             }
+            const created = await User.findOne({where: {pseudo_3: pseudo3}});
             // Every new player starts with a generated default avatar (see DefaultAvatar.ts); the
             // list below is read after this so it shows it. An avatar failing to write must not
             // turn a successful creation into an error page.
@@ -9028,8 +9114,9 @@ export function createBoApp(
                 console.error(`[boServer] Default avatar for "${pseudo3}" failed:`, avatarError);
             }
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(await usersPage(req, 
+            res.send(await usersPage(req,
                 users, getAvatarFilenames(config), undefined, onlineMessage?.info ?? `Player "${pseudo3}" created.`,
+                undefined, created ? {id_user: created.id_user, pin: onlineMessage?.pin} : undefined,
             ));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
@@ -9041,7 +9128,7 @@ export function createBoApp(
 
     // ONLINE actions on one player (OnlinePlayersBo.ts). Same-origin only: they act on MAUI-API
     // with the cabinet's credentials, and the BO has no CSRF token (see SameOrigin.ts).
-    type OnlinePlayerHandler = (user: User, client: MauiApiClient, req: Request) => Promise<{info?: string; error?: string}>;
+    type OnlinePlayerHandler = (user: User, client: MauiApiClient, req: Request) => Promise<OnlineBoMessage>;
     const onlinePlayerAction = (handler: OnlinePlayerHandler) => async (req: Request, res: Response) => {
         if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
             res.status(403).send('Cross-site request refused.');
@@ -9058,7 +9145,8 @@ export function createBoApp(
                 }));
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.status(message.error ? 422 : 200).send(await usersPage(
-            req, users, getAvatarFilenames(new Config()), message.error, message.info,
+            req, users, getAvatarFilenames(new Config()), message.error, message.info, undefined,
+            user && message.pin ? {id_user: user.id_user, pin: message.pin} : undefined,
         ));
     };
 
@@ -9099,7 +9187,7 @@ export function createBoApp(
                 : `MAUI-API refused the new PIN (${result.kind === 'rejected' ? result.code : result.kind}).`};
         }
         await user.update({online_status: 'active'});
-        return {info: `New PIN for "${user.pseudo_3}": ${result.value}. Give it to the player.`};
+        return {info: `New PIN for "${user.pseudo_3}": shown under their row.`, pin: result.value};
     }));
 
     // Same sync as opening the tab (GET /users), on demand, with its outcome.
