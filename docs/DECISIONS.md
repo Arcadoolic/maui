@@ -411,8 +411,8 @@ no new player. Taken initials lead to the PIN of the player who owns them
 is shown once, never stored on the cabinet; MAUI-API admins can read it
 back. Only `pseudo_3` and the visibility leave the cabinet: `realname`,
 `email` stay local, and `pseudo_2` is a leftover nothing reads. Players are
-private by default (scores kept out of the shared leaderboards); the BO
-makes them public. Local columns (`user.remote_id`, `is_public`,
+public by default (2026-10-20; private before, scores kept out of the
+shared leaderboards); the BO can make them private. Local columns (`user.remote_id`, `is_public`,
 `online_status`, migration `20261002090000`) are kept in line by
 `src/class/PlayerSync.ts`, run by `OnlineSession` after the startup report
 and every 10 heartbeats. The sync never touches `active`, the BO's own

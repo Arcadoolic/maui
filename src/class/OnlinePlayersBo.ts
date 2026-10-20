@@ -73,7 +73,7 @@ export function renderOnlinePlayerActions(user: OnlineUserView): string {
 export function renderCreateOnlineFields(): string {
     return `
         <label class="checkbox-row">
-            <input type="checkbox" name="is_public">
+            <input type="checkbox" name="is_public" checked>
             Public scores (shared leaderboards)
         </label>
         <label for="pin">PIN, only if these initials already play on another cabinet</label>
