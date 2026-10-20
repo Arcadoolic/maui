@@ -11,12 +11,12 @@ function client(overrides: Partial<Record<'createPlayer' | 'linkPlayer', unknown
 }
 
 describe('registerOnline', () => {
-    it('creates a private player, saves it and returns the PIN to show', async () => {
+    it('creates a public player, saves it and returns the PIN to show', async () => {
         const createPlayer = vi.fn(async () => ({kind: 'ok', value: {player, pin: '0042'}}));
         const save = vi.fn(async () => undefined);
 
         expect(await registerOnline(client({createPlayer}), 'ACE', save)).toEqual({kind: 'created', pin: '0042'});
-        expect(createPlayer).toHaveBeenCalledWith('ACE', false);
+        expect(createPlayer).toHaveBeenCalledWith('ACE', true);
         expect(save).toHaveBeenCalledWith(player);
     });
 

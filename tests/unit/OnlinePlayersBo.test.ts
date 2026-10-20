@@ -57,7 +57,7 @@ describe('renderOnlinePlayerActions', () => {
 describe('renderCreateOnlineFields', () => {
     it('asks for the visibility and the PIN of initials already used elsewhere', () => {
         const html = renderCreateOnlineFields();
-        expect(html).toContain('name="is_public"');
+        expect(html).toContain('name="is_public" checked');
         expect(html).toContain('name="pin"');
     });
 });

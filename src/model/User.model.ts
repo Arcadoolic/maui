@@ -65,11 +65,11 @@ export default class User extends Model<User> {
     })
     public remote_id!: string | null;
 
-    // Shown in the shared leaderboards. Private by default.
+    // Shown in the shared leaderboards. Public by default.
     @Column({
         type: DataType.BOOLEAN,
         allowNull: false,
-        defaultValue: false,
+        defaultValue: true,
     })
     public is_public!: boolean;
 
