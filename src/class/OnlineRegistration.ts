@@ -3,7 +3,7 @@ import type {ApiFailure, MauiApiClient, OnlinePlayer} from '@/class/MauiApiClien
 // Registering a player on the cabinet in ONLINE mode (maui-api docs/DECISIONS.md D4, D48): the
 // initials are reserved in MAUI-API first, synchronously, so an unreachable API means no new
 // player. Initials already taken lead to the PIN of that player, which links it to this cabinet.
-// Players start public; the BO can make one private.
+// Players start private, unless the BO says otherwise.
 
 export type RegistrationOutcome =
     | {kind: 'created'; pin: string}
@@ -36,7 +36,7 @@ function describe(failure: ApiFailure): RegistrationOutcome {
 }
 
 export async function registerOnline(
-    client: MauiApiClient, pseudo3: string, save: SaveOnlinePlayer, isPublic: boolean = true,
+    client: MauiApiClient, pseudo3: string, save: SaveOnlinePlayer, isPublic: boolean = false,
 ): Promise<RegistrationOutcome> {
     const result = await client.createPlayer(pseudo3, isPublic);
     if (result.kind === 'ok') {

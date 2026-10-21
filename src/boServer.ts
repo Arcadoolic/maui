@@ -5896,6 +5896,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                     ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
                 </label>
                 <label class="checkbox-row">
+                    <input type="checkbox" name="cabinetPlayersPublic" ${config.cabinetPlayersPublic ? 'checked' : ''}>
+                    Players registered on the cabinet are public: their scores go to the shared leaderboards (unticked, they start private and the Players tab makes them public)
+                </label>
+                <label class="checkbox-row">
                     <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
                     Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
                 </label>
@@ -9730,6 +9734,8 @@ export function createBoApp(
         config.frontSleepScreenOff = req.body.frontSleepScreenOff === 'on';
         const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
+        // Read again by userRegistration.vue at each registration: no reload of the front.
+        config.cabinetPlayersPublic = req.body.cabinetPlayersPublic === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
