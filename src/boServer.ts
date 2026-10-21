@@ -1850,6 +1850,32 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--text-muted);
             font-size: 0.9em;
         }
+        /* The MAUI card's groups of settings (renderMauiCard()), under one form and one Save. */
+        .settings-group {
+            min-width: 0;
+            margin: 24px 0 0;
+            padding: 0;
+            border: none;
+        }
+        .settings-group:first-of-type {
+            margin-top: 0;
+        }
+        .settings-group legend {
+            padding: 0 0 6px;
+            width: 100%;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.85em;
+            font-weight: bold;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .settings-group input[type="number"] {
+            max-width: 10em;
+        }
+        .settings-group + button[type="submit"] {
+            margin-top: 24px;
+        }
         .current-path {
             font-family: monospace;
             word-break: break-all;
@@ -5829,6 +5855,17 @@ function shownCategories(config: Config): string {
     return [config.showAllGamesCategory, config.showBeatThisCategory, config.showHiscoresOnlyCategory].join();
 }
 
+/** One checkbox of the MAUI card: a short label, and what it does in smaller text below. */
+function renderSettingCheckbox(name: string, checked: boolean, label: string, detail?: string): string {
+    return `
+                <label class="checkbox-row">
+                    <input type="checkbox" name="${name}" ${checked ? 'checked' : ''}>
+                    <span>${label}${detail ? ` <span class="checkbox-row-detail">${detail}</span>` : ''}</span>
+                </label>`;
+}
+
+// One form and one Save for the whole card (POST /maui/save), its settings grouped by what they
+// act on: the screen, the list of games, the idle cabinet, the players, this back office.
 function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): string {
     const autoUiMode = getAutoUiMode() === 'lite' ? 'Lite' : 'Full';
     return `
@@ -5836,77 +5873,63 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
             <h2>mame-awesome-ui</h2>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/maui/save">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
-                    Show fullscreen (unchecked = windowed)
-                </label>
-                ${isAdvanced ? `
-                    <label class="checkbox-row">
-                        <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
-                        Open DevTools on startup (development mode)
-                    </label>
-                ` : ''}
-                <label class="checkbox-row">
-                    <input type="checkbox" name="showAllGamesCategory" ${config.showAllGamesCategory ? 'checked' : ''}>
-                    Show the "All Games" category
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="showBeatThisCategory" ${config.showBeatThisCategory ? 'checked' : ''}>
-                    Show the "Beat This!" category - the games players have a score on, the one scored on last first
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="showHiscoresOnlyCategory" ${config.showHiscoresOnlyCategory ? 'checked' : ''}>
-                    Show the "Hiscores Only" category - the games whose hiscores can be extracted
-                </label>
-                <label for="uiMode">Interface</label>
-                <select id="uiMode" name="uiMode">
-                    <option value="auto" ${config.uiMode === 'auto' ? 'selected' : ''}>Automatic (${autoUiMode} on this machine)</option>
-                    <option value="lite" ${config.uiMode === 'lite' ? 'selected' : ''}>Lite - no animations, blurs or shadows, for a Raspberry Pi 3 and the like</option>
-                    <option value="full" ${config.uiMode === 'full' ? 'selected' : ''}>Full</option>
-                </select>
-                ${isKioskLayout() ? `
-                    <label for="displayMode">Screen mode (applied the next time the cabinet starts; MAME follows it)</label>
-                    <select id="displayMode" name="displayMode">
-                        <option value="auto" ${config.displayMode === 'auto' ? 'selected' : ''}>Automatic (1080p at most, 720p with the Lite interface)</option>
-                        <option value="1080p" ${config.displayMode === '1080p' ? 'selected' : ''}>1080p</option>
-                        <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
-                        <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
+                <fieldset class="settings-group">
+                    <legend>Screen</legend>
+                    ${renderSettingCheckbox('fullscreen', config.fullscreen, 'Fullscreen', 'Unticked, the front opens in a window.')}
+                    <label for="uiMode">Interface</label>
+                    <select id="uiMode" name="uiMode">
+                        <option value="auto" ${config.uiMode === 'auto' ? 'selected' : ''}>Automatic (${autoUiMode} on this machine)</option>
+                        <option value="lite" ${config.uiMode === 'lite' ? 'selected' : ''}>Lite - no animations, blurs or shadows, for a Raspberry Pi 3 and the like</option>
+                        <option value="full" ${config.uiMode === 'full' ? 'selected' : ''}>Full</option>
                     </select>
-                ` : ''}
-                <label for="boIdleMinutes">Unload this back office from memory after this many minutes without a request (0 = keep it loaded) - it loads again at the next visit, which asks to sign in again</label>
-                <input type="number" id="boIdleMinutes" name="boIdleMinutes" min="0" max="1440" step="1" value="${config.boIdleMinutes}">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="frontIdleEnabled" ${config.frontIdleEnabled ? 'checked' : ''}>
-                    Idle curtain: when nobody plays, the cabinet shows the latest best scores of the fleet (its own while OFFLINE) and goes to the games they are about
-                </label>
-                <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
-                <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="frontIdleShowsGames" ${config.frontIdleShowsGames ? 'checked' : ''}>
-                    Behind the idle curtain, the list of games goes to the game each best score is about
-                </label>
-                <label for="frontSleepMinutes">Minutes of idle curtain before the cabinet goes to sleep - a black screen until the next key press (0 = never; counted from the last key press when the idle curtain is off)</label>
-                <input type="number" id="frontSleepMinutes" name="frontSleepMinutes" min="0" max="1440" step="1" value="${config.frontSleepMinutes}">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="frontSleepScreenOff" ${config.frontSleepScreenOff ? 'checked' : ''}>
-                    Asleep, also switch the screen off (DPMS, dedicated cabinet only) - untick it if the screen does not come back on, or keeps showing "no signal"
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
-                    ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="cabinetPlayersPublic" ${config.cabinetPlayersPublic ? 'checked' : ''}>
-                    Players registered on the cabinet are public: their scores go to the shared leaderboards (unticked, they start private and the Players tab makes them public)
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
-                    Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="thumbsDownRemovesFavorite" ${config.thumbsDownRemovesFavorite ? 'checked' : ''}>
-                    A thumbs down removes the game from the favorites (restorable from the Games tab's removed favorites)
-                </label>
+                    ${isKioskLayout() ? `
+                        <label for="displayMode">Screen mode <span class="checkbox-row-detail">Applied the next time the cabinet starts; MAME follows it.</span></label>
+                        <select id="displayMode" name="displayMode">
+                            <option value="auto" ${config.displayMode === 'auto' ? 'selected' : ''}>Automatic (1080p at most, 720p with the Lite interface)</option>
+                            <option value="1080p" ${config.displayMode === '1080p' ? 'selected' : ''}>1080p</option>
+                            <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
+                            <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
+                        </select>
+                    ` : ''}
+                    ${renderSettingCheckbox('onlineBadgeDotOnly', config.onlineBadgeDotOnly, 'ONLINE badge: the dot alone',
+                        'In the top right corner of the cabinet, without ONLINE / OFFLINE.')}
+                    ${isAdvanced ? renderSettingCheckbox('openDevTools', config.openDevTools, 'Open DevTools on startup', 'Development mode.') : ''}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>List of games</legend>
+                    ${renderSettingCheckbox('showAllGamesCategory', config.showAllGamesCategory, 'Show the "All Games" category')}
+                    ${renderSettingCheckbox('showBeatThisCategory', config.showBeatThisCategory, 'Show the "Beat This!" category',
+                        'The games players have a score on, the one scored on last first.')}
+                    ${renderSettingCheckbox('showHiscoresOnlyCategory', config.showHiscoresOnlyCategory, 'Show the "Hiscores Only" category',
+                        'The games whose hiscores can be extracted.')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>When nobody plays</legend>
+                    ${renderSettingCheckbox('frontIdleEnabled', config.frontIdleEnabled, 'Idle curtain',
+                        'The cabinet shows the latest best scores of the fleet (its own while OFFLINE).')}
+                    <label for="frontIdleMinutes">Minutes before the idle curtain comes down <span class="checkbox-row-detail">Without a key press on the list of games.</span></label>
+                    <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
+                    ${renderSettingCheckbox('frontIdleShowsGames', config.frontIdleShowsGames, 'Go to the games of the best scores',
+                        'Behind the idle curtain, the list of games goes to the game each best score is about.')}
+                    <label for="frontSleepMinutes">Minutes before the cabinet goes to sleep <span class="checkbox-row-detail">A black screen until the next key press, counted from the idle curtain, or from the last key press when the curtain is off. 0 = never.</span></label>
+                    <input type="number" id="frontSleepMinutes" name="frontSleepMinutes" min="0" max="1440" step="1" value="${config.frontSleepMinutes}">
+                    ${renderSettingCheckbox('frontSleepScreenOff', config.frontSleepScreenOff, 'Asleep, also switch the screen off',
+                        'DPMS, dedicated cabinet only. Untick it if the screen does not come back on, or keeps showing "no signal".')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>Players and votes</legend>
+                    ${renderSettingCheckbox('cabinetPlayersPublic', config.cabinetPlayersPublic, 'Players registered on the cabinet are public',
+                        'Their scores go to the shared leaderboards. Unticked, they start private and the Players tab makes them public.')}
+                    ${renderSettingCheckbox('voteEnabled', config.voteEnabled, 'Ask for a vote when a game is quit',
+                        'Thumbs up / neutral / thumbs down. A neutral vote is asked again next time.')}
+                    ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the favorites',
+                        'Restorable from the Games tab\'s removed favorites.')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>Back office</legend>
+                    <label for="boIdleMinutes">Minutes before this back office is unloaded from memory <span class="checkbox-row-detail">Without a request. It loads again at the next visit, which asks to sign in again. 0 = keep it loaded.</span></label>
+                    <input type="number" id="boIdleMinutes" name="boIdleMinutes" min="0" max="1440" step="1" value="${config.boIdleMinutes}">
+                </fieldset>
                 <button type="submit">Save</button>
             </form>
         </section>
