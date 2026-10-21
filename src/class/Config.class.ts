@@ -111,6 +111,10 @@ export default class Config {
     // dot, or the dot alone, more discreet.
     public onlineBadgeDotOnly: boolean = false;
 
+    // A player registering on the cabinet itself starts public, their scores in the shared
+    // leaderboards (userRegistration.vue). Off by default: they start private, the BO makes them public.
+    public cabinetPlayersPublic: boolean = false;
+
     // The setup guide was told the cabinet stays OFFLINE (SetupSteps.ts): its ONLINE step is done,
     // and the packs are left to install by hand.
     public setupOffline: boolean = false;
@@ -169,6 +173,7 @@ export default class Config {
                 : 30;
             this.frontSleepScreenOff = configFile.frontSleepScreenOff !== false;
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
+            this.cabinetPlayersPublic = configFile.cabinetPlayersPublic === true;
             this.setupOffline = configFile.setupOffline === true;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
@@ -222,6 +227,7 @@ export default class Config {
                 frontSleepMinutes: this.frontSleepMinutes,
                 frontSleepScreenOff: this.frontSleepScreenOff,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
+                cabinetPlayersPublic: this.cabinetPlayersPublic,
                 setupOffline: this.setupOffline,
             }),
             {mode: FILE_MODE},

@@ -52,7 +52,7 @@ export default class UserService {
      * player found by findOrCreate keeps whatever status the BO gave them.
      */
     public async registerUser(
-        pseudo3: string, online?: OnlinePlayer,
+        pseudo3: string, online?: OnlinePlayer, isPublic: boolean = false,
     ): Promise<{user: User; created: boolean; reserved: boolean}> {
         // A deleted player's pseudo stays reserved (see UserReservation.ts): refused here rather
         // than failing on the unique constraint, and never cached in users3 - HiscoreService
@@ -69,7 +69,8 @@ export default class UserService {
             this.users3[deleted.pseudo_3] = deleted;
             return {user: deleted, created: false, reserved: false};
         }
-        const remote = online ? onlineFields(online) : {};
+        // Without MAUI-API, the visibility is kept for the day this player is linked to it (BO).
+        const remote = online ? onlineFields(online) : {is_public: isPublic};
         const [user, created] = await User.findOrCreate({where: {pseudo_3: pseudo3}, defaults: {active: true, ...remote}});
         if (online && !created) {
             await user.update(remote);

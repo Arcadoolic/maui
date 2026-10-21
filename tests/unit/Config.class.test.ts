@@ -256,6 +256,22 @@ describe('Config ONLINE badge', () => {
     });
 });
 
+describe('Config cabinet players', () => {
+    it('registers players private unless public is asked for', () => {
+        expect(new Config().cabinetPlayersPublic).toBe(false);
+        for (const [written, expected] of [[true, true], [false, false], [undefined, false], ['yes', false]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.cabinetPlayersPublic = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.cabinetPlayersPublic).toBe(expected);
+        }
+    });
+});
+
 describe('Config front idle', () => {
     it('goes to the announced games unless switched off', () => {
         expect(new Config().frontIdleShowsGames).toBe(true);
@@ -364,6 +380,7 @@ describe('Config.save', () => {
         expect(Object.keys(raw).sort()).toEqual([
             'bezelAspect',
             'boIdleMinutes',
+            'cabinetPlayersPublic',
             'displayMode',
             'frontIdleEnabled',
             'frontIdleMinutes',

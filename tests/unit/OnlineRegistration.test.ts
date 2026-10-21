@@ -11,13 +11,20 @@ function client(overrides: Partial<Record<'createPlayer' | 'linkPlayer', unknown
 }
 
 describe('registerOnline', () => {
-    it('creates a public player, saves it and returns the PIN to show', async () => {
+    it('creates a private player, saves it and returns the PIN to show', async () => {
         const createPlayer = vi.fn(async () => ({kind: 'ok', value: {player, pin: '0042'}}));
         const save = vi.fn(async () => undefined);
 
         expect(await registerOnline(client({createPlayer}), 'ACE', save)).toEqual({kind: 'created', pin: '0042'});
-        expect(createPlayer).toHaveBeenCalledWith('ACE', true);
+        expect(createPlayer).toHaveBeenCalledWith('ACE', false);
         expect(save).toHaveBeenCalledWith(player);
+    });
+
+    it('creates a public player when asked to', async () => {
+        const createPlayer = vi.fn(async () => ({kind: 'ok', value: {player, pin: '0042'}}));
+
+        await registerOnline(client({createPlayer}), 'ACE', vi.fn(async () => undefined), true);
+        expect(createPlayer).toHaveBeenCalledWith('ACE', true);
     });
 
     it('asks for the PIN when the initials belong to another player', async () => {

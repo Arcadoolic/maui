@@ -73,7 +73,7 @@
     import {useControllable} from '@/composables/useControllable';
     import {MAUI_KEYS} from '@/class/MauiControls';
     import {controlKey} from '@/class/MauiControlsRuntime';
-    import {getUserService} from '@/services';
+    import {getConfiguration, getUserService} from '@/services';
     import {createOnlineClient} from '@/class/OnlineClient';
     import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
     import {newPseudo3Error} from '@/class/Pseudo3';
@@ -177,8 +177,11 @@
             return;
         }
         returning.value = false;
+        // Set on the BO's MAUI card, which may have changed it since the front loaded.
+        const config = getConfiguration();
+        config.load();
         if (!client) {
-            const {created} = await userService.registerUser(usernameString.value);
+            const {created} = await userService.registerUser(usernameString.value, undefined, config.cabinetPlayersPublic);
             if (created) {
                 step.value = 'success';
             } else {
@@ -186,7 +189,7 @@
             }
             return;
         }
-        apply(await registerOnline(client, usernameString.value, saveOnlineUser));
+        apply(await registerOnline(client, usernameString.value, saveOnlineUser, config.cabinetPlayersPublic));
     }
 
     async function submitPin() {

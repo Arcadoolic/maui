@@ -56,6 +56,20 @@ describe('UserService.registerUser', () => {
         expect(options.defaults?.active).toBe(true);
     });
 
+    it('creates a local-only player private, unless the cabinet makes its players public', async () => {
+        let options: {defaults?: {is_public?: boolean}} = {};
+        (User as unknown as {findOrCreate: (opts: typeof options) => Promise<unknown>}).findOrCreate = (opts) => {
+            options = opts;
+            return Promise.resolve([{pseudo_3: 'PUB'}, true]);
+        };
+
+        await service.registerUser('PUB');
+        expect(options.defaults?.is_public).toBe(false);
+
+        await service.registerUser('PUB', undefined, true);
+        expect(options.defaults?.is_public).toBe(true);
+    });
+
     it('refuses a pseudo held by a deleted player, without creating or caching anything', async () => {
         const deleted = {pseudo_3: 'DEL', deletionDate: new Date()};
         stubFindOne(deleted);
