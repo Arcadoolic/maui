@@ -174,7 +174,7 @@ seule et l'image à l'écran. C'est la marge que la résolution peut rendre.
 ### Ce qui en découle
 
 - Mode **Lite** du front (`src/class/UiMode.ts`, réglage « Interface » de
-  l'onglet MAUI du BO, automatique sous 2 Gio de RAM ou en rendu logiciel) :
+  l'onglet MAUI du BO, automatique à 1,5 Gio de RAM ou moins ou en rendu logiciel) :
   même écran, sans animation infinie, transitions, filtres ni ombres floues,
   fond réduit à 1280 px, fenêtre de 13 lignes au lieu de 41 dans la liste.
 - **Mode d'écran** (`src/class/DisplayMode.ts`, réglage « Screen mode » du même
@@ -248,6 +248,7 @@ au-dessus de la vitesse en jeu) : aucune erreur, pas de bridage thermique
   vérifié) : une liste par système ne les aurait pas trouvés.
 
 Seuls les jeux à 120 % ou plus sont proposés à une borne de cette classe
-(2 Gio de mémoire ou moins, `src/class/GameSpeed.ts`). Les mesures sont dans
+(1,5 Gio de mémoire ou moins, `src/class/GameSpeed.ts` : un Pi 3 en annonce 905 Mio, un
+Pi 4 de 2 Go 1,8 Gio et n'en fait pas partie). Les mesures sont dans
 `scripts/pi3-speeds.json` de maui-repository, qui les écrit dans le manifeste de
 chaque pack (`pi3Speeds`).
