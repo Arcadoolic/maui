@@ -88,6 +88,7 @@ import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
+import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
@@ -6956,9 +6957,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             })();</script>
             <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
             roms and artwork stay on disk); it moves to the removed favorites below, from which it
-            can be restored. The change shows up on the cabinet the next time MAUI
-            starts. Do not do it while a MAME game is open: MAME rewrites this file when it
-            closes.</p>
+            can be restored. The game leaves the cabinet's list at once, or as soon as the game
+            being played on it is quit, and its vote is no longer asked.</p>
             ${ASSET_PREVIEW_SCRIPT}
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
             present (hover it to preview the image), red (struck through) when it is missing.${viewer === 'advanced'
@@ -8382,6 +8382,7 @@ export function createBoApp(
     core: BoCore, databaseReady: Promise<void>, reloadFront: () => void, onReset: () => void,
     showGameOnFront: FrontGameShower,
     frontControls: FrontControls,
+    favoritesChanged: FrontFavoritesNotifier,
 ): BoApp {
     const {online, scoreStore} = core;
     onlineSession = online;
@@ -8849,8 +8850,9 @@ export function createBoApp(
             return;
         }
 
+        favoritesChanged();
         res.send(await renderFavoritesTab(req, {
-            notice: `"${romName}" removed from the favorites (it can be restored from the removed favorites below).`,
+            notice: `"${romName}" removed from the favorites and from the cabinet (it can be restored from the removed favorites below).`,
         }));
     });
 
@@ -8900,6 +8902,7 @@ export function createBoApp(
             }
         }
 
+        favoritesChanged();
         res.send(await renderFavoritesTab(req, {
             notice: updated === null
                 ? `"${romName}" was already in the favorites.`
@@ -8940,8 +8943,9 @@ export function createBoApp(
                 flash.warning = 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini. '
                     + 'The game stays in the favorites for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
-                flash.notice += ' Removed from the favorites (restorable from the removed favorites, below the favorites list).'
-                    + ' The change shows up on the cabinet the next time MAUI starts.';
+                favoritesChanged();
+                flash.notice += ' Removed from the favorites and from the cabinet (restorable from the removed favorites,'
+                    + ' below the favorites list).';
             } else {
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
