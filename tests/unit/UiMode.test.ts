@@ -23,10 +23,11 @@ describe('resolveUiMode', () => {
         expect(resolveUiMode('lite', {totalMemBytes: 32 * GIB, gpuCompositing: 'enabled'})).toBe('lite');
     });
 
-    it('auto: lite at or under 2 GiB of memory', () => {
-        // The Raspberry Pi 3 the mode was made for reports 905 MiB.
+    it('auto: lite at or under 1.5 GiB of memory', () => {
+        // The Raspberry Pi 3 the mode was made for reports 905 MiB, a 2 GB Raspberry Pi 4 1.8 GiB.
         expect(resolveUiMode('auto', {totalMemBytes: 905 * 1024 ** 2, gpuCompositing: 'enabled'})).toBe('lite');
-        expect(resolveUiMode('auto', {totalMemBytes: 2 * GIB, gpuCompositing: 'enabled'})).toBe('lite');
+        expect(resolveUiMode('auto', {totalMemBytes: 1.5 * GIB, gpuCompositing: 'enabled'})).toBe('lite');
+        expect(resolveUiMode('auto', {totalMemBytes: 1888912 * 1024, gpuCompositing: 'enabled'})).toBe('full');
         expect(resolveUiMode('auto', {totalMemBytes: 4 * GIB, gpuCompositing: 'enabled'})).toBe('full');
     });
 

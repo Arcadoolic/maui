@@ -412,7 +412,9 @@ is shown once, never stored on the cabinet; MAUI-API admins can read it
 back. Only `pseudo_3` and the visibility leave the cabinet: `realname`,
 `email` stay local, and `pseudo_2` is a leftover nothing reads. Players are
 private by default (scores kept out of the shared leaderboards); the BO
-makes them public. Local columns (`user.remote_id`, `is_public`,
+makes them public. The BO's MAUI card can have the players registered on
+the cabinet itself start public (`Config.cabinetPlayersPublic`, off by
+default; 2026-10-21, after a day where they all started public). Local columns (`user.remote_id`, `is_public`,
 `online_status`, migration `20261002090000`) are kept in line by
 `src/class/PlayerSync.ts`, run by `OnlineSession` after the startup report
 and every 10 heartbeats. The sync never touches `active`, the BO's own

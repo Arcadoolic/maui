@@ -1,5 +1,5 @@
 <template>
-    <div class="home" :class="{empty: noGames}">
+    <div class="home" :class="{empty: noGames, asleep}">
         <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -63,7 +63,7 @@
             <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
-        <message-band v-if="idle && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
+        <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
     </div>
 
 </template>
@@ -107,9 +107,12 @@ import {
 } from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
 import {IdleWatch} from '@/class/IdleWatch';
+import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
 import {createOnlineClient} from '@/class/OnlineClient';
@@ -191,11 +194,30 @@ const idle = ref(false);
 const idleMessages = ref<BandMessage[]>([]);
 // Switched off in the BO: a delay of 0, the cabinet never turns idle.
 const idleDelayMs = getConfiguration().frontIdleEnabled ? getConfiguration().frontIdleMinutes * 60_000 : 0;
+// Left alone longer, the cabinet falls asleep: a black screen, nothing left moving, and the screen
+// itself off on a dedicated cabinet (ScreenPower.ts) unless the BO says not to.
+const asleep = ref(false);
+const screenOff = getConfiguration().frontSleepScreenOff && canSwitchScreenOff(remote.app.isPackaged);
 const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     idle.value = isIdle;
     if (isIdle) {
         void loadIdleMessages();
     }
+}, {
+    delayMs: getConfiguration().frontSleepMinutes * 60_000,
+    onChange: (isAsleep) => {
+        asleep.value = isAsleep;
+        if (isAsleep) {
+            stopRoll();
+        }
+        if (screenOff) {
+            // A keyboard key wakes the screen by itself, a gamepad button only through this.
+            setScreenPower(!isAsleep).catch((err: unknown) => {
+                Log.warn('[Home] Screen not switched ' + (isAsleep ? 'off' : 'on') + ': '
+                    + (err instanceof Error ? err.message : String(err)));
+            });
+        }
+    },
 });
 
 function readAvailableUpdate(): string | null {
@@ -233,6 +255,9 @@ const heldKeys = new Set<string>();
 // A game is being launched or runs: the front takes no input, keyboard or controller, until it
 // is quit (see lockFront()).
 let gameRunning = false;
+// The BO changed the favorites while a game was running: synced once it is quit (see
+// syncFavorites()).
+let favoritesChangedDuringGame = false;
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -563,6 +588,9 @@ function startGame() {
                 const pending = endScoreCapture(game.romName);
                 hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
+                    if (favoritesChangedDuringGame) {
+                        await syncFavorites();
+                    }
                     await onScoresChanged();
                     await askWhoPlayed(await pending);
                     return askVote(game);
@@ -585,6 +613,10 @@ function startGame() {
  * or the BO turned the prompt off.
  */
 async function askVote(game: Game) {
+    // Removed from the BO while it was played: it has left the cabinet, its vote with it.
+    if (isRemovedFavorite(game.romName)) {
+        return;
+    }
     // Both the setting and the vote itself can have been changed from the BO since this game was
     // loaded: read them again.
     const config = getConfiguration();
@@ -609,6 +641,39 @@ async function onVote(vote: Vote) {
         }
     } catch (err) {
         Log.error('[Home] Error on game ' + game.id_game + ' vote.');
+        Log.error(err);
+    }
+}
+
+function isRemovedFavorite(romName: string): boolean {
+    return readRemovedFavorites().some(removed => removed.romName === romName);
+}
+
+/**
+ * The BO took a game out of the favorites or put one back (FrontFavoritesBridge.ts): the games
+ * follow favorites.ini and the carousel is built again. Waits for the game being played to be
+ * quit - MAME writes favorites.ini back on exit, removed games included, hence
+ * removeReturnedFavorites() as on a start (Init.vue). A vote asked for a game just removed is
+ * dropped.
+ */
+async function syncFavorites() {
+    if (gameRunning) {
+        favoritesChangedDuringGame = true;
+        return;
+    }
+    favoritesChangedDuringGame = false;
+    if (voteGame.value && isRemovedFavorite(voteGame.value.romName)) {
+        voteGame.value = null;
+    }
+    try {
+        const mameService = getMameService();
+        if (mameService.favoritesPath) {
+            removeReturnedFavorites(mameService.favoritesPath);
+        }
+        await gameService.saveGamesFromRomNames(mameService.getRomListFromFavorites());
+        await reloadCarousel();
+    } catch (err) {
+        Log.error('[Home] Error on favorites sync.');
         Log.error(err);
     }
 }
@@ -805,10 +870,18 @@ function cancelBackOffice() {
 const {onKeydown, onKeyup} = useControllable();
 
 let stopLeaderboardsListener: (() => void) | undefined;
-const onShowGame = (_event: unknown, romName: string) => void showGame(romName);
+const onShowGame = (_event: unknown, romName: string) => {
+    // Asked from the BO: a sleeping cabinet wakes up to show it.
+    if (asleep.value) {
+        idleWatch.activity();
+    }
+    void showGame(romName);
+};
+const onFavoritesChanged = () => void syncFavorites();
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
+    ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
@@ -943,6 +1016,7 @@ if (!getIsInit()) {
         idleWatch.start();
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
+        ipcRenderer.on(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();
@@ -961,6 +1035,15 @@ if (!getIsInit()) {
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
+    }
+
+    /* Asleep: nothing shown, so nothing left to animate or to paint. */
+    .home.asleep {
+        background: #000000;
+    }
+
+    .home.asleep > * {
+        display: none !important;
     }
 
     .gameTitle, .categoryTitle {

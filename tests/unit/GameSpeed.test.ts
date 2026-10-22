@@ -6,9 +6,11 @@ const GIB = 1024 ** 3;
 const games = (...romNames: string[]) => romNames.map(romName => ({romName}) as StartingPackGameEntry);
 
 describe('isWeakHardware', () => {
-    it('takes a machine with 2 GiB of memory or less for a Raspberry Pi 3', () => {
+    it('takes a machine with 1.5 GiB of memory or less for a Raspberry Pi 3', () => {
         expect(isWeakHardware(905 * 1024 ** 2)).toBe(true);
-        expect(isWeakHardware(2 * GIB)).toBe(true);
+        expect(isWeakHardware(1.5 * GIB)).toBe(true);
+        // A 2 GB Raspberry Pi 4 (MemTotal 1888912 kB).
+        expect(isWeakHardware(1888912 * 1024)).toBe(false);
         expect(isWeakHardware(4 * GIB)).toBe(false);
     });
 });

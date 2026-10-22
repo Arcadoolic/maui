@@ -256,6 +256,22 @@ describe('Config ONLINE badge', () => {
     });
 });
 
+describe('Config cabinet players', () => {
+    it('registers players private unless public is asked for', () => {
+        expect(new Config().cabinetPlayersPublic).toBe(false);
+        for (const [written, expected] of [[true, true], [false, false], [undefined, false], ['yes', false]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.cabinetPlayersPublic = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.cabinetPlayersPublic).toBe(expected);
+        }
+    });
+});
+
 describe('Config front idle', () => {
     it('goes to the announced games unless switched off', () => {
         expect(new Config().frontIdleShowsGames).toBe(true);
@@ -298,6 +314,34 @@ describe('Config front idle', () => {
             expect(config.frontIdleMinutes).toBe(expected);
         }
     });
+
+    it('falls asleep after 30 minutes by default, 0 for never, a whole number of minutes', () => {
+        expect(new Config().frontSleepMinutes).toBe(30);
+        for (const [written, expected] of [[0, 0], [45, 45], [-1, 30], [1.5, 30], ['5', 30], [undefined, 30]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontSleepMinutes = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontSleepMinutes).toBe(expected);
+        }
+    });
+
+    it('switches the screen off asleep unless told not to', () => {
+        expect(new Config().frontSleepScreenOff).toBe(true);
+        for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontSleepScreenOff = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontSleepScreenOff).toBe(expected);
+        }
+    });
 });
 
 describe('Config.save', () => {
@@ -336,10 +380,13 @@ describe('Config.save', () => {
         expect(Object.keys(raw).sort()).toEqual([
             'bezelAspect',
             'boIdleMinutes',
+            'cabinetPlayersPublic',
             'displayMode',
             'frontIdleEnabled',
             'frontIdleMinutes',
             'frontIdleShowsGames',
+            'frontSleepMinutes',
+            'frontSleepScreenOff',
             'fullscreen',
             'mameBinaryName',
             'mamePath',

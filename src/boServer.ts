@@ -88,6 +88,7 @@ import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
+import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
@@ -101,6 +102,7 @@ import {createOnlineClient} from '@/class/OnlineClient';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
 import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
+    renderPinReveal, type OnlineBoMessage,
 } from '@/class/OnlinePlayersBo';
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
@@ -1849,6 +1851,32 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--text-muted);
             font-size: 0.9em;
         }
+        /* The MAUI card's groups of settings (renderMauiCard()), under one form and one Save. */
+        .settings-group {
+            min-width: 0;
+            margin: 24px 0 0;
+            padding: 0;
+            border: none;
+        }
+        .settings-group:first-of-type {
+            margin-top: 0;
+        }
+        .settings-group legend {
+            padding: 0 0 6px;
+            width: 100%;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.85em;
+            font-weight: bold;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .settings-group input[type="number"] {
+            max-width: 10em;
+        }
+        .settings-group + button[type="submit"] {
+            margin-top: 24px;
+        }
         .current-path {
             font-family: monospace;
             word-break: break-all;
@@ -1981,6 +2009,59 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         table.favorites-table tr.row-deleted td:last-child {
             opacity: 1;
+        }
+        /* The player just created or given a new PIN (see renderUsersListCard()): an accent
+           band that fades to a lasting tint, and their PIN under it. */
+        table.favorites-table tr.row-highlight td {
+            background-color: rgba(138, 180, 248, 0.16);
+            animation: row-highlight-flash 2.4s ease-out;
+        }
+        table.favorites-table tr.row-highlight td:first-child {
+            box-shadow: inset 4px 0 0 var(--accent);
+        }
+        @keyframes row-highlight-flash {
+            0%, 30% { background-color: rgba(138, 180, 248, 0.45); }
+            100% { background-color: rgba(138, 180, 248, 0.16); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            table.favorites-table tr.row-highlight td { animation: none; }
+        }
+        table.favorites-table tr.row-pin td {
+            background-color: rgba(138, 180, 248, 0.08);
+            box-shadow: inset 4px 0 0 var(--accent);
+        }
+        .pin-reveal {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: var(--space-2) var(--space-3);
+            padding: var(--space-2) 0;
+        }
+        .pin-reveal-label {
+            font-size: 1.1em;
+        }
+        .pin-digits {
+            display: inline-flex;
+            gap: var(--space-2);
+        }
+        .pin-digit {
+            display: inline-block;
+            min-width: 1.4em;
+            padding: 6px 4px;
+            border: 2px solid var(--warn);
+            border-radius: var(--radius-md);
+            background: var(--surface-inset);
+            color: var(--warn);
+            font-family: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+            font-size: 2.2em;
+            font-weight: bold;
+            line-height: 1;
+            text-align: center;
+        }
+        .pin-reveal-help {
+            flex-basis: 100%;
+            margin: 0;
+            color: var(--text-muted);
         }
         .row-actions {
             display: inline-flex;
@@ -4357,7 +4438,7 @@ function renderPendingRelaunchNotice(): string {
     // the change is simply there next time it's played.
     return isMameConfigSessionAlive()
         ? `<p class="warn flash"><strong>Saved, not active yet:</strong> the running MAME keeps the
-            controls it started with. Click <strong>Relaunch MAME</strong> at the top of the page to
+            controls it started with. Click <strong>Apply controls</strong> at the top of the page to
             try the new ones.</p>`
         : `<p class="warn flash"><strong>Saved, not active yet:</strong> the game being played keeps
             the controls it started with - the change applies the next time it's launched.</p>`;
@@ -5316,14 +5397,14 @@ function renderForm(
     // data-mame-session lets the page notice MAME being closed from its own window (see
     // renderPageTail()). A MAME the BO didn't start (a game launched from MAUI...) counts too:
     // closing it is what the button then offers.
-    // Once a capture/reset is saved during the session, "Relaunch MAME" comes first and stands
+    // Once a capture/reset is saved during the session, "Apply controls" comes first and stands
     // out: MAME only picks the change up at its next start (see hasPendingCfgEdits()).
     const mameRunning = isAnyMameRunning(config);
     const relaunchButton = isMameConfigSessionAlive() && hasPendingCfgEdits() ? `
         <form method="post" action="/input-probe/mame/restart">
             <button type="submit" class="launch-button button-attention">
                 <img src="/mame-logo.svg" alt="" class="launch-logo">
-                Relaunch MAME
+                Apply controls
             </button>
         </form>
     ` : '';
@@ -5775,6 +5856,17 @@ function shownCategories(config: Config): string {
     return [config.showAllGamesCategory, config.showBeatThisCategory, config.showHiscoresOnlyCategory].join();
 }
 
+/** One checkbox of the MAUI card: a short label, and what it does in smaller text below. */
+function renderSettingCheckbox(name: string, checked: boolean, label: string, detail?: string): string {
+    return `
+                <label class="checkbox-row">
+                    <input type="checkbox" name="${name}" ${checked ? 'checked' : ''}>
+                    <span>${label}${detail ? ` <span class="checkbox-row-detail">${detail}</span>` : ''}</span>
+                </label>`;
+}
+
+// One form and one Save for the whole card (POST /maui/save), its settings grouped by what they
+// act on: the screen, the list of games, the idle cabinet, the players, this back office.
 function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): string {
     const autoUiMode = getAutoUiMode() === 'lite' ? 'Lite' : 'Full';
     return `
@@ -5782,67 +5874,63 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
             <h2>mame-awesome-ui</h2>
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/maui/save">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="fullscreen" ${config.fullscreen ? 'checked' : ''}>
-                    Show fullscreen (unchecked = windowed)
-                </label>
-                ${isAdvanced ? `
-                    <label class="checkbox-row">
-                        <input type="checkbox" name="openDevTools" ${config.openDevTools ? 'checked' : ''}>
-                        Open DevTools on startup (development mode)
-                    </label>
-                ` : ''}
-                <label class="checkbox-row">
-                    <input type="checkbox" name="showAllGamesCategory" ${config.showAllGamesCategory ? 'checked' : ''}>
-                    Show the "All Games" category
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="showBeatThisCategory" ${config.showBeatThisCategory ? 'checked' : ''}>
-                    Show the "Beat This!" category - the games players have a score on, the one scored on last first
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="showHiscoresOnlyCategory" ${config.showHiscoresOnlyCategory ? 'checked' : ''}>
-                    Show the "Hiscores Only" category - the games whose hiscores can be extracted
-                </label>
-                <label for="uiMode">Interface</label>
-                <select id="uiMode" name="uiMode">
-                    <option value="auto" ${config.uiMode === 'auto' ? 'selected' : ''}>Automatic (${autoUiMode} on this machine)</option>
-                    <option value="lite" ${config.uiMode === 'lite' ? 'selected' : ''}>Lite - no animations, blurs or shadows, for a Raspberry Pi 3 and the like</option>
-                    <option value="full" ${config.uiMode === 'full' ? 'selected' : ''}>Full</option>
-                </select>
-                ${isKioskLayout() ? `
-                    <label for="displayMode">Screen mode (applied the next time the cabinet starts; MAME follows it)</label>
-                    <select id="displayMode" name="displayMode">
-                        <option value="auto" ${config.displayMode === 'auto' ? 'selected' : ''}>Automatic (1080p at most, 720p with the Lite interface)</option>
-                        <option value="1080p" ${config.displayMode === '1080p' ? 'selected' : ''}>1080p</option>
-                        <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
-                        <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
+                <fieldset class="settings-group">
+                    <legend>Screen</legend>
+                    ${renderSettingCheckbox('fullscreen', config.fullscreen, 'Fullscreen', 'Unticked, the front opens in a window.')}
+                    <label for="uiMode">Interface</label>
+                    <select id="uiMode" name="uiMode">
+                        <option value="auto" ${config.uiMode === 'auto' ? 'selected' : ''}>Automatic (${autoUiMode} on this machine)</option>
+                        <option value="lite" ${config.uiMode === 'lite' ? 'selected' : ''}>Lite - no animations, blurs or shadows, for a Raspberry Pi 3 and the like</option>
+                        <option value="full" ${config.uiMode === 'full' ? 'selected' : ''}>Full</option>
                     </select>
-                ` : ''}
-                <label for="boIdleMinutes">Unload this back office from memory after this many minutes without a request (0 = keep it loaded) - it loads again at the next visit, which asks to sign in again</label>
-                <input type="number" id="boIdleMinutes" name="boIdleMinutes" min="0" max="1440" step="1" value="${config.boIdleMinutes}">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="frontIdleEnabled" ${config.frontIdleEnabled ? 'checked' : ''}>
-                    Idle curtain: when nobody plays, the cabinet shows the latest best scores of the fleet (its own while OFFLINE) and goes to the games they are about
-                </label>
-                <label for="frontIdleMinutes">Minutes without a key press on the list of games before the idle curtain comes down</label>
-                <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
-                <label class="checkbox-row">
-                    <input type="checkbox" name="frontIdleShowsGames" ${config.frontIdleShowsGames ? 'checked' : ''}>
-                    Behind the idle curtain, the list of games goes to the game each best score is about
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="onlineBadgeDotOnly" ${config.onlineBadgeDotOnly ? 'checked' : ''}>
-                    ONLINE badge in the top right corner of the cabinet: show only its dot, without ONLINE / OFFLINE
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="voteEnabled" ${config.voteEnabled ? 'checked' : ''}>
-                    Ask for a vote (thumbs up / neutral / thumbs down) when a game is quit - a neutral vote is asked again next time
-                </label>
-                <label class="checkbox-row">
-                    <input type="checkbox" name="thumbsDownRemovesFavorite" ${config.thumbsDownRemovesFavorite ? 'checked' : ''}>
-                    A thumbs down removes the game from the favorites (restorable from the Games tab's removed favorites)
-                </label>
+                    ${isKioskLayout() ? `
+                        <label for="displayMode">Screen mode <span class="checkbox-row-detail">Applied the next time the cabinet starts; MAME follows it.</span></label>
+                        <select id="displayMode" name="displayMode">
+                            <option value="auto" ${config.displayMode === 'auto' ? 'selected' : ''}>Automatic (1080p at most, 720p with the Lite interface)</option>
+                            <option value="1080p" ${config.displayMode === '1080p' ? 'selected' : ''}>1080p</option>
+                            <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
+                            <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
+                        </select>
+                    ` : ''}
+                    ${renderSettingCheckbox('onlineBadgeDotOnly', config.onlineBadgeDotOnly, 'ONLINE badge: the dot alone',
+                        'In the top right corner of the cabinet, without ONLINE / OFFLINE.')}
+                    ${isAdvanced ? renderSettingCheckbox('openDevTools', config.openDevTools, 'Open DevTools on startup', 'Development mode.') : ''}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>List of games</legend>
+                    ${renderSettingCheckbox('showAllGamesCategory', config.showAllGamesCategory, 'Show the "All Games" category')}
+                    ${renderSettingCheckbox('showBeatThisCategory', config.showBeatThisCategory, 'Show the "Beat This!" category',
+                        'The games players have a score on, the one scored on last first.')}
+                    ${renderSettingCheckbox('showHiscoresOnlyCategory', config.showHiscoresOnlyCategory, 'Show the "Hiscores Only" category',
+                        'The games whose hiscores can be extracted.')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>When nobody plays</legend>
+                    ${renderSettingCheckbox('frontIdleEnabled', config.frontIdleEnabled, 'Idle curtain',
+                        'The cabinet shows the latest best scores of the fleet (its own while OFFLINE).')}
+                    <label for="frontIdleMinutes">Minutes before the idle curtain comes down <span class="checkbox-row-detail">Without a key press on the list of games.</span></label>
+                    <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
+                    ${renderSettingCheckbox('frontIdleShowsGames', config.frontIdleShowsGames, 'Go to the games of the best scores',
+                        'Behind the idle curtain, the list of games goes to the game each best score is about.')}
+                    <label for="frontSleepMinutes">Minutes before the cabinet goes to sleep <span class="checkbox-row-detail">A black screen until the next key press, counted from the idle curtain, or from the last key press when the curtain is off. 0 = never.</span></label>
+                    <input type="number" id="frontSleepMinutes" name="frontSleepMinutes" min="0" max="1440" step="1" value="${config.frontSleepMinutes}">
+                    ${renderSettingCheckbox('frontSleepScreenOff', config.frontSleepScreenOff, 'Asleep, also switch the screen off',
+                        'DPMS, dedicated cabinet only. Untick it if the screen does not come back on, or keeps showing "no signal".')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>Players and votes</legend>
+                    ${renderSettingCheckbox('cabinetPlayersPublic', config.cabinetPlayersPublic, 'Players registered on the cabinet are public',
+                        'Their scores go to the shared leaderboards. Unticked, they start private and the Players tab makes them public.')}
+                    ${renderSettingCheckbox('voteEnabled', config.voteEnabled, 'Ask for a vote when a game is quit',
+                        'Thumbs up / neutral / thumbs down. A neutral vote is asked again next time.')}
+                    ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the favorites',
+                        'Restorable from the Games tab\'s removed favorites.')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>Back office</legend>
+                    <label for="boIdleMinutes">Minutes before this back office is unloaded from memory <span class="checkbox-row-detail">Without a request. It loads again at the next visit, which asks to sign in again. 0 = keep it loaded.</span></label>
+                    <input type="number" id="boIdleMinutes" name="boIdleMinutes" min="0" max="1440" step="1" value="${config.boIdleMinutes}">
+                </fieldset>
                 <button type="submit">Save</button>
             </form>
         </section>
@@ -6869,9 +6957,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             })();</script>
             <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
             roms and artwork stay on disk); it moves to the removed favorites below, from which it
-            can be restored. The change shows up on the cabinet the next time MAUI
-            starts. Do not do it while a MAME game is open: MAME rewrites this file when it
-            closes.</p>
+            can be restored. The game leaves the cabinet's list at once, or as soon as the game
+            being played on it is quit, and its vote is no longer asked.</p>
             ${ASSET_PREVIEW_SCRIPT}
             <p class="info">Assets: marquee, flyer and logo, in that order - green when the file is
             present (hover it to preview the image), red (struck through) when it is missing.${viewer === 'advanced'
@@ -7772,6 +7859,14 @@ interface UsersListExtras {
     // ONLINE configured, on or not: MAUI-API column and actions, to get the players ready before
     // turning it on (OnlineReconciliation.ts).
     onlineColumn?: boolean;
+    // The player just created or given a new PIN: their row is highlighted and scrolled to, with
+    // the PIN, if any, in a row of its own under it.
+    highlight?: PlayerHighlight;
+}
+
+interface PlayerHighlight {
+    id_user: number;
+    pin?: string;
 }
 
 /**
@@ -7802,8 +7897,10 @@ function renderUsersListCard(
         const hasCustomAvatar = hasAvatar && !avatarFromOrigin && !isDefaultAvatar(avatarsPath, user.pseudo_3);
         // What the status filter goes by: disabled in MAUI-API counts as inactive.
         const status = user.active && !disabledUpstream ? 'active' : 'inactive';
+        const highlighted = extras.highlight?.id_user === user.id_user;
+        const pin = highlighted ? extras.highlight?.pin : undefined;
         return `
-        <tr data-status="${status}">
+        <tr id="player-${user.id_user}" data-status="${status}"${highlighted ? ' class="row-highlight"' : ''}>
             <td class="center">
                 ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
                     ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
@@ -7852,6 +7949,9 @@ function renderUsersListCard(
                 </div>
             </td>
         </tr>
+        ${pin ? `<tr class="row-pin" data-status="${status}">
+            <td colspan="${extras.onlineColumn ? 6 : 5}">${renderPinReveal(user.pseudo_3, pin)}</td>
+        </tr>` : ''}
     `;
     }).join('');
 
@@ -7943,6 +8043,12 @@ function renderUsersListCard(
                         status.value = stored;
                     }
                 } catch (error) { /* storage blocked: all the players are shown */ }
+                // The player just created or given a PIN is always shown: a filter that hides them
+                // goes back to all the players.
+                var highlighted = document.querySelector('#playersTable tr.row-highlight');
+                if (highlighted && status.value !== '*' && highlighted.dataset.status !== status.value) {
+                    status.value = '*';
+                }
                 function render() {
                     var shown = 0;
                     rows.forEach(function (row) {
@@ -7956,6 +8062,17 @@ function renderUsersListCard(
                     render();
                 });
                 render();
+            })();
+            (function () {
+                // After the page's own scroll restore (renderPageTail(), and the AJAX submit's
+                // scrollTo() once the document is written), hence the timeout.
+                var highlighted = document.querySelector('#playersTable tr.row-highlight');
+                if (!highlighted) { return; }
+                setTimeout(function () {
+                    var pinRow = highlighted.nextElementSibling;
+                    var target = pinRow && pinRow.classList.contains('row-pin') ? pinRow : highlighted;
+                    target.scrollIntoView({block: 'center', behavior: 'smooth'});
+                }, 0);
             })();</script>
         </section>
     `;
@@ -8265,6 +8382,7 @@ export function createBoApp(
     core: BoCore, databaseReady: Promise<void>, reloadFront: () => void, onReset: () => void,
     showGameOnFront: FrontGameShower,
     frontControls: FrontControls,
+    favoritesChanged: FrontFavoritesNotifier,
 ): BoApp {
     const {online, scoreStore} = core;
     onlineSession = online;
@@ -8732,8 +8850,9 @@ export function createBoApp(
             return;
         }
 
+        favoritesChanged();
         res.send(await renderFavoritesTab(req, {
-            notice: `"${romName}" removed from the favorites (it can be restored from the removed favorites below).`,
+            notice: `"${romName}" removed from the favorites and from the cabinet (it can be restored from the removed favorites below).`,
         }));
     });
 
@@ -8783,6 +8902,7 @@ export function createBoApp(
             }
         }
 
+        favoritesChanged();
         res.send(await renderFavoritesTab(req, {
             notice: updated === null
                 ? `"${romName}" was already in the favorites.`
@@ -8823,8 +8943,9 @@ export function createBoApp(
                 flash.warning = 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini. '
                     + 'The game stays in the favorites for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
-                flash.notice += ' Removed from the favorites (restorable from the removed favorites, below the favorites list).'
-                    + ' The change shows up on the cabinet the next time MAUI starts.';
+                favoritesChanged();
+                flash.notice += ' Removed from the favorites and from the cabinet (restorable from the removed favorites,'
+                    + ' below the favorites list).';
             } else {
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
@@ -8885,12 +9006,13 @@ export function createBoApp(
      */
     const usersPage = async (
         req: Request, users: User[], avatarFilenames: string[], error?: string, info?: string,
-        createError?: string,
+        createError?: string, highlight?: PlayerHighlight,
     ): Promise<string> => {
         const isAdvanced = req.session.boAdvanced === true;
         const deleted = isAdvanced ? await listDeletedUsers().catch(() => []) : [];
         return renderUsersPage(users, avatarFilenames, error, info, createError, {
             isAdvanced, deleted, online: isOnlineActive(), onlineColumn: getOnlineView().state === 'configured',
+            highlight,
         });
     };
 
@@ -8998,7 +9120,7 @@ export function createBoApp(
             // once the API said yes. Checked locally first, so the API never reserves initials
             // this cabinet cannot store.
             const client = await createOnlineClient();
-            let onlineMessage: {info?: string; error?: string} | undefined;
+            let onlineMessage: OnlineBoMessage | undefined;
             if (client) {
                 if (await User.findOne({where: {pseudo_3: pseudo3}})) {
                     throw new Error('A player with this nickname already exists.');
@@ -9019,6 +9141,7 @@ export function createBoApp(
             } else {
                 await User.create(fields as User);
             }
+            const created = await User.findOne({where: {pseudo_3: pseudo3}});
             // Every new player starts with a generated default avatar (see DefaultAvatar.ts); the
             // list below is read after this so it shows it. An avatar failing to write must not
             // turn a successful creation into an error page.
@@ -9028,8 +9151,9 @@ export function createBoApp(
                 console.error(`[boServer] Default avatar for "${pseudo3}" failed:`, avatarError);
             }
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
-            res.send(await usersPage(req, 
+            res.send(await usersPage(req,
                 users, getAvatarFilenames(config), undefined, onlineMessage?.info ?? `Player "${pseudo3}" created.`,
+                undefined, created ? {id_user: created.id_user, pin: onlineMessage?.pin} : undefined,
             ));
         } catch (error) {
             const users = await User.findAll({order: [['pseudo_3', 'ASC']]}).catch(() => []);
@@ -9041,7 +9165,7 @@ export function createBoApp(
 
     // ONLINE actions on one player (OnlinePlayersBo.ts). Same-origin only: they act on MAUI-API
     // with the cabinet's credentials, and the BO has no CSRF token (see SameOrigin.ts).
-    type OnlinePlayerHandler = (user: User, client: MauiApiClient, req: Request) => Promise<{info?: string; error?: string}>;
+    type OnlinePlayerHandler = (user: User, client: MauiApiClient, req: Request) => Promise<OnlineBoMessage>;
     const onlinePlayerAction = (handler: OnlinePlayerHandler) => async (req: Request, res: Response) => {
         if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
             res.status(403).send('Cross-site request refused.');
@@ -9058,7 +9182,8 @@ export function createBoApp(
                 }));
         const users = await User.findAll({order: [['pseudo_3', 'ASC']]});
         res.status(message.error ? 422 : 200).send(await usersPage(
-            req, users, getAvatarFilenames(new Config()), message.error, message.info,
+            req, users, getAvatarFilenames(new Config()), message.error, message.info, undefined,
+            user && message.pin ? {id_user: user.id_user, pin: message.pin} : undefined,
         ));
     };
 
@@ -9099,7 +9224,7 @@ export function createBoApp(
                 : `MAUI-API refused the new PIN (${result.kind === 'rejected' ? result.code : result.kind}).`};
         }
         await user.update({online_status: 'active'});
-        return {info: `New PIN for "${user.pseudo_3}": ${result.value}. Give it to the player.`};
+        return {info: `New PIN for "${user.pseudo_3}": shown under their row.`, pin: result.value};
     }));
 
     // Same sync as opening the tab (GET /users), on demand, with its outcome.
@@ -9620,15 +9745,24 @@ export function createBoApp(
         if (Number.isInteger(boIdleMinutes) && boIdleMinutes >= 0 && boIdleMinutes <= 1440) {
             config.boIdleMinutes = boIdleMinutes;
         }
-        const previousFrontIdle = `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`;
+        const frontIdleKey = () => `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`
+            + `/${config.frontSleepMinutes}/${config.frontSleepScreenOff}`;
+        const previousFrontIdle = frontIdleKey();
         config.frontIdleEnabled = req.body.frontIdleEnabled === 'on';
         config.frontIdleShowsGames = req.body.frontIdleShowsGames === 'on';
         const frontIdleMinutes = Number(req.body.frontIdleMinutes);
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;
         }
+        const frontSleepMinutes = Number(req.body.frontSleepMinutes);
+        if (Number.isInteger(frontSleepMinutes) && frontSleepMinutes >= 0 && frontSleepMinutes <= 1440) {
+            config.frontSleepMinutes = frontSleepMinutes;
+        }
+        config.frontSleepScreenOff = req.body.frontSleepScreenOff === 'on';
         const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
+        // Read again by userRegistration.vue at each registration: no reload of the front.
+        config.cabinetPlayersPublic = req.body.cabinetPlayersPublic === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
         // which must not reset it.
         if (typeof req.body.displayMode === 'string') {
@@ -9636,7 +9770,7 @@ export function createBoApp(
         }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
-            || `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}` !== previousFrontIdle
+            || frontIdleKey() !== previousFrontIdle
             || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
             // The front decides its mode and its badge's look once, when it loads (App.vue), and
             // builds its carousel and starts its idle watch when Home.vue is mounted.
@@ -10401,7 +10535,7 @@ export function createBoApp(
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
     });
 
-    // "Relaunch MAME" (see renderForm()): same game, fresh start, so the saved bindings apply.
+    // "Apply controls" (see renderForm()): same game, fresh start, so the saved bindings apply.
     app.post('/input-probe/mame/restart', async (req, res) => {
         const config = new Config();
         config.load();

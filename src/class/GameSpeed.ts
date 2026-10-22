@@ -9,8 +9,9 @@ import type {StartingPackManifest} from '@/types/StartingPackManifest';
 export const MIN_PI3_SPEED = 120;
 
 // At or under this much memory the machine is taken for a Raspberry Pi 3 or the like - the same
-// limit that turns the front's Lite mode on by itself (UiMode.ts).
-const WEAK_MEMORY_BYTES = 2 * 1024 ** 3;
+// limit that turns the front's Lite mode on by itself (UiMode.ts). A Pi 3 reports 905 MiB, a 2 GB
+// Pi 4 1.8 GiB: at 2 GiB the Pi 4, which runs mslug at full speed, lost the games a Pi 3 cannot run.
+const WEAK_MEMORY_BYTES = 1.5 * 1024 ** 3;
 
 export function isWeakHardware(totalMemBytes: number): boolean {
     return totalMemBytes <= WEAK_MEMORY_BYTES;

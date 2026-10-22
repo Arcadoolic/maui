@@ -20,6 +20,13 @@ describe('registerOnline', () => {
         expect(save).toHaveBeenCalledWith(player);
     });
 
+    it('creates a public player when asked to', async () => {
+        const createPlayer = vi.fn(async () => ({kind: 'ok', value: {player, pin: '0042'}}));
+
+        await registerOnline(client({createPlayer}), 'ACE', vi.fn(async () => undefined), true);
+        expect(createPlayer).toHaveBeenCalledWith('ACE', true);
+    });
+
     it('asks for the PIN when the initials belong to another player', async () => {
         const save = vi.fn();
         const outcome = await registerOnline(client({createPlayer: async () => rejected(409, 'initials_taken')}), 'ACE', save);

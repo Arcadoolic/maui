@@ -101,10 +101,19 @@ export default class Config {
     public frontIdleMinutes: number = 2;
     // While idle, the list goes to the game each message is about (Home.vue onMessageShown()).
     public frontIdleShowsGames: boolean = true;
+    // Left alone this many minutes more, the front falls asleep (IdleWatch.ts): a black screen, and
+    // the screen switched off on a dedicated cabinet when frontSleepScreenOff (ScreenPower.ts). 0 =
+    // never. Counted from the last key when the idle curtain is switched off.
+    public frontSleepMinutes: number = 30;
+    public frontSleepScreenOff: boolean = true;
 
     // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
     // dot, or the dot alone, more discreet.
     public onlineBadgeDotOnly: boolean = false;
+
+    // A player registering on the cabinet itself starts public, their scores in the shared
+    // leaderboards (userRegistration.vue). Off by default: they start private, the BO makes them public.
+    public cabinetPlayersPublic: boolean = false;
 
     // The setup guide was told the cabinet stays OFFLINE (SetupSteps.ts): its ONLINE step is done,
     // and the packs are left to install by hand.
@@ -159,7 +168,12 @@ export default class Config {
             this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
                 ? configFile.frontIdleMinutes
                 : 2;
+            this.frontSleepMinutes = Number.isInteger(configFile.frontSleepMinutes) && configFile.frontSleepMinutes >= 0
+                ? configFile.frontSleepMinutes
+                : 30;
+            this.frontSleepScreenOff = configFile.frontSleepScreenOff !== false;
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
+            this.cabinetPlayersPublic = configFile.cabinetPlayersPublic === true;
             this.setupOffline = configFile.setupOffline === true;
 
             this._plaintextSecrets = SECRET_FIELDS.some(field => this[field] !== '' && !isEncryptedSecret(this[field]));
@@ -210,7 +224,10 @@ export default class Config {
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
                 frontIdleShowsGames: this.frontIdleShowsGames,
+                frontSleepMinutes: this.frontSleepMinutes,
+                frontSleepScreenOff: this.frontSleepScreenOff,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
+                cabinetPlayersPublic: this.cabinetPlayersPublic,
                 setupOffline: this.setupOffline,
             }),
             {mode: FILE_MODE},
