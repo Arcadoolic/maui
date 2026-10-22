@@ -1,3 +1,18 @@
+## [2.17.0](https://github.com/Arcadoolic/maui/compare/2.16.1...2.17.0) (2026-10-22)
+
+### Features
+
+* **bo:** highlight the new player's row and show their PIN in large tiles ([d658196](https://github.com/Arcadoolic/maui/commit/d658196e6534c9ff32ccd1d531449608102e81aa))
+* **front:** fall asleep after the idle curtain, screen off on a cabinet ([def4303](https://github.com/Arcadoolic/maui/commit/def4303a7f13ffd44855695ce40389c3505e01d6))
+* **players:** a BO setting for public cabinet registrations ([b889067](https://github.com/Arcadoolic/maui/commit/b889067f537fb85be7cc8dc810be81880261aae8))
+* **players:** new players are public by default ([6b545be](https://github.com/Arcadoolic/maui/commit/6b545be410a643d5f1eff7d179f8b238166917a4))
+
+### Bug Fixes
+
+* a 2 GB Raspberry Pi 4 is no weak cabinet ([e9a3952](https://github.com/Arcadoolic/maui/commit/e9a3952d6f2873e87b538a2d3a732cd2f0c20efe))
+* **bo:** "Apply controls" instead of "Relaunch MAME" on the Controls tab ([307d1e1](https://github.com/Arcadoolic/maui/commit/307d1e1ae41e45e7885fd7c2d60326a1666a4ba9))
+* **front:** a game removed from the BO leaves the cabinet at once ([c5ca437](https://github.com/Arcadoolic/maui/commit/c5ca437de0707801c2d17a8fa36434b7b53bbad1))
+
 ## [2.16.1](https://github.com/Arcadoolic/maui/compare/2.16.0...2.16.1) (2026-10-18)
 
 ### Bug Fixes
