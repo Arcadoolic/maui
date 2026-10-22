@@ -4437,7 +4437,7 @@ function renderPendingRelaunchNotice(): string {
     // the change is simply there next time it's played.
     return isMameConfigSessionAlive()
         ? `<p class="warn flash"><strong>Saved, not active yet:</strong> the running MAME keeps the
-            controls it started with. Click <strong>Relaunch MAME</strong> at the top of the page to
+            controls it started with. Click <strong>Apply controls</strong> at the top of the page to
             try the new ones.</p>`
         : `<p class="warn flash"><strong>Saved, not active yet:</strong> the game being played keeps
             the controls it started with - the change applies the next time it's launched.</p>`;
@@ -5396,14 +5396,14 @@ function renderForm(
     // data-mame-session lets the page notice MAME being closed from its own window (see
     // renderPageTail()). A MAME the BO didn't start (a game launched from MAUI...) counts too:
     // closing it is what the button then offers.
-    // Once a capture/reset is saved during the session, "Relaunch MAME" comes first and stands
+    // Once a capture/reset is saved during the session, "Apply controls" comes first and stands
     // out: MAME only picks the change up at its next start (see hasPendingCfgEdits()).
     const mameRunning = isAnyMameRunning(config);
     const relaunchButton = isMameConfigSessionAlive() && hasPendingCfgEdits() ? `
         <form method="post" action="/input-probe/mame/restart">
             <button type="submit" class="launch-button button-attention">
                 <img src="/mame-logo.svg" alt="" class="launch-logo">
-                Relaunch MAME
+                Apply controls
             </button>
         </form>
     ` : '';
@@ -10531,7 +10531,7 @@ export function createBoApp(
         res.send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
     });
 
-    // "Relaunch MAME" (see renderForm()): same game, fresh start, so the saved bindings apply.
+    // "Apply controls" (see renderForm()): same game, fresh start, so the saved bindings apply.
     app.post('/input-probe/mame/restart', async (req, res) => {
         const config = new Config();
         config.load();
