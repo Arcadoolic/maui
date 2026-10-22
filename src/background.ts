@@ -22,6 +22,7 @@ import {
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {
     CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type FrontControls,
     type PadCaptureReply,
@@ -255,7 +256,12 @@ app.on('ready', async () => {
         }
         win.webContents.send(SHOW_GAME_CHANNEL, romName);
         return true;
-    }, frontControls);
+    }, frontControls, () => {
+        // The BO took a game out of the favorites or put one back: the front syncs (Home.vue).
+        if (win && !win.isDestroyed()) {
+            win.webContents.send(FAVORITES_CHANGED_CHANNEL);
+        }
+    });
     core = bo;
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.

@@ -107,6 +107,8 @@ import {
 } from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
+import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
 import {IdleWatch} from '@/class/IdleWatch';
@@ -253,6 +255,9 @@ const heldKeys = new Set<string>();
 // A game is being launched or runs: the front takes no input, keyboard or controller, until it
 // is quit (see lockFront()).
 let gameRunning = false;
+// The BO changed the favorites while a game was running: synced once it is quit (see
+// syncFavorites()).
+let favoritesChangedDuringGame = false;
 
 const loaderDuration = ref(2);
 const loaderTitle = ref('Button pressing');
@@ -583,6 +588,9 @@ function startGame() {
                 const pending = endScoreCapture(game.romName);
                 hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
+                    if (favoritesChangedDuringGame) {
+                        await syncFavorites();
+                    }
                     await onScoresChanged();
                     await askWhoPlayed(await pending);
                     return askVote(game);
@@ -605,6 +613,10 @@ function startGame() {
  * or the BO turned the prompt off.
  */
 async function askVote(game: Game) {
+    // Removed from the BO while it was played: it has left the cabinet, its vote with it.
+    if (isRemovedFavorite(game.romName)) {
+        return;
+    }
     // Both the setting and the vote itself can have been changed from the BO since this game was
     // loaded: read them again.
     const config = getConfiguration();
@@ -629,6 +641,39 @@ async function onVote(vote: Vote) {
         }
     } catch (err) {
         Log.error('[Home] Error on game ' + game.id_game + ' vote.');
+        Log.error(err);
+    }
+}
+
+function isRemovedFavorite(romName: string): boolean {
+    return readRemovedFavorites().some(removed => removed.romName === romName);
+}
+
+/**
+ * The BO took a game out of the favorites or put one back (FrontFavoritesBridge.ts): the games
+ * follow favorites.ini and the carousel is built again. Waits for the game being played to be
+ * quit - MAME writes favorites.ini back on exit, removed games included, hence
+ * removeReturnedFavorites() as on a start (Init.vue). A vote asked for a game just removed is
+ * dropped.
+ */
+async function syncFavorites() {
+    if (gameRunning) {
+        favoritesChangedDuringGame = true;
+        return;
+    }
+    favoritesChangedDuringGame = false;
+    if (voteGame.value && isRemovedFavorite(voteGame.value.romName)) {
+        voteGame.value = null;
+    }
+    try {
+        const mameService = getMameService();
+        if (mameService.favoritesPath) {
+            removeReturnedFavorites(mameService.favoritesPath);
+        }
+        await gameService.saveGamesFromRomNames(mameService.getRomListFromFavorites());
+        await reloadCarousel();
+    } catch (err) {
+        Log.error('[Home] Error on favorites sync.');
         Log.error(err);
     }
 }
@@ -832,9 +877,11 @@ const onShowGame = (_event: unknown, romName: string) => {
     }
     void showGame(romName);
 };
+const onFavoritesChanged = () => void syncFavorites();
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
+    ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
@@ -969,6 +1016,7 @@ if (!getIsInit()) {
         idleWatch.start();
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
+        ipcRenderer.on(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();
