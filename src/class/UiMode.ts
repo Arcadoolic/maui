@@ -15,8 +15,9 @@ export interface UiModeHardware {
     gpuCompositing?: string;
 }
 
-// At or under this much memory, "auto" means Lite whatever the GPU says.
-const LITE_MEMORY_BYTES = 2 * 1024 ** 3;
+// At or under this much memory, "auto" means Lite whatever the GPU says: a Raspberry Pi 3 (905 MiB),
+// not a 2 GB Pi 4 (1.8 GiB), whose GPU composites.
+const LITE_MEMORY_BYTES = 1.5 * 1024 ** 3;
 
 /** Anything but a known setting (older config file, hand edit) reads as "auto". */
 export function parseUiModeSetting(value: unknown): UiModeSetting {
