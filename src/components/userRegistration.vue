@@ -10,9 +10,7 @@
                 If lost, a MAUI-API administrator can find it.</p>
             <div class="validate">
                 Press
-                <span class="arcadeButton">
-                    <i class="fas fa-male"></i>
-                </span>
+                <control-icon action="new_player"></control-icon>
                 when done
             </div>
         </div>
@@ -27,14 +25,12 @@
             <div class="error" v-if="errorMessage">{{errorMessage}}</div>
             <div class="validate">
                 Press
-                <span class="arcadeButton">
-                    <i class="fas fa-male"></i>
-                </span>
+                <control-icon action="new_player"></control-icon>
                 to validate
             </div>
             <div class="cancel">
                 Press
-                <span class="arcadeButton rectangle"></span>
+                <control-icon action="scores"></control-icon>
                 to cancel
             </div>
         </div>
@@ -54,14 +50,12 @@
             <div class="error" v-if="errorMessage">{{errorMessage}}</div>
             <div class="validate">
                 Press
-                <span class="arcadeButton">
-                    <i class="fas fa-male"></i>
-                </span>
+                <control-icon action="new_player"></control-icon>
                 to validate
             </div>
             <div class="cancel">
                 Press
-                <span class="arcadeButton rectangle"></span>
+                <control-icon action="scores"></control-icon>
                 to cancel
             </div>
         </div>
@@ -79,6 +73,7 @@
     import {newPseudo3Error} from '@/class/Pseudo3';
     import type {OnlinePlayer} from '@/class/MauiApiClient';
     import Modal from '@/components/Modal.vue';
+    import ControlIcon from '@/components/ControlIcon.vue';
 
     // In ONLINE mode the initials are reserved in MAUI-API first (OnlineRegistration.ts): free ones
     // show the new player's PIN once, taken ones ask for that player's PIN to link them here.
@@ -319,22 +314,4 @@
             font-size: 1em;
         }
 
-        .arcadeButton {
-            display: inline-block;
-            width: 30px;
-            height: 30px;
-            content: ' ';
-            border-radius: 50%;
-            box-shadow: #a7a700 1px 1px;
-            margin: 0 15px;
-            background-color: snow;
-            color: black;
-            line-height: 30px;
-            text-align: center;
-            font-size: 20px;
-        }
-            .arcadeButton.rectangle {
-                border-radius: 0;
-                width: 50px;
-            }
 </style>

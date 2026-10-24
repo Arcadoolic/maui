@@ -15,7 +15,7 @@
                 </div>
             </div>
             <div class="hint">
-                <span class="arcadeButton"></span>
+                <control-icon action="confirm"></control-icon>
                 to choose
             </div>
         </div>
@@ -28,6 +28,7 @@ import {useControllable} from '@/composables/useControllable';
 import {MAUI_KEYS} from '@/class/MauiControls';
 import {controlKey} from '@/class/MauiControlsRuntime';
 import Modal from '@/components/Modal.vue';
+import ControlIcon from '@/components/ControlIcon.vue';
 import {getConfiguration} from '@/services';
 
 // Asked when the cabinet wakes up from idle (Home.vue, FrontUpdate.ts): yes installs the version
@@ -154,14 +155,5 @@ onKeyup(() => {
         display: flex;
         align-items: center;
         justify-content: center;
-    }
-    .arcadeButton {
-        display: inline-block;
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        box-shadow: #a7a700 1px 1px;
-        margin: 0 10px 0 0;
-        background-color: snow;
     }
 </style>
