@@ -13,6 +13,8 @@ import type {UpdateProgress} from '@/class/SelfUpdate';
 
 /** What FrontUpdate needs of the rest of the main process (background.ts), replaceable in tests. */
 export interface FrontUpdateDeps {
+    /** Where the declined version is kept (getDeclinedUpdatePath() by default). */
+    declinedPath?: string;
     /** The BO's settings, read again at each call. */
     settings(): {frontUpdateEnabled: boolean; updateChannel: UpdateChannel};
     /** Whether this machine installs a version by itself (SelfUpdate.ts isSelfUpdateCapable()). */
@@ -23,8 +25,6 @@ export interface FrontUpdateDeps {
     installAndRestart(version: string, progress: UpdateProgress): Promise<void>;
     /** Where each step goes: the front's window. */
     send(step: UpdateStep): void;
-    /** Where the declined version is kept. */
-    declinedPath?: string;
 }
 
 export function getDeclinedUpdatePath(): string {

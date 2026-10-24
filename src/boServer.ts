@@ -2,14 +2,12 @@ import express, {Request, Response} from 'express';
 import session from 'express-session';
 import {
     existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
-    chmodSync, renameSync, createWriteStream, statfsSync, statSync, lstatSync,
+    statfsSync, statSync, lstatSync,
 } from 'fs';
 import {join, dirname, sep, basename} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
 import {ChildProcess, execFileSync, spawn} from 'child_process';
-import {Readable, Transform} from 'stream';
-import {pipeline} from 'stream/promises';
 import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
@@ -5818,6 +5816,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                     ` : ''}
                     ${renderSettingCheckbox('onlineBadgeDotOnly', config.onlineBadgeDotOnly, 'ONLINE badge: the dot alone',
                         'In the top right corner of the cabinet, without ONLINE / OFFLINE.')}
+                    ${renderSettingCheckbox('onlineBadgeHideIp', config.onlineBadgeHideIp, 'ONLINE badge: hide the local IP address',
+                        'Unticked, the badge shows the cabinet\'s address on the local network 10 seconds every minute, the Wi-Fi\'s first.')}
                     ${isAdvanced ? renderSettingCheckbox('openDevTools', config.openDevTools, 'Open DevTools on startup', 'Development mode.') : ''}
                 </fieldset>
                 <fieldset class="settings-group">
@@ -9701,8 +9701,9 @@ export function createBoApp(
             config.frontSleepMinutes = frontSleepMinutes;
         }
         config.frontSleepScreenOff = req.body.frontSleepScreenOff === 'on';
-        const previousOnlineBadgeDotOnly = config.onlineBadgeDotOnly;
+        const previousOnlineBadge = `${config.onlineBadgeDotOnly}/${config.onlineBadgeHideIp}`;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
+        config.onlineBadgeHideIp = req.body.onlineBadgeHideIp === 'on';
         // Read again by userRegistration.vue at each registration: no reload of the front.
         config.cabinetPlayersPublic = req.body.cabinetPlayersPublic === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
@@ -9713,7 +9714,7 @@ export function createBoApp(
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
             || frontIdleKey() !== previousFrontIdle
-            || config.onlineBadgeDotOnly !== previousOnlineBadgeDotOnly) {
+            || `${config.onlineBadgeDotOnly}/${config.onlineBadgeHideIp}` !== previousOnlineBadge) {
             // The front decides its mode and its badge's look once, when it loads (App.vue), and
             // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
