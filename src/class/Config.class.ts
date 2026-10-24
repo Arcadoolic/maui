@@ -6,7 +6,7 @@ import {parseUiModeSetting, type UiModeSetting} from '@/class/UiMode';
 import {parseDisplayModeSetting, type DisplayModeSetting} from '@/class/DisplayMode';
 import {parseUpdateChannel, type UpdateChannel} from '@/class/ReleaseList';
 import {parseVideoOutputSetting} from '@/class/VideoOutput';
-import {parseAudioOutputSetting} from '@/class/AudioOutput';
+import {FOLLOW_SCREEN, parseAudioOutputSetting} from '@/class/AudioOutput';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
 // the clear: they are shown back in the BO forms, the passwords are not.
@@ -105,7 +105,8 @@ export default class Config {
     // The screen output (an xrandr name, VideoOutput.ts) and the sound output ("card,device",
     // AudioOutput.ts) of a dedicated cabinet; '' leaves them as the system set them.
     public videoOutput: string = '';
-    public audioOutput: string = '';
+    // FOLLOW_SCREEN by default: the HDMI card of the screen output.
+    public audioOutput: string = FOLLOW_SCREEN;
 
     // Minutes without a request before the BO is unloaded from memory (BoOnDemand.ts); its next
     // request loads it again. 0 keeps it loaded once it has been opened.

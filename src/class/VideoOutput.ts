@@ -48,6 +48,12 @@ export function videoOutputArgs(name: string, outputs: ScreenOutputInfo[]): stri
     return ['--output', name, '--auto', '--primary', ...others.flatMap(output => ['--output', output.name, '--off'])];
 }
 
+/** The output the picture is on: the one set when it has a screen, else the primary connected one. */
+export function currentScreenOutput(setting: string, outputs: ScreenOutputInfo[]): string {
+    const connected = outputs.filter(output => output.connected);
+    return (connected.find(output => output.name === setting) ?? connected.find(output => output.primary) ?? connected[0])?.name ?? '';
+}
+
 type Exec = (file: string, args: string[], options: {encoding: 'utf8'; timeout: number}) => string;
 
 /** The outputs as xrandr sees them. Throws what xrandr throws (missing, no X server). */

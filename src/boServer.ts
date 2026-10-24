@@ -52,8 +52,10 @@ import {
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
-import {listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
-import {applyAudioOutput, listAudioDevices, parseAudioOutputSetting} from '@/class/AudioOutput';
+import {currentScreenOutput, listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
+import {
+    applyAudioOutput, FOLLOW_SCREEN, listAudioDevices, parseAudioOutputSetting, resolveAudioOutput,
+} from '@/class/AudioOutput';
 import {
     downloadWindowsInstaller, findInstallAsset, installAppImage, isKioskInstall, isSelfUpdateCapable, isWindowsInstall,
     restartOnInstalledVersion, runWindowsInstaller, type UpdateProgress,
@@ -5828,8 +5830,12 @@ function renderCabinetOutputSelects(config: Config): string {
         ...(config.videoOutput && !outputs.some(output => output.name === config.videoOutput)
             ? [option(config.videoOutput, `${config.videoOutput} - not found now`, true)] : []),
     ].join('');
+    // What "Same as the screen output" comes down to now, named like the other choices.
+    const followed = resolveAudioOutput(FOLLOW_SCREEN, currentScreenOutput(config.videoOutput, outputs), devices);
+    const followedLabel = devices.find(device => device.id === followed)?.label ?? 'the system default';
     const audioOptions = [
-        option('', 'Automatic (the system default, /etc/asound.conf)', config.audioOutput === ''),
+        option(FOLLOW_SCREEN, `Same as the screen output (now: ${followedLabel})`, config.audioOutput === FOLLOW_SCREEN),
+        option('', 'System default (/etc/asound.conf)', config.audioOutput === ''),
         ...devices.map(device => option(device.id, `${device.label} (${device.id})`, config.audioOutput === device.id)),
         ...(config.audioOutput && !devices.some(device => device.id === config.audioOutput)
             ? [option(config.audioOutput, `${config.audioOutput} - not found now`, true)] : []),
@@ -5837,7 +5843,7 @@ function renderCabinetOutputSelects(config: Config): string {
     return `
         <label for="videoOutput">Screen output <span class="checkbox-row-detail">The port the screen is plugged in. Applied the next time the cabinet starts; MAME follows it.</span></label>
         <select id="videoOutput" name="videoOutput">${videoOptions}</select>
-        <label for="audioOutput">Sound output <span class="checkbox-row-detail">HDMI sound goes with the screen's port (vc4hdmi0 with HDMI-1 on a Raspberry Pi). The next game uses it at once, MAUI's own sounds at its next start.</span></label>
+        <label for="audioOutput">Sound output <span class="checkbox-row-detail">HDMI sound comes out of the screen (its speakers or its headphone socket). The next game uses it at once, MAUI's own sounds at its next start.</span></label>
         <select id="audioOutput" name="audioOutput">${audioOptions}</select>
     `;
 }
@@ -10039,14 +10045,19 @@ export function createBoApp(
         let audioError: string | undefined;
         if (typeof req.body.audioOutput === 'string') {
             const audioOutput = parseAudioOutputSetting(req.body.audioOutput);
-            if (audioOutput !== config.audioOutput) {
-                try {
-                    // At once: the next game opens the sound device again.
-                    applyAudioOutput(audioOutput);
-                    config.audioOutput = audioOutput;
-                } catch (error) {
-                    audioError = error instanceof Error ? error.message : String(error);
-                }
+            let outputs: ScreenOutputInfo[] = [];
+            try {
+                outputs = listScreenOutputs();
+            } catch {
+                // No xrandr answer: no screen output to follow.
+            }
+            try {
+                // At once (the next game opens the sound device again), and even unchanged: the
+                // screen output it follows may have changed.
+                applyAudioOutput(resolveAudioOutput(audioOutput, currentScreenOutput(config.videoOutput, outputs), listAudioDevices()));
+                config.audioOutput = audioOutput;
+            } catch (error) {
+                audioError = error instanceof Error ? error.message : String(error);
             }
         }
         config.save();
