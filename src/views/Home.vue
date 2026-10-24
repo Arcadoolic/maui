@@ -432,6 +432,8 @@ async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
             return await gameService.loadHiscoreGames();
         case 'beat-this':
             return await loadBeatThisGames();
+        case 'starred':
+            return await gameService.loadStarredGames();
         }
     }
     if (isMergedCategory(selected)) {
@@ -688,7 +690,7 @@ async function askVote(game: Game) {
     }
 }
 
-async function onVote(vote: Vote) {
+async function onVote(vote: Vote, starred: boolean) {
     const game = voteGame.value;
     voteGame.value = null;
     if (!game || vote === VOTE_NEUTRAL) {
@@ -696,8 +698,9 @@ async function onVote(vote: Vote) {
         return;
     }
     try {
-        const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite);
-        if (removed) {
+        const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite, starred);
+        // A star: "My favourites" comes into the carousel with its first game, or gets one more.
+        if (removed || starred) {
             await reloadCarousel();
         }
     } catch (err) {
@@ -873,6 +876,7 @@ async function loadCategories() {
         showAllGames: config.showAllGamesCategory,
         showBeatThis: config.showBeatThisCategory,
         showHiscoresOnly: config.showHiscoresOnlyCategory,
+        hasStarredGames: (await gameService.loadStarredGames()).length > 0,
         hasBeatThisGames: config.showBeatThisCategory && (await loadBeatThisGames()).length > 0,
         hasHiscoreGames: config.showHiscoresOnlyCategory && (await gameService.loadHiscoreGames()).length > 0,
     });

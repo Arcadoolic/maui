@@ -95,6 +95,17 @@ export default class Game extends Model<Game> {
     })
     public vote!: number;
 
+    /**
+     * Starred on the cabinet (or from the BO): the game is in the carousel's "My favourites"
+     * category, and its vote is always a thumbs up. See GameVote.ts.
+     */
+    @Column({
+        type: DataType.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+    })
+    public starred!: boolean;
+
     /** When the game was last launched from the front-end; null = never played. */
     @Column({
         type: DataType.DATE,

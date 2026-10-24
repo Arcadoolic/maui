@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {parseVote, shouldAskVote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
+import {parseVote, shouldAskVote, voteFields, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
 
 describe('parseVote', () => {
     it('reads the three votes from numbers and form strings', () => {
@@ -13,6 +13,19 @@ describe('parseVote', () => {
         for (const value of [undefined, null, '', '  ', 'up', '2', -2, true, {}, []]) {
             expect(parseVote(value), String(value)).toBeNull();
         }
+    });
+});
+
+describe('voteFields', () => {
+    it('makes a star a thumbs up, starred', () => {
+        expect(voteFields(VOTE_DOWN, true)).toEqual({vote: VOTE_UP, starred: true});
+        expect(voteFields(VOTE_UP, true)).toEqual({vote: VOTE_UP, starred: true});
+    });
+
+    it('takes the star away with any other vote', () => {
+        expect(voteFields(VOTE_UP)).toEqual({vote: VOTE_UP, starred: false});
+        expect(voteFields(VOTE_NEUTRAL)).toEqual({vote: VOTE_NEUTRAL, starred: false});
+        expect(voteFields(VOTE_DOWN)).toEqual({vote: VOTE_DOWN, starred: false});
     });
 });
 

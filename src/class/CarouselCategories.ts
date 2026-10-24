@@ -1,6 +1,6 @@
 import type Category from '@/model/Category.model';
 import {
-    ALL_GAMES_CATEGORY, HISCORES_ONLY_CATEGORY, BEAT_THIS_CATEGORY,
+    ALL_GAMES_CATEGORY, HISCORES_ONLY_CATEGORY, BEAT_THIS_CATEGORY, STARRED_CATEGORY,
     type CarouselCategory, type MergedCategory,
 } from '@/types/CarouselCategory';
 import {GENRE_ICON_KEYS} from '@/class/CatverGenres';
@@ -67,20 +67,22 @@ export interface CarouselOptions {
     showAllGames: boolean;
     showBeatThis: boolean;
     showHiscoresOnly: boolean;
-    // An empty category would be a dead end in the carousel: these two are only offered once
-    // they hold a game.
+    // An empty category would be a dead end in the carousel: these are only offered once they
+    // hold a game ("My favourites" has no setting of its own: it is there once a game is starred).
+    hasStarredGames: boolean;
     hasBeatThisGames: boolean;
     hasHiscoreGames: boolean;
 }
 
 /**
- * The carousel's entries, in order: "All Games", "Beat This!", "Hiscores Only", then the
- * genres. Never empty: with everything hidden and no genre (no configuration pack yet), "All
+ * The carousel's entries, in order: "All Games", "My favourites", "Beat This!", "Hiscores Only",
+ * then the genres. Never empty: with everything hidden and no genre (no configuration pack yet), "All
  * Games" is shown all the same, or the cabinet would list no game at all.
  */
 export function buildCarousel(genres: CarouselCategory[], options: CarouselOptions): CarouselCategory[] {
     const carousel = [
         ...(options.showAllGames ? [ALL_GAMES_CATEGORY] : []),
+        ...(options.hasStarredGames ? [STARRED_CATEGORY] : []),
         ...(options.showBeatThis && options.hasBeatThisGames ? [BEAT_THIS_CATEGORY] : []),
         ...(options.showHiscoresOnly && options.hasHiscoreGames ? [HISCORES_ONLY_CATEGORY] : []),
         ...genres,

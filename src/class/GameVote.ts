@@ -19,6 +19,14 @@ export function parseVote(value: unknown): Vote | null {
 }
 
 /**
+ * A game's vote and star together. The star is a thumbs up and more: a starred game is in the
+ * carousel's "My favourites" category, and any other vote takes its star away.
+ */
+export function voteFields(vote: Vote, starred = false): {vote: Vote, starred: boolean} {
+    return starred ? {vote: VOTE_UP, starred: true} : {vote, starred: false};
+}
+
+/**
  * Whether the vote is asked after this game was quit: only while it is neutral, which is also
  * what a game nobody voted on yet is - a thumbs up or down is final until changed from the BO.
  */

@@ -78,7 +78,7 @@ import {
 } from '@/class/UserReservation';
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
-import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
+import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote, voteFields} from '@/class/GameVote';
 import {
     sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL, parseUpdateChannel,
 } from '@/class/ReleaseList';
@@ -623,6 +623,8 @@ interface GameStats {
     fullname: string;
     playCount: number;
     vote: Vote;
+    // Starred: in the cabinet's "My favourites", and voted thumbs up.
+    starred: boolean;
     // The game's carousel category (TTL twin merged, as displayed on the cabinet), null when
     // genre.ini doesn't know it.
     category: GameCategory | null;
@@ -641,7 +643,7 @@ interface GameCategory {
 async function loadGameStats(): Promise<Map<string, GameStats> | null> {
     try {
         const games = await Game.findAll({
-            attributes: ['romName', 'fullname', 'play_count', 'vote', 'id_category'],
+            attributes: ['romName', 'fullname', 'play_count', 'vote', 'starred', 'id_category'],
             paranoid: false,
         });
         const categories = new Map((await Category.findAll()).map(category => [category.id_category, {
@@ -653,6 +655,7 @@ async function loadGameStats(): Promise<Map<string, GameStats> | null> {
             fullname: game.fullname || game.romName,
             playCount: game.play_count || 0,
             vote: parseVote(game.vote) ?? VOTE_NEUTRAL,
+            starred: !!game.starred,
             category: categories.get(game.id_category) ?? null,
         }]));
     } catch {
@@ -2291,6 +2294,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         form.vote-buttons > button.down[aria-pressed="true"] {
             color: var(--danger);
+        }
+        form.vote-buttons > button.star[aria-pressed="true"] {
+            color: #ffc400;
         }
 
         .game-name-cell {
@@ -6723,6 +6729,7 @@ const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
     + '<path d="M5 7l2.6-4.5c1.2 0 1.9 1 1.6 2.1L8.8 6.5h3.4c1 0 1.7.9 1.5 1.9l-.9 4c-.2.7-.8 1.1-1.5 1.1H5"/>';
 const THUMB_DOWN_ICON_PATHS = `<g transform="rotate(180 8 8)">${THUMB_UP_ICON_PATHS}</g>`;
 // Eyes are zero-length round-capped lines: dots that keep the stroke-only look of the other icons.
+const STAR_ICON_PATHS = '<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>';
 const NEUTRAL_ICON_PATHS = '<circle cx="8" cy="8" r="6"/><path d="M5.5 10h5"/><path d="M6 6.5v.01M10 6.5v.01"/>';
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
 const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
@@ -7241,8 +7248,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 ? ' To download the missing artwork from ScreenScraper, use the button in the '
                     + '<a href="/screenscraper">ScreenScraper</a> tab.'
                 : ''}</p>
-            <p class="info">Vote: the one the players give on the cabinet once a game is quit (thumbs
-            up, neutral or thumbs down), changeable here. Whether a thumbs down also removes the
+            <p class="info">Vote: the one the players give on the cabinet once a game is quit (star,
+            thumbs up, neutral or thumbs down), changeable here. A star is a thumbs up that also puts
+            the game in the cabinet's "My favourites" category. Whether a thumbs down also removes the
             game from the favorites is set in the <a href="/maui">MAUI</a> tab.</p>
         </section>
         ${removedCard}
@@ -7253,6 +7261,9 @@ interface FavoritesFlash {
     notice?: string;
     warning?: string;
 }
+
+// The star: a thumbs up that also puts the game in "My favourites" (GameVote.ts voteFields()).
+const STAR_LABEL = 'Star (My favourites)';
 
 const VOTE_LABELS: Record<Vote, string> = {
     [VOTE_UP]: 'Thumbs up',
@@ -7267,13 +7278,19 @@ const VOTE_ICONS: Record<Vote, {cssClass: string, paths: string}> = {
 };
 
 /**
- * A game's three vote buttons (thumbs up, neutral, thumbs down), the current one lit up, posting
- * to /votes/set.
+ * A game's four vote buttons (star, thumbs up, neutral, thumbs down), the current one lit up,
+ * posting to /votes/set.
  */
-function renderVoteForm(romName: string, current: Vote): string {
-    const buttons = ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
+function renderVoteForm(romName: string, current: Vote, starred: boolean): string {
+    const star = `
+        <button type="submit" name="vote" value="star" class="icon-button star"
+            aria-pressed="${starred}" title="${STAR_LABEL}" aria-label="${STAR_LABEL}">
+            <svg ${ICON_SVG_ATTRS}>${STAR_ICON_PATHS}</svg>
+        </button>
+    `;
+    const buttons = star + ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
         <button type="submit" name="vote" value="${vote}" class="icon-button ${VOTE_ICONS[vote].cssClass}"
-            aria-pressed="${current === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
+            aria-pressed="${!starred && current === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
             <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[vote].paths}</svg>
         </button>
     `).join('');
@@ -7290,7 +7307,7 @@ function renderVoteForm(romName: string, current: Vote): string {
  * database doesn't know (or no database at all) - /votes/set would have nothing to update.
  */
 function renderVoteCell(stats: GameStats | undefined): string {
-    return stats ? renderVoteForm(stats.romName, stats.vote) : '<em>-</em>';
+    return stats ? renderVoteForm(stats.romName, stats.vote, stats.starred) : '<em>-</em>';
 }
 
 // The Home carousel's category icons, embedded as text in this bundle (the BO has no access to
@@ -9188,16 +9205,19 @@ export function createBoApp(
 
     app.post('/votes/set', async (req, res) => {
         const romName: string = (req.body.romName || '').trim();
-        const vote = parseVote(req.body.vote);
+        const starred = req.body.vote === 'star';
+        const vote = starred ? VOTE_UP : parseVote(req.body.vote);
         if (!/^[a-z0-9]+$/.test(romName) || vote === null) {
             res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid vote.'}));
             return;
         }
 
         let updated: number;
+        let wasStarred: boolean;
         try {
             // paranoid: false - a game already out of the favorites keeps its vote editable.
-            [updated] = await Game.update({vote}, {where: {romName}, paranoid: false});
+            wasStarred = !!(await Game.findOne({attributes: ['starred'], where: {romName}, paranoid: false}))?.starred;
+            [updated] = await Game.update(voteFields(vote, starred), {where: {romName}, paranoid: false});
         } catch {
             res.status(503).send(await renderFavoritesTab(req, {
                 warning: 'Database not ready yet - launch the application once, then retry.',
@@ -9209,10 +9229,12 @@ export function createBoApp(
             return;
         }
 
-        const flash: FavoritesFlash = {notice: `Vote saved for "${romName}": ${VOTE_LABELS[vote].toLowerCase()}.`};
+        const label = starred ? STAR_LABEL : VOTE_LABELS[vote];
+        const flash: FavoritesFlash = {notice: `Vote saved for "${romName}": ${label.toLowerCase()}.`};
         const config = new Config();
         config.load();
         const {favoritesPath} = getMameLocations(getMameHomePath());
+        let frontTold = false;
         if (vote === VOTE_DOWN && config.thumbsDownRemovesFavorite && favoritesPath
             && getFavoriteRomNames(favoritesPath).includes(romName)) {
             if (isMameConfigSessionAlive()) {
@@ -9220,11 +9242,16 @@ export function createBoApp(
                     + 'The game stays in the favorites for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
                 favoritesChanged();
+                frontTold = true;
                 flash.notice += ' Removed from the favorites and from the cabinet (restorable from the removed favorites,'
                     + ' below the favorites list).';
             } else {
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
+        }
+        // Starred or not any more: the cabinet's "My favourites" follows (Home.vue rebuilds its carousel).
+        if (wasStarred !== starred && !frontTold) {
+            favoritesChanged();
         }
         res.send(await renderFavoritesTab(req, flash));
     });

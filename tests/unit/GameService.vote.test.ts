@@ -78,9 +78,22 @@ describe('GameService.applyVote', () => {
         const removed = await service.applyVote(voted, VOTE_UP, true);
 
         expect(removed).toBe(false);
-        expect(updates).toEqual([[{vote: VOTE_UP}, {where: {romName: 'bzone'}}]]);
+        expect(updates).toEqual([[{vote: VOTE_UP, starred: false}, {where: {romName: 'bzone'}}]]);
         expect(voted.vote).toBe(VOTE_UP);
         expect(readFileSync(favoritesPath, 'utf8')).toBe(twoFavorites);
+        expect(synced).toEqual([]);
+    });
+
+    it('saves a star as a thumbs up, starred', async () => {
+        makeService(twoFavorites);
+        const voted = game();
+
+        const removed = await service.applyVote(voted, VOTE_UP, true, true);
+
+        expect(removed).toBe(false);
+        expect(updates).toEqual([[{vote: VOTE_UP, starred: true}, {where: {romName: 'bzone'}}]]);
+        expect(voted.vote).toBe(VOTE_UP);
+        expect(voted.starred).toBe(true);
         expect(synced).toEqual([]);
     });
 
@@ -90,7 +103,7 @@ describe('GameService.applyVote', () => {
         const removed = await service.applyVote(game(), VOTE_DOWN, false);
 
         expect(removed).toBe(false);
-        expect(updates).toEqual([[{vote: VOTE_DOWN}, {where: {romName: 'bzone'}}]]);
+        expect(updates).toEqual([[{vote: VOTE_DOWN, starred: false}, {where: {romName: 'bzone'}}]]);
         expect(readFileSync(favoritesPath, 'utf8')).toBe(twoFavorites);
         expect(synced).toEqual([]);
     });
