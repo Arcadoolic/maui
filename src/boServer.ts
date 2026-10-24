@@ -54,12 +54,14 @@ import {
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
-import {findLinuxAppImage} from '@/class/LinuxUpdate';
-import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
+import {
+    downloadWindowsInstaller, findInstallAsset, installAppImage, isKioskInstall, isSelfUpdateCapable, isWindowsInstall,
+    restartOnInstalledVersion, runWindowsInstaller, type UpdateProgress,
+} from '@/class/SelfUpdate';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
-import {canRestartKiosk, isKioskLayout as isKioskSystem, restartKiosk} from '@/class/KioskRestart';
+import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {chooseRelaunch, type RelaunchMode} from '@/class/AppRelaunch';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
 import {
@@ -75,7 +77,9 @@ import {
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
-import {sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL} from '@/class/ReleaseList';
+import {
+    sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL, parseUpdateChannel,
+} from '@/class/ReleaseList';
 import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {MAUI_KEYS, MAUI_CONTROL_CONTEXTS} from '@/class/MauiControls';
@@ -5460,19 +5464,9 @@ interface UpdateInfo {
 }
 
 
-function getSquashfsRootPath(): string {
-    return join(os.homedir(), 'squashfs-root');
-}
-
-// The dedicated-system layout (KioskRestart.ts).
+// The dedicated-system layout (KioskRestart.ts, SelfUpdate.ts).
 function isKioskLayout(): boolean {
-    return isKioskSystem(electronApp.isPackaged);
-}
-
-// On Windows, an application put there by its installer (WindowsUpdate.ts): the portable .exe of
-// the earlier versions has nothing an installer could replace.
-function isWindowsInstall(): boolean {
-    return process.platform === 'win32' && electronApp.isPackaged && isInstalledByInstaller(process.execPath);
+    return isKioskInstall();
 }
 
 // Where the MAUI tab offers the Network and Bluetooth cards (WifiControl.ts, BluetoothControl.ts):
@@ -5481,10 +5475,6 @@ function isWindowsInstall(): boolean {
 // on them.
 function isNetworkControlHost(): boolean {
     return isKioskLayout() || (process.platform === 'linux' && process.env.NODE_ENV === 'development');
-}
-
-function isSelfUpdateCapable(): boolean {
-    return isKioskLayout() || isWindowsInstall();
 }
 
 let releasesCache: {fetchedAt: number; releases: GithubRelease[]} | null = null;
@@ -5530,9 +5520,7 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
         const releases = await fetchGithubReleases();
         const entries = releases.map((release): UpdateReleaseEntry => {
             const assetNames = release.assets.map(a => a.name);
-            const assetName = process.platform === 'win32'
-                ? findWindowsInstaller(assetNames, process.arch)
-                : findLinuxAppImage(assetNames, process.arch);
+            const assetName = findInstallAsset(assetNames);
             const asset = release.assets.find(a => a.name === assetName);
             return {
                 tagName: release.tag_name,
@@ -5556,55 +5544,40 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
     return info;
 }
 
-/** Downloads a release asset to `destination`, a line of progress per megabyte. */
-async function downloadUpdateAsset(downloadUrl: string, destination: string, writeLine: (line: string) => void): Promise<void> {
-    writeLine('Downloading…');
-    const response = await fetch(downloadUrl);
-    if (!response.ok || !response.body) {
-        throw new Error(`Download failed (HTTP ${response.status}).`);
-    }
-    const totalBytes = Number(response.headers.get('content-length')) || 0;
-    let downloadedBytes = 0;
-    let lastLoggedMb = 0;
-    await pipeline(
-        // Node's fetch typings (undici) and DOM's lib.dom ReadableStream diverge slightly -
-        // both are the real web ReadableStream at runtime, fromWeb() just wants any of them.
-        Readable.fromWeb(response.body as import('stream/web').ReadableStream<Uint8Array>),
-        new Transform({
-            transform(chunk, _enc, callback) {
-                downloadedBytes += chunk.length;
-                const mb = Math.floor(downloadedBytes / (1024 * 1024));
-                if (mb > lastLoggedMb) {
-                    lastLoggedMb = mb;
-                    const totalMb = totalBytes ? Math.round(totalBytes / (1024 * 1024)) : undefined;
-                    writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
-                }
-                callback(null, chunk);
-            },
-        }),
-        createWriteStream(destination),
-    );
+/** A line of the BO's progress log for each step of an installation (SelfUpdate.ts). */
+function updateStepLogger(writeLine: (line: string) => void): UpdateProgress {
+    let lastLoggedMb = -1;
+    return (step) => {
+        if (step.step === 'download') {
+            const mb = Math.floor(step.doneBytes / (1024 * 1024));
+            if (mb === 0 && lastLoggedMb < 0) {
+                writeLine('Downloading…');
+            } else if (mb > lastLoggedMb) {
+                const totalMb = step.totalBytes ? Math.round(step.totalBytes / (1024 * 1024)) : undefined;
+                writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
+            }
+            lastLoggedMb = Math.max(lastLoggedMb, mb);
+        } else if (step.step === 'extract') {
+            writeLine('Extracting the AppImage…');
+        } else if (step.step === 'switch') {
+            writeLine('Switching to the new version…');
+        }
+    };
 }
 
 /**
  * Windows: downloads the installer of the version picked and returns its path, or null after a
  * failure (reported in the block). The caller runs it once the page is sent: the installer closes
- * this very process. Kept in a folder of its own under the temporary directory, emptied first -
- * the installer cannot delete itself while it runs.
+ * this very process.
  */
-async function downloadWindowsInstaller(res: Response, title: string, downloadUrl: string): Promise<string | null> {
+async function downloadWindowsInstallerLogged(res: Response, title: string, downloadUrl: string): Promise<string | null> {
     res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
     const writeLine = (line: string): void => {
         res.write(`<li>${escapeHtml(line)}</li>`);
     };
     let installerPath: string | null = null;
     try {
-        const workDir = join(os.tmpdir(), 'mame-awesome-ui-update');
-        rmSync(workDir, {recursive: true, force: true});
-        mkdirSync(workDir, {recursive: true});
-        const destination = join(workDir, 'mame-awesome-ui-setup.exe');
-        await downloadUpdateAsset(downloadUrl, destination, writeLine);
-        installerPath = destination;
+        installerPath = await downloadWindowsInstaller(downloadUrl, updateStepLogger(writeLine));
         writeLine('Starting the installer: the application closes, updates and reopens on the new version.');
     } catch (error) {
         writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
@@ -5614,79 +5587,26 @@ async function downloadWindowsInstaller(res: Response, title: string, downloadUr
 }
 
 /**
- * Downloads `downloadUrl` (a raw release asset - real releases and develop-prerelease builds
- * are published the same way, see getUpdateInfo()) and swaps it into ~/squashfs-root (see
- * getSquashfsRootPath()) - same end state as docs/RASPBERRY-PI-DEPLOY.md §7's manual `rm -rf` +
- * re-extract, but via an atomic rename into a fresh temp dir first, so ~/squashfs-root.old stays
- * available as a manual rollback if the new version turns out broken, and the currently-running
- * process's own files are never touched mid-extraction. Streams progress the same way as
- * runImportScript() above - res must already have its page head written.
+ * Dedicated Linux cabinet: installs the version into ~/squashfs-root (SelfUpdate.ts
+ * installAppImage()), streaming its progress the same way as runImportScript() above - res must
+ * already have its page head written. Whether it was installed.
  */
-async function runUpdateInstall(res: Response, title: string, downloadUrl: string): Promise<void> {
+async function runUpdateInstall(res: Response, title: string, downloadUrl: string): Promise<boolean> {
     res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
     const writeLine = (line: string): void => {
         res.write(`<li>${escapeHtml(line)}</li>`);
     };
-
-    const squashfsRoot = getSquashfsRootPath();
-    // Next to ~/squashfs-root, not in os.tmpdir(): /tmp is a separate tmpfs on Debian/Raspberry Pi
-    // OS, and renameSync() across devices fails with EXDEV - which used to happen *after* the
-    // current install had already been moved to .old, leaving no ~/squashfs-root at all.
-    const workDir = mkdtempSync(join(dirname(squashfsRoot), '.mame-awesome-ui-update-'));
+    let installed = false;
     try {
-        const appImagePath = join(workDir, 'download.AppImage');
-        await downloadUpdateAsset(downloadUrl, appImagePath, writeLine);
-
-        chmodSync(appImagePath, 0o755);
-
-        writeLine('Extracting the AppImage…');
-        execFileSync(appImagePath, ['--appimage-extract'], {cwd: workDir, stdio: ['ignore', 'pipe', 'pipe']});
-
-        const newSquashfsRoot = join(workDir, 'squashfs-root');
-        if (!existsSync(newSquashfsRoot)) {
-            throw new Error('Extraction finished but squashfs-root was not found in the AppImage.');
-        }
-
-        const oldSquashfsRoot = `${squashfsRoot}.old`;
-        // The previous .old is parked in workDir (deleted with it in finally) rather than removed
-        // up front, so it can be put back if the swap fails.
-        const parkedOldSquashfsRoot = join(workDir, 'previous.old');
-        writeLine('Switching to the new version…');
-        const hadOld = existsSync(oldSquashfsRoot);
-        if (hadOld) {
-            renameSync(oldSquashfsRoot, parkedOldSquashfsRoot);
-        }
-        const hadCurrent = existsSync(squashfsRoot);
-        try {
-            if (hadCurrent) {
-                renameSync(squashfsRoot, oldSquashfsRoot);
-            }
-            renameSync(newSquashfsRoot, squashfsRoot);
-        } catch (error) {
-            // Undo, so a failed swap never leaves the machine without ~/squashfs-root (which
-            // ~/.xinitrc launches on boot).
-            if (!existsSync(squashfsRoot) && hadCurrent && existsSync(oldSquashfsRoot)) {
-                renameSync(oldSquashfsRoot, squashfsRoot);
-            }
-            if (hadOld && !existsSync(oldSquashfsRoot)) {
-                renameSync(parkedOldSquashfsRoot, oldSquashfsRoot);
-            }
-            throw error;
-        }
-
-        writeLine(
-            'Update installed. Use "Restart the application" below (or restart the Pi) '
-            + 'to apply the new version. The previous version stays available in '
-            + '~/squashfs-root.old while the new one is being validated.',
-        );
+        await installAppImage(downloadUrl, updateStepLogger(writeLine));
+        writeLine('Update installed. The previous version stays available in ~/squashfs-root.old '
+            + 'while the new one is being validated.');
+        installed = true;
     } catch (error) {
-        const message = error instanceof Error ? error.message : 'unexpected error';
-        writeLine(`Failed: ${message}`);
-    } finally {
-        rmSync(workDir, {recursive: true, force: true});
+        writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
-
     res.write('</ul></section>');
+    return installed;
 }
 
 /**
@@ -5791,9 +5711,10 @@ function renderUpdateTable(rows: string, emptyLabel: string): string {
 function renderUpdateCard(
     updateInfo: UpdateInfo, isAdvanced: boolean, installMessage?: string, installError?: string,
 ): string {
+    // Dedicated cabinet: the session restarts once the version is installed (SelfUpdate.ts).
     // Windows: the installer closes the application and starts it again by itself.
     const afterInstall = updateInfo.canRestart
-        ? 'The Pi will then need to be restarted.'
+        ? 'MAUI restarts by itself on it once it is downloaded.'
         : 'The application closes and reopens on that version.';
     const confirmRelease = `Install version {tag}? ${afterInstall}`;
     const releaseRows = updateInfo.releases
@@ -5809,13 +5730,16 @@ function renderUpdateCard(
         <section class="card">
             <h2>Update</h2>
             <p class="info">Currently installed version: <strong>${escapeHtml(updateInfo.currentVersion)}</strong></p>
+            ${updateInfo.capable ? `<p class="info">Installing a version downloads it, then ${updateInfo.canRestart
+                ? 'restarts MAUI by itself on it (the screen goes blank for a moment): any game in progress is closed'
+                : 'closes the application, which reopens on it'}.</p>` : ''}
             ${updateInfo.canRestart ? `
                 <form method="post" action="/maui/update/restart"
                     onsubmit="return confirm('Restart the application now? The screen goes blank for a moment, then it reopens on the version installed in ~/squashfs-root.')">
                     <button type="submit">Restart the application</button>
                 </form>
-                <p class="info">Relaunches the cabinet session (needed after an installation to run the
-                new version). Any game in progress is closed.</p>
+                <p class="info">Relaunches the cabinet session on the version installed (an installation
+                restarts it by itself; needed only when that restart failed). Any game in progress is closed.</p>
             ` : ''}
             ${!updateInfo.capable ? `
                 <p class="error">Automatic installation is unavailable on this machine (expected, not in
@@ -5925,6 +5849,18 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         'Thumbs up / neutral / thumbs down. A neutral vote is asked again next time.')}
                     ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the favorites',
                         'Restorable from the Games tab\'s removed favorites.')}
+                </fieldset>
+                <fieldset class="settings-group">
+                    <legend>Updates</legend>
+                    ${renderSettingCheckbox('frontUpdateEnabled', config.frontUpdateEnabled, 'Offer newer versions on the cabinet',
+                        'When it wakes up from idle, the cabinet asks whether to install the newer version: a thumbs up downloads it and restarts MAUI on it. Unticked, only the Update card below installs one.')}
+                    ${isAdvanced ? `
+                        <label for="updateChannel">Versions offered <span class="checkbox-row-detail">On the cabinet and in its idle messages.</span></label>
+                        <select id="updateChannel" name="updateChannel">
+                            <option value="releases" ${config.updateChannel === 'releases' ? 'selected' : ''}>Releases</option>
+                            <option value="prereleases" ${config.updateChannel === 'prereleases' ? 'selected' : ''}>Releases and development builds (pre-releases)</option>
+                        </select>
+                    ` : ''}
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>Back office</legend>
@@ -9735,6 +9671,12 @@ export function createBoApp(
         config.fullscreen = req.body.fullscreen === 'on';
         config.voteEnabled = req.body.voteEnabled === 'on';
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
+        // Read again by the main process each time the front wakes up (FrontUpdate.ts): no reload.
+        config.frontUpdateEnabled = req.body.frontUpdateEnabled === 'on';
+        // Advanced configuration only, like the development builds it offers.
+        if (req.session.boAdvanced === true) {
+            config.updateChannel = parseUpdateChannel(req.body.updateChannel);
+        }
         const previousCategories = shownCategories(config);
         config.showAllGamesCategory = req.body.showAllGamesCategory === 'on';
         config.showBeatThisCategory = req.body.showBeatThisCategory === 'on';
@@ -10021,28 +9963,39 @@ export function createBoApp(
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead('maui', getViewer(req)));
+        const waitForNewVersion = '<section class="card"><p id="restart-wait-message" class="info">Waiting for the '
+            + 'application to come back… this page will automatically take you back to the MAUI tab as soon as the '
+            + `new version is running.</p>${renderRestartWaitScript('/maui')}</section>`;
+        let installMessage: string | undefined;
         if (isWindowsInstall()) {
-            const installerPath = await downloadWindowsInstaller(res, `Installing version ${tagName}…`, assetUrl);
+            const installerPath = await downloadWindowsInstallerLogged(res, `Installing version ${tagName}…`, assetUrl);
             if (installerPath) {
-                res.write('<section class="card"><p id="restart-wait-message" class="info">Waiting for the application '
-                    + 'to come back… this page will automatically take you back to the MAUI tab as soon as the new '
-                    + `version is running.</p>${renderRestartWaitScript('/maui')}</section>`);
+                res.write(waitForNewVersion);
                 res.write(renderPageTail());
                 res.end();
                 // Delayed so this response finishes flushing: the installer closes this process.
-                setTimeout(() => {
-                    spawn(installerPath, [...WINDOWS_INSTALLER_ARGS], {detached: true, stdio: 'ignore'}).unref();
-                    onReset();
-                }, 500);
+                setTimeout(() => runWindowsInstaller(installerPath, onReset), 500);
                 return;
             }
-        } else {
-            await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl);
+        } else if (await runUpdateInstall(res, `Installing version ${tagName}…`, assetUrl)) {
+            // MAUI restarts by itself on the new version, as the confirmation said: the kiosk session
+            // (X and MAUI, which ~/.xinitrc runs as its last command), not the machine.
+            // Delayed so this response finishes flushing before the session goes down.
+            if (await restartOnInstalledVersion(500)) {
+                res.write('<section class="card"><h2>Restarting MAUI</h2><p class="info">The screen goes '
+                    + 'blank for a moment, then MAUI comes back on the new version.</p></section>');
+                res.write(waitForNewVersion);
+                res.write(renderPageTail());
+                res.end();
+                return;
+            }
+            installMessage = 'MAUI cannot restart by itself (the sudo rule of docs/RASPBERRY-PI-DEPLOY.md '
+                + '§5.7 is missing): restart the cabinet to run the new version.';
         }
 
         const updateInfo = await getUpdateInfo();
         res.write(renderMauiCard(config, isAdvanced));
-        res.write(renderUpdateCard(updateInfo, isAdvanced));
+        res.write(renderUpdateCard(updateInfo, isAdvanced, undefined, installMessage));
         if (isAdvanced) {
             res.write(renderMauiImportExportCard());
             res.write(renderMauiDangerZoneCard());

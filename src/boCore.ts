@@ -167,8 +167,9 @@ export interface StartedCore extends BoCore {
     bo: BoOnDemand;
     // Where the BO is reached from, as the front shows it (BoUrl.ts).
     getUrl(): string;
-    // A newer release of MAUI, announced by the idle band (UpdateWatch.ts); null without one.
-    availableUpdate(): string | null;
+    // The releases GitHub lists (UpdateWatch.ts): the newer version for the idle band and the
+    // front's update offer (FrontUpdate.ts), and the file of a version.
+    updates: UpdateWatch;
     // Closes the BO's port(s).
     close(): void;
 }
@@ -306,7 +307,7 @@ export function startCore(
         databaseReady,
         bo,
         getUrl: () => describeBoUrl({cabinet, lanAddress: getLanAddress(), onCabinetPort, port}),
-        availableUpdate: () => updates.available(),
+        updates,
         close: () => {
             server.close();
             cabinetServer?.close();

@@ -4,6 +4,7 @@ import * as os from 'os';
 import {decryptSecret, encryptSecret, isEncryptedSecret} from '@/class/SecretBox';
 import {parseUiModeSetting, type UiModeSetting} from '@/class/UiMode';
 import {parseDisplayModeSetting, type DisplayModeSetting} from '@/class/DisplayMode';
+import {parseUpdateChannel, type UpdateChannel} from '@/class/ReleaseList';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
 // the clear: they are shown back in the BO forms, the passwords are not.
@@ -76,6 +77,15 @@ export default class Config {
     // weren't liked - what a cabinet builder sorting through a big imported game list wants
     // the other way round.
     public thumbsDownRemovesFavorite: boolean = true;
+
+    // Whether the front offers a newer version of MAUI when it wakes up from idle (Home.vue,
+    // FrontUpdate.ts): a player installs it with a thumbs up, without the BO. Off, only the BO's
+    // Update card installs one.
+    public frontUpdateEnabled: boolean = true;
+
+    // Which versions are offered, on the front and in the idle band (ReleaseList.ts newestAbove()):
+    // the releases, or the development builds too (Advanced configuration).
+    public updateChannel: UpdateChannel = 'releases';
 
     // The carousel's categories that are not genres (CarouselCategories.ts buildCarousel()): every
     // game, the games players have a score on ("Beat This!"), and the games whose hiscores
@@ -155,6 +165,8 @@ export default class Config {
             this.fullscreen = configFile.fullscreen === true;
             this.voteEnabled = configFile.voteEnabled !== false;
             this.thumbsDownRemovesFavorite = configFile.thumbsDownRemovesFavorite !== false;
+            this.frontUpdateEnabled = configFile.frontUpdateEnabled !== false;
+            this.updateChannel = parseUpdateChannel(configFile.updateChannel);
             this.showAllGamesCategory = configFile.showAllGamesCategory !== false;
             this.showBeatThisCategory = configFile.showBeatThisCategory !== false;
             this.showHiscoresOnlyCategory = configFile.showHiscoresOnlyCategory !== false;
@@ -215,6 +227,8 @@ export default class Config {
                 fullscreen: this.fullscreen,
                 voteEnabled: this.voteEnabled,
                 thumbsDownRemovesFavorite: this.thumbsDownRemovesFavorite,
+                frontUpdateEnabled: this.frontUpdateEnabled,
+                updateChannel: this.updateChannel,
                 showAllGamesCategory: this.showAllGamesCategory,
                 showBeatThisCategory: this.showBeatThisCategory,
                 showHiscoresOnlyCategory: this.showHiscoresOnlyCategory,
