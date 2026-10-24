@@ -343,6 +343,12 @@ EOF
 Test : `aplay /usr/share/sounds/alsa/Front_Center.wav` (sans `-D`, donc via
 le device par défaut) doit être audible sur l'écran.
 
+> 💡 Depuis le BO (onglet MAUI, carte mame-awesome-ui, groupe *Screen*) :
+> « Screen output » choisit le port HDMI de l'écran (`xrandr`, au prochain
+> démarrage) et « Sound output » la sortie son, écrite dans `~/.asoundrc`
+> (lu par ALSA après `/etc/asound.conf`, sans root). La partie suivante
+> l'utilise aussitôt.
+
 ### 6.3 Sink par défaut PulseAudio (MAME lui-même)
 
 > ⚠️ Depuis le §6.4, MAME est forcé sur ALSA (`SDL_AUDIO_DRIVER=alsa` dans

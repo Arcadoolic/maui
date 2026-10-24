@@ -378,6 +378,7 @@ describe('Config.save', () => {
 
         const raw = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(Object.keys(raw).sort()).toEqual([
+            'audioOutput',
             'bezelAspect',
             'boIdleMinutes',
             'cabinetPlayersPublic',
@@ -406,6 +407,7 @@ describe('Config.save', () => {
             'thumbsDownRemovesFavorite',
             'uiMode',
             'updateChannel',
+            'videoOutput',
             'voteEnabled',
         ]);
     });

@@ -52,6 +52,8 @@ import {
 } from '@/class/PackOwnership';
 import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
+import {listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
+import {applyAudioOutput, listAudioDevices, parseAudioOutputSetting} from '@/class/AudioOutput';
 import {
     downloadWindowsInstaller, findInstallAsset, installAppImage, isKioskInstall, isSelfUpdateCapable, isWindowsInstall,
     restartOnInstalledVersion, runWindowsInstaller, type UpdateProgress,
@@ -5805,6 +5807,41 @@ function getAutoUiMode(): UiMode {
     return resolveUiMode('auto', {totalMemBytes: os.totalmem(), gpuCompositing});
 }
 
+/**
+ * The screen and sound outputs of a dedicated cabinet (VideoOutput.ts, AudioOutput.ts), as this
+ * machine has them now. A saved output not found now (a screen unplugged) stays offered.
+ */
+function renderCabinetOutputSelects(config: Config): string {
+    let outputs: ScreenOutputInfo[] = [];
+    try {
+        outputs = listScreenOutputs();
+    } catch {
+        // No X server reachable: Automatic only.
+    }
+    const devices = listAudioDevices();
+    const option = (value: string, label: string, selected: boolean) =>
+        `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    const videoOptions = [
+        option('', 'Automatic (as the system starts it)', config.videoOutput === ''),
+        ...outputs.map(output => option(output.name,
+            `${output.name} - ${output.connected ? 'screen connected' : 'nothing connected'}`, config.videoOutput === output.name)),
+        ...(config.videoOutput && !outputs.some(output => output.name === config.videoOutput)
+            ? [option(config.videoOutput, `${config.videoOutput} - not found now`, true)] : []),
+    ].join('');
+    const audioOptions = [
+        option('', 'Automatic (the system default, /etc/asound.conf)', config.audioOutput === ''),
+        ...devices.map(device => option(device.id, `${device.label} (${device.id})`, config.audioOutput === device.id)),
+        ...(config.audioOutput && !devices.some(device => device.id === config.audioOutput)
+            ? [option(config.audioOutput, `${config.audioOutput} - not found now`, true)] : []),
+    ].join('');
+    return `
+        <label for="videoOutput">Screen output <span class="checkbox-row-detail">The port the screen is plugged in. Applied the next time the cabinet starts; MAME follows it.</span></label>
+        <select id="videoOutput" name="videoOutput">${videoOptions}</select>
+        <label for="audioOutput">Sound output <span class="checkbox-row-detail">HDMI sound goes with the screen's port (vc4hdmi0 with HDMI-1 on a Raspberry Pi). The next game uses it at once, MAUI's own sounds at its next start.</span></label>
+        <select id="audioOutput" name="audioOutput">${audioOptions}</select>
+    `;
+}
+
 /** The carousel categories switched on in the MAUI tab, to tell whether a save changed them. */
 function shownCategories(config: Config): string {
     return [config.showAllGamesCategory, config.showBeatThisCategory, config.showHiscoresOnlyCategory].join();
@@ -5845,6 +5882,7 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                             <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
                             <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
                         </select>
+                        ${renderCabinetOutputSelects(config)}
                     ` : ''}
                     ${renderSettingCheckbox('onlineBadgeDotOnly', config.onlineBadgeDotOnly, 'ONLINE badge: the dot alone',
                         'In the top right corner of the cabinet, without ONLINE / OFFLINE.')}
@@ -9995,6 +10033,22 @@ export function createBoApp(
         if (typeof req.body.displayMode === 'string') {
             config.displayMode = parseDisplayModeSetting(req.body.displayMode);
         }
+        if (typeof req.body.videoOutput === 'string') {
+            config.videoOutput = parseVideoOutputSetting(req.body.videoOutput);
+        }
+        let audioError: string | undefined;
+        if (typeof req.body.audioOutput === 'string') {
+            const audioOutput = parseAudioOutputSetting(req.body.audioOutput);
+            if (audioOutput !== config.audioOutput) {
+                try {
+                    // At once: the next game opens the sound device again.
+                    applyAudioOutput(audioOutput);
+                    config.audioOutput = audioOutput;
+                } catch (error) {
+                    audioError = error instanceof Error ? error.message : String(error);
+                }
+            }
+        }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
             || frontIdleKey() !== previousFrontIdle
@@ -10003,7 +10057,9 @@ export function createBoApp(
             // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
-        await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
+        await sendMauiPage(req, res, config, {
+            mauiInfo: audioError ? `Configuration saved, but not the sound output: ${audioError}` : 'Configuration saved.',
+        });
     });
 
     app.post('/maui/online/save', async (req, res) => {
