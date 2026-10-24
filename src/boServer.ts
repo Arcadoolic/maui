@@ -4473,7 +4473,8 @@ function renderPendingRelaunchNotice(): string {
             controls it started with. Click <strong>Apply controls</strong> at the top of the page to
             try the new ones.</p>`
         : `<p class="warn flash"><strong>Saved, not active yet:</strong> the game being played keeps
-            the controls it started with - the change applies the next time it's launched.</p>`;
+            the controls it started with. <strong>Apply controls</strong> relaunches it with the new
+            ones (ending the game in progress), else they apply the next time it's launched.</p>`;
 }
 
 /**
@@ -4488,6 +4489,14 @@ async function stopEveryMame(config: Config): Promise<void> {
         : Promise.resolve();
     stopMameConfigSession();
     await Promise.all([sessionExited, stopMameProcesses(findOtherMameProcesses(config))]);
+    // MAUI's game is gone too: its edits are replayed now rather than by its watch (up to a second
+    // later), so a MAME started right after reads them ("Apply controls" on the per-game card).
+    if (adoptedMame && !isProcessAlive(adoptedMame.pid)) {
+        const adopted = adoptedMame;
+        adoptedMame = undefined;
+        replayCfgEdits(adopted);
+        adopted.cfgEdits = [];
+    }
 }
 
 function stopMameConfigSession(): void {
@@ -5146,6 +5155,11 @@ function renderGameRemapCard(
     const selectedRom = state?.romName ?? targetRom ?? otherRom
         ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
     const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
+    // Once a change is saved for the running game, relaunching it is what puts the change in effect
+    // (see hasPendingCfgEdits()): the button says so and stands out, like the global "Apply controls".
+    const applyPending = targetRom === selectedRom && hasPendingCfgEdits();
+    const gameLaunchLabel = applyPending ? 'Apply controls'
+        : selectedRom === targetRom || selectedRom === otherRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game';
 
     const renderTable = (romName: string): string => {
         const fields = readSessionGameFields();
@@ -5259,7 +5273,7 @@ function renderGameRemapCard(
             `}
             <form method="post" action="/input-probe/game/start">
                 ${picker}
-                <button type="submit">${selectedRom === targetRom || selectedRom === otherRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
+                <button type="submit"${applyPending ? ' class="button-attention"' : ''}>${gameLaunchLabel}</button>
             </form>
             ${targetRom === selectedRom ? renderPendingRelaunchNotice() : ''}
             ${targetRom ? `
