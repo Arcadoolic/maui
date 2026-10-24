@@ -811,6 +811,8 @@ function resolveFavorites(
 // The BO account's seeded password (see migrations/20260917061122-create-bo-user.js), public by
 // definition: never accepted as a new password, and forced to be changed at sign-in.
 const DEFAULT_BO_PASSWORD = 'puckman';
+// The BO's only account (BoUser.model.ts): signing in asks for its password alone.
+const BO_USERNAME = 'puckman';
 // The wrapped data key (SecretBox.ts) can be brute-forced offline from a copy of the database,
 // only the password's length and scrypt's cost stand in the way.
 const MIN_BO_PASSWORD_LENGTH = 8;
@@ -3597,18 +3599,13 @@ function renderLoginPage(error?: string): string {
         <section class="card">
             <h2>Sign in</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <!-- Deliberately no "required" here: with two fields, pressing Enter in one while
-                 the other is still empty triggers the browser's native validation instead of
-                 submitting - easy to miss (the message lands on the other, unfocused field),
-                 and looks like "Enter does nothing". /login already handles a blank/wrong
-                 username or password gracefully (401 + "Incorrect username or password
-                 incorrect."), so letting the browser send an incomplete submission and having
-                 the server reject it is simpler than fighting native validation here. -->
+            <!-- The password alone: the BO has one account (BO_USERNAME), nothing to pick. No
+                 "required": /login answers a blank password with its own message (401). The
+                 hidden username only helps password managers file the password under it. -->
             <form method="post" action="/login" id="loginForm">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" autofocus>
+                <input type="text" name="username" value="${BO_USERNAME}" autocomplete="username" hidden>
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password">
+                <input type="password" id="password" name="password" autocomplete="current-password" autofocus>
                 <button type="submit">Sign in</button>
             </form>
             <!-- A password manager's menu in a field (an extension, Chrome's own suggestions) can
@@ -3637,13 +3634,10 @@ function renderLoginPage(error?: string): string {
     `, 'mame', null);
 }
 
-function renderAccountPage(
-    username: string, viewer: Viewer, mustChangePassword: boolean, error?: string, info?: string,
-): string {
+function renderAccountPage(viewer: Viewer, mustChangePassword: boolean, error?: string, info?: string): string {
     return renderPage(`
         <section class="card">
             <h2>My account</h2>
-            <p>Signed in as <strong>${escapeHtml(username)}</strong>.</p>
             ${mustChangePassword ? `<p class="error flash">You are using the default password.
             Choose a new one to continue: it also encrypts the saved credentials.</p>` : ''}
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
@@ -8725,11 +8719,10 @@ export function createBoApp(
     });
 
     app.post('/login', async (req, res) => {
-        const username: string = (req.body.username || '').trim();
         const password: string = req.body.password || '';
         let boUser: BoUser | null;
         try {
-            boUser = await BoUser.findOne({where: {username}});
+            boUser = await BoUser.findOne({where: {username: BO_USERNAME}});
         } catch {
             // The database bootstrap failed (see bootstrapDatabase(), logged at startup).
             res.status(503).send(renderLoginPage(
@@ -8738,7 +8731,7 @@ export function createBoApp(
             return;
         }
         if (!boUser || !bcrypt.compareSync(password, boUser.passwordHash)) {
-            res.status(401).send(renderLoginPage('Incorrect username or password.'));
+            res.status(401).send(renderLoginPage('Incorrect password.'));
             return;
         }
         if (bcrypt.getRounds(boUser.passwordHash) < BO_PASSWORD_BCRYPT_ROUNDS) {
@@ -8785,7 +8778,7 @@ export function createBoApp(
             req.session.destroy(() => res.redirect('/login'));
             return;
         }
-        res.send(renderAccountPage(boUser.username, getViewer(req), req.session.mustChangePassword === true));
+        res.send(renderAccountPage(getViewer(req), req.session.mustChangePassword === true));
     });
 
     app.post('/account/password', async (req, res) => {
@@ -8799,7 +8792,7 @@ export function createBoApp(
         const confirmPassword: string = req.body.confirmPassword || '';
         const mustChange = req.session.mustChangePassword === true;
         const sendError = (status: number, error: string) => {
-            res.status(status).send(renderAccountPage(boUser.username, getViewer(req), mustChange, error));
+            res.status(status).send(renderAccountPage(getViewer(req), mustChange, error));
         };
 
         if (!bcrypt.compareSync(currentPassword, boUser.passwordHash)) {
@@ -8834,7 +8827,7 @@ export function createBoApp(
             res.redirect(303, '/setup');
             return;
         }
-        res.send(renderAccountPage(boUser.username, getViewer(req), false, undefined, 'Password updated.'));
+        res.send(renderAccountPage(getViewer(req), false, undefined, 'Password updated.'));
     });
 
     app.get('/', (req, res) => {
