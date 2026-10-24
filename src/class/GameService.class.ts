@@ -19,7 +19,7 @@ const Sequelize = SequelizeTS.Sequelize;
  * jumps (AlphaJump.ts) rely on it.
  */
 export const GAMES_BY_TITLE: NonNullable<NonNullable<Parameters<typeof Game.findAll>[0]>['order']> = [[Sequelize.literal('shortname COLLATE NOCASE'), 'ASC'], ['romName', 'ASC']];
-import {Vote, VOTE_DOWN} from '@/class/GameVote';
+import {Vote, VOTE_DOWN, voteFields} from '@/class/GameVote';
 import {removeFavoriteFromDisk} from '@/class/FavoritesStore';
 import {parseCatverIni} from '@/class/CatverGenres';
 
@@ -236,11 +236,14 @@ export default class GameService {
      * Save the cabinet's vote on a game (see GameVote.ts). A thumbs down also takes the game out
      * of mame's favorites when `removeFromFavorites` is set (BO, MAUI tab) - the game is then
      * soft-deleted by the same favorites resync Init.vue runs on every start, and stays
-     * restorable from the BO's "Removed" tab. Returns whether the game left the favorites.
+     * restorable from the BO's "Removed" tab. `starred`: the star, a thumbs up that also puts the
+     * game in "My favourites" (voteFields()). Returns whether the game left the favorites.
      */
-    public async applyVote(game: Game, vote: Vote, removeFromFavorites: boolean): Promise<boolean> {
-        await Game.update({vote}, {where: {romName: game.romName}});
-        game.vote = vote;
+    public async applyVote(game: Game, vote: Vote, removeFromFavorites: boolean, starred = false): Promise<boolean> {
+        const fields = voteFields(vote, starred);
+        await Game.update(fields, {where: {romName: game.romName}});
+        game.vote = fields.vote;
+        game.starred = fields.starred;
         if (vote !== VOTE_DOWN || !removeFromFavorites) {
             return false;
         }
@@ -272,6 +275,17 @@ export default class GameService {
     public async loadHiscoreGames() {
         return await Game.findAll({
             where: {hi: true},
+            order: GAMES_BY_TITLE,
+        });
+    }
+
+    /**
+     * Starred games - the content of the dynamic "My favourites" category. Queried on every call,
+     * like loadHiscoreGames(), so a star given a moment ago is there.
+     */
+    public async loadStarredGames() {
+        return await Game.findAll({
+            where: {starred: true},
             order: GAMES_BY_TITLE,
         });
     }

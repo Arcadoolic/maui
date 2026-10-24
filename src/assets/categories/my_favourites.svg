@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="140px" height="140px" viewBox="0 0 140 140">
+<circle fill="#F8EB48" cx="70" cy="70" r="70"/>
+<!-- The star given on the cabinet once a game is quit (VoteModal.vue) -->
+<path fill="#384850" d="M70,24l13.6,27.6l30.4,4.4l-22,21.5l5.2,30.3L70,93.5L42.8,107.8l5.2-30.3l-22-21.5l30.4-4.4L70,24z"/>
+</svg>

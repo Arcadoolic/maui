@@ -8,7 +8,7 @@ import type Category from '@/model/Category.model';
 export interface DynamicCategory {
     id_category: number;
     name: string;
-    dynamic: 'all' | 'hiscores' | 'beat-this';
+    dynamic: 'all' | 'hiscores' | 'beat-this' | 'starred';
 }
 
 /**
@@ -36,6 +36,13 @@ export const BEAT_THIS_CATEGORY: DynamicCategory = {
     id_category: -3,
     name: 'Beat This!',
     dynamic: 'beat-this',
+};
+
+// The games starred on the cabinet once quit (VoteModal.vue) or from the BO.
+export const STARRED_CATEGORY: DynamicCategory = {
+    id_category: -4,
+    name: 'My favourites',
+    dynamic: 'starred',
 };
 
 export const HISCORES_ONLY_CATEGORY: DynamicCategory = {

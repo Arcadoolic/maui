@@ -173,6 +173,10 @@ function getCategoryClasses(index: number) {
         background-image: url(../assets/categories/hiscores_only.svg);
     }
 
+    .categories .category.my_favourites {
+        background-image: url(../assets/categories/my_favourites.svg);
+    }
+
     .categories .category.beat_this {
         background-image: url(../assets/categories/beat_this.svg);
     }
