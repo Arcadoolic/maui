@@ -124,6 +124,7 @@ import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
+import {buildStarredFile, MAX_STARRED_FILE_BYTES, parseStarredFile} from '@/class/StarredGamesFile';
 import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
 import {renderBluetoothCard} from '@/class/BluetoothBoCard';
 import {
@@ -7253,7 +7254,33 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             the game in the cabinet's "My favourites" category. Whether a thumbs down also removes the
             game from the favorites is set in the <a href="/maui">MAUI</a> tab.</p>
         </section>
+        ${renderStarredCard(favoritesInfo)}
         ${removedCard}
+    `;
+}
+
+/**
+ * The cabinet's "My favourites" (the starred games, see GameVote.ts) to a file and back: for
+ * another cabinet, or this one after a reinstall. An import adds stars, it never takes one away.
+ */
+function renderStarredCard(favoritesInfo: FavoritesInfo): string {
+    const starred = favoritesInfo.rows.filter(row => favoritesInfo.stats?.get(row.romName)?.starred).length;
+    return `
+        <section class="card">
+            <h2>My favourites (${starred})</h2>
+            <p class="info">The games starred on the cabinet or above. Export them to a file, and import
+            such a file here or on another cabinet: its games get a star (and a thumbs up) where the
+            cabinet has them, the other games keep theirs. A game the cabinet doesn't have is left out.</p>
+            ${starred ? `
+            <form method="get" action="/favorites/starred/export">
+                <button type="submit">Export</button>
+            </form>` : ''}
+            <form method="post" action="/favorites/starred/import" enctype="multipart/form-data">
+                <label for="starredImportFile">File to import (a .json exported here)</label>
+                <input type="file" id="starredImportFile" name="file" accept=".json" required>
+                <button type="submit">Import</button>
+            </form>
+        </section>
     `;
 }
 
@@ -8714,6 +8741,7 @@ export function createBoApp(
     // storage has no buffer). An export is the config file and the SQLite database, a few MiB.
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
+    const starredUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_STARRED_FILE_BYTES, files: 1}});
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -9254,6 +9282,68 @@ export function createBoApp(
             favoritesChanged();
         }
         res.send(await renderFavoritesTab(req, flash));
+    });
+
+    app.get('/favorites/starred/export', async (req, res) => {
+        let games: Game[];
+        try {
+            games = await Game.findAll({attributes: ['romName', 'fullname'], where: {starred: true}, order: [['romName', 'ASC']]});
+        } catch {
+            res.status(503).send(await renderFavoritesTab(req, {
+                warning: 'Database not ready yet - launch the application once, then retry.',
+            }));
+            return;
+        }
+        if (!games.length) {
+            res.send(await renderFavoritesTab(req, {warning: 'No starred game to export.'}));
+            return;
+        }
+        const now = new Date();
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="maui-my-favourites-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildStarredFile(games.map(game => ({romName: game.romName, name: game.fullname || game.romName})), now));
+    });
+
+    app.post('/favorites/starred/import', starredUpload.single('file'), async (req, res) => {
+        // It changes the cabinet's votes: same-origin only, the BO having no CSRF token (see
+        // refuseOnlineRequest()).
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Pick a .json file exported from "My favourites".'}));
+            return;
+        }
+        let romNames: string[];
+        try {
+            romNames = parseStarredFile(req.file.buffer.toString('utf8'));
+        } catch (error) {
+            res.status(422).send(await renderFavoritesTab(req, {warning: `Import failed: ${(error as Error).message}`}));
+            return;
+        }
+
+        let present: Game[];
+        try {
+            // The cabinet's games only (not those out of the favorites): a star is for its carousel.
+            present = await Game.findAll({attributes: ['romName', 'starred'], where: {romName: romNames}});
+            const added = present.filter(game => !game.starred).map(game => game.romName);
+            if (added.length) {
+                await Game.update(voteFields(VOTE_UP, true), {where: {romName: added}});
+                favoritesChanged();
+            }
+            const missing = romNames.length - present.length;
+            const plural = (count: number, word: string) => `${count} ${word}${count > 1 ? 's' : ''}`;
+            res.send(await renderFavoritesTab(req, {
+                notice: `Import done: ${plural(added.length, 'game')} starred, `
+                    + `${plural(present.length - added.length, 'game')} already starred`
+                    + (missing ? `, ${plural(missing, 'game')} of the file not on this cabinet.` : '.'),
+            }));
+        } catch {
+            res.status(503).send(await renderFavoritesTab(req, {
+                warning: 'Database not ready yet - launch the application once, then retry.',
+            }));
+        }
     });
 
     app.post('/favorites/refresh', async (req, res) => {
