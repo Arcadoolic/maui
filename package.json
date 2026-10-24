@@ -35,7 +35,7 @@
         "multer": "^2.4.0",
         "os": "^0.1.1",
         "pg-hstore": "^2.3.3",
-        "react": "^19.3.0",
+        "react": "^19.3.1",
         "react-dom": "^19.3.0",
         "reflect-metadata": "^0.2.2",
         "sequelize": "^6.37.8",
