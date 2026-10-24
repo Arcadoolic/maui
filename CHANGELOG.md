@@ -1,3 +1,10 @@
+## [2.18.0](https://github.com/Arcadoolic/maui/compare/2.17.0...2.18.0) (2026-10-24)
+
+### Features
+
+* **front:** show the local IP address in the ONLINE badge ([59fcb47](https://github.com/Arcadoolic/maui/commit/59fcb47849e0b12dd49640de83b0affa526411e3))
+* **update:** offer newer versions on the front, restart after install ([0670270](https://github.com/Arcadoolic/maui/commit/0670270044d178fb52962d88696af07236bf003f))
+
 ## [2.17.0](https://github.com/Arcadoolic/maui/compare/2.16.1...2.17.0) (2026-10-22)
 
 ### Features
