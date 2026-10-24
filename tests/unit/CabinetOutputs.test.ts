@@ -5,7 +5,11 @@ import {join} from 'path';
 import {
     applyVideoOutput, parseVideoOutputSetting, parseXrandrOutputs, videoOutputArgs,
 } from '@/class/VideoOutput';
-import {applyAudioOutput, parseAlsaDevices, parseAudioOutputSetting, renderAsoundrc} from '@/class/AudioOutput';
+import {
+    applyAudioOutput, audioDeviceForScreen, FOLLOW_SCREEN, parseAlsaDevices, parseAudioOutputSetting, renderAsoundrc,
+    resolveAudioOutput,
+} from '@/class/AudioOutput';
+import {currentScreenOutput} from '@/class/VideoOutput';
 
 // What a Raspberry Pi 4 (arcade-dkong) gives, its screen on the first HDMI port.
 const XRANDR = `Screen 0: minimum 320 x 200, current 1920 x 1080, maximum 7680 x 7680
@@ -77,12 +81,31 @@ describe('sound output', () => {
         }
     });
 
-    it('lists the playback devices with their card names', () => {
+    it('names a Raspberry Pi\'s cards after where the sound comes out', () => {
         expect(parseAlsaDevices(CARDS, PCM)).toEqual([
-            {id: 'Headphones,0', label: 'bcm2835 Headphones'},
-            {id: 'vc4hdmi0,0', label: 'vc4-hdmi-0'},
-            {id: 'vc4hdmi1,0', label: 'vc4-hdmi-1'},
+            {id: 'Headphones,0', label: 'Raspberry Pi\'s 3.5 mm jack'},
+            {id: 'vc4hdmi0,0', label: 'HDMI-1 port (the screen\'s speakers or its headphone socket)'},
+            {id: 'vc4hdmi1,0', label: 'HDMI-2 port (the screen\'s speakers or its headphone socket)'},
         ]);
+    });
+
+    it('follows the screen: HDMI-1 is vc4hdmi0, HDMI-2 vc4hdmi1', () => {
+        const devices = parseAlsaDevices(CARDS, PCM);
+        expect(audioDeviceForScreen('HDMI-1', devices)).toBe('vc4hdmi0,0');
+        expect(audioDeviceForScreen('HDMI-A-2', devices)).toBe('vc4hdmi1,0');
+        // Not a Pi's HDMI port, or a machine without these cards: the system's default.
+        expect(audioDeviceForScreen('DP-1', devices)).toBe('');
+        expect(audioDeviceForScreen('HDMI-1', [])).toBe('');
+        expect(resolveAudioOutput(FOLLOW_SCREEN, 'HDMI-2', devices)).toBe('vc4hdmi1,0');
+        expect(resolveAudioOutput('Headphones,0', 'HDMI-2', devices)).toBe('Headphones,0');
+        expect(resolveAudioOutput('', 'HDMI-2', devices)).toBe('');
+    });
+
+    it('follows the output the picture is on: the one set when it has a screen, else the primary one', () => {
+        const outputs = parseXrandrOutputs(XRANDR);
+        expect(currentScreenOutput('', outputs)).toBe('HDMI-1');
+        expect(currentScreenOutput('HDMI-2', outputs)).toBe('HDMI-1');
+        expect(currentScreenOutput('', [])).toBe('');
     });
 
     it('names the device when a card has several', () => {
@@ -100,6 +123,9 @@ describe('sound output', () => {
         expect(() => renderAsoundrc('x"; y')).toThrow();
         expect(parseAudioOutputSetting('vc4hdmi0,0')).toBe('vc4hdmi0,0');
         expect(parseAudioOutputSetting('hw:0')).toBe('');
+        // Following the screen is the default, also for a config file from before the setting.
+        expect(parseAudioOutputSetting(undefined)).toBe(FOLLOW_SCREEN);
+        expect(parseAudioOutputSetting('')).toBe('');
     });
 
     it('writes and removes its own ~/.asoundrc, never one it did not write', () => {

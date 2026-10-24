@@ -39,8 +39,8 @@ import {canRestartKiosk, isKioskLayout, powerOff, restartKiosk} from '@/class/Ki
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
-import {applyVideoOutput} from '@/class/VideoOutput';
-import {applyAudioOutput} from '@/class/AudioOutput';
+import {applyVideoOutput, currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
+import {applyAudioOutput, listAudioDevices, resolveAudioOutput} from '@/class/AudioOutput';
 import {resolveUiMode} from '@/class/UiMode';
 
 remoteMain.initialize();
@@ -172,12 +172,6 @@ function setCabinetDisplayMode(): void {
     const config = new Config();
     config.load();
     try {
-        // The BO writes it when it changes; written again here in case ~/.asoundrc was lost.
-        applyAudioOutput(config.audioOutput);
-    } catch (error) {
-        console.error('[background] Sound output not set:', error);
-    }
-    try {
         // First: the mode below is set on the primary output, the one picked here.
         const output = applyVideoOutput(config.videoOutput);
         if (output) {
@@ -185,6 +179,19 @@ function setCabinetDisplayMode(): void {
         }
     } catch (error) {
         console.error('[background] Screen output not set:', error);
+    }
+    try {
+        // After the screen output, which the sound follows by default. The BO writes it when it
+        // changes; written again here in case ~/.asoundrc was lost or the screen moved.
+        let screen = '';
+        try {
+            screen = currentScreenOutput(config.videoOutput, listScreenOutputs());
+        } catch {
+            // No xrandr answer: no screen output to follow.
+        }
+        applyAudioOutput(resolveAudioOutput(config.audioOutput, screen, listAudioDevices()));
+    } catch (error) {
+        console.error('[background] Sound output not set:', error);
     }
     try {
         // The GPU's status is not known this early: the memory alone tells Lite here (UiMode.ts).
