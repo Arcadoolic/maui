@@ -5837,7 +5837,7 @@ function renderCabinetOutputSelects(config: Config): string {
         option(FOLLOW_SCREEN, `Same as the screen output (now: ${followedLabel})`, config.audioOutput === FOLLOW_SCREEN),
         option('', 'System default (/etc/asound.conf)', config.audioOutput === ''),
         ...devices.map(device => option(device.id, `${device.label} (${device.id})`, config.audioOutput === device.id)),
-        ...(config.audioOutput && !devices.some(device => device.id === config.audioOutput)
+        ...(config.audioOutput && config.audioOutput !== FOLLOW_SCREEN && !devices.some(device => device.id === config.audioOutput)
             ? [option(config.audioOutput, `${config.audioOutput} - not found now`, true)] : []),
     ].join('');
     return `
