@@ -27,7 +27,8 @@ import {
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {
-    CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type FrontControls,
+    CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, MAME_SESSION_CHANNEL, PAD_CAPTURED_CHANNEL,
+    type FrontControls,
     type PadCaptureReply,
 } from '@/class/FrontControlsBridge';
 import Config from '@/class/Config.class';
@@ -262,6 +263,11 @@ app.on('ready', async () => {
         cancelCapture: () => {
             if (win && !win.isDestroyed()) {
                 win.webContents.send(CANCEL_CAPTURE_CHANNEL);
+            }
+        },
+        mameSessionChanged: (running) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(MAME_SESSION_CHANNEL, running);
             }
         },
     };

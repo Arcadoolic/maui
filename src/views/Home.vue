@@ -118,6 +118,7 @@ import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
@@ -612,10 +613,13 @@ function unlockFront() {
     Gamepads.resume();
 }
 
-/** The front is not left alone while a game runs, a modal is up or there is no game to show. */
+/**
+ * The front is not left alone while a game runs (launched here or from the BO), a modal is up or
+ * there is no game to show.
+ */
 function syncIdleBlock() {
     stopRoll();
-    idleWatch.block(gameRunning || showAddUser.value || !!whoPlayed.value || !!voteGame.value
+    idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
         || !!updateOffer.value || !!updating.value || !!backOfficeUrl.value || noGames.value);
 }
 
@@ -953,6 +957,7 @@ const hotkeys = new HotkeyEngine(getHotkeys(), {
     },
 });
 const stopHotkeysListener = onControlsChanged(() => hotkeys.setHotkeys(getHotkeys()));
+const stopBoMameListener = onBoMameChanged(syncIdleBlock);
 
 const {onKeydown, onKeyup} = useControllable();
 
@@ -968,6 +973,7 @@ const onFavoritesChanged = () => void syncFavorites();
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     stopHotkeysListener();
+    stopBoMameListener();
     hotkeys.reset();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);

@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest';
 import {
-    COMBO_WINDOW_MS, defaultHotkeys, HotkeyEngine, parseHotkey, sameHotkey, type Hotkey, type KeyPress,
+    COMBO_WINDOW_MS, defaultHotkeys, HOLD_DELAY_MS, HotkeyEngine, parseHotkey, sameHotkey, type Hotkey, type KeyPress,
 } from '@/class/Hotkeys';
 
 // Timers driven by hand: advance(ms) runs what is due.
@@ -61,15 +61,26 @@ describe('HotkeyEngine with the default hotkeys', () => {
     it('gives a held key its own job on release when released early', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press(space);
-        timers.advance(500);
+        timers.advance(HOLD_DELAY_MS + 500);
         hotkeyEngine.release(space);
         expect(log).toEqual(['hold quit', 'hold end', 'down Space', 'up Space']);
+    });
+
+    it('shows no hold for a plain press of a key with a held hotkey', () => {
+        const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
+        hotkeyEngine.press(space);
+        timers.advance(HOLD_DELAY_MS - 1);
+        hotkeyEngine.release(space);
+        timers.advance(5000);
+        expect(log).toEqual(['down Space', 'up Space']);
     });
 
     it('fires a held hotkey once its time is up, and the key does nothing else', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press(space);
-        timers.advance(3000);
+        timers.advance(HOLD_DELAY_MS + 3000 - 1);
+        expect(log).toEqual(['hold quit']);
+        timers.advance(1);
         hotkeyEngine.release(space);
         expect(log).toEqual(['hold quit', 'hold end', 'action quit']);
     });
@@ -77,7 +88,7 @@ describe('HotkeyEngine with the default hotkeys', () => {
     it('lets two keys together take over the held key of the first', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press(space);
-        timers.advance(300);
+        timers.advance(HOLD_DELAY_MS + 300);
         hotkeyEngine.press(p);
         timers.advance(2000);
         hotkeyEngine.release(p);
@@ -89,14 +100,14 @@ describe('HotkeyEngine with the default hotkeys', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press(p);
         hotkeyEngine.press(p);
-        timers.advance(2000);
+        timers.advance(HOLD_DELAY_MS + 2000);
         expect(log).toEqual(['hold newPlayer', 'hold end', 'action newPlayer']);
     });
 
     it('matches a MAUI key whatever input produces it', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press({key: 'Space', input: 'button|3|standard'});
-        timers.advance(3000);
+        timers.advance(HOLD_DELAY_MS + 3000);
         expect(log).toContain('action quit');
     });
 });
@@ -133,6 +144,7 @@ describe('HotkeyEngine with single inputs', () => {
     it('forgets everything on reset', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press(space);
+        timers.advance(HOLD_DELAY_MS);
         hotkeyEngine.reset();
         timers.advance(5000);
         hotkeyEngine.release(space);

@@ -4,7 +4,7 @@ import {MAUI_KEYS, LONG_PRESS_MS} from './MauiControls';
  * MAUI's hotkeys (the BO's MAUI > Controls tab, kept in maui-controls.json with the rest of the
  * controls): an action of the front triggered by
  * - one key, pressed (a cabinet's own button for it),
- * - one key held a while (holdMs),
+ * - one key held a while (HOLD_DELAY_MS, then holdMs with a loader),
  * - two keys together, at once or held a while.
  * A key is either one of MAUI's keys, whatever produces it ("maui|Space": every input bound to
  * Scores / back), or a single input, MAUI key or not ("button|8|standard", a mauiInputId()): a
@@ -45,6 +45,9 @@ export const MAUI_KEY_REF = 'maui|';
 export const MAX_HOLD_MS = 10_000;
 // How long a key of a two-key hotkey waits for the other one before doing its own job.
 export const COMBO_WINDOW_MS = 250;
+// How long a key with a held hotkey of its own is down before that hold starts (its loader shows,
+// then fills for holdMs): a plain press of the key never flashes it.
+export const HOLD_DELAY_MS = 1000;
 
 /** MAUI's hotkeys before the BO changed anything: what the front always did. */
 export function defaultHotkeys(): Hotkey[] {
@@ -114,7 +117,8 @@ const browserTimers: Timers = {
 /** Tells, from the front's presses and releases, which hotkey goes off and when the keys act. */
 export class HotkeyEngine {
     private readonly pressed = new Map<string, {press: KeyPress; state: PressState; window?: unknown}>();
-    private holding: {hotkey: Hotkey; inputs: string[]; timer: unknown} | null = null;
+    // `started`: its loader is on (holdStart() called), past HOLD_DELAY_MS for a one-key hotkey.
+    private holding: {hotkey: Hotkey; inputs: string[]; timer: unknown; started: boolean} | null = null;
 
     public constructor(
         private hotkeys: Hotkey[],
@@ -219,12 +223,21 @@ export class HotkeyEngine {
         }
         // A two-key hotkey takes over the held one-key hotkey of its first key.
         this.stopHolding();
+        if (match.hotkey.keys.length > 1) {
+            this.startHold(match);
+            return;
+        }
+        const timer = this.timers.set(() => this.startHold(match), HOLD_DELAY_MS);
+        this.holding = {...match, timer, started: false};
+    }
+
+    private startHold(match: {hotkey: Hotkey; inputs: string[]}): void {
         const timer = this.timers.set(() => {
             this.holding = null;
             this.callbacks.holdEnd();
             this.fire(match.hotkey, match.inputs);
         }, match.hotkey.holdMs);
-        this.holding = {...match, timer};
+        this.holding = {...match, timer, started: true};
         this.callbacks.holdStart(match.hotkey);
     }
 
@@ -251,8 +264,11 @@ export class HotkeyEngine {
             return;
         }
         this.timers.clear(this.holding.timer);
+        const started = this.holding.started;
         this.holding = null;
-        this.callbacks.holdEnd();
+        if (started) {
+            this.callbacks.holdEnd();
+        }
     }
 }
 
