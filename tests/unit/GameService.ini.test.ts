@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeAll, afterAll, afterEach} from 'vitest';
-import {mkdtempSync, rmSync, writeFileSync} from 'fs';
+import {mkdtempSync, rmSync, utimesSync, writeFileSync} from 'fs';
 import {join} from 'path';
 import {tmpdir} from 'os';
 import GameService from '@/class/GameService.class';
@@ -160,5 +160,35 @@ describe('GameService ini lookups, catver.ini present next to genre.ini', () => 
     it('no longer reads genre.ini for categories', () => {
         // academy is only in genre.ini.
         expect(service.getGameCategoryId('academy')).toBeUndefined();
+    });
+});
+
+describe('GameService ini lookups, files installed while MAUI runs', () => {
+    it('reads genre.ini and Multiplayer.ini once a configuration pack brings them', () => {
+        // A fresh cabinet: the games are synced before the configuration pack is installed.
+        const paths: {genreIniPath: string | null; nplayersIniPath: string | null; catverIniPath: string | null} = {
+            genreIniPath: null, nplayersIniPath: null, catverIniPath: null,
+        };
+        const service = new GameService(paths as unknown as MameService, null as never);
+        expect(service.getGameCategoryId('arkanoid')).toBeUndefined();
+        expect(service.getGameNplayers('arkanoid')).toEqual({sim: 0, alt: 0});
+
+        // The pack is installed: the same running service sees it at the next sync.
+        paths.genreIniPath = genreIniPath;
+        paths.nplayersIniPath = nplayersIniPath;
+        expect(service.getGameCategoryId('arkanoid')).toBe(1);
+        expect(service.getGameNplayers('arkanoid')).toEqual({sim: 0, alt: 2});
+    });
+
+    it('reads a file again once it changed', () => {
+        const changing = join(dir, 'changing-genre.ini');
+        writeFileSync(changing, '[Maze]\npacman\n');
+        const service = new GameService({genreIniPath: changing, catverIniPath: null} as unknown as MameService, null as never);
+        expect(service.getGameCategoryId('dkong')).toBeUndefined();
+
+        writeFileSync(changing, '[Maze]\npacman\n[Platform]\ndkong\n');
+        // A later modification time, whatever the file system's resolution.
+        utimesSync(changing, new Date(), new Date(Date.now() + 10_000));
+        expect(service.getGameCategoryId('dkong')).toBe(2);
     });
 });
