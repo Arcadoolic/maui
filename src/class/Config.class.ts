@@ -120,6 +120,9 @@ export default class Config {
     // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
     // dot, or the dot alone, more discreet.
     public onlineBadgeDotOnly: boolean = false;
+    // The badge shows the machine's local address 10 seconds every minute (LocalAddress.ts),
+    // unless the BO hides it.
+    public onlineBadgeHideIp: boolean = false;
 
     // A player registering on the cabinet itself starts public, their scores in the shared
     // leaderboards (userRegistration.vue). Off by default: they start private, the BO makes them public.
@@ -185,6 +188,7 @@ export default class Config {
                 : 30;
             this.frontSleepScreenOff = configFile.frontSleepScreenOff !== false;
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
+            this.onlineBadgeHideIp = configFile.onlineBadgeHideIp === true;
             this.cabinetPlayersPublic = configFile.cabinetPlayersPublic === true;
             this.setupOffline = configFile.setupOffline === true;
 
@@ -241,6 +245,7 @@ export default class Config {
                 frontSleepMinutes: this.frontSleepMinutes,
                 frontSleepScreenOff: this.frontSleepScreenOff,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
+                onlineBadgeHideIp: this.onlineBadgeHideIp,
                 cabinetPlayersPublic: this.cabinetPlayersPublic,
                 setupOffline: this.setupOffline,
             }),

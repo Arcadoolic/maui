@@ -392,6 +392,7 @@ describe('Config.save', () => {
             'mameBinaryName',
             'mamePath',
             'onlineBadgeDotOnly',
+            'onlineBadgeHideIp',
             'openDevTools',
             'setupOffline',
             'showAllGamesCategory',
@@ -429,6 +430,18 @@ describe('Config.save', () => {
         legacy.load();
         expect(legacy.voteEnabled).toBe(true);
         expect(legacy.thumbsDownRemovesFavorite).toBe(true);
+    });
+
+    it('shows the local IP address in the ONLINE badge by default, and reads the setting back', () => {
+        const config = new Config();
+        config.mamePath = '/opt/mame';
+        expect(config.onlineBadgeHideIp).toBe(false);
+
+        config.onlineBadgeHideIp = true;
+        config.save();
+        const read = new Config();
+        read.load();
+        expect(read.onlineBadgeHideIp).toBe(true);
     });
 
     it('offers updates on the front, from the releases only, by default, and reads them back', () => {
