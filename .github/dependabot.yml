@@ -6,6 +6,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    groups:
+      # react-dom refuses to load beside another react version (the BO's server rendering throws
+      # "Incompatible React versions" at startup), so both must move in the same PR.
+      react:
+        patterns: ["react", "react-dom"]
     ignore:
       # Major bumps of these two shipped in 2.2.0 and broke the front at startup: the renderer
       # bundle threw "Uncaught TypeError: Cannot redefine property: prototype" at load (the BO,
