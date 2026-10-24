@@ -1,8 +1,9 @@
 import {describe, it, expect} from 'vitest';
 import {
-    addInput, defaultMauiBindings, describeMauiInput, inputsOfKey, isDefaultKey, keyOfInput, MAUI_KEY_VALUES, mauiInputId,
-    parseMauiBindings, parseMauiInputId, removeInput, resetKey, serializeMauiBindings, type MauiInput,
+    addInput, defaultMauiBindings, describeMauiInput, hotkeyInputs, inputsOfKey, isDefaultKey, keyOfInput, MAUI_KEY_VALUES,
+    mauiInputId, parseMauiBindings, parseMauiInputId, removeInput, resetKey, serializeMauiBindings, type MauiInput,
 } from '@/class/MauiControlBindings';
+import {defaultHotkeys} from '@/class/Hotkeys';
 
 const ids = (inputs: MauiInput[]) => inputs.map(mauiInputId);
 
@@ -122,5 +123,35 @@ describe('describeMauiInput', () => {
         expect(describeMauiInput({device: 'pad', layout: 'standard', button: 0})).toBe('Button 0 (A)');
         expect(describeMauiInput({device: 'pad', layout: 'other', button: 8})).toBe('Button 8');
         expect(describeMauiInput({device: 'pad', layout: 'standard', axis: 1, direction: 0})).toBe('Stick up (axis 1 −)');
+    });
+});
+
+describe('hotkeys in maui-controls.json', () => {
+    it('keeps the hotkeys MAUI always had for a file from before them', () => {
+        expect(parseMauiBindings(JSON.stringify({keyboard: {Enter: 'Enter'}})).hotkeys).toEqual(defaultHotkeys());
+        expect(defaultMauiBindings().hotkeys).toEqual(defaultHotkeys());
+    });
+
+    it('keeps an empty list: no hotkey at all is a choice', () => {
+        expect(parseMauiBindings(JSON.stringify({hotkeys: []})).hotkeys).toEqual([]);
+    });
+
+    it('reads MAUI keys and single inputs, and drops what is not a hotkey', () => {
+        const hotkeys = parseMauiBindings(JSON.stringify({hotkeys: [
+            {action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0},
+            {action: 'quit', keys: ['maui|Nope'], holdMs: 0},
+            {action: 'quit', keys: ['bogus'], holdMs: 0},
+        ]})).hotkeys;
+        expect(hotkeys).toEqual([{action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0}]);
+    });
+
+    it('survives a save and a read', () => {
+        const bindings = {...defaultMauiBindings(), hotkeys: [{action: 'newPlayer' as const, keys: ['mouse|1'], holdMs: 500}]};
+        expect(parseMauiBindings(serializeMauiBindings(bindings)).hotkeys).toEqual(bindings.hotkeys);
+    });
+
+    it('lists the single inputs the front must hear', () => {
+        const bindings = {...defaultMauiBindings(), hotkeys: [{action: 'quit' as const, keys: ['button|9|standard', 'maui|Space'], holdMs: 0}]};
+        expect([...hotkeyInputs(bindings)]).toEqual(['button|9|standard']);
     });
 });

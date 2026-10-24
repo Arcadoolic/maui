@@ -3,7 +3,8 @@ import {dirname, join} from 'path';
 import {ipcRenderer} from 'electron';
 import Config from './Config.class';
 import Gamepads from './Gamepads.class';
-import {parseMauiBindings, type MauiBindings} from './MauiControlBindings';
+import {hotkeyInputs, parseMauiBindings, type MauiBindings} from './MauiControlBindings';
+import type {Hotkey} from './Hotkeys';
 import {
     CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type PadCaptureReply,
 } from './FrontControlsBridge';
@@ -15,6 +16,7 @@ import {
  */
 
 let bindings: MauiBindings = parseMauiBindings(undefined);
+const changeListeners = new Set<() => void>();
 
 export function getMauiControlsPath(): string {
     return join(dirname(new Config().configPath), 'maui-controls.json');
@@ -24,6 +26,19 @@ function load(): void {
     const path = getMauiControlsPath();
     bindings = parseMauiBindings(existsSync(path) ? readFileSync(path, 'utf8') : undefined);
     Gamepads.controllerMapping = bindings.pads;
+    Gamepads.hotkeyInputs = hotkeyInputs(bindings);
+    changeListeners.forEach(listener => listener());
+}
+
+/** The hotkeys as the BO last set them (Hotkeys.ts). */
+export function getHotkeys(): Hotkey[] {
+    return bindings.hotkeys;
+}
+
+/** Called each time the BO changes the controls; returns what stops it. */
+export function onControlsChanged(listener: () => void): () => void {
+    changeListeners.add(listener);
+    return () => changeListeners.delete(listener);
 }
 
 /**
@@ -31,7 +46,12 @@ function load(): void {
  * mouse button's) carries it already, a keyboard's is looked up.
  */
 export function controlKey(e: Event, isGamepad: boolean): string {
-    return isGamepad ? (e as CustomEvent).detail.key : bindings.keyboard[(e as KeyboardEvent).code] ?? '';
+    return isGamepad ? (e as CustomEvent).detail.key ?? '' : bindings.keyboard[(e as KeyboardEvent).code] ?? '';
+}
+
+/** The input itself a useControllable() event comes from, as a mauiInputId() (what hotkeys name). */
+export function controlInput(e: Event, isGamepad: boolean): string {
+    return isGamepad ? (e as CustomEvent).detail.input ?? '' : `key|${(e as KeyboardEvent).code}`;
 }
 
 // A mouse button bound to a MAUI key goes the gamepads' way: a gamepadKeydown/gamepadKeyup event.
@@ -41,9 +61,10 @@ function onMouse(e: MouseEvent, eventName: 'gamepadKeydown' | 'gamepadKeyup'): v
     if (e.target instanceof Element && e.target.closest('[data-mouse-nav].mouse')) {
         return;
     }
-    const key = bindings.mouse[String(e.button)];
-    if (key) {
-        window.dispatchEvent(new CustomEvent(eventName, {detail: {key, value: eventName === 'gamepadKeydown' ? 1 : 0}}));
+    const key = bindings.mouse[String(e.button)] ?? '';
+    const input = `mouse|${e.button}`;
+    if (key || Gamepads.hotkeyInputs.has(input)) {
+        window.dispatchEvent(new CustomEvent(eventName, {detail: {key, value: eventName === 'gamepadKeydown' ? 1 : 0, input}}));
     }
 }
 
@@ -84,7 +105,7 @@ export function startMauiControls(): void {
     window.addEventListener('mouseup', e => onMouse(e, 'gamepadKeyup'));
     // No menu when the right button is one of MAUI's keys.
     window.addEventListener('contextmenu', (e) => {
-        if (bindings.mouse['2']) {
+        if (bindings.mouse['2'] || Gamepads.hotkeyInputs.has('mouse|2')) {
             e.preventDefault();
         }
     });

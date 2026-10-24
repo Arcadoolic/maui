@@ -3,7 +3,7 @@
  * Controls tab): a handful of keys, which the keyboard keys, mouse buttons and gamepad inputs set
  * in the BO's MAUI > Controls tab produce (MauiControlBindings.ts, MauiControlsRuntime.ts). Single
  * source of truth for both the screens (Home.vue, userRegistration.vue switch on MAUI_KEYS,
- * Home.vue's long presses use LONG_PRESS_MS) and that tab, which lists them with their role - so
+ * the default hotkeys of Hotkeys.ts use LONG_PRESS_MS) and that tab, which lists them with their role - so
  * the tab can't drift from what the screens actually do.
  */
 
@@ -21,12 +21,13 @@ export const MAUI_KEYS = {
     p: 'KeyP',
 } as const;
 
+// The holds of the default hotkeys (Hotkeys.ts defaultHotkeys()), what Home.vue always did.
 export const LONG_PRESS_MS = {
-    // Home.vue: holding the scores key this long quits MAUI altogether.
+    // Holding the scores key this long quits MAUI altogether.
     quit: 3000,
-    // Home.vue: holding the new-player key this long opens the trigram entry screen.
+    // Holding the new-player key this long opens the trigram entry screen.
     newPlayer: 2000,
-    // Home.vue: holding the scores and new-player keys together this long loads the BO and shows
+    // Holding the scores and new-player keys together this long loads the BO and shows
     // its address.
     backOffice: 2000,
 } as const;
@@ -66,10 +67,8 @@ export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
             {key: MAUI_KEYS.left, role: 'Previous category (if categories exist)'},
             {key: MAUI_KEYS.right, role: 'Next category (if categories exist)'},
             {key: MAUI_KEYS.enter, role: 'Confirm: launch the selected game'},
-            {key: MAUI_KEYS.space, role: 'Show / hide the game scores'},
-            {key: MAUI_KEYS.space, longPressMs: LONG_PRESS_MS.quit, role: 'Quitter MAUI'},
-            {key: MAUI_KEYS.p, longPressMs: LONG_PRESS_MS.newPlayer, role: 'Create a new player (3-letter tag)'},
-            {key: MAUI_KEYS.space, longPressMs: LONG_PRESS_MS.backOffice, role: 'Held together with the new-player key: show the back office address'},
+            {key: MAUI_KEYS.space, role: 'Show / hide the game scores (on release while a held hotkey uses the key)'},
+            {key: MAUI_KEYS.p, role: 'Nothing by itself: its hotkeys (by default, held to create a new player, with Scores to show the back office address)'},
         ],
     },
     {

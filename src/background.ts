@@ -35,7 +35,8 @@ import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
 import {getAppIconPath} from '@/staticPath';
 import {totalmem} from 'os';
-import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
+import {canRestartKiosk, isKioskLayout, powerOff, restartKiosk} from '@/class/KioskRestart';
+import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
 import {resolveUiMode} from '@/class/UiMode';
@@ -95,6 +96,13 @@ function readSettings(): Config {
     config.load();
     return config;
 }
+
+// The front's "shut the cabinet down" hotkey (Home.vue): a dedicated cabinet only, never a
+// desktop nor a development checkout.
+const requestShutdown: ShutdownRequest = async () => (isKioskLayout(app.isPackaged)
+    ? powerOff()
+    : 'Shutting down is for a dedicated cabinet only: nothing was done.');
+(global as Record<string, unknown>)[SHUTDOWN_GLOBAL] = requestShutdown;
 
 // Read by the idle band (Home.vue) through @electron/remote: the newer version on the BO's channel.
 const readAvailableUpdate: UpdateNoticeReader = () => fakeUpdate ?? core?.updates.available(readSettings().updateChannel) ?? null;
