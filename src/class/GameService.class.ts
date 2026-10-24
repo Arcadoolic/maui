@@ -1,4 +1,4 @@
-import {readFileSync, readdirSync} from 'fs';
+import {readFileSync, readdirSync, statSync} from 'fs';
 import {parse as iniParse} from 'ini';
 import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
@@ -23,9 +23,24 @@ import {Vote, VOTE_DOWN} from '@/class/GameVote';
 import {removeFavoriteFromDisk} from '@/class/FavoritesStore';
 import {parseCatverIni} from '@/class/CatverGenres';
 
+/** A file's path and modification time, '' without a file: what tells a new version of it. */
+function fileVersion(path: string | null | undefined): string {
+    if (!path) {
+        return '';
+    }
+    try {
+        return `${path}|${statSync(path).mtimeMs}`;
+    } catch {
+        return '';
+    }
+}
+
 export default class GameService {
-    protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
-    protected static nplayersIni?: { [romName: string]: { [romName: string]: boolean } };
+    // Parsed once per file version: `key` is the file's path and modification time ('' without
+    // a file), so a configuration pack installed or replaced while MAUI runs is read again at the
+    // next sync - the front's reload after an import keeps these statics.
+    protected static genreIni?: {key: string; data: { [genre: string]: { [romName: string]: boolean } }};
+    protected static nplayersIni?: {key: string; data: { [romName: string]: { [romName: string]: boolean } }};
 
     protected static nplayersTranslation: { [k: string]: Nplayers } = {
         '12P sim': {sim: 12, alt: 0},
@@ -136,16 +151,16 @@ export default class GameService {
      * parseCatverIni().
      */
     public getGameCategories() {
-        if (!GameService.genreIni) {
-            const catverIniPath = this.mameService.catverIniPath;
-            const genreIniPath = this.mameService.genreIniPath;
-            GameService.genreIni = catverIniPath
-                ? parseCatverIni(readFileSync(catverIniPath, 'utf8'))
-                : genreIniPath
-                    ? iniParse(readFileSync(genreIniPath, 'utf8'))
-                    : {};
+        const catverIniPath = this.mameService.catverIniPath;
+        const path = catverIniPath ?? this.mameService.genreIniPath;
+        const key = fileVersion(path);
+        if (GameService.genreIni?.key !== key) {
+            GameService.genreIni = {
+                key,
+                data: !path ? {} : catverIniPath ? parseCatverIni(readFileSync(path, 'utf8')) : iniParse(readFileSync(path, 'utf8')),
+            };
         }
-        return GameService.genreIni;
+        return GameService.genreIni.data;
     }
 
     /**
@@ -171,13 +186,14 @@ export default class GameService {
      * @param romName
      */
     public getGameNplayers(romName: string): Nplayers {
-        if (!GameService.nplayersIni) {
-            GameService.nplayersIni = this.mameService.nplayersIniPath
-                ? iniParse(readFileSync(this.mameService.nplayersIniPath, 'utf8'))
-                : {};
+        const path = this.mameService.nplayersIniPath;
+        const key = fileVersion(path);
+        if (GameService.nplayersIni?.key !== key) {
+            GameService.nplayersIni = {key, data: path ? iniParse(readFileSync(path, 'utf8')) : {}};
         }
-        for (const nplayers in GameService.nplayersIni) {
-            if (GameService.nplayersIni[nplayers][romName]) {
+        const nplayersIni = GameService.nplayersIni.data;
+        for (const nplayers in nplayersIni) {
+            if (nplayersIni[nplayers][romName]) {
                 if (GameService.nplayersTranslation[nplayers]) {
                     return GameService.nplayersTranslation[nplayers];
                 } else {
