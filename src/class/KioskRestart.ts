@@ -53,3 +53,25 @@ export function canRestartKiosk(exec: ExecFile = execFile as ExecFile): Promise<
 export function restartKiosk(spawnFn: Spawn = spawn as Spawn): void {
     spawnFn('sudo', ['-n', ...RESTART_COMMAND], {detached: true, stdio: 'ignore'}).unref();
 }
+
+// Shutting the dedicated cabinet down (a hotkey of the front, Hotkeys.ts): the rule's third
+// command, else systemd's own permission (polkit lets the active local session power off while it
+// is the only one: not with an SSH session open).
+const POWEROFF_COMMAND = [SYSTEMCTL, 'poweroff'];
+
+/**
+ * Asks systemd to power the machine off: through sudo's rule first, else directly. Resolves to
+ * null once systemd took the order (this process goes down with the machine), else to why not.
+ */
+export function powerOff(exec: ExecFile = execFile as ExecFile): Promise<string | null> {
+    const run = (file: string, args: string[]) => new Promise<boolean>((resolve) => {
+        exec(file, args, {timeout: 10000}, error => resolve(!error));
+    });
+    return run('sudo', ['-n', ...POWEROFF_COMMAND]).then(async (bySudo) => {
+        if (bySudo || await run(SYSTEMCTL, ['poweroff'])) {
+            return null;
+        }
+        return 'Not allowed to shut the cabinet down: add the poweroff command to its sudo rule '
+            + '(docs/RASPBERRY-PI-DEPLOY.md §5.7, maui-cabinets).';
+    });
+}

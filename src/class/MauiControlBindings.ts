@@ -1,5 +1,6 @@
 import ControllerMappingJson from '../assets/controllers.json';
 import {MAUI_KEYS, STANDARD_BUTTON_NAMES} from './MauiControls';
+import {defaultHotkeys, MAUI_KEY_REF, parseHotkey, type Hotkey} from './Hotkeys';
 
 /**
  * Which keyboard keys, mouse buttons and gamepad inputs produce each of MAUI's keys (MAUI_KEYS),
@@ -20,6 +21,8 @@ export interface MauiBindings {
     // Gamepad layouts, keyed like Gamepads.class.ts's mappingFor(): "standard" (every pad without a
     // layout of its own) or a pad's id. An empty string means the input does nothing.
     pads: Record<string, ControllerMapping>;
+    // The front's actions triggered by a key pressed, held, or two keys together (Hotkeys.ts).
+    hotkeys: Hotkey[];
 }
 
 export type MauiInput =
@@ -35,7 +38,20 @@ export function defaultMauiBindings(): MauiBindings {
         keyboard: Object.fromEntries(MAUI_KEY_VALUES.map(key => [key, key])),
         mouse: {},
         pads: JSON.parse(JSON.stringify(ControllerMappingJson)) as Record<string, ControllerMapping>,
+        hotkeys: defaultHotkeys(),
     };
+}
+
+/** A hotkey's key: one of MAUI's keys ("maui|Space") or a single input (a mauiInputId()). */
+export function isHotkeyKey(key: string): boolean {
+    return key.startsWith(MAUI_KEY_REF)
+        ? MAUI_KEY_VALUES.includes(key.slice(MAUI_KEY_REF.length))
+        : parseMauiInputId(key) !== undefined;
+}
+
+/** The single inputs the hotkeys name: the front must hear them even when they have no MAUI key. */
+export function hotkeyInputs(bindings: MauiBindings): Set<string> {
+    return new Set(bindings.hotkeys.flatMap(hotkey => hotkey.keys.filter(key => !key.startsWith(MAUI_KEY_REF))));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -82,7 +98,11 @@ export function parseMauiBindings(json: string | undefined): MauiBindings {
     }
     // A layout file without the standard layout would leave every other pad doing nothing.
     pads.standard ??= defaultMauiBindings().pads.standard;
-    return {keyboard: cleanMap(parsed.keyboard, false), mouse: cleanMap(parsed.mouse, false), pads};
+    // A file from before the hotkeys keeps the ones MAUI always had; an empty list is a choice.
+    const hotkeys = Array.isArray(parsed.hotkeys)
+        ? parsed.hotkeys.map(hotkey => parseHotkey(hotkey, isHotkeyKey)).filter((hotkey): hotkey is Hotkey => hotkey !== null)
+        : defaultHotkeys();
+    return {keyboard: cleanMap(parsed.keyboard, false), mouse: cleanMap(parsed.mouse, false), pads, hotkeys};
 }
 
 export function serializeMauiBindings(bindings: MauiBindings): string {

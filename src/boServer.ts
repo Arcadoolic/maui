@@ -82,9 +82,13 @@ import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {MAUI_KEYS, MAUI_CONTROL_CONTEXTS} from '@/class/MauiControls';
 import {
-    addInput, describeMauiInput, inputsOfKey, isDefaultKey, mauiInputId, parseMauiBindings, parseMauiInputId,
-    removeInput, resetKey, serializeMauiBindings, type MauiBindings, type MauiInput,
+    addInput, describeMauiInput, inputsOfKey, isDefaultKey, isHotkeyKey, keyOfInput, mauiInputId, parseMauiBindings,
+    parseMauiInputId, removeInput, resetKey, serializeMauiBindings, type MauiBindings, type MauiInput,
 } from '@/class/MauiControlBindings';
+import {
+    defaultHotkeys, HOTKEY_ACTION_LABELS, HOTKEY_ACTIONS, MAUI_KEY_REF, MAX_HOLD_MS, parseHotkey, sameHotkey, type Hotkey,
+    type HotkeyAction,
+} from '@/class/Hotkeys';
 import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
@@ -2801,6 +2805,26 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .binding-actions > button[type="submit"]:last-child {
             margin-top: 0;
         }
+        /* Hotkeys card: the step by step "Add a hotkey", one question per screen. */
+        .hotkey-step {
+            margin: 1em 0 0;
+        }
+        .hotkey-choices {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0.5em 0 1em;
+        }
+        .hotkey-choices button {
+            margin-top: 0;
+            text-align: left;
+        }
+        .hotkey-choices button .checkbox-row-detail {
+            display: block;
+        }
+        .hotkey-summary {
+            font-size: 1.1em;
+        }
         .binding .flash {
             grid-column: 1 / -1;
             margin: 0;
@@ -3368,8 +3392,13 @@ function renderPageTail(): string {
                     listening.button.textContent = 'Not known to MAME - try another';
                     return;
                 }
+                var slot = listening.button.dataset.slot;
                 stop();
                 form.elements.code.value = token;
+                // The Hotkeys card: which of its two keys was caught.
+                if (slot && form.elements.slot) {
+                    form.elements.slot.value = slot;
+                }
                 form.requestSubmit(form.querySelector('[data-control-add]'));
             }
             function onKey(event) {
@@ -3467,6 +3496,9 @@ function renderPageTail(): string {
                             clearInterval(timer);
                             // The layout the front would pick: "standard", else the pad's own.
                             form.elements.code.value = fresh + '|' + (pad.mapping === 'standard' ? 'standard' : pad.id);
+                            if (button.dataset.slot && form.elements.slot) {
+                                form.elements.slot.value = button.dataset.slot;
+                            }
                             form.requestSubmit(form.querySelector('[data-control-add]'));
                             return true;
                         });
@@ -5931,6 +5963,7 @@ interface MauiPageMessages {
     // What a search for Bluetooth devices just found.
     bluetoothFound?: BluetoothDevice[];
     controls?: MauiControlsState;
+    hotkeys?: HotkeysState;
 }
 
 /** MAUI's keys as the MAUI > Controls tab shows them, one card each. */
@@ -6048,6 +6081,256 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
     `;
 }
 
+type HotkeyType = 'press' | 'hold' | 'combo';
+type HotkeyStep = 'action' | 'type' | 'key1' | 'key2' | 'hold' | 'review';
+
+/**
+ * The hotkey being put together step by step in the Hotkeys card: each step's form carries what the
+ * steps before chose, and the next step is whatever is still missing (nextHotkeyStep()).
+ */
+interface HotkeyDraft {
+    action: string;
+    type: string;
+    keys: [string, string];
+    holdSeconds: string;
+}
+
+interface HotkeysState {
+    error?: string;
+    info?: string;
+    draft?: HotkeyDraft;
+}
+
+const EMPTY_HOTKEY_DRAFT: HotkeyDraft = {action: '', type: '', keys: ['', ''], holdSeconds: ''};
+
+const HOTKEY_TYPES: readonly {value: HotkeyType; label: string; detail: string}[] = [
+    {value: 'press', label: 'One key, pressed', detail: 'A button of its own on the cabinet, for instance.'},
+    {value: 'hold', label: 'One key, held', detail: 'Released early, the key does its own job.'},
+    {value: 'combo', label: 'Two keys together', detail: 'At once or held, like Start + Select.'},
+];
+
+const HOTKEY_HOLD_CHOICES = ['1', '2', '3', '5'];
+
+function nextHotkeyStep(draft: HotkeyDraft): HotkeyStep {
+    if (!HOTKEY_ACTIONS.includes(draft.action as HotkeyAction)) {
+        return 'action';
+    }
+    if (!HOTKEY_TYPES.some(type => type.value === draft.type)) {
+        return 'type';
+    }
+    if (!draft.keys[0]) {
+        return 'key1';
+    }
+    if (draft.type === 'combo' && !draft.keys[1]) {
+        return 'key2';
+    }
+    if (draft.type !== 'press' && draft.holdSeconds === '') {
+        return 'hold';
+    }
+    return 'review';
+}
+
+/** The draft one step back: what the last step chose is asked again. */
+function previousHotkeyDraft(draft: HotkeyDraft): HotkeyDraft {
+    const previous: HotkeyDraft = {...draft, keys: [...draft.keys]};
+    if (draft.type !== 'press' && draft.holdSeconds !== '') {
+        previous.holdSeconds = '';
+    } else if (draft.keys[1]) {
+        previous.keys[1] = '';
+    } else if (draft.keys[0]) {
+        previous.keys[0] = '';
+    } else if (draft.type) {
+        previous.type = '';
+        previous.holdSeconds = '';
+    } else {
+        previous.action = '';
+    }
+    return previous;
+}
+
+/** The finished draft as a hotkey, null when something is missing or wrong. */
+function draftHotkey(draft: HotkeyDraft): Hotkey | null {
+    const seconds = draft.type === 'press' ? 0 : Number(draft.holdSeconds);
+    return parseHotkey({
+        action: draft.action,
+        keys: draft.keys.filter(key => key !== ''),
+        holdMs: Number.isFinite(seconds) ? Math.round(seconds * 1000) : -1,
+    }, isHotkeyKey);
+}
+
+/** What a hotkey's key shows: a MAUI action ("Scores / back"), or an input and its device. */
+function describeHotkeyKey(key: string): string {
+    if (key.startsWith(MAUI_KEY_REF)) {
+        return mauiActionLabel(key.slice(MAUI_KEY_REF.length));
+    }
+    const input = parseMauiInputId(key);
+    if (!input) {
+        return key;
+    }
+    const kind = input.device === 'pad' ? 'joystick' : input.device;
+    const layout = input.device === 'pad' && input.layout !== 'standard' ? ` (${shortLayoutName(input.layout)})` : '';
+    return `${CONTROL_KIND_LABELS[kind]} ${describeMauiInput(input)}${layout}`;
+}
+
+function describeHotkeyTrigger(hotkey: Hotkey): string {
+    const two = hotkey.keys.length > 1;
+    return hotkey.holdMs > 0 ? `${two ? 'held together' : 'held'} ${hotkey.holdMs / 1000} s` : (two ? 'together' : 'pressed');
+}
+
+/**
+ * What saving this hotkey changes besides it: a single input pressed (not held) leaves the MAUI
+ * action it had, a MAUI action pressed no longer does its own job on the list of games.
+ */
+function describeHotkeyTakeover(bindings: MauiBindings, hotkey: Hotkey): string | undefined {
+    const [key] = hotkey.keys;
+    if (hotkey.keys.length !== 1 || hotkey.holdMs !== 0) {
+        return undefined;
+    }
+    if (key.startsWith(MAUI_KEY_REF)) {
+        return `${describeHotkeyKey(key)} will trigger this hotkey instead of its own job on the list of games.`;
+    }
+    const input = parseMauiInputId(key);
+    const taken = input ? keyOfInput(bindings, input) : '';
+    return taken ? `${describeHotkeyKey(key)} does ${mauiActionLabel(taken)} today: it will only trigger this hotkey.` : undefined;
+}
+
+/** The choices of the steps before, carried along; `except` is the one this step asks. */
+function renderHotkeyDraftFields(draft: HotkeyDraft, except: string[] = []): string {
+    const fields: [string, string][] = [
+        ['hotkeyAction', draft.action], ['type', draft.type], ['key1', draft.keys[0]], ['key2', draft.keys[1]],
+        ['holdSeconds', draft.holdSeconds],
+    ];
+    return fields.filter(([name]) => !except.includes(name))
+        .map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`).join('');
+}
+
+function renderHotkeyStepBody(bindings: MauiBindings, draft: HotkeyDraft, step: HotkeyStep): string {
+    switch (step) {
+        case 'action':
+            return `
+                <p>What should the hotkey do?</p>
+                <div class="hotkey-choices">
+                    ${HOTKEY_ACTIONS.map(action => `<button type="submit" name="hotkeyAction" value="${action}">${escapeHtml(HOTKEY_ACTION_LABELS[action])}</button>`).join('')}
+                </div>`;
+        case 'type':
+            return `
+                <p>How is it triggered?</p>
+                <div class="hotkey-choices">
+                    ${HOTKEY_TYPES.map(type => `<button type="submit" name="type" value="${type.value}">${escapeHtml(type.label)}<span class="checkbox-row-detail">${escapeHtml(type.detail)}</span></button>`).join('')}
+                </div>`;
+        case 'key1':
+        case 'key2': {
+            const slot = step === 'key1' ? 1 : 2;
+            const name = `key${slot}`;
+            return `
+                <p>${slot === 1 ? (draft.type === 'combo' ? 'First key' : 'The key') : `Second key, pressed with ${escapeHtml(describeHotkeyKey(draft.keys[0]))}`}:
+                press it on the cabinet (or here for a key or a mouse button)…</p>
+                <div class="binding-actions">
+                    <button type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}">Catch a gamepad button</button>
+                    <button type="button" data-control-listen="raw" data-slot="${slot}">Catch a key or mouse button</button>
+                </div>
+                <p>…or pick a MAUI action, whatever control triggers it:</p>
+                <div class="hotkey-choices">
+                    ${MAUI_ACTIONS.filter(action => MAUI_KEY_REF + action.key !== draft.keys[0])
+                        .map(action => `<button type="submit" name="${name}" value="${escapeHtml(MAUI_KEY_REF + action.key)}">${escapeHtml(action.label)}</button>`).join('')}
+                </div>
+                <input type="hidden" name="code" value="">
+                <input type="hidden" name="slot" value="">
+                <button type="submit" name="action" value="catch" hidden data-control-add></button>`;
+        }
+        case 'hold':
+            return `
+                <p>${draft.type === 'combo' ? 'Held together how long?' : 'Held how long?'}</p>
+                <div class="hotkey-choices">
+                    ${draft.type === 'combo' ? '<button type="submit" name="holdSeconds" value="0">At once</button>' : ''}
+                    ${HOTKEY_HOLD_CHOICES.map(seconds => `<button type="submit" name="holdSeconds" value="${seconds}">${seconds} s</button>`).join('')}
+                </div>`;
+        case 'review': {
+            const hotkey = draftHotkey(draft);
+            if (!hotkey) {
+                return '<p class="error">Something is missing: go back a step.</p>';
+            }
+            const takeover = describeHotkeyTakeover(bindings, hotkey);
+            return `
+                <p class="hotkey-summary"><strong>${escapeHtml(HOTKEY_ACTION_LABELS[hotkey.action])}</strong>:
+                ${hotkey.keys.map(key => escapeHtml(describeHotkeyKey(key))).join(' + ')}, ${escapeHtml(describeHotkeyTrigger(hotkey))}.</p>
+                ${takeover ? `<p class="warn">${escapeHtml(takeover)}</p>` : ''}
+                <div class="hotkey-choices">
+                    <button type="submit" name="action" value="add">Save the hotkey</button>
+                </div>`;
+        }
+    }
+}
+
+/** "Add a hotkey", one question per screen: action, kind, key(s), how long, then a summary. */
+function renderHotkeyWizard(bindings: MauiBindings, draft: HotkeyDraft): string {
+    const step = nextHotkeyStep(draft);
+    const steps: HotkeyStep[] = ['action', 'type', 'key1',
+        ...(draft.type === 'combo' ? ['key2' as const] : []),
+        ...(draft.type && draft.type !== 'press' ? ['hold' as const] : []), 'review'];
+    const asked: Record<HotkeyStep, string[]> = {
+        action: ['hotkeyAction'], type: ['type', 'holdSeconds'], key1: ['key1'], key2: ['key2'], hold: ['holdSeconds'], review: [],
+    };
+    return `
+        <form method="post" action="/maui/hotkeys" class="hotkey-step">
+            <h3>Add a hotkey <span class="checkbox-row-detail">Step ${steps.indexOf(step) + 1} of ${draft.type ? steps.length : '4 to 6'}</span></h3>
+            ${renderHotkeyDraftFields(draft, asked[step])}
+            ${renderHotkeyStepBody(bindings, draft, step)}
+            <div class="binding-actions">
+                ${step === 'action' ? '' : '<button type="submit" name="action" value="back">Back</button>'}
+                <button type="submit" name="action" value="cancel">Cancel</button>
+            </div>
+        </form>
+    `;
+}
+
+/**
+ * The front's hotkeys (Hotkeys.ts): each action of the list of games triggered by a key pressed,
+ * a key held, or two keys together. A key is a MAUI action (whatever input produces it) or an input
+ * caught here, a MAUI key or not.
+ */
+function renderHotkeysCard(bindings: MauiBindings, state?: HotkeysState): string {
+    const rows = bindings.hotkeys.map((hotkey, index) => `
+        <tr>
+            <td>${escapeHtml(HOTKEY_ACTION_LABELS[hotkey.action])}</td>
+            <td>${hotkey.keys.map(key => escapeHtml(describeHotkeyKey(key))).join(' + ')}</td>
+            <td>${escapeHtml(describeHotkeyTrigger(hotkey))}</td>
+            <td class="center">
+                <form method="post" action="/maui/hotkeys">
+                    <input type="hidden" name="index" value="${index}">
+                    <button type="submit" name="action" value="remove" class="control-remove"
+                        aria-label="Remove this hotkey">✕</button>
+                </form>
+            </td>
+        </tr>
+    `).join('');
+    const isDefault = JSON.stringify(bindings.hotkeys) === JSON.stringify(defaultHotkeys());
+    return `
+        <section class="card">
+            <h2>MAUI hotkeys</h2>
+            <p class="info">Actions of the list of games triggered by one key pressed, one key held,
+            or two keys together. A key is a MAUI action above (any of its controls) or a button
+            caught on the cabinet, even one that does nothing else in MAUI, like Start or Select.
+            A key a held or two-key hotkey uses still does its own job, once released or when no
+            other key came - never when its hotkey went off.</p>
+            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.info ? `<p class="warn flash">${escapeHtml(state.info)}</p>` : ''}
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead><tr><th>Action</th><th>Keys</th><th>Trigger</th><th class="center"></th></tr></thead>
+                    <tbody>${rows || '<tr><td colspan="4"><em>No hotkey: these actions can\'t be used on the cabinet.</em></td></tr>'}</tbody>
+                </table>
+            </div>
+            ${state?.draft ? renderHotkeyWizard(bindings, state.draft) : `
+                <form method="post" action="/maui/hotkeys" class="hotkey-choices">
+                    <button type="submit" name="action" value="start">Add a hotkey</button>
+                    ${isDefault ? '' : '<button type="submit" name="action" value="reset">Back to MAUI\'s default hotkeys</button>'}
+                </form>
+            `}
+        </section>
+    `;
+}
+
 // Set once by startBoServer(); read by the MAUI page renderer, which runs outside its closure.
 let onlineSession: OnlineSession | null = null;
 
@@ -6140,7 +6423,8 @@ function renderMauiPage(
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
-        {id: 'controls', label: 'Controls', html: renderMauiControlsCard(readMauiBindings(), messages.controls)},
+        {id: 'controls', label: 'Controls', html: renderMauiControlsCard(readMauiBindings(), messages.controls)
+            + renderHotkeysCard(readMauiBindings(), messages.hotkeys)},
     ];
     if (network) {
         sections.push({
@@ -10583,6 +10867,132 @@ export function createBoApp(
             frontControls.cancelCapture();
         }
         await send({key, info});
+    });
+
+    // The Hotkeys card (renderHotkeysCard()): its step by step "Add a hotkey" (each step posts the
+    // draft, "catch" / "capture1|2" fill a key in with the input caught by the page, or by the front
+    // within 30 s), then "add" saves it; "remove" and "reset" act on the list.
+    app.post('/maui/hotkeys', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const action: string = typeof req.body.action === 'string' ? req.body.action : 'step';
+        const field = (name: string): string => (typeof req.body[name] === 'string' ? req.body[name].trim() : '');
+        const draft: HotkeyDraft = {
+            action: field('hotkeyAction'),
+            type: field('type'),
+            keys: [field('key1'), field('key2')],
+            holdSeconds: field('holdSeconds'),
+        };
+        // A key pressed, not held: nothing to ask about how long.
+        if (draft.type === 'press') {
+            draft.holdSeconds = '0';
+        }
+        const send = (hotkeys: HotkeysState) => sendMauiPage(req, res, config, {hotkeys});
+        let bindings = readMauiBindings();
+        let info: string | undefined;
+
+        if (action === 'start') {
+            await send({draft: EMPTY_HOTKEY_DRAFT});
+            return;
+        }
+        if (action === 'cancel') {
+            await send({});
+            return;
+        }
+        if (action === 'back') {
+            await send({draft: previousHotkeyDraft(draft)});
+            return;
+        }
+        if (action === 'step') {
+            if (draft.keys[1] && draft.keys[1] === draft.keys[0]) {
+                draft.keys[1] = '';
+                await send({draft, error: 'The second key must be another one.'});
+                return;
+            }
+            await send({draft});
+            return;
+        }
+        if (action === 'catch' || action === 'capture1' || action === 'capture2') {
+            const slot = action === 'catch' ? Number(field('slot')) : Number(action.slice(-1));
+            if (slot !== 1 && slot !== 2) {
+                await send({draft, error: 'Unknown key.'});
+                return;
+            }
+            let input: MauiInput | undefined;
+            if (action === 'catch') {
+                input = parseMauiInputId(field('code'));
+                if (input?.device === 'pad') {
+                    // Caught by the page itself: the front stops waiting.
+                    input = {...input, layout: bindings.pads[input.layout] ? input.layout : 'standard'};
+                    frontControls.cancelCapture();
+                }
+            } else {
+                const caught = await frontControls.capturePad(30000);
+                if ('cancelled' in caught) {
+                    await send({draft});
+                    return;
+                }
+                if ('error' in caught) {
+                    await send({draft, error: caught.error});
+                    return;
+                }
+                input = caught.axis !== undefined
+                    ? {device: 'pad', layout: caught.layout, axis: caught.axis, direction: caught.direction ?? 0}
+                    : {device: 'pad', layout: caught.layout, button: caught.button ?? 0};
+            }
+            if (!input) {
+                await send({draft, error: 'Not a key, a mouse button or a gamepad input.'});
+                return;
+            }
+            const id = mauiInputId(input);
+            if (slot === 2 && id === draft.keys[0]) {
+                await send({draft, error: 'The second key must be another one.'});
+                return;
+            }
+            draft.keys[slot - 1] = id;
+            await send({draft});
+            return;
+        }
+
+        if (action === 'add') {
+            const hotkey = draftHotkey(draft);
+            if (!hotkey) {
+                await send({draft, error: `A hotkey is an action, one or two different keys, and a hold of 0 to ${MAX_HOLD_MS / 1000} seconds.`});
+                return;
+            }
+            if (bindings.hotkeys.some(known => sameHotkey(known, hotkey))) {
+                await send({draft, error: 'This hotkey is already there.'});
+                return;
+            }
+            info = describeHotkeyTakeover(bindings, hotkey);
+            // One input pressed, not held: it only triggers the hotkey (an input does one thing).
+            const input = hotkey.keys.length === 1 && hotkey.holdMs === 0 ? parseMauiInputId(hotkey.keys[0]) : undefined;
+            if (input && keyOfInput(bindings, input)) {
+                bindings = removeInput(bindings, input);
+            }
+            bindings = {...bindings, hotkeys: [...bindings.hotkeys, hotkey]};
+        } else if (action === 'remove') {
+            const index = Number(field('index'));
+            if (!Number.isInteger(index) || index < 0 || index >= bindings.hotkeys.length) {
+                await send({});
+                return;
+            }
+            bindings = {...bindings, hotkeys: bindings.hotkeys.filter((_, at) => at !== index)};
+        } else if (action === 'reset') {
+            bindings = {...bindings, hotkeys: defaultHotkeys()};
+        } else {
+            res.status(422);
+            await send({error: 'Unknown action.'});
+            return;
+        }
+        try {
+            writeFileSync(getMauiControlsPath(), serializeMauiBindings(bindings), 'utf8');
+        } catch (error) {
+            await send({draft, error: `Saving failed: ${(error as Error).message}`});
+            return;
+        }
+        frontControls.controlsChanged();
+        await send({info: info ? `Saved. ${info}` : 'Saved.'});
     });
 
     // The Spinner, trackball, paddle card: mame.ini's <family>_device values.

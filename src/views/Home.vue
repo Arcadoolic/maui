@@ -5,6 +5,10 @@
             <loader :duration="loaderDuration"></loader>
         </modal>
 
+        <modal v-if="notice">
+            <p>{{notice}}</p>
+        </modal>
+
         <modal v-if="backOfficeUrl">
             <p>Back office</p>
             <p>{{backOfficeUrl}}</p>
@@ -94,8 +98,9 @@ import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSourc
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
-import {MAUI_KEYS, LONG_PRESS_MS, HOLD_MS} from '@/class/MauiControls';
-import {controlKey} from '@/class/MauiControlsRuntime';
+import {MAUI_KEYS, HOLD_MS} from '@/class/MauiControls';
+import {controlInput, controlKey, getHotkeys, onControlsChanged} from '@/class/MauiControlsRuntime';
+import {HOTKEY_HOLD_TITLES, HotkeyEngine, type HotkeyAction} from '@/class/Hotkeys';
 import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
 import * as Log from 'electron-log';
@@ -110,6 +115,7 @@ import {
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
+import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
@@ -140,12 +146,10 @@ const displayedCategoryIndex = ref(0);
 const hasPlayerInfo = ref(false);
 
 const timeouts: {
-    quit?: number,
     showGame?: number,
     showFlyer?: number,
-    addPlayer?: number,
-    backOffice?: number,
     hideBackOffice?: number,
+    hideNotice?: number,
     hold?: number,
     holdRepeat?: number,
     roll?: number,
@@ -197,9 +201,12 @@ const noGames = computed(() => gamesLoaded.value && !games.value.length);
 // No game yet on a new cabinet: the setup guide's steps instead of a bare message (Lot VI.3).
 const setupProgress = useSetupProgress();
 
-// The BO's address on the local network, while it is shown (see askBackOffice()).
+// The BO's address on the local network, while it is shown (see showBackOffice()).
 const backOfficeUrl = ref('');
 const BACK_OFFICE_SHOWN_MS = 15000;
+// A line a hotkey has to say ("Shutting down…", or why it did nothing), and how long it stays.
+const notice = ref('');
+const NOTICE_SHOWN_MS = 8000;
 // Nobody at the controls for a while (IdleWatch.ts): the cabinet shows its messages, its latest
 // best scores, until the next key - which only takes them away.
 const IDLE_MESSAGES = 20;
@@ -306,7 +313,6 @@ async function loadIdleMessages() {
 }
 
 // Keys of the two-key long press currently held down.
-const heldKeys = new Set<string>();
 // A game is being launched or runs: the front takes no input, keyboard or controller, until it
 // is quit (see lockFront()).
 let gameRunning = false;
@@ -596,11 +602,7 @@ function lockFront() {
     gameRunning = true;
     syncIdleBlock();
     stopHold();
-    heldKeys.clear();
-    cancelBackOffice();
-    clearTimeout(timeouts.quit);
-    clearTimeout(timeouts.addPlayer);
-    showLoader.value = false;
+    hotkeys.reset();
     Gamepads.suspend();
 }
 
@@ -872,55 +874,85 @@ async function loadCategories() {
     });
 }
 
-function addPlayer() {
-    loaderDuration.value = LONG_PRESS_MS.newPlayer / 1000;
-    showLoader.value = true;
-    loaderTitle.value = 'Add new player ?';
-    timeouts.addPlayer = window.setTimeout(() => {
-        showLoader.value = false;
-        showAddUser.value = true;
-    }, LONG_PRESS_MS.newPlayer);
-}
-
 /**
- * The scores and new-player keys held together: loads the BO, which is not kept in memory on a
- * cabinet nobody is setting up (boCore.ts), and shows where to reach it. Each key started its own
- * long press on the way down: both are taken back.
+ * Loads the BO, which is not kept in memory on a cabinet nobody is setting up (boCore.ts), and
+ * shows where to reach it.
  */
-function askBackOffice() {
-    clearTimeout(timeouts.quit);
-    clearTimeout(timeouts.addPlayer);
+async function showBackOffice() {
     clearTimeout(timeouts.hideBackOffice);
     showHiscores.value = false;
-    backOfficeUrl.value = '';
-    loaderDuration.value = LONG_PRESS_MS.backOffice / 1000;
-    loaderTitle.value = 'Back office ?';
-    showLoader.value = true;
-    timeouts.backOffice = window.setTimeout(async () => {
-        timeouts.backOffice = undefined;
-        showLoader.value = false;
-        let url = boUrl.value;
-        try {
-            const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
-            url = wake ? await wake() : boUrl.value;
-        } catch (err) {
-            Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
-        }
-        backOfficeUrl.value = url;
-        timeouts.hideBackOffice = window.setTimeout(() => {
-            backOfficeUrl.value = '';
-        }, BACK_OFFICE_SHOWN_MS);
-    }, LONG_PRESS_MS.backOffice);
+    let url = boUrl.value;
+    try {
+        const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
+        url = wake ? await wake() : boUrl.value;
+    } catch (err) {
+        Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
+    }
+    backOfficeUrl.value = url;
+    timeouts.hideBackOffice = window.setTimeout(() => {
+        backOfficeUrl.value = '';
+    }, BACK_OFFICE_SHOWN_MS);
 }
 
-function cancelBackOffice() {
-    if (timeouts.backOffice === undefined) {
-        return;
+/** What a hotkey of the BO's Controls tab does once it goes off (Hotkeys.ts). */
+function runHotkey(action: HotkeyAction) {
+    switch (action) {
+    case 'backOffice':
+        void showBackOffice();
+        break;
+    case 'quit':
+        remote.app.quit();
+        break;
+    case 'newPlayer':
+        showAddUser.value = true;
+        break;
+    case 'shutdown':
+        void shutDown();
+        break;
     }
-    clearTimeout(timeouts.backOffice);
-    timeouts.backOffice = undefined;
-    showLoader.value = false;
 }
+
+function showNotice(text: string, hideAfterMs?: number) {
+    clearTimeout(timeouts.hideNotice);
+    notice.value = text;
+    if (hideAfterMs) {
+        timeouts.hideNotice = window.setTimeout(() => {
+            notice.value = '';
+        }, hideAfterMs);
+    }
+}
+
+/** A dedicated cabinet goes down (KioskRestart.ts powerOff()); anywhere else, or without the right, says why not. */
+async function shutDown() {
+    showNotice('Shutting down…');
+    let refused: string | null;
+    try {
+        const request = remote.getGlobal(SHUTDOWN_GLOBAL) as ShutdownRequest | undefined;
+        refused = request ? await request() : 'Shutting down is not available.';
+    } catch (err) {
+        refused = err instanceof Error ? err.message : String(err);
+    }
+    if (refused) {
+        showNotice(refused, NOTICE_SHOWN_MS);
+    }
+}
+
+// Turns the keys pressed on the list of games into what they do: a hotkey, or a key's own job
+// (onListKeyDown()), a little later for the keys a held or two-key hotkey uses.
+const hotkeys = new HotkeyEngine(getHotkeys(), {
+    keyDown: key => onListKeyDown(key),
+    keyUp: key => onListKeyUp(key),
+    action: runHotkey,
+    holdStart: (hotkey) => {
+        loaderDuration.value = hotkey.holdMs / 1000;
+        loaderTitle.value = HOTKEY_HOLD_TITLES[hotkey.action];
+        showLoader.value = true;
+    },
+    holdEnd: () => {
+        showLoader.value = false;
+    },
+});
+const stopHotkeysListener = onControlsChanged(() => hotkeys.setHotkeys(getHotkeys()));
 
 const {onKeydown, onKeyup} = useControllable();
 
@@ -935,6 +967,8 @@ const onShowGame = (_event: unknown, romName: string) => {
 const onFavoritesChanged = () => void syncFavorites();
 onUnmounted(() => {
     stopLeaderboardsListener?.();
+    stopHotkeysListener();
+    hotkeys.reset();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
     ipcRenderer.off(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
@@ -949,14 +983,53 @@ onUnmounted(() => {
 // A keyboard key released while the window is not focused sends no keyup (Gamepads.class.ts
 // sends its own for a controller).
 window.addEventListener('blur', stopHold);
+window.addEventListener('blur', () => hotkeys.reset());
 // A modal takes the keys over: the list stops where it is.
 watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value, (modal) => {
     if (modal) {
         stopHold();
+        hotkeys.reset();
     }
 });
 watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
     !!backOfficeUrl.value, noGames.value], syncIdleBlock);
+
+/** A key's own job on the list of games, as a press. */
+function onListKeyDown(key: string) {
+    switch (key) {
+    case MAUI_KEYS.up:
+        onGameChange(true);
+        startHold(true);
+        break;
+    case MAUI_KEYS.down:
+        onGameChange(false);
+        startHold(false);
+        break;
+    case MAUI_KEYS.left:
+        if (hasCategories.value) {
+            onCategoryChange(true);
+        }
+        break;
+    case MAUI_KEYS.right:
+        if (hasCategories.value) {
+            onCategoryChange(false);
+        }
+        break;
+    case MAUI_KEYS.space:
+        showHiscores.value = !showHiscores.value;
+        break;
+    case MAUI_KEYS.enter:
+        startGame();
+        break;
+    }
+}
+
+/** A key's own job on the list of games, as a release. */
+function onListKeyUp(key: string) {
+    if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
+        stopHold();
+    }
+}
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
@@ -970,47 +1043,7 @@ function registerKeyMapping() {
         if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || updateOffer.value || updating.value) {
             return;
         }
-        const key = controlKey(e, isGamepad);
-        if (key === MAUI_KEYS.space || key === MAUI_KEYS.p) {
-            heldKeys.add(key);
-            if (heldKeys.has(MAUI_KEYS.space) && heldKeys.has(MAUI_KEYS.p)) {
-                // Also reached by a held keyboard key repeating: started once.
-                if (timeouts.backOffice === undefined) {
-                    askBackOffice();
-                }
-                return;
-            }
-        }
-        switch (key) {
-        case MAUI_KEYS.up:
-            onGameChange(true);
-            startHold(true);
-            break;
-        case MAUI_KEYS.down:
-            onGameChange(false);
-            startHold(false);
-            break;
-        case MAUI_KEYS.left:
-            if (hasCategories.value) {
-                onCategoryChange(true);
-            }
-            break;
-        case MAUI_KEYS.right:
-            if (hasCategories.value) {
-                onCategoryChange(false);
-            }
-            break;
-        case MAUI_KEYS.space:
-            showHiscores.value = !showHiscores.value;
-            timeouts.quit = window.setTimeout(() => remote.app.quit(), LONG_PRESS_MS.quit);
-            break;
-        case MAUI_KEYS.enter:
-            startGame();
-            break;
-        case MAUI_KEYS.p:
-            addPlayer();
-            break;
-        }
+        hotkeys.press({key: controlKey(e, isGamepad), input: controlInput(e, isGamepad)});
     });
 
     onKeyup((e, isGamepad) => {
@@ -1025,18 +1058,7 @@ function registerKeyMapping() {
         if (showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
-        if (heldKeys.delete(key)) {
-            cancelBackOffice();
-        }
-        switch (key) {
-        case MAUI_KEYS.space:
-            clearTimeout(timeouts.quit);
-            break;
-        case MAUI_KEYS.p:
-            showLoader.value = false;
-            clearTimeout(timeouts.addPlayer);
-            break;
-        }
+        hotkeys.release({key, input: controlInput(e, isGamepad)});
     });
 }
 
