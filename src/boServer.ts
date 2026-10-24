@@ -4245,6 +4245,8 @@ interface AdoptedMame extends CaptureTarget {
 // there's only one cabinet (one MAME window) to configure, so users signed in at the same time
 // share it rather than each getting their own.
 let mameConfigSession: MameConfigSession | undefined;
+// Tells the front the session started or stopped (createBoApp() sets it): no sleep under a game.
+let mameSessionChanged: (running: boolean) => void = () => undefined;
 
 function isMameConfigSessionAlive(): boolean {
     return !!mameConfigSession && mameConfigSession.child.exitCode === null && !mameConfigSession.child.killed;
@@ -4411,12 +4413,14 @@ function startMameConfigSession(
     child.on('exit', () => {
         if (mameConfigSession === session) {
             mameConfigSession = undefined;
+            mameSessionChanged(false);
         }
         replayCfgEdits(session);
         rmSync(dir, {recursive: true, force: true});
     });
 
     mameConfigSession = session;
+    mameSessionChanged(true);
 }
 
 /**
@@ -6157,7 +6161,7 @@ const EMPTY_HOTKEY_DRAFT: HotkeyDraft = {action: '', type: '', keys: ['', ''], h
 
 const HOTKEY_TYPES: readonly {value: HotkeyType; label: string; detail: string}[] = [
     {value: 'press', label: 'One key, pressed', detail: 'A button of its own on the cabinet, for instance.'},
-    {value: 'hold', label: 'One key, held', detail: 'Released early, the key does its own job.'},
+    {value: 'hold', label: 'One key, held', detail: 'After 1 s held, a loader counts down the time below. Released early, the key does its own job.'},
     {value: 'combo', label: 'Two keys together', detail: 'At once or held, like Start + Select.'},
 ];
 
@@ -6292,7 +6296,7 @@ function renderHotkeyStepBody(bindings: MauiBindings, draft: HotkeyDraft, step: 
         }
         case 'hold':
             return `
-                <p>${draft.type === 'combo' ? 'Held together how long?' : 'Held how long?'}</p>
+                <p>${draft.type === 'combo' ? 'Held together how long?' : 'Held how long, once held 1 s (a plain press stays a plain press)?'}</p>
                 <div class="hotkey-choices">
                     ${draft.type === 'combo' ? '<button type="submit" name="holdSeconds" value="0">At once</button>' : ''}
                     ${HOTKEY_HOLD_CHOICES.map(seconds => `<button type="submit" name="holdSeconds" value="${seconds}">${seconds} s</button>`).join('')}
@@ -8658,6 +8662,7 @@ export function createBoApp(
 ): BoApp {
     const {online, scoreStore} = core;
     onlineSession = online;
+    mameSessionChanged = running => frontControls.mameSessionChanged(running);
     const app = express();
     app.use(express.urlencoded({extended: false}));
     // A fresh secret per server start (rather than a persisted one) invalidates every session on
