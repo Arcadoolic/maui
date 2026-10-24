@@ -19,10 +19,10 @@
                 </div>
             </div>
             <div class="hint">
-                <span class="arcadeButton"></span>
+                <control-icon action="confirm"></control-icon>
                 to vote
                 <span class="later" @click="mouse && emit('skip')">
-                    <span class="arcadeButton rectangle"></span>
+                    <control-icon action="scores"></control-icon>
                     to decide later
                 </span>
             </div>
@@ -37,6 +37,7 @@ import {MAUI_KEYS} from '@/class/MauiControls';
 import {controlKey} from '@/class/MauiControlsRuntime';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
 import Modal from '@/components/Modal.vue';
+import ControlIcon from '@/components/ControlIcon.vue';
 import {getConfiguration} from '@/services';
 
 // Nobody may be standing at the cabinet anymore: the prompt goes away by itself, like a skip.
@@ -149,23 +150,11 @@ onKeyup(() => {
     .later {
         display: inline-flex;
         align-items: center;
+        margin-left: 13px;
     }
     .hint {
         display: flex;
         align-items: center;
         justify-content: center;
-    }
-    .arcadeButton {
-        display: inline-block;
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        box-shadow: #a7a700 1px 1px;
-        margin: 0 10px 0 25px;
-        background-color: snow;
-    }
-    .arcadeButton.rectangle {
-        border-radius: 0;
-        width: 50px;
     }
 </style>

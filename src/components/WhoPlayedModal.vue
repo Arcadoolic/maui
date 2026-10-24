@@ -12,12 +12,12 @@
             <p class="position">{{choice ? `Player ${selected + 1} / ${players.length}` : 'Nobody of this cabinet'}}</p>
             <div class="validate">
                 Press
-                <span class="arcadeButton"></span>
+                <control-icon action="confirm"></control-icon>
                 to validate
             </div>
             <div class="cancel">
                 Press
-                <span class="arcadeButton rectangle"></span>
+                <control-icon action="scores"></control-icon>
                 {{total > 1 ? 'to stop asking' : 'to cancel'}}
             </div>
         </div>
@@ -30,6 +30,7 @@ import {useControllable} from '@/composables/useControllable';
 import {MAUI_KEYS} from '@/class/MauiControls';
 import {controlKey} from '@/class/MauiControlsRuntime';
 import Modal from '@/components/Modal.vue';
+import ControlIcon from '@/components/ControlIcon.vue';
 
 // A score the game wrote without a name (ScoreDeclaration.ts): who made it is picked as the
 // letters of a new player are (userRegistration.vue), one name shown at a time and the joystick
@@ -163,18 +164,5 @@ onKeyup(() => {
     }
     .cancel {
         font-size: 1em;
-    }
-    .arcadeButton {
-        display: inline-block;
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        box-shadow: #a7a700 1px 1px;
-        margin: 0 15px;
-        background-color: snow;
-    }
-    .arcadeButton.rectangle {
-        border-radius: 0;
-        width: 50px;
     }
 </style>
