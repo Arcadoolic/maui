@@ -74,8 +74,19 @@ export function limitOlderReleases<T extends {tagName: string}>(
     return entries.filter(entry => !isOlderVersion(entry.tagName, currentVersion) || ++older <= max);
 }
 
-/** Where MAUI's releases are published (GitHub's /releases API, public, no auth needed). */
-export const MAUI_RELEASES_URL = 'https://api.github.com/repos/Arcadoolic/maui/releases';
+/**
+ * Where MAUI's releases are published (GitHub's /releases API, public, no auth needed). 100 a
+ * page, GitHub's most: every push to develop publishes a development build, and with the default
+ * 30 the running release could fall off the page (newestAbove() dates development builds by it).
+ */
+export const MAUI_RELEASES_URL = 'https://api.github.com/repos/Arcadoolic/maui/releases?per_page=100';
+
+/** The update channels of the BO's MAUI tab: the releases, or the development builds too. */
+export type UpdateChannel = 'releases' | 'prereleases';
+
+export function parseUpdateChannel(value: unknown): UpdateChannel {
+    return value === 'prereleases' ? 'prereleases' : 'releases';
+}
 
 /**
  * The newest stable release above `currentVersion`, null when there is none. Develop builds
@@ -94,4 +105,52 @@ export function newestStableAbove(
         }
     }
     return newest;
+}
+
+export interface ListedRelease {
+    tag_name: string;
+    prerelease: boolean;
+    draft?: boolean;
+    published_at?: string;
+}
+
+function publishedTime(release: ListedRelease): number {
+    return Date.parse(release.published_at ?? '');
+}
+
+/** Same three numbers: a development build and the release it leads to, or two development builds. */
+function isSameVersion(a: string, b: string): boolean {
+    return parseVersion(a) !== null && parseVersion(b) !== null && !isOlderVersion(a, b) && !isOlderVersion(b, a);
+}
+
+/**
+ * The newest version above `currentVersion` on `channel`, null when there is none. On the
+ * releases channel, newestStableAbove(). With the development builds too, every build of develop
+ * carries the number of the release before it ("2.17.0+dev.1a2b3c4", see build.yml): two versions
+ * of the same number are told apart by their publication, newer when published after the running
+ * one. A running version GitHub does not list (too old, or a local build) has no date: only a
+ * higher number is newer then. Drafts never count.
+ */
+export function newestAbove(
+    releases: readonly ListedRelease[], currentVersion: string, channel: UpdateChannel,
+): string | null {
+    if (channel === 'releases') {
+        return newestStableAbove(releases, currentVersion);
+    }
+    const running = releases.find(release => release.tag_name === currentVersion);
+    const runningTime = running ? publishedTime(running) : NaN;
+    const isNewer = (release: ListedRelease, than: string, thanTime: number): boolean =>
+        isOlderVersion(than, release.tag_name)
+        || (isSameVersion(release.tag_name, than) && publishedTime(release) > thanTime);
+
+    let newest: ListedRelease | null = null;
+    for (const release of releases) {
+        if (release.draft || release.tag_name === currentVersion || !isNewer(release, currentVersion, runningTime)) {
+            continue;
+        }
+        if (newest === null || isNewer(release, newest.tag_name, publishedTime(newest))) {
+            newest = release;
+        }
+    }
+    return newest?.tag_name ?? null;
 }

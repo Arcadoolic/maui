@@ -22,11 +22,12 @@ export interface BandMessage {
 /**
  * A newer release of MAUI (UpdateWatch.ts): the first message of each idle band. Short enough to
  * stop in its middle: in the band's Arcade font, about 42 characters fit in 90% of its width.
+ * `onFront`: the front offers it at the next key press (FrontUpdate.ts), else only the BO installs it.
  */
-export function updateNoticeMessage(version: string): BandMessage {
+export function updateNoticeMessage(version: string, onFront = false): BandMessage {
     return {
         id: `maui-update-${version}`,
-        text: `MAUI **${plain(version)}** is out: update from the BO`,
+        text: `MAUI **${plain(version)}** is out: ${onFront ? 'press to update' : 'update from the BO'}`,
         kind: 'system',
         once: true,
     };

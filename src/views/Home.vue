@@ -18,6 +18,8 @@
 
         <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
 
+        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer"></update-modal>
+
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
                 <h1>{{selectedGame.shortname}}</h1>
@@ -64,6 +66,8 @@
         </transition>
 
         <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
+
+        <update-progress v-if="updating" :version="updating.version" :step="updating.step" @close="updating = null"></update-progress>
     </div>
 
 </template>
@@ -115,6 +119,11 @@ import {IdleWatch} from '@/class/IdleWatch';
 import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
+import {
+    FRONT_UPDATE_GLOBAL, UPDATE_PROGRESS_CHANNEL, type FrontUpdateControl, type UpdateStep,
+} from '@/class/FrontUpdateBridge';
+import UpdateModal from '@/components/UpdateModal.vue';
+import UpdateProgress from '@/components/UpdateProgress.vue';
 import {createOnlineClient} from '@/class/OnlineClient';
 
 let gameService: GameService;
@@ -165,6 +174,10 @@ const showLoader = ref(false);
 const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
+// The newer version of MAUI offered when the cabinet wakes up from idle (see offerUpdate()), then
+// its installation, followed step by step until MAUI restarts (FrontUpdate.ts).
+const updateOffer = ref<string | null>(null);
+const updating = ref<{version: string, step: UpdateStep} | null>(null);
 // The nameless score being asked about, right after the game was quit (see askWhoPlayed()).
 // `answer` takes the player picked, null when nobody claims the score, undefined when the
 // question was cancelled or nobody answered at all.
@@ -229,6 +242,46 @@ function readAvailableUpdate(): string | null {
     }
 }
 
+function frontUpdate(): FrontUpdateControl | undefined {
+    try {
+        return remote.getGlobal(FRONT_UPDATE_GLOBAL) as FrontUpdateControl | undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** On waking up from idle: the newer version of MAUI, when the BO lets the front install it. */
+function offerUpdate() {
+    try {
+        updateOffer.value = frontUpdate()?.offer() ?? null;
+    } catch (err) {
+        Log.warn('[Home] Update offer not read: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
+function onUpdateAnswer(install: boolean) {
+    const version = updateOffer.value;
+    updateOffer.value = null;
+    const control = frontUpdate();
+    if (!version || !control) {
+        return;
+    }
+    if (!install) {
+        control.decline(version);
+        return;
+    }
+    // The main process only installs the version it offers: false when it changed meanwhile.
+    if (control.install(version)) {
+        updating.value = {version, step: {step: 'download', doneBytes: 0, totalBytes: 0}};
+    }
+}
+
+const onUpdateStep = (_event: unknown, step: UpdateStep) => {
+    if (updating.value) {
+        updating.value = {...updating.value, step};
+    }
+};
+
 /**
  * Read each time the cabinet turns idle: MAUI-API's latest score events in ONLINE mode, else, or
  * when there is none to read, the cabinet's own latest best scores. A newer release of MAUI
@@ -243,7 +296,9 @@ async function loadIdleMessages() {
             : await getHiscoreService().loadLatestBests(IDLE_MESSAGES);
         // A newer release of MAUI opens the band, once, before the scores.
         const update = readAvailableUpdate();
-        idleMessages.value = update ? [updateNoticeMessage(update), ...scores] : scores;
+        idleMessages.value = update
+            ? [updateNoticeMessage(update, frontUpdate()?.offer() === update), ...scores]
+            : scores;
     } catch (err) {
         idleMessages.value = [];
         Log.warn('[Home] Messages not loaded: ' + (err instanceof Error ? err.message : String(err)));
@@ -559,7 +614,7 @@ function unlockFront() {
 function syncIdleBlock() {
     stopRoll();
     idleWatch.block(gameRunning || showAddUser.value || !!whoPlayed.value || !!voteGame.value
-        || !!backOfficeUrl.value || noGames.value);
+        || !!updateOffer.value || !!updating.value || !!backOfficeUrl.value || noGames.value);
 }
 
 function startGame() {
@@ -882,6 +937,7 @@ onUnmounted(() => {
     stopLeaderboardsListener?.();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
+    ipcRenderer.off(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
@@ -894,21 +950,24 @@ onUnmounted(() => {
 // sends its own for a controller).
 window.addEventListener('blur', stopHold);
 // A modal takes the keys over: the list stops where it is.
-watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value, (modal) => {
+watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value, (modal) => {
     if (modal) {
         stopHold();
     }
 });
-watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!backOfficeUrl.value, noGames.value], syncIdleBlock);
+watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
+    !!backOfficeUrl.value, noGames.value], syncIdleBlock);
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        // The key that wakes an idle cabinet only takes its messages away.
+        // The key that wakes an idle cabinet only takes its messages away, and may bring the
+        // offer of a newer version.
         if (idleWatch.activity()) {
             stopRoll();
+            offerUpdate();
             return;
         }
-        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value) {
+        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || updateOffer.value || updating.value) {
             return;
         }
         const key = controlKey(e, isGamepad);
@@ -1017,6 +1076,7 @@ if (!getIsInit()) {
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
         ipcRenderer.on(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
+        ipcRenderer.on(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();

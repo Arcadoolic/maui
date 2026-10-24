@@ -17,6 +17,9 @@ import {readSetupFacts} from '@/class/SetupFacts';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
+import {FRONT_UPDATE_GLOBAL, UPDATE_PROGRESS_CHANNEL} from '@/class/FrontUpdateBridge';
+import {FrontUpdate, simulateInstall} from '@/class/FrontUpdate';
+import {findInstallAsset, installAndRestart, isSelfUpdateCapable} from '@/class/SelfUpdate';
 import {
     LEADERBOARDS_CHANGED_CHANNEL, PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
@@ -83,8 +86,18 @@ const readSetupProgress: SetupProgressReader = () => {
 };
 (global as Record<string, unknown>)[SETUP_PROGRESS_GLOBAL] = readSetupProgress;
 
-// Read by the idle band (Home.vue) through @electron/remote.
-const readAvailableUpdate: UpdateNoticeReader = () => core?.availableUpdate() ?? null;
+// Development only (MAUI_FAKE_UPDATE=<version>): the front offers this version and plays an
+// installation without installing anything (FrontUpdate.ts simulateInstall()).
+const fakeUpdate = app.isPackaged ? undefined : process.env.MAUI_FAKE_UPDATE || undefined;
+
+function readSettings(): Config {
+    const config = new Config();
+    config.load();
+    return config;
+}
+
+// Read by the idle band (Home.vue) through @electron/remote: the newer version on the BO's channel.
+const readAvailableUpdate: UpdateNoticeReader = () => fakeUpdate ?? core?.updates.available(readSettings().updateChannel) ?? null;
 (global as Record<string, unknown>)[UPDATE_NOTICE_GLOBAL] = readAvailableUpdate;
 
 function loadPath(winVar: BrowserWindow, path: string) {
@@ -263,6 +276,35 @@ app.on('ready', async () => {
         }
     });
     core = bo;
+    // The front's update of MAUI (FrontUpdate.ts): offered when it wakes up from idle (Home.vue),
+    // each step of the installation sent to the window.
+    const frontUpdate = new FrontUpdate({
+        settings: readSettings,
+        capable: () => fakeUpdate !== undefined || isSelfUpdateCapable(),
+        available: channel => fakeUpdate ?? bo.updates.available(channel),
+        installAndRestart: async (version, progress) => {
+            if (fakeUpdate) {
+                await simulateInstall(progress);
+                // Nothing installed: the front comes back as after a restart.
+                setTimeout(() => win?.reload(), 3000);
+                return;
+            }
+            // The file GitHub lists for that version, never one the front names.
+            const assets = bo.updates.release(version)?.assets ?? [];
+            const assetName = findInstallAsset(assets.map(asset => asset.name));
+            const asset = assets.find(candidate => candidate.name === assetName);
+            if (!asset) {
+                throw new Error(`Version ${version} has nothing to install on this machine.`);
+            }
+            await installAndRestart(asset.browser_download_url, progress, () => app.exit(0));
+        },
+        send: (step) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(UPDATE_PROGRESS_CHANNEL, step);
+            }
+        },
+    });
+    (global as Record<string, unknown>)[FRONT_UPDATE_GLOBAL] = frontUpdate;
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
