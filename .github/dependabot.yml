@@ -35,6 +35,9 @@ updates:
       # (tsconfig.json is already on "bundler" and paths without baseUrl). TypeScript 6 is in range.
       - dependency-name: "typescript"
         versions: ["7.x"]
+      # Installed from a Git tag, which Dependabot resolves to an older one (#163: 2.2.2 to
+      # 2.2.1). Bumped by hand with the hiscore readers it brings ("mhiex 2.2.x" PRs).
+      - dependency-name: "@arcadoolic/mhiex"
 
   - package-ecosystem: "github-actions"
     directory: "/"
