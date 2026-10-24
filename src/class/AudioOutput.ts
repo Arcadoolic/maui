@@ -1,19 +1,25 @@
-import {existsSync, readFileSync, rmSync, writeFileSync} from 'fs';
+import {existsSync, readFileSync, writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {join} from 'path';
+import {currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
 
 // Which sound output a dedicated cabinet uses (the BO's MAUI tab, Config.audioOutput). MAME plays
 // through ALSA there (SDL_AUDIO_DRIVER=alsa in ~/.xinitrc, docs/RASPBERRY-PI-DEPLOY.md §6.4), and
 // ALSA reads the user's ~/.asoundrc after /etc/asound.conf (maui-cabinets' asound.conf.j2): MAUI
-// writes the default device there, no root needed. A game started afterwards uses it at once;
-// MAUI's own window, at its next start. The default, FOLLOW_SCREEN, takes the HDMI card of the
-// screen output (VideoOutput.ts); '' removes MAUI's file, back to the system's default. A
-// ~/.asoundrc MAUI did not write is never touched.
+// writes the default device there, no root needed: MAUI's own window uses it at its next start.
+// MAME does not follow ALSA's default: each game names its output in its cfg file, which the
+// front writes before each game (MameSoundMap.ts, gameSoundNode()). And since SDL opens an
+// output by its `hw:` name, which a Raspberry Pi's HDMI refuses ("Sample format non
+// available"), ~/.asoundrc also makes `hw:` go through plug, as /etc/asound.conf's default
+// does. The default, FOLLOW_SCREEN, takes the HDMI card of the screen output (VideoOutput.ts);
+// '' leaves the default output to the system. A ~/.asoundrc MAUI did not write is never touched.
 
 export interface AudioDevice {
     // "card,device", the card by its id: "vc4hdmi0,0", "PCH,3".
     id: string;
     label: string;
+    // What SDL (hence MAME) calls it: "<card name>, <pcm name>", "vc4-hdmi-0, MAI PCM i2s-hifi-0".
+    node: string;
 }
 
 const MARKER = '# Written by MAUI (BO > MAUI > Screen > Sound output): any change here is overwritten.';
@@ -83,6 +89,7 @@ export function parseAlsaDevices(cardsText: string, pcmText: string): AudioDevic
         devices.push({
             id: `${card.id},${device}`,
             label: KNOWN_CARDS[card.id] ?? (several ? `${card.name}, device ${device} (${pcm[4] || pcm[3]})` : card.name),
+            node: `${card.name}, ${pcm[4] || pcm[3]}`,
         });
     }
     return devices;
@@ -97,8 +104,28 @@ export function listAudioDevices(): AudioDevice[] {
     }
 }
 
-/** ~/.asoundrc for `id`: the same default as maui-cabinets' asound.conf.j2, through plug. */
+// `hw:CARD,DEV` through plug, for whoever opens a card by its `hw:` name (SDL, hence MAME): same
+// arguments and defaults as alsa.conf's own pcm.hw, the hardware itself one level down.
+const HW_THROUGH_PLUG = `pcm.!hw {
+    @args [ CARD DEV SUBDEV ]
+    @args.CARD { type string default { @func getenv vars [ ALSA_PCM_CARD ALSA_CARD ] default { @func refer name defaults.pcm.card } } }
+    @args.DEV { type integer default { @func igetenv vars [ ALSA_PCM_DEVICE ] default { @func refer name defaults.pcm.device } } }
+    @args.SUBDEV { type integer default { @func refer name defaults.pcm.subdevice } }
+    type plug
+    slave.pcm { type hw card $CARD device $DEV subdevice $SUBDEV }
+    hint { show on description "Hardware device, converted by MAUI" device $DEV }
+}
+`;
+
+/**
+ * ~/.asoundrc for `id` ('' for the system's default output): the same default as maui-cabinets'
+ * asound.conf.j2, through plug, and `hw:` through plug too.
+ */
 export function renderAsoundrc(id: string): string {
+    if (!id) {
+        return `${MARKER}
+${HW_THROUGH_PLUG}`;
+    }
     const match = DEVICE_ID.exec(id);
     if (!match) {
         throw new Error(`Not an ALSA device: ${id}`);
@@ -112,7 +139,7 @@ ctl.!default {
     type hw
     card ${match[1]}
 }
-`;
+${HW_THROUGH_PLUG}`;
 }
 
 export function getAsoundrcPath(): string {
@@ -120,7 +147,7 @@ export function getAsoundrcPath(): string {
 }
 
 /**
- * Makes `id` the default sound output ('' gives it back to the system). Throws, with nothing
+ * Makes `id` the default sound output ('' leaves it to the system). Throws, with nothing
  * written, when a ~/.asoundrc MAUI did not write is in the way.
  */
 export function applyAudioOutput(id: string, path: string = getAsoundrcPath()): void {
@@ -128,9 +155,22 @@ export function applyAudioOutput(id: string, path: string = getAsoundrcPath()): 
     if (!ours) {
         throw new Error(`${path} was not written by MAUI: it is left as it is.`);
     }
-    if (!id) {
-        rmSync(path, {force: true});
-        return;
-    }
     writeFileSync(path, renderAsoundrc(id));
+}
+
+/**
+ * What a game launched now must play on, as MAME names it (MameSoundMap.ts): the output the BO
+ * set, the screen's HDMI card by default. '' to leave MAME to itself: the system's default, or
+ * an output this machine does not have.
+ */
+export function gameSoundNode(setting: string, videoSetting: string): string {
+    const devices = listAudioDevices();
+    let screen = '';
+    try {
+        screen = currentScreenOutput(videoSetting, listScreenOutputs());
+    } catch {
+        // No xrandr answer: no screen output to follow.
+    }
+    const id = resolveAudioOutput(setting, screen, devices);
+    return devices.find(device => device.id === id)?.node ?? '';
 }

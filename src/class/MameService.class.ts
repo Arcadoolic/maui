@@ -1,11 +1,13 @@
 import {existsSync, readFileSync, rmSync, writeFileSync} from 'fs';
-import {join} from 'path';
+import {isAbsolute, join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
 import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
+import {gameSoundNode} from '@/class/AudioOutput';
+import {applyGameSoundOutput, speakerTagsFromListXml} from '@/class/MameSoundMap';
 
 export default class MameService {
     public mameIni: { [key: string]: string[] } = {};
@@ -101,6 +103,38 @@ export default class MameService {
             return [];
         }
         return parseFavorites(readFileSync(favoritePath, 'utf8'));
+    }
+
+    /** MAME's cfg_directory (cfg files per game: inputs, sound outputs...), from its home. */
+    public get cfgDirectory(): string {
+        const directory = this.mameIni.cfg_directory?.[0] || 'cfg';
+        return isAbsolute(directory) ? directory : join(this.iniPath, directory);
+    }
+
+    /**
+     * Before a game starts: the output the BO set for the sound (AudioOutput.ts) written into the
+     * game's cfg file, MAME's only way to choose one (MameSoundMap.ts). Read from the config file
+     * each time, the BO may have changed it. Never what keeps a game from starting.
+     */
+    protected prepareSoundOutput(romName: string): void {
+        if (process.platform !== 'linux') {
+            return;
+        }
+        try {
+            const config = new Config();
+            config.load();
+            const node = gameSoundNode(config.audioOutput, config.videoOutput);
+            if (!node) {
+                return;
+            }
+            applyGameSoundOutput(this.cfgDirectory, romName, node, () => speakerTagsFromListXml(execFileSync(
+                this.mameBinary,
+                ['-listxml', romName, ...this.mameHomeArgs],
+                {encoding: 'utf8', cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024},
+            )));
+        } catch (error) {
+            console.warn('[MameService] Sound output not set for ' + romName + ':', error);
+        }
     }
 
     /**
@@ -202,6 +236,7 @@ export default class MameService {
     public startGame(romName: string, capture = this.prepareCapture()): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
+            this.prepareSoundOutput(romName);
             // With the BO's capture daemon, so the BO can list and rebind this game's controls
             // while it's being played (see CaptureDaemon.ts), and which reports on the game for its
             // scores (ScoreCapture.ts): `capture` prepared beforehand to say where.

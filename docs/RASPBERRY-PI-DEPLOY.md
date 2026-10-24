@@ -345,9 +345,12 @@ le device par défaut) doit être audible sur l'écran.
 
 > 💡 Depuis le BO (onglet MAUI, carte mame-awesome-ui, groupe *Screen*) :
 > « Screen output » choisit le port HDMI de l'écran (`xrandr`, au prochain
-> démarrage) et « Sound output » la sortie son, écrite dans `~/.asoundrc`
-> (lu par ALSA après `/etc/asound.conf`, sans root). La partie suivante
-> l'utilise aussitôt.
+> démarrage) et « Sound output » la sortie son (par défaut celle de l'écran),
+> sans root. MAME ne suit pas la sortie par défaut d'ALSA : depuis la 0.278,
+> chaque jeu désigne sa sortie dans son `cfg/<jeu>.cfg` (`<sound_map>`), et
+> sans elle prend la première carte, le jack. MAUI l'écrit donc avant chaque
+> partie, et `~/.asoundrc` fait passer `hw:` par `plug` : SDL ouvre la carte
+> par son nom `hw:`, que le HDMI du Pi refuse en direct (§6.2).
 
 ### 6.3 Sink par défaut PulseAudio (MAME lui-même)
 

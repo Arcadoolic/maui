@@ -83,9 +83,9 @@ describe('sound output', () => {
 
     it('names a Raspberry Pi\'s cards after where the sound comes out', () => {
         expect(parseAlsaDevices(CARDS, PCM)).toEqual([
-            {id: 'Headphones,0', label: 'Raspberry Pi\'s 3.5 mm jack'},
-            {id: 'vc4hdmi0,0', label: 'HDMI-1 port (the screen\'s speakers or its headphone socket)'},
-            {id: 'vc4hdmi1,0', label: 'HDMI-2 port (the screen\'s speakers or its headphone socket)'},
+            {id: 'Headphones,0', label: 'Raspberry Pi\'s 3.5 mm jack', node: 'bcm2835 Headphones, bcm2835 Headphones'},
+            {id: 'vc4hdmi0,0', label: 'HDMI-1 port (the screen\'s speakers or its headphone socket)', node: 'vc4-hdmi-0, MAI PCM i2s-hifi-0'},
+            {id: 'vc4hdmi1,0', label: 'HDMI-2 port (the screen\'s speakers or its headphone socket)', node: 'vc4-hdmi-1, MAI PCM i2s-hifi-0'},
         ]);
     });
 
@@ -112,14 +112,18 @@ describe('sound output', () => {
         const cards = ' 0 [PCH            ]: HDA-Intel - HDA Intel PCH\n';
         const pcm = '00-00: ALC892 Analog : ALC892 Analog : playback 1 : capture 1\n00-03: HDMI 0 : HDMI 0 : playback 1\n';
         expect(parseAlsaDevices(cards, pcm)).toEqual([
-            {id: 'PCH,0', label: 'HDA Intel PCH, device 0 (ALC892 Analog)'},
-            {id: 'PCH,3', label: 'HDA Intel PCH, device 3 (HDMI 0)'},
+            {id: 'PCH,0', label: 'HDA Intel PCH, device 0 (ALC892 Analog)', node: 'HDA Intel PCH, ALC892 Analog'},
+            {id: 'PCH,3', label: 'HDA Intel PCH, device 3 (HDMI 0)', node: 'HDA Intel PCH, HDMI 0'},
         ]);
     });
 
-    it('writes the default device through plug, as /etc/asound.conf does', () => {
+    it('writes the default device through plug, as /etc/asound.conf does, and hw: through plug too', () => {
         expect(renderAsoundrc('vc4hdmi1,0')).toContain('slave.pcm "hw:vc4hdmi1,0"');
         expect(renderAsoundrc('vc4hdmi1,0')).toContain('card vc4hdmi1');
+        // SDL opens a card by its hw: name, which a Pi's HDMI refuses without conversion.
+        expect(renderAsoundrc('vc4hdmi1,0')).toContain('pcm.!hw {');
+        expect(renderAsoundrc('')).toContain('pcm.!hw {');
+        expect(renderAsoundrc('')).not.toContain('pcm.!default');
         expect(() => renderAsoundrc('x"; y')).toThrow();
         expect(parseAudioOutputSetting('vc4hdmi0,0')).toBe('vc4hdmi0,0');
         expect(parseAudioOutputSetting('hw:0')).toBe('');
@@ -128,13 +132,15 @@ describe('sound output', () => {
         expect(parseAudioOutputSetting('')).toBe('');
     });
 
-    it('writes and removes its own ~/.asoundrc, never one it did not write', () => {
+    it('writes its own ~/.asoundrc, never over one it did not write', () => {
         dir = mkdtempSync(join(tmpdir(), 'maui-asoundrc-'));
         const path = join(dir, '.asoundrc');
         applyAudioOutput('vc4hdmi1,0', path);
         expect(readFileSync(path, 'utf8')).toContain('hw:vc4hdmi1,0');
+        // The system's default output: only hw: through plug is left.
         applyAudioOutput('', path);
-        expect(existsSync(path)).toBe(false);
+        expect(readFileSync(path, 'utf8')).not.toContain('pcm.!default');
+        expect(existsSync(path)).toBe(true);
 
         writeFileSync(path, 'pcm.!default { type hw card 1 }\n');
         expect(() => applyAudioOutput('vc4hdmi0,0', path)).toThrow(/not written by MAUI/);
