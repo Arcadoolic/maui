@@ -39,6 +39,8 @@ import {canRestartKiosk, isKioskLayout, powerOff, restartKiosk} from '@/class/Ki
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
+import {applyVideoOutput} from '@/class/VideoOutput';
+import {applyAudioOutput} from '@/class/AudioOutput';
 import {resolveUiMode} from '@/class/UiMode';
 
 remoteMain.initialize();
@@ -160,15 +162,31 @@ function integrateAppImage(): void {
     }
 }
 
-// The screen mode of a dedicated cabinet (DisplayMode.ts), before any window opens. Only there, on
-// its bare X session: a desktop's own screen settings are never touched.
+// The screen output and mode of a dedicated cabinet (VideoOutput.ts, DisplayMode.ts), and its sound
+// output (AudioOutput.ts), before any window opens. Only there, on its bare X session: a desktop's
+// own screen and sound settings are never touched.
 function setCabinetDisplayMode(): void {
     if (!isKioskLayout(app.isPackaged) || !process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
         return;
     }
+    const config = new Config();
+    config.load();
     try {
-        const config = new Config();
-        config.load();
+        // The BO writes it when it changes; written again here in case ~/.asoundrc was lost.
+        applyAudioOutput(config.audioOutput);
+    } catch (error) {
+        console.error('[background] Sound output not set:', error);
+    }
+    try {
+        // First: the mode below is set on the primary output, the one picked here.
+        const output = applyVideoOutput(config.videoOutput);
+        if (output) {
+            console.log(`[background] Screen output set to ${output}`);
+        }
+    } catch (error) {
+        console.error('[background] Screen output not set:', error);
+    }
+    try {
         // The GPU's status is not known this early: the memory alone tells Lite here (UiMode.ts).
         const lite = resolveUiMode(config.uiMode, {totalMemBytes: totalmem()}) === 'lite';
         const mode = applyDisplayMode(config.displayMode, lite);

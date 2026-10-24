@@ -5,6 +5,8 @@ import {decryptSecret, encryptSecret, isEncryptedSecret} from '@/class/SecretBox
 import {parseUiModeSetting, type UiModeSetting} from '@/class/UiMode';
 import {parseDisplayModeSetting, type DisplayModeSetting} from '@/class/DisplayMode';
 import {parseUpdateChannel, type UpdateChannel} from '@/class/ReleaseList';
+import {parseVideoOutputSetting} from '@/class/VideoOutput';
+import {parseAudioOutputSetting} from '@/class/AudioOutput';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
 // the clear: they are shown back in the BO forms, the passwords are not.
@@ -100,6 +102,10 @@ export default class Config {
     // The screen mode of a dedicated cabinet, set when the application starts (DisplayMode.ts):
     // "auto" keeps it at 1080 lines at most, 720 in Lite mode.
     public displayMode: DisplayModeSetting = 'auto';
+    // The screen output (an xrandr name, VideoOutput.ts) and the sound output ("card,device",
+    // AudioOutput.ts) of a dedicated cabinet; '' leaves them as the system set them.
+    public videoOutput: string = '';
+    public audioOutput: string = '';
 
     // Minutes without a request before the BO is unloaded from memory (BoOnDemand.ts); its next
     // request loads it again. 0 keeps it loaded once it has been opened.
@@ -175,6 +181,8 @@ export default class Config {
             this.showHiscoresOnlyCategory = configFile.showHiscoresOnlyCategory !== false;
             this.uiMode = parseUiModeSetting(configFile.uiMode);
             this.displayMode = parseDisplayModeSetting(configFile.displayMode);
+            this.videoOutput = parseVideoOutputSetting(configFile.videoOutput);
+            this.audioOutput = parseAudioOutputSetting(configFile.audioOutput);
             this.boIdleMinutes = Number.isInteger(configFile.boIdleMinutes) && configFile.boIdleMinutes >= 0
                 ? configFile.boIdleMinutes
                 : 15;
@@ -238,6 +246,8 @@ export default class Config {
                 showHiscoresOnlyCategory: this.showHiscoresOnlyCategory,
                 uiMode: this.uiMode,
                 displayMode: this.displayMode,
+                videoOutput: this.videoOutput,
+                audioOutput: this.audioOutput,
                 boIdleMinutes: this.boIdleMinutes,
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
