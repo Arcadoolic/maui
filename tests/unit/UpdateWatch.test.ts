@@ -3,7 +3,7 @@ import {newestStableAbove} from '@/class/ReleaseList';
 import {UpdateWatch} from '@/class/UpdateWatch';
 import {parseMessage, updateNoticeMessage} from '@/class/CabinetMessages';
 
-const release = (tag: string, prerelease = false, draft = false) => ({tag_name: tag, prerelease, draft});
+const release = (tag: string, prerelease = false, draft = false) => ({tag_name: tag, prerelease, draft, assets: []});
 
 describe('newestStableAbove', () => {
     it('gives the newest stable release above the running version', () => {

@@ -1,24 +1,49 @@
 <template>
-    <div v-if="display" class="online-badge" :class="[indicator, {'dot-only': dotOnly}]" :title="display.title">{{ dotOnly ? '' : display.label }}</div>
+    <div v-if="display" class="online-badge" :class="[indicator, {'dot-only': dotOnly && !localIp}]"
+         :title="display.title">{{ localIp ?? (dotOnly ? '' : display.label) }}</div>
 </template>
 
 <script setup lang="ts">
 // ONLINE / OFFLINE and a dot in the top right corner, the BO header badge's states and colors
 // without the cabinet's name: the only sign of the connection to MAUI-API while the cabinet runs
-// fullscreen. The BO can leave only the dot, more discreet (Config.onlineBadgeDotOnly).
+// fullscreen. The BO can leave only the dot, more discreet (Config.onlineBadgeDotOnly). Every
+// minute, for 10 seconds, it shows the machine's local address instead (LocalAddress.ts), unless
+// the BO hides it (Config.onlineBadgeHideIp).
 import {computed, onMounted, onUnmounted, ref} from 'vue';
 import * as remote from '@electron/remote';
 import type {OnlineIndicator} from '@/class/OnlineSetup';
 import {describeFrontIndicator, ONLINE_INDICATOR_GLOBAL, type OnlineIndicatorReader} from '@/class/OnlineIndicatorBridge';
 import {getConfiguration} from '@/services';
+import {networkInterfaces} from 'os';
+import {pickLocalAddress} from '@/class/LocalAddress';
 
 const REFRESH_MS = 5000;
+const LOCAL_IP_EVERY_MS = 60_000;
+const LOCAL_IP_FOR_MS = 10_000;
 
-// Read once: the BO reloads the front when the setting changes.
+// Read once: the BO reloads the front when one of these settings changes.
 const dotOnly = getConfiguration().onlineBadgeDotOnly;
+const hideIp = getConfiguration().onlineBadgeHideIp;
+// The address while it is shown, null the rest of the time (or without any local network).
+const localIp = ref<string | null>(null);
+let ipTimer: ReturnType<typeof setInterval> | undefined;
+let ipHideTimer: ReturnType<typeof setTimeout> | undefined;
 const indicator = ref<OnlineIndicator | null>(null);
 const display = computed(() => describeFrontIndicator(indicator.value));
 let timer: ReturnType<typeof setInterval> | undefined;
+
+/** Read at each showing: the cabinet may have joined another network meanwhile. */
+function showLocalIp(): void {
+    try {
+        localIp.value = pickLocalAddress(networkInterfaces());
+    } catch {
+        localIp.value = null;
+    }
+    clearTimeout(ipHideTimer);
+    ipHideTimer = setTimeout(() => {
+        localIp.value = null;
+    }, LOCAL_IP_FOR_MS);
+}
 
 function refresh(): void {
     try {
@@ -32,9 +57,16 @@ function refresh(): void {
 onMounted(() => {
     refresh();
     timer = setInterval(refresh, REFRESH_MS);
+    if (!hideIp) {
+        ipTimer = setInterval(showLocalIp, LOCAL_IP_EVERY_MS);
+    }
 });
 
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => {
+    clearInterval(timer);
+    clearInterval(ipTimer);
+    clearTimeout(ipHideTimer);
+});
 </script>
 
 <style scoped>

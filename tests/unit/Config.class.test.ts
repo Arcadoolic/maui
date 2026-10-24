@@ -387,10 +387,12 @@ describe('Config.save', () => {
             'frontIdleShowsGames',
             'frontSleepMinutes',
             'frontSleepScreenOff',
+            'frontUpdateEnabled',
             'fullscreen',
             'mameBinaryName',
             'mamePath',
             'onlineBadgeDotOnly',
+            'onlineBadgeHideIp',
             'openDevTools',
             'setupOffline',
             'showAllGamesCategory',
@@ -403,6 +405,7 @@ describe('Config.save', () => {
             'ssUserPassword',
             'thumbsDownRemovesFavorite',
             'uiMode',
+            'updateChannel',
             'voteEnabled',
         ]);
     });
@@ -427,6 +430,40 @@ describe('Config.save', () => {
         legacy.load();
         expect(legacy.voteEnabled).toBe(true);
         expect(legacy.thumbsDownRemovesFavorite).toBe(true);
+    });
+
+    it('shows the local IP address in the ONLINE badge by default, and reads the setting back', () => {
+        const config = new Config();
+        config.mamePath = '/opt/mame';
+        expect(config.onlineBadgeHideIp).toBe(false);
+
+        config.onlineBadgeHideIp = true;
+        config.save();
+        const read = new Config();
+        read.load();
+        expect(read.onlineBadgeHideIp).toBe(true);
+    });
+
+    it('offers updates on the front, from the releases only, by default, and reads them back', () => {
+        const config = new Config();
+        config.mamePath = '/opt/mame';
+        expect(config.frontUpdateEnabled).toBe(true);
+        expect(config.updateChannel).toBe('releases');
+
+        config.frontUpdateEnabled = false;
+        config.updateChannel = 'prereleases';
+        config.save();
+        const read = new Config();
+        read.load();
+        expect(read.frontUpdateEnabled).toBe(false);
+        expect(read.updateChannel).toBe('prereleases');
+
+        // A config file written before these settings existed keeps the defaults.
+        writeFileSync(configPath, JSON.stringify({mamePath: '/opt/mame', mameBinaryName: 'mame', updateChannel: 'nightly'}));
+        const legacy = new Config();
+        legacy.load();
+        expect(legacy.frontUpdateEnabled).toBe(true);
+        expect(legacy.updateChannel).toBe('releases');
     });
 });
 

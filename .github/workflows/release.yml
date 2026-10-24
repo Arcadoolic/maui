@@ -4,6 +4,15 @@ on:
   push:
     branches:
       - main
+  # Rebuilds the binaries of a release already published, when its run did not attach them
+  # (cancelled, failed): the build job alone, on the tag, replacing the release's assets. Never
+  # fill a release with build.yml's binaries: a develop build bakes "+dev.<sha>" into the
+  # version the BO shows (electron.vite.config.ts), as happened to 2.17.0.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to rebuild (e.g. 2.17.0)
+        required: true
 
 permissions:
   contents: write
@@ -12,7 +21,7 @@ permissions:
 
 jobs:
   release:
-    if: "!contains(github.event.head_commit.message, 'chore(release):')"
+    if: "github.event_name == 'push' && !contains(github.event.head_commit.message, 'chore(release):')"
     runs-on: ubuntu-latest
     outputs:
       published: ${{ steps.release_check.outputs.published }}
@@ -77,7 +86,10 @@ jobs:
 
   build:
     needs: release
-    if: needs.release.outputs.published == 'true'
+    # always(): on a dispatch the release job is skipped, which would skip this one too.
+    if: >-
+      always() && (needs.release.outputs.published == 'true'
+      || (github.event_name == 'workflow_dispatch' && needs.release.result == 'skipped'))
     permissions:
       contents: write
     strategy:
@@ -101,11 +113,23 @@ jobs:
             build_args: --win --x64
             artifact_glob: dist_electron/*.exe
     runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release.outputs.tag }}
     steps:
+      - name: Check the tag is a published release
+        # Only a real release: a dev prerelease's tag (2.17.0+dev.9d2ca10) or a draft is refused.
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a release tag: $RELEASE_TAG"; exit 1; }
+          gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" --json isPrerelease,isDraft \
+            --jq 'if .isPrerelease or .isDraft then error("not a published release") else empty end'
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -148,4 +172,5 @@ jobs:
       - name: Attach to GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.release.outputs.tag }}" ${{ matrix.artifact_glob }} --clobber
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" ${{ matrix.artifact_glob }} --clobber --repo "${{ github.repository }}"
