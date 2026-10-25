@@ -1309,6 +1309,12 @@ function renderImportTabsOpen(packFilenames: string[]): string {
             var picked = false;
             function tab(i) { return document.querySelector('[data-import-tab="' + i + '"]'); }
             function select(i) {
+                // The panel shown next is shorter (a pack that just started): the page would shrink
+                // under the reader and the browser scroll it up. The panels keep the tallest height.
+                var panels = document.querySelector('.import-panels');
+                if (panels) {
+                    panels.style.minHeight = Math.max(panels.offsetHeight, parseFloat(panels.style.minHeight) || 0) + 'px';
+                }
                 Array.prototype.forEach.call(document.querySelectorAll('[data-import-tab]'), function (t) {
                     t.classList.toggle('active', t.dataset.importTab === String(i));
                 });
