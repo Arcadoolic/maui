@@ -99,8 +99,13 @@ export async function simulateInstall(progress: UpdateProgress, wait = (ms: numb
         progress({step: 'download', doneBytes, totalBytes});
         await wait(250);
     }
-    progress({step: 'extract'});
-    await wait(1500);
+    const totalEntries = 3000;
+    for (let entries = 0; entries <= totalEntries; entries += 300) {
+        progress({step: 'extract', entries, totalEntries});
+        await wait(150);
+    }
     progress({step: 'switch'});
+    await wait(800);
+    progress({step: 'cleanup'});
     await wait(800);
 }

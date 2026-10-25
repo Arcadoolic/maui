@@ -61,6 +61,7 @@ import {
     downloadWindowsInstaller, findInstallAsset, installAppImage, isKioskInstall, isSelfUpdateCapable, isWindowsInstall,
     restartOnInstalledVersion, runWindowsInstaller, type UpdateProgress,
 } from '@/class/SelfUpdate';
+import {describeUpdateStep} from '@/class/UpdateScreen';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
@@ -5861,24 +5862,91 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
     return info;
 }
 
-/** A line of the BO's progress log for each step of an installation (SelfUpdate.ts). */
-function updateStepLogger(writeLine: (line: string) => void): UpdateProgress {
-    let lastLoggedMb = -1;
-    return (step) => {
-        if (step.step === 'download') {
-            const mb = Math.floor(step.doneBytes / (1024 * 1024));
-            if (mb === 0 && lastLoggedMb < 0) {
-                writeLine('Downloading…');
-            } else if (mb > lastLoggedMb) {
-                const totalMb = step.totalBytes ? Math.round(step.totalBytes / (1024 * 1024)) : undefined;
-                writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
-            }
-            lastLoggedMb = Math.max(lastLoggedMb, mb);
-        } else if (step.step === 'extract') {
-            writeLine('Extracting the AppImage…');
-        } else if (step.step === 'switch') {
-            writeLine('Switching to the new version…');
+/**
+ * The BO's block for an installation (SelfUpdate.ts): a progress bar over every step, the same
+ * figures as the front's update screen (describeUpdateStep()), and a log line as each step starts
+ * and ends, with its duration - the extraction alone takes a minute or more on a Raspberry Pi.
+ * Writes the open card; `close()` ends it.
+ */
+function openUpdateBlock(res: Response, title: string): {
+    progress: UpdateProgress; line: (text: string) => void; endStep: () => void; close: (ok: boolean) => void;
+} {
+    res.write(`
+        <section class="card">
+            <h2>${escapeHtml(title)}</h2>
+            <div class="import-progress" id="updateProgress">
+                <div class="progress-label"><span data-label>Starting…</span><span data-percent></span></div>
+                <div class="progress-track"><div class="progress-fill progress-indeterminate" data-fill></div></div>
+            </div>
+            <script>
+            window.mauiUpdateBar = function (percent, label, state) {
+                var root = document.getElementById('updateProgress');
+                var fill = root.querySelector('[data-fill]');
+                fill.classList.toggle('progress-indeterminate', percent === null && !state);
+                fill.classList.toggle('progress-done', state === 'done');
+                fill.classList.toggle('progress-failed', state === 'failed');
+                fill.style.width = (state ? 100 : percent === null ? 100 : percent) + '%';
+                root.querySelector('[data-label]').textContent = label;
+                root.querySelector('[data-percent]').textContent = percent === null || state ? '' : percent + '%';
+            };
+            </script>
+            ${PROGRESS_LOG_OPEN}
+    `);
+    const line = (text: string): void => {
+        console.log(`[boServer] Update: ${text}`);
+        res.write(`<li>${escapeHtml(text)}</li>`);
+    };
+    const bar = (percent: number | null, label: string, state = ''): void => {
+        res.write(`<script>mauiUpdateBar(${percent === null ? 'null' : percent},${JSON.stringify(label).replace(/</g, '\\u003c')},${JSON.stringify(state)})</script>`);
+    };
+    const megabytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    const startedAt = Date.now();
+    let current: {step: string; at: number; summary: string} | null = null;
+    const seconds = (since: number): string => `${Math.max(1, Math.round((Date.now() - since) / 1000))} s`;
+    // The step under way's summary line, once (the next step, the end).
+    const endStep = (): void => {
+        if (current?.summary) {
+            line(`${current.summary} in ${seconds(current.at)}.`);
+            current.summary = '';
         }
+    };
+    const progress: UpdateProgress = (step) => {
+        if (current?.step !== step.step) {
+            endStep();
+            current = {step: step.step, at: Date.now(), summary: ''};
+            if (step.step === 'download') {
+                line(step.totalBytes ? `Downloading ${megabytes(step.totalBytes)}…` : 'Downloading…');
+            } else if (step.step === 'extract') {
+                line(step.totalEntries
+                    ? `Extracting the new version (about ${step.totalEntries} files, as many as the installed one)…`
+                    : 'Extracting the new version…');
+            } else if (step.step === 'switch') {
+                line('Switching versions: the running one is kept as ~/squashfs-root.old, for a manual rollback.');
+            } else if (step.step === 'cleanup') {
+                line('Removing the temporary files and the older backup…');
+            }
+        }
+        if (step.step === 'download') {
+            current.summary = `Downloaded ${megabytes(step.doneBytes)}`;
+        } else if (step.step === 'extract') {
+            current.summary = `Extracted ${step.entries} files`;
+        } else if (step.step === 'cleanup') {
+            current.summary = 'Removed';
+        }
+        const screen = describeUpdateStep(step);
+        const label = screen.label.charAt(0) + screen.label.slice(1).toLowerCase();
+        bar(screen.percent, `${label} — ${screen.detail}`);
+    };
+    return {
+        progress,
+        line,
+        endStep,
+        close: (ok) => {
+            endStep();
+            line(ok ? `Done in ${seconds(startedAt)}.` : `Stopped after ${seconds(startedAt)}.`);
+            bar(100, ok ? 'Installed' : 'Failed — see the log below', ok ? 'done' : 'failed');
+            res.write('</ul></section>');
+        },
     };
 }
 
@@ -5888,18 +5956,16 @@ function updateStepLogger(writeLine: (line: string) => void): UpdateProgress {
  * this very process.
  */
 async function downloadWindowsInstallerLogged(res: Response, title: string, downloadUrl: string): Promise<string | null> {
-    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
-    const writeLine = (line: string): void => {
-        res.write(`<li>${escapeHtml(line)}</li>`);
-    };
+    const block = openUpdateBlock(res, title);
     let installerPath: string | null = null;
     try {
-        installerPath = await downloadWindowsInstaller(downloadUrl, updateStepLogger(writeLine));
-        writeLine('Starting the installer: the application closes, updates and reopens on the new version.');
+        installerPath = await downloadWindowsInstaller(downloadUrl, block.progress);
+        block.endStep();
+        block.line('Starting the installer: the application closes, updates and reopens on the new version.');
     } catch (error) {
-        writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
+        block.line(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
-    res.write('</ul></section>');
+    block.close(installerPath !== null);
     return installerPath;
 }
 
@@ -5909,20 +5975,18 @@ async function downloadWindowsInstallerLogged(res: Response, title: string, down
  * already have its page head written. Whether it was installed.
  */
 async function runUpdateInstall(res: Response, title: string, downloadUrl: string): Promise<boolean> {
-    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
-    const writeLine = (line: string): void => {
-        res.write(`<li>${escapeHtml(line)}</li>`);
-    };
+    const block = openUpdateBlock(res, title);
     let installed = false;
     try {
-        await installAppImage(downloadUrl, updateStepLogger(writeLine));
-        writeLine('Update installed. The previous version stays available in ~/squashfs-root.old '
+        await installAppImage(downloadUrl, block.progress);
+        block.endStep();
+        block.line('Update installed. The previous version stays available in ~/squashfs-root.old '
             + 'while the new one is being validated.');
         installed = true;
     } catch (error) {
-        writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
+        block.line(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
-    res.write('</ul></section>');
+    block.close(installed);
     return installed;
 }
 
@@ -5964,10 +6028,19 @@ function renderRestartWaitScript(backHref: string): string {
     return `<script>${
         'var backHref = ' + JSON.stringify(backHref) + ';'
         + 'var sawDown = false;'
+        // Where it stands and for how long, after the page's own message: a restart takes a while
+        // on a Raspberry Pi, and a still page looked stuck.
+        + 'var message = document.getElementById("restart-wait-message");'
+        + 'var base = message ? message.textContent : "";'
+        + 'var started = Date.now();'
+        + 'var show = function (state) {'
+        + 'if (message) { message.textContent = base + " " + state + " (" + Math.round((Date.now() - started) / 1000) + " s)"; }'
+        + '};'
         + 'var poll = function () {'
         + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
-        + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
-        + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
+        + 'if (sawDown) { show("Back up, opening the page."); window.location.href = backHref; }'
+        + 'else { show("The running version is closing…"); setTimeout(poll, 1000); }'
+        + '}).catch(function () { sawDown = true; show("Restarting…"); setTimeout(poll, 1000); });'
         + '};'
         + 'setTimeout(poll, 1000);'
     }</script>`;
