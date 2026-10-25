@@ -3394,8 +3394,8 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
         ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
             ${renderSetupNavTab(active === 'setup')}
-            ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
+            ${renderNavTabLink('/mame', 'MAME', active === 'mame')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
             ${viewer === 'advanced' ? renderNavTabLink('/hiscores', 'Hiscores', active === 'hiscores') : ''}
             ${viewer === 'advanced' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
@@ -9107,7 +9107,7 @@ function describeUserError(error: unknown): string {
 function renderBrowsePage(
     target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
     // Where the chosen folder is brought back: the MAME tab, or the setup guide.
-    returnTo: '/' | '/setup' = '/',
+    returnTo: '/mame' | '/setup' = '/mame',
 ): string {
     let entries: string[] = [];
     let error: string|undefined;
@@ -9389,13 +9389,17 @@ export function createBoApp(
         res.send(renderAccountPage(getViewer(req), false, undefined, 'Password updated.'));
     });
 
+    // The BO's home: a new cabinet's setup guide until it is done, then the Games tab. A query is
+    // a folder /browse brought back before the MAME tab moved to /mame: shown there.
     app.get('/', (req, res) => {
-        // A new cabinet lands on its setup guide until it is done. Not when /browse brings a folder
-        // back to the MAME tab (a query).
-        if (!Object.keys(req.query).length && !readSetup().progress.finished) {
-            res.redirect('/setup');
+        if (Object.keys(req.query).length) {
+            res.redirect(`/mame?${new URLSearchParams(req.query as Record<string, string>).toString()}`);
             return;
         }
+        res.redirect(readSetup().progress.finished ? '/favorites' : '/setup');
+    });
+
+    app.get('/mame', (req, res) => {
         const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
@@ -10335,7 +10339,7 @@ export function createBoApp(
     // Starting packs come from the repository only (MAME > Import, Games > Repository): kept as a
     // redirect rather than a 404 for anyone with the old standalone upload page bookmarked.
     app.get('/import', (req, res) => {
-        res.redirect('/');
+        res.redirect('/mame#import');
     });
 
     // Every route that downloads from the repository: ONLINE mode only (see RepositoryAuth.ts).
@@ -11160,7 +11164,7 @@ export function createBoApp(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/'));
+        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/mame'));
     });
 
     /**
@@ -11229,7 +11233,7 @@ export function createBoApp(
             + (plugins?.pluginsAdded ? `<p>${plugins.pluginsAdded} plugin(s) initialized in plugin.ini.</p>` : '')
             + (plugins && !plugins.saved ? '<p class="error">The plugins folder could not be saved: mame.ini not found.</p>' : '')
             + '<p>Back to the MAME configuration in <span id="redirect-countdown">5</span> '
-            + 'second(s)… <a href="/">Go now</a>.</p></section>'
+            + 'second(s)… <a href="/mame#config">Go now</a>.</p></section>'
             + '<script>'
             + 'var secondsLeft = 5;'
             + 'var countdownEl = document.getElementById("redirect-countdown");'
@@ -11237,7 +11241,7 @@ export function createBoApp(
             + 'secondsLeft -= 1;'
             + 'countdownEl.textContent = Math.max(secondsLeft, 0);'
             + '}, 1000);'
-            + 'setTimeout(function () { window.location.href = "/"; }, 5000);'
+            + 'setTimeout(function () { window.location.href = "/mame#config"; }, 5000);'
             + '</script>',
             'mame', getViewer(req),
         ));
