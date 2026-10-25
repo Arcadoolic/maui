@@ -70,6 +70,8 @@ Only ever run **one** `serve`/`build` at a time — both trigger `npm install`, 
 
 `just serve`/`just build` wrap `electron:serve`/`electron:build`, which run `electron-vite dev --watch` (main-process changes such as `boServer.ts` restart Electron automatically) and `electron-vite build && electron-builder` respectively (not `vue-cli-service`, removed during the Vue 3 migration).
 
+Development only: `MAIN_VITE_BO_NO_PASSWORD=1` in maui's `.env` (gitignored, read by electron-vite) signs the BO in without its password, from the machine itself (loopback) only; the credentials (`ssDevPassword`...) stay locked then. A production build compiles it out (`import.meta.env.DEV`), and `isPackaged` is checked again (`signInWithoutPassword()` in `boServer.ts`).
+
 Other useful commands (no `just` recipe):
 ```bash
 npm test                                              # run the Vitest characterization tests
