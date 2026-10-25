@@ -626,6 +626,8 @@ interface GameStats {
     vote: Vote;
     // Starred: in the cabinet's "My favourites", and voted thumbs up.
     starred: boolean;
+    // Scores of the cabinet's players saved for it (hiscore table).
+    hasPlayerScores: boolean;
     // The game's carousel category (TTL twin merged, as displayed on the cabinet), null when
     // genre.ini doesn't know it.
     category: GameCategory | null;
@@ -644,9 +646,11 @@ interface GameCategory {
 async function loadGameStats(): Promise<Map<string, GameStats> | null> {
     try {
         const games = await Game.findAll({
-            attributes: ['romName', 'fullname', 'play_count', 'vote', 'starred', 'id_category'],
+            attributes: ['id_game', 'romName', 'fullname', 'play_count', 'vote', 'starred', 'id_category'],
             paranoid: false,
         });
+        const scoredGames = new Set((await Hiscore.findAll({attributes: ['id_game'], group: ['id_game'], raw: true}))
+            .map(hiscore => hiscore.id_game));
         const categories = new Map((await Category.findAll()).map(category => [category.id_category, {
             name: getCategoryDisplayName(category.name),
             iconKey: getCategoryIconKey(category.name),
@@ -657,6 +661,7 @@ async function loadGameStats(): Promise<Map<string, GameStats> | null> {
             playCount: game.play_count || 0,
             vote: parseVote(game.vote) ?? VOTE_NEUTRAL,
             starred: !!game.starred,
+            hasPlayerScores: scoredGames.has(game.id_game),
             category: categories.get(game.id_category) ?? null,
         }]));
     } catch {
@@ -671,6 +676,23 @@ interface FavoritesContext {
     marqueePath: string | null;
     flyerPath: string | null;
     logoPath: string | null;
+    // The .png files of each of the three folders, listed once: a check per favorite and per
+    // folder costs too much on a cabinet's SD card.
+    marqueeFiles: Set<string>;
+    flyerFiles: Set<string>;
+    logoFiles: Set<string>;
+}
+
+/** The names of a folder's files, lower-cased; none when there is no folder (or it is unreadable). */
+function listFileNames(path: string | null): Set<string> {
+    if (!path) {
+        return new Set();
+    }
+    try {
+        return new Set(readdirSync(path).map(name => name.toLowerCase()));
+    } catch {
+        return new Set();
+    }
 }
 
 /**
@@ -699,20 +721,25 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
         return {error: `The binary "${mameBinary}" was not found.`};
     }
 
-    return {romNames, mameBinary, iniPath, marqueePath, flyerPath, logoPath};
+    return {
+        romNames, mameBinary, iniPath, marqueePath, flyerPath, logoPath,
+        marqueeFiles: listFileNames(marqueePath),
+        flyerFiles: listFileNames(flyerPath),
+        logoFiles: listFileNames(logoPath),
+    };
 }
 
 /**
- * Cheap (fs-only, no `mame -lx`) marquee/flyer/logo presence check for one favorite - shared by
- * both the cached favorites list and resolveFavoriteRow() below, so badges are always live even
- * when the name/BIOS cache is stale.
+ * Cheap (no `mame -lx`, folders listed once by getFavoritesContext()) marquee/flyer/logo presence
+ * check for one favorite - shared by both the cached favorites list and resolveFavoriteRow()
+ * below, so badges are always live even when the name/BIOS cache is stale.
  */
 function getFavoriteMediaStatus(context: FavoritesContext, romName: string): FavoriteMediaStatus {
-    const {marqueePath, flyerPath, logoPath} = context;
+    const file = romName.toLowerCase() + '.png';
     return {
-        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
-        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
-        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+        hasMarquee: context.marqueeFiles.has(file),
+        hasFlyer: context.flyerFiles.has(file),
+        hasLogo: context.logoFiles.has(file),
     };
 }
 
@@ -2437,6 +2464,14 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .table-search-controls select {
             width: auto;
             flex: 0 1 auto;
+        }
+        .table-search-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0 24px;
+        }
+        .table-search-filters .checkbox-row {
+            margin-top: 8px;
         }
         .table-pager {
             display: flex;
@@ -6671,11 +6706,6 @@ function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean, rom
     </span>`;
 }
 
-function renderAssetIcons(row: FavoriteMediaStatus & {romName: string}): string {
-    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee, row.romName)}${
-        renderAssetIcon('Flyer', row.hasFlyer, row.romName)}${renderAssetIcon('Logo', row.hasLogo, row.romName)}</span>`;
-}
-
 /**
  * Asset thumbnail that follows the mouse over any [data-preview] icon (see renderAssetIcon()):
  * one shared <img>, fixed-positioned next to the cursor and flipped to the other side of it near
@@ -6800,12 +6830,16 @@ function renderGameCategoryIcon(category: GameCategory | null | undefined): stri
  */
 function renderGameName(fullname: string, romName?: string, category?: GameCategory | null): string {
     const {name, extra} = splitGameName(fullname);
+    return renderGameNameCell(name, extra, !!romName && hasHiscoreExtraction(romName), renderGameCategoryIcon(category));
+}
+
+/** renderGameName()'s markup, from its parts (also the favorites list's template, see renderFavoritesCard()). */
+function renderGameNameCell(name: string, extra: string | null, hiscoreCup: boolean, categoryIcon: string): string {
     // The name is cut with an ellipsis by CSS (see .game-name-cell) when too long for the column;
     // its title carries the full text. The search matches data-search, not this markup.
     const nameHtml = `<span class="game-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
     const infoIcon = extra ? renderInfoIcon(extra) : '';
-    const hiscoreIcon = romName && hasHiscoreExtraction(romName) ? HISCORE_CUP_ICON : '';
-    return `<span class="game-name-cell">${renderGameCategoryIcon(category)}${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
+    return `<span class="game-name-cell">${categoryIcon}${nameHtml}${infoIcon}${hiscoreCup ? HISCORE_CUP_ICON : ''}</span>`;
 }
 
 function renderDownloadSummary(summary: DownloadSummary): string {
@@ -6836,11 +6870,19 @@ function renderDownloadSummary(summary: DownloadSummary): string {
  * listed, each on its own line.
  */
 function renderRomNameCell(row: FavoriteRow): string {
-    const lines = [
+    return renderRomNameCellParts(row.romName, getRomDependencies(row));
+}
+
+/** The tooltip of a rom name's (i): its dependencies, one kind per line ('' for none). */
+function getRomDependencies(row: FavoriteRow): string {
+    return [
         ...(row.cached && row.biosName ? [`Bios: ${row.biosName}`] : []),
         ...(row.cached && row.deviceRoms.length ? [`Devices: ${row.deviceRoms.join(', ')}`] : []),
-    ];
-    return `<span class="romname-cell"><span class="game-name-text" title="${escapeHtml(row.romName)}">${escapeHtml(row.romName)}</span>${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
+    ].join('\n');
+}
+
+function renderRomNameCellParts(romName: string, dependencies: string): string {
+    return `<span class="romname-cell"><span class="game-name-text" title="${escapeHtml(romName)}">${escapeHtml(romName)}</span>${dependencies ? renderInfoIcon(dependencies) : ''}</span>`;
 }
 
 /**
@@ -6955,6 +6997,102 @@ const FAVORITES_REFRESH_MODAL = `
 const FAVORITES_PAGE_SIZES = [10, 30, 50, 100];
 const FAVORITES_DEFAULT_PAGE_SIZE = 30;
 
+// The placeholders of the favorites list's templates, replaced by each game's values in the browser
+// (renderFavoritesCard()'s script). Letters and underscores only: escapeHtml() and
+// encodeURIComponent() leave them as they are.
+const FAVORITE_TOKENS = {
+    rom: '__rom__', name: '__name__', extra: '__extra__', dependencies: '__dependencies__', category: '__category__',
+};
+
+/** One game of the favorites list, as its script gets it. */
+interface FavoriteListGame {
+    romName: string;
+    // splitGameName()'s parts of the full name.
+    name: string;
+    extra: string | null;
+    dependencies: string;
+    cached: boolean;
+    // getFavoriteSearchText(), accents and case folded.
+    search: string;
+    // Marquee, flyer, logo.
+    assets: [boolean, boolean, boolean];
+    playCount: number;
+    // renderVoteForm()'s template key, null when the database doesn't know the game.
+    vote: string | null;
+    starred: boolean;
+    // Its category's name, '' when genre.ini doesn't know it, undefined without a database.
+    category: string | undefined;
+    hiscores: boolean;
+    playerScores: boolean;
+}
+
+function foldSearchText(text: string): string {
+    return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/**
+ * The favorites list's games and the templates its script builds their rows from: the markup of
+ * renderGameName(), renderRomNameCell() and co. themselves, placeholders in place of a game's values.
+ */
+function buildFavoritesListData(rows: FavoriteRow[], stats: Map<string, GameStats> | undefined) {
+    const {rom, name, extra, dependencies, category} = FAVORITE_TOKENS;
+    const categoryIcons: Record<string, string> = {};
+    const games: FavoriteListGame[] = rows.map(row => {
+        const gameStats = stats?.get(row.romName);
+        const gameCategory = stats ? gameStats?.category ?? null : undefined;
+        if (gameCategory !== undefined) {
+            categoryIcons[gameCategory?.name ?? ''] ??= renderGameCategoryIcon(gameCategory);
+        }
+        const parts = splitGameName(row.fullname);
+        return {
+            romName: row.romName,
+            name: parts.name,
+            extra: parts.extra,
+            dependencies: getRomDependencies(row),
+            cached: row.cached,
+            search: foldSearchText(getFavoriteSearchText(row)),
+            assets: [row.hasMarquee, row.hasFlyer, row.hasLogo],
+            playCount: gameStats?.playCount ?? 0,
+            vote: gameStats ? (gameStats.starred ? 'star' : String(gameStats.vote)) : null,
+            starred: !!gameStats?.starred,
+            category: gameCategory === undefined ? undefined : gameCategory?.name ?? '',
+            hiscores: hasHiscoreExtraction(row.romName),
+            playerScores: !!gameStats?.hasPlayerScores,
+        };
+    });
+    const nameTemplate = (withExtra: boolean, hiscoreCup: boolean): string =>
+        renderGameNameCell(name, withExtra ? extra : null, hiscoreCup, category);
+    return {
+        tokens: FAVORITE_TOKENS,
+        games,
+        templates: {
+            // Keyed by "<has extra><has hiscores>".
+            name: {
+                '00': nameTemplate(false, false), '01': nameTemplate(false, true),
+                '10': nameTemplate(true, false), '11': nameTemplate(true, true),
+            },
+            unresolvedName: `<em>${rom}</em>`,
+            romName: [renderRomNameCellParts(rom, ''), renderRomNameCellParts(rom, dependencies)],
+            assets: (['Marquee', 'Flyer', 'Logo'] as const).map(kind =>
+                [renderAssetIcon(kind, false, rom), renderAssetIcon(kind, true, rom)]),
+            votes: {
+                star: renderVoteForm(rom, VOTE_UP, true),
+                ...Object.fromEntries(([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const)
+                    .map(vote => [String(vote), renderVoteForm(rom, vote, false)])),
+            },
+            show: `<form method="post" action="/favorites/show">
+                    <input type="hidden" name="romName" value="${rom}">
+                    ${renderIconButton('Show on the cabinet', SHOW_ON_FRONT_ICON_PATHS, 'accent')}
+                </form>`,
+            remove: `<form method="post" action="/favorites/delete">
+                    <input type="hidden" name="romName" value="${rom}">
+                    ${renderIconButton('Remove from favorites', TRASH_ICON_PATHS)}
+                </form>`,
+            categoryIcons,
+        },
+    };
+}
+
 /**
  * The favorites list (searchable, filterable by category, paginated client-side), followed by the
  * removed favorites in a card of their own.
@@ -6983,29 +7121,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
     const categoryOf = (row: FavoriteRow): GameCategory | null | undefined => favoritesInfo.stats
         ? favoritesInfo.stats.get(row.romName)?.category ?? null
         : undefined;
-    const rows = sortedRows.map(row => `
-        <tr data-search="${escapeHtml(getFavoriteSearchText(row))}" data-category="${escapeHtml(categoryOf(row)?.name ?? '')}">
-            <td>${row.cached
-                ? renderGameName(row.fullname, row.romName, categoryOf(row))
-                : `<em>${escapeHtml(row.romName)}</em>`}</td>
-            <td>${renderRomNameCell(row)}</td>
-            <td class="center">${renderAssetIcons(row)}</td>
-            <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
-            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
-            <td class="center">
-                <form method="post" action="/favorites/show">
-                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${renderIconButton('Show on the cabinet', SHOW_ON_FRONT_ICON_PATHS, 'accent')}
-                </form>
-            </td>
-            <td class="center">
-                <form method="post" action="/favorites/delete">
-                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${renderIconButton('Remove from favorites', TRASH_ICON_PATHS)}
-                </form>
-            </td>
-        </tr>
-    `).join('');
+    const listData = buildFavoritesListData(sortedRows, favoritesInfo.stats);
 
     // Favorites removed from this list (removed-favorites.json), in their own table right after
     // it, newest first. A rom put back by another route (or by mame's own menu) since it was
@@ -7092,6 +7208,14 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
         </select>
     ` : '';
 
+    // Filters a game must pass them all to be listed, each with the number of games it keeps.
+    const countOf = (keep: (game: FavoriteListGame) => boolean): number => listData.games.filter(keep).length;
+    const filters = [
+        ...(favoritesInfo.stats ? [{id: 'favoritesStarred', label: 'Starred (My favourites)', count: countOf(game => game.starred)}] : []),
+        {id: 'favoritesHiscores', label: 'Hiscores extractable', count: countOf(game => game.hiscores)},
+        ...(favoritesInfo.stats ? [{id: 'favoritesPlayerScores', label: 'Players\' hiscores', count: countOf(game => game.playerScores)}] : []),
+    ];
+
     const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
     const cacheStatus = favoritesInfo.cacheUpdatedAt
         ? `Names up to date as of ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('en-GB', {
@@ -7118,6 +7242,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         autocomplete="off" aria-label="Search the favorites">
                     ${categoryFilter}
                 </div>
+                <div class="table-search-filters">
+                    ${filters.map(filter => `
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="${filter.id}">
+                        <span>${escapeHtml(filter.label)} (${filter.count})</span>
+                    </label>`).join('')}
+                </div>
                 <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
             </div>
             <div class="table-wrap">
@@ -7142,9 +7273,11 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody></tbody>
                 </table>
+                <noscript><p class="info">The list needs JavaScript.</p></noscript>
             </div>
+            <script type="application/json" id="favoritesData">${JSON.stringify(listData).replace(/</g, '\\u003c')}</script>
             <div class="table-pager" id="favoritesPager">
                 <label for="favoritesPageSize">Per page</label>
                 <select id="favoritesPageSize">
@@ -7155,13 +7288,24 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 <button type="button" id="favoritesNextPage" aria-label="Next page">›</button>
             </div>
             <script>(function () {
-                // Search: every term must appear (accents and case ignored) in a row's rom name,
-                // name or bios / devices (its data-search, see getFavoriteSearchText()), and the row
-                // must be in the chosen category (its data-category; '*' for all). The matches are
-                // then paginated. Rows are only hidden, so the remove buttons keep working on what
-                // is shown.
+                // The games come as data (buildFavoritesListData()) and only the page shown is
+                // turned into rows, from the server's own templates: hundreds of rows of forms and
+                // icons are too much for a small machine to lay out, or to hide at each key typed.
+                // Search: every term must appear (accents and case ignored) in a game's rom name,
+                // name or bios / devices (its search, see getFavoriteSearchText()), and the game
+                // must be in the chosen category ('*' for all) and pass every filter ticked. The
+                // matches are then paginated.
+                var data = JSON.parse(document.getElementById('favoritesData').textContent);
+                var games = data.games;
+                var templates = data.templates;
+                var body = document.querySelector('#favoritesTable tbody');
                 var search = document.getElementById('favoritesSearch');
                 var category = document.getElementById('favoritesCategory');
+                var filters = [
+                    {box: document.getElementById('favoritesStarred'), keep: function (game) { return game.starred; }},
+                    {box: document.getElementById('favoritesHiscores'), keep: function (game) { return game.hiscores; }},
+                    {box: document.getElementById('favoritesPlayerScores'), keep: function (game) { return game.playerScores; }},
+                ].filter(function (filter) { return filter.box; });
                 var count = document.getElementById('favoritesSearchCount');
                 var pageSize = document.getElementById('favoritesPageSize');
                 var prev = document.getElementById('favoritesPrevPage');
@@ -7175,6 +7319,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     try {
                         sessionStorage.setItem(VIEW_KEY, JSON.stringify({
                             search: search.value, category: category ? category.value : '*', page: page,
+                            filters: filters.map(function (filter) { return filter.box.id; })
+                                .filter(function (id) { return document.getElementById(id).checked; }),
                         }));
                     } catch (error) { /* storage blocked: the list just starts over */ }
                 });
@@ -7185,29 +7331,71 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         pageSize.value = storedSize;
                     }
                 } catch (error) { /* storage blocked: default page size */ }
-                var rows = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable tbody tr'));
                 function fold(text) {
                     return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+                }
+                function escapeHtml(text) {
+                    return String(text).replace(/[&<>"']/g, function (char) {
+                        return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char];
+                    });
+                }
+                // Puts a game's values (already escaped) in a template, in place of its tokens.
+                function fill(template, values) {
+                    return Object.keys(values).reduce(function (html, token) {
+                        return html.split(token).join(values[token]);
+                    }, template);
+                }
+                function renderRow(game) {
+                    var tokens = data.tokens;
+                    var rom = {};
+                    rom[tokens.rom] = escapeHtml(game.romName);
+                    var name = {};
+                    name[tokens.category] = templates.categoryIcons[game.category] || '';
+                    name[tokens.extra] = escapeHtml(game.extra || '');
+                    name[tokens.name] = escapeHtml(game.name);
+                    var romCell = {};
+                    romCell[tokens.rom] = rom[tokens.rom];
+                    romCell[tokens.dependencies] = escapeHtml(game.dependencies);
+                    var cells = [
+                        game.cached
+                            ? fill(templates.name[(game.extra ? '1' : '0') + (game.hiscores ? '1' : '0')], name)
+                            : fill(templates.unresolvedName, rom),
+                        fill(templates.romName[game.dependencies ? 1 : 0], romCell),
+                        '<span class="asset-icons">' + game.assets.map(function (found, kind) {
+                            return fill(templates.assets[kind][found ? 1 : 0], rom);
+                        }).join('') + '</span>',
+                        game.playCount ? String(game.playCount) : '<em>-</em>',
+                        game.vote === null ? '<em>-</em>' : fill(templates.votes[game.vote], rom),
+                        fill(templates.show, rom),
+                        fill(templates.remove, rom),
+                    ];
+                    return '<tr>' + cells.map(function (cell, index) {
+                        return (index < 2 ? '<td>' : '<td class="center">') + cell + '</td>';
+                    }).join('') + '</tr>';
+                }
+                function filtering() {
+                    return search.value.trim() !== '' || (category && category.value !== '*')
+                        || filters.some(function (filter) { return filter.box.checked; });
                 }
                 function render() {
                     var terms = fold(search.value).split(/\\s+/).filter(Boolean);
                     var chosen = category ? category.value : '*';
-                    var matches = rows.filter(function (row) {
-                        var haystack = fold(row.dataset.search || '');
-                        return terms.every(function (term) { return haystack.indexOf(term) >= 0; })
-                            && (chosen === '*' || row.dataset.category === chosen);
+                    var ticked = filters.filter(function (filter) { return filter.box.checked; });
+                    var matches = games.filter(function (game) {
+                        return terms.every(function (term) { return game.search.indexOf(term) >= 0; })
+                            && (chosen === '*' || game.category === chosen)
+                            && ticked.every(function (filter) { return filter.keep(game); });
                     });
                     var size = Number(pageSize.value);
                     var pages = Math.max(1, Math.ceil(matches.length / size));
                     page = Math.min(page, pages - 1);
-                    rows.forEach(function (row) { row.hidden = true; });
-                    matches.slice(page * size, (page + 1) * size).forEach(function (row) { row.hidden = false; });
+                    body.innerHTML = matches.slice(page * size, (page + 1) * size).map(renderRow).join('');
                     pageInfo.textContent = 'Page ' + (page + 1) + ' / ' + pages;
                     prev.disabled = page === 0;
                     next.disabled = page >= pages - 1;
-                    count.hidden = terms.length === 0 && chosen === '*';
+                    count.hidden = !filtering();
                     count.textContent = matches.length
-                        ? matches.length + ' favorite(s) found out of ' + rows.length + '.'
+                        ? matches.length + ' favorite(s) found out of ' + games.length + '.'
                         : 'No favorite matches this search.';
                 }
                 // A new search, category or page size starts over from the first page.
@@ -7217,6 +7405,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 }
                 search.addEventListener('input', applySearch);
                 if (category) { category.addEventListener('change', applySearch); }
+                filters.forEach(function (filter) { filter.box.addEventListener('change', applySearch); });
                 pageSize.addEventListener('change', function () {
                     try { localStorage.setItem('bo.favorites.pageSize', pageSize.value); } catch (error) { /* blocked */ }
                     applySearch();
@@ -7231,6 +7420,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         if (category && category.querySelector('option[value="' + CSS.escape(view.category) + '"]')) {
                             category.value = view.category;
                         }
+                        filters.forEach(function (filter) {
+                            filter.box.checked = Array.isArray(view.filters) && view.filters.indexOf(filter.box.id) >= 0;
+                        });
                         page = Number(view.page) || 0;
                     }
                 } catch (error) { /* storage blocked or unreadable: the list just starts over */ }
