@@ -6,8 +6,11 @@ export const UPDATE_PROGRESS_CHANNEL = 'maui:update-progress';
 
 export type UpdateStep =
     | {step: 'download'; doneBytes: number; totalBytes: number}
-    | {step: 'extract'}
+    // entries: extracted so far; totalEntries: those of the version installed, an estimate (0: unknown).
+    | {step: 'extract'; entries: number; totalEntries: number}
     | {step: 'switch'}
+    // The previous version's backup being deleted, the new one kept as ~/squashfs-root.old.
+    | {step: 'cleanup'}
     // The last message when it works: the application goes down and comes back on the new version.
     | {step: 'restart'}
     // The last message when it does not: the installed version is left as it was.

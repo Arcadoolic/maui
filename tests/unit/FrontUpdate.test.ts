@@ -74,7 +74,7 @@ describe('FrontUpdate', () => {
             available: () => '2.18.0',
             installAndRestart: async (version, progress) => {
                 installed.push(version);
-                progress({step: 'extract'});
+                progress({step: 'extract', entries: 0, totalEntries: 0});
             },
             send: step => sent.push(step),
             declinedPath: join(dir, 'declined-update.json'),
@@ -117,7 +117,7 @@ describe('FrontUpdate', () => {
         expect(update.install('2.18.0')).toBe(true);
         await new Promise(resolve => setTimeout(resolve, 0));
         expect(installed).toEqual(['2.18.0']);
-        expect(sent).toEqual([{step: 'extract'}, {step: 'restart'}]);
+        expect(sent).toEqual([{step: 'extract', entries: 0, totalEntries: 0}, {step: 'restart'}]);
         // Nothing more is offered while it installs.
         expect(update.offer()).toBeNull();
     });
@@ -138,7 +138,7 @@ describe('FrontUpdate', () => {
         const steps: string[] = [];
         await simulateInstall(step => steps.push(step.step), async () => undefined);
         expect(steps[0]).toBe('download');
-        expect(steps.slice(-2)).toEqual(['extract', 'switch']);
+        expect(steps.slice(-3)).toEqual(['extract', 'switch', 'cleanup']);
     });
 });
 
@@ -155,8 +155,14 @@ describe('describeUpdateStep', () => {
     });
 
     it('goes on with the installation, then the restart', () => {
-        expect(describeUpdateStep({step: 'extract'})).toMatchObject({label: 'INSTALLING', percent: 85});
+        expect(describeUpdateStep({step: 'extract', entries: 0, totalEntries: 0}))
+            .toMatchObject({label: 'INSTALLING', percent: 80, detail: 'Unpacking the new version'});
+        expect(describeUpdateStep({step: 'extract', entries: 1500, totalEntries: 3000}))
+            .toMatchObject({percent: 87, detail: 'Unpacking the new version: 1500 files'});
+        // The estimate may be short: the bar never reaches the next step.
+        expect(describeUpdateStep({step: 'extract', entries: 4000, totalEntries: 3000})).toMatchObject({percent: 94});
         expect(describeUpdateStep({step: 'switch'})).toMatchObject({label: 'INSTALLING', percent: 95});
+        expect(describeUpdateStep({step: 'cleanup'})).toMatchObject({label: 'INSTALLING', percent: 98});
         expect(describeUpdateStep({step: 'restart'})).toMatchObject({label: 'RESTARTING', percent: 100});
     });
 
