@@ -6754,7 +6754,8 @@ function renderScreenScraperPage(
 const ASSET_ICON_PATHS: { [kind: string]: string } = {
     Marquee: '<rect x="1.5" y="3" width="13" height="6" rx="1"/><path d="M8 9v3.5M5 13h6"/>',
     Flyer: '<path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 8.5h5M6 11h5"/>',
-    Logo: '<path d="M8 1.8l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.1l-3.7 2 .8-4.1L2 6.1l4.2-.5z"/>',
+    // A title's letter on its baseline: a star would read as the vote's star (My favourites).
+    Logo: '<path d="M4 12L8 2.5l4 9.5M5.5 8.5h5"/><path d="M2 14.5h12"/>',
 };
 
 
