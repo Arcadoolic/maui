@@ -5,7 +5,7 @@ import {tmpdir} from 'os';
 import {parseFavorites} from '@/class/MameIniParser';
 import {
     removeFavoriteFromDisk, removeReturnedFavorites, readRemovedFavorites, readFavoritesCache,
-    writeFavoritesCache,
+    mergeFavoritesCache,
 } from '@/class/FavoritesStore';
 
 // FavoritesStore keeps its files in os.homedir()/.mame-awesome-ui, like Config.class.ts: stub the
@@ -61,7 +61,7 @@ describe('removeReturnedFavorites', () => {
         const record = readRemovedFavorites().find(item => item.romName === 'hasamu');
         // What a pack import did before it skipped the removed games.
         writeFileSync(favoritesPath, favorites);
-        writeFavoritesCache({
+        mergeFavoritesCache({
             galaga: {fullname: 'Galaga', biosName: null, deviceRoms: []},
             hasamu: {fullname: 'Hasamu (Japan)', biosName: null, deviceRoms: []},
         });
@@ -72,5 +72,15 @@ describe('removeReturnedFavorites', () => {
         // Still restorable from the BO, with the record of the first removal.
         expect(readRemovedFavorites().find(item => item.romName === 'hasamu')).toEqual(record);
         expect(Object.keys(readFavoritesCache()?.entries ?? {})).toEqual(['galaga']);
+    });
+
+    it('adds entries to the cache and keeps its MAME version until all are resolved again', () => {
+        mergeFavoritesCache({galaga: {fullname: 'Galaga', biosName: null, deviceRoms: []}}, '0.280');
+        mergeFavoritesCache({pacman: {fullname: 'Pac-Man', biosName: 'puckman', deviceRoms: []}});
+
+        expect(readFavoritesCache()).toMatchObject({mameVersion: '0.280', entries: {
+            galaga: {fullname: 'Galaga'}, pacman: {fullname: 'Pac-Man', biosName: 'puckman'},
+        }});
+        expect(mergeFavoritesCache({}, '0.281').mameVersion).toBe('0.281');
     });
 });

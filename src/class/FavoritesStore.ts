@@ -16,8 +16,9 @@ import type {GameInfos} from '@/class/ScreenScraperClient.class';
  * Same fixed <home>/.mame-awesome-ui path as Database.class.ts's getDatabasePath(), for the
  * favorites name/BIOS cache (see FavoritesCache below) - resolving a favorite's fullname/BIOS is a
  * blocking `mame -lx` process spawn per rom (see getGameXmlInfo()), so the favorites tab reads
- * this cache instead of re-running it on every page load; only "Update favorites" re-resolves
- * and rewrites it.
+ * this cache instead of re-running it on every page load. The BO fills it as favorites come
+ * (pack imports, and the Games tab for the others: added from MAME's own menu), and resolves them
+ * all again when the MAME version changes.
  */
 export function getFavoritesCachePath(): string {
     const appDataPath = join(os.homedir(), '.mame-awesome-ui');
@@ -35,6 +36,8 @@ export interface FavoritesCacheEntry {
 
 export interface FavoritesCache {
     updatedAt: string;
+    // The MAME version the entries come from (`mame -version`); absent in older caches.
+    mameVersion?: string;
     entries: { [romName: string]: FavoritesCacheEntry };
 }
 
@@ -51,8 +54,19 @@ export function readFavoritesCache(): FavoritesCache | null {
     }
 }
 
-export function writeFavoritesCache(entries: { [romName: string]: FavoritesCacheEntry }): FavoritesCache {
-    const cache: FavoritesCache = {updatedAt: new Date().toISOString(), entries};
+/**
+ * Adds (or replaces) these entries in the cache, keeping the others. `mameVersion` is given when
+ * every favorite was just resolved with that MAME; otherwise the cache keeps the version it had.
+ */
+export function mergeFavoritesCache(
+    entries: { [romName: string]: FavoritesCacheEntry }, mameVersion?: string,
+): FavoritesCache {
+    const current = readFavoritesCache();
+    const cache: FavoritesCache = {
+        updatedAt: new Date().toISOString(),
+        mameVersion: mameVersion ?? current?.mameVersion,
+        entries: {...current?.entries, ...entries},
+    };
     writeFileSync(getFavoritesCachePath(), JSON.stringify(cache));
     return cache;
 }
