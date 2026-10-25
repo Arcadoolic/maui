@@ -878,6 +878,30 @@ const MIN_BO_PASSWORD_LENGTH = 8;
 // the next sign-in, while the password is at hand.
 const BO_PASSWORD_BCRYPT_ROUNDS = 12;
 
+// Development only: `MAIN_VITE_BO_NO_PASSWORD=1` in maui's .env (read by electron-vite) signs the BO
+// in without its password, from this machine only. Never in a packaged build: import.meta.env.DEV
+// is false there, and signInWithoutPassword() checks isPackaged again.
+const DEV_NO_PASSWORD = import.meta.env.DEV && import.meta.env.MAIN_VITE_BO_NO_PASSWORD === '1';
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * Signs this request's session in as the BO account, without a password, when DEV_NO_PASSWORD
+ * allows it. The credentials stay locked (no password to unwrap them with, see unlockSecrets()).
+ */
+async function signInWithoutPassword(req: Request): Promise<boolean> {
+    if (!DEV_NO_PASSWORD || electronApp.isPackaged || !LOOPBACK_ADDRESSES.has(req.socket.remoteAddress ?? '')) {
+        return false;
+    }
+    const boUser = await BoUser.findOne({where: {username: BO_USERNAME}}).catch(() => null);
+    if (!boUser) {
+        return false;
+    }
+    req.session.boUserId = boUser.id;
+    req.session.boUsername = boUser.username;
+    req.session.boAdvanced = false;
+    return true;
+}
+
 function getSecretsKey(req: Request): Buffer | null {
     return req.session.secretsKey ? Buffer.from(req.session.secretsKey, 'hex') : null;
 }
@@ -8817,8 +8841,8 @@ export function createBoApp(
     // below this guard requires a logged-in session except the login page itself and the static
     // assets it needs (background/logo) to render.
     const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg', '/maui-logo.png']);
-    app.use((req, res, next) => {
-        if (PUBLIC_PATHS.has(req.path) || req.session.boUserId) {
+    app.use(async (req, res, next) => {
+        if (PUBLIC_PATHS.has(req.path) || req.session.boUserId || await signInWithoutPassword(req)) {
             next();
             return;
         }
