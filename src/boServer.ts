@@ -2232,6 +2232,26 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             gap: 8px;
         }
+        /* An empty list's call to action (no player yet): stands out from the info notes. */
+        .empty-callout {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px 24px;
+            margin: 16px 0;
+            padding: 16px 20px;
+            border: 1px solid var(--warn);
+            border-left-width: 4px;
+            border-radius: 6px;
+            background-color: rgba(255, 196, 0, 0.08);
+        }
+        .empty-callout p {
+            margin: 0;
+        }
+        .button-link.button-link-attention {
+            background-color: var(--warn);
+        }
         .card-heading {
             display: flex;
             align-items: center;
@@ -8499,7 +8519,7 @@ function renderUserStatusBadge(active: boolean): string {
 
 function renderCreateUserCard(error?: string, online: boolean = false): string {
     return `
-        <section class="card">
+        <section class="card" id="add-player">
             <h2>Add a player</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/users/create">
@@ -8661,10 +8681,18 @@ function renderUsersListCard(
         <section class="card">
             <div class="card-heading">
                 <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
-                ${extras.online ? `<form method="post" action="/users/online/sync">
-                    ${renderIconButton('Sync with MAUI-API now', SYNC_ICON_PATHS, 'accent')}
-                </form>` : ''}
+                <div class="row-actions">
+                    ${extras.online ? `<form method="post" action="/users/online/sync">
+                        ${renderIconButton('Sync with MAUI-API now', SYNC_ICON_PATHS, 'accent')}
+                    </form>` : ''}
+                    ${users.length ? '<a class="button-link" href="#add-player" data-add-player>Add player</a>' : ''}
+                </div>
             </div>
+            ${users.length ? '' : `<div class="empty-callout">
+                <p><strong>No player yet.</strong> Add at least one: the cabinet only keeps the scores
+                of its players, matched by their 3-letter nickname.</p>
+                <a class="button-link button-link-attention" href="#add-player" data-add-player>Add player</a>
+            </div>`}
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             ${deleted.length ? `<p class="info">A deleted player's nickname stays reserved: nobody can
@@ -8683,7 +8711,7 @@ function renderUsersListCard(
                 </div>
                 <p class="info table-search-count" id="playersStatusCount" hidden>No player has this status.</p>
             </div>` : ''}
-            <div class="table-wrap">
+            ${users.length + deleted.length ? `<div class="table-wrap">
                 <table class="favorites-table" id="playersTable">
                     <thead>
                         <tr>
@@ -8695,9 +8723,17 @@ function renderUsersListCard(
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows + deletedRows || `<tr><td colspan="${extras.onlineColumn ? 6 : 5}"><em>No players</em></td></tr>`}</tbody>
+                    <tbody>${rows + deletedRows}</tbody>
                 </table>
-            </div>
+            </div>` : ''}
+            <script>(function () {
+                // "Add player": down to the form at the end of the page, its nickname ready to type.
+                document.querySelectorAll('[data-add-player]').forEach(function (link) {
+                    link.addEventListener('click', function () {
+                        setTimeout(function () { document.getElementById('pseudo_3').focus({preventScroll: true}); }, 0);
+                    });
+                });
+            })();</script>
             <script>(function () {
                 // Status filter: rows are only hidden (their data-status), so their buttons keep
                 // working. Every action re-renders the whole page: the choice is kept for the
@@ -8925,10 +8961,10 @@ function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
     extras: UsersListExtras = {isAdvanced: false, deleted: []},
 ): string {
-    // One page, no subtabs: the add form, then every player (deleted ones included, see
-    // renderUsersListCard()) in a single list.
+    // One page, no subtabs: every player (deleted ones included, see renderUsersListCard()) in a
+    // single list, then the add form (#add-player, the list's "Add player" button).
     return renderPage(
-        renderCreateUserCard(createError, extras.online) + renderUsersListCard(users, avatarFilenames, error, info, extras),
+        renderUsersListCard(users, avatarFilenames, error, info, extras) + renderCreateUserCard(createError, extras.online),
         'users',
         extras.isAdvanced ? 'advanced' : 'basic',
     );
