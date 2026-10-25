@@ -7716,7 +7716,7 @@ function renderIconLabel(iconKey: string | undefined, label: string): string {
 }
 
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
-/** What the Games tab's Repository subtab shows (Advanced configuration only, see renderFavoritesPage()). */
+/** What the Games tab's Repository subtab shows (ONLINE mode only, see renderFavoritesPage()). */
 interface RepoSection {
     mameInfo: MameInfo;
     packs?: RepoPack[];
@@ -7727,7 +7727,7 @@ interface RepoSection {
 }
 
 /**
- * The Games tab: the favorites and, in Advanced configuration, the pack repository the games come
+ * The Games tab: the favorites and, in ONLINE mode, the pack repository the games come
  * from (`repository`), as a second subtab - opened by default when a repository action set its
  * packs or a message.
  */
@@ -9398,11 +9398,9 @@ export function createBoApp(
         res.redirect(303, '/setup');
     });
 
-    // The end of the guide: the repository's packs, in Games > Repository, which only Advanced
-    // configuration shows. A link, not a form: the BO's form script follows a redirect without
-    // its #repository, which picks the subtab. It only flips the session's display setting.
+    // The end of the guide: the repository's packs, in Games > Repository. A link, not a form:
+    // the BO's form script follows a redirect without its #repository, which picks the subtab.
     app.get('/setup/more-games', (req, res) => {
-        req.session.boAdvanced = true;
         res.redirect('/favorites#repository');
     });
 
@@ -9444,9 +9442,10 @@ export function createBoApp(
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
-        // Repository subtab: Advanced configuration and ONLINE mode only, like the routes below it.
-        // With ONLINE off there is no subtab at all, the Games tab is the favorites alone.
-        const repositorySection = req.session.boAdvanced && isOnlineActive()
+        // Repository subtab: ONLINE mode only, like the routes below it (the repository's address
+        // and credentials come from MAUI-API). With ONLINE off there is no subtab at all, the
+        // Games tab is the favorites alone.
+        const repositorySection = isOnlineActive()
             ? {mameInfo: getMameInfo(config), ...repository}
             : undefined;
 
@@ -10208,10 +10207,6 @@ export function createBoApp(
     // Proxied server-side (rather than the browser fetching index.json directly) so the cabinet
     // credentials never reach the browser at all.
     app.get('/import/from-url/packs', async (req, res) => {
-        if (!req.session.boAdvanced) {
-            res.status(403).send('Available in Advanced configuration only.');
-            return;
-        }
         if (refuseOffline(res)) {
             return;
         }
@@ -10269,9 +10264,9 @@ export function createBoApp(
         }
     });
 
-    // Not Advanced-only, unlike the game packs below: the carousel needs the configuration pack to
-    // have genres, and the starter pack is what a new cabinet starts with. The starter pack comes
-    // with the configuration pack, like every game pack from the repository.
+    // The carousel needs the configuration pack to have genres, and the starter pack is what a new
+    // cabinet starts with. The starter pack comes with the configuration pack, like every game
+    // pack from the repository.
     const importFromRepository = (withStarterPack: boolean) => async (req: Request, res: Response) => {
         if (refuseOffline(res)) {
             return;
@@ -10329,10 +10324,6 @@ export function createBoApp(
     app.post('/import/starter-pack', importFromRepository(true));
 
     app.post('/import/from-url', async (req, res) => {
-        if (!req.session.boAdvanced) {
-            res.status(403).send('Available in Advanced configuration only.');
-            return;
-        }
         if (refuseOffline(res)) {
             return;
         }

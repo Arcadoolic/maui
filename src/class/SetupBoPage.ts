@@ -150,8 +150,8 @@ function renderStep(step: SetupStep, index: number, input: SetupPageInput): stri
         </li>`;
 }
 
-// Once the setup is done: more packs and games, from the repository (Games > Repository, which
-// only Advanced configuration shows). The repository is only reached ONLINE.
+// Once the setup is done: more packs and games, from the repository (Games > Repository). The
+// repository is only reached ONLINE.
 function renderMoreGames(facts: SetupFacts): string {
     if (!facts.onlineActive) {
         return `<p>More games: copy their roms into mame's roms folder and add them to the favorites from
@@ -159,8 +159,8 @@ function renderMoreGames(facts: SetupFacts): string {
     }
     return `
             <div class="setup-more">
-                <p>More games? The repository holds more packs to pick from, game by game. They are in the
-                Games tab, with the Advanced configuration on.</p>
+                <p>More games? The repository holds more packs to pick from, game by game, in the Games
+                tab.</p>
                 <p><a class="button-link" href="/setup/more-games">Add more games</a></p>
             </div>`;
 }
