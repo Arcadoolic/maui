@@ -2665,6 +2665,12 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             outline: 2px solid var(--accent);
             outline-offset: 2px;
         }
+        /* Between two kinds of filters (players: status, then visibility). */
+        .filter-chip-divider {
+            width: 1px;
+            height: 20px;
+            background-color: #444444;
+        }
         .filter-chip-count {
             margin-left: 4px;
             color: #888888;
@@ -8590,7 +8596,7 @@ function renderUsersListCard(
         const highlighted = extras.highlight?.id_user === user.id_user;
         const pin = highlighted ? extras.highlight?.pin : undefined;
         return `
-        <tr id="player-${user.id_user}" data-status="${status}"${highlighted ? ' class="row-highlight"' : ''}>
+        <tr id="player-${user.id_user}" data-status="${status}" data-visibility="${user.is_public ? 'public' : 'private'}"${highlighted ? ' class="row-highlight"' : ''}>
             <td class="center">
                 ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
                     ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
@@ -8639,7 +8645,7 @@ function renderUsersListCard(
                 </div>
             </td>
         </tr>
-        ${pin ? `<tr class="row-pin" data-status="${status}">
+        ${pin ? `<tr class="row-pin" data-status="${status}" data-visibility="${user.is_public ? 'public' : 'private'}">
             <td colspan="${extras.onlineColumn ? 6 : 5}">${renderPinReveal(user.pseudo_3, pin)}</td>
         </tr>` : ''}
     `;
@@ -8648,13 +8654,26 @@ function renderUsersListCard(
     const deleted = extras.isAdvanced ? extras.deleted : [];
     const activeCount = users.filter(user => user.active
         && !isDisabledUpstream({online_status: user.online_status ?? null}, !!extras.online)).length;
+    // Filters: a player's status (active, inactive, deleted) and, ONLINE, its visibility in the
+    // shared leaderboards. Within a kind any ticked value matches; every kind ticked must match.
+    const allPlayers = [...users, ...deleted.map(item => item.user)];
+    const publicCount = allPlayers.filter(user => user.is_public).length;
+    const playerFilters = [
+        {key: 'status', value: 'active', label: 'Active', count: activeCount},
+        {key: 'status', value: 'inactive', label: 'Inactive', count: users.length - activeCount},
+        ...(deleted.length ? [{key: 'status', value: 'deleted', label: 'Deleted', count: deleted.length}] : []),
+        ...(extras.onlineColumn ? [
+            {key: 'visibility', value: 'public', label: 'Public', count: publicCount},
+            {key: 'visibility', value: 'private', label: 'Private', count: allPlayers.length - publicCount},
+        ] : []),
+    ];
     const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
             dateStyle: 'short', timeStyle: 'short',
         });
         return `
-        <tr class="row-deleted" data-status="deleted">
+        <tr class="row-deleted" data-status="deleted" data-visibility="${user.is_public ? 'public' : 'private'}">
             <td class="center">${avatarFilename !== undefined
                 ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
@@ -8701,15 +8720,15 @@ function renderUsersListCard(
             permanently removes the player, their scores and their avatar from the database for good,
             and frees the nickname.</p>` : ''}
             ${users.length + deleted.length ? `<div class="table-search">
-                <div class="table-search-controls">
-                    <select id="playersStatus" aria-label="Filter the players by status">
-                        <option value="*">All players (${users.length + deleted.length})</option>
-                        <option value="active">Active (${activeCount})</option>
-                        <option value="inactive">Inactive (${users.length - activeCount})</option>
-                        ${deleted.length ? `<option value="deleted">Deleted (${deleted.length})</option>` : ''}
-                    </select>
+                <div class="table-search-filters" id="playersFilters">
+                    ${playerFilters.map((filter, index) => `
+                    ${index && filter.key !== playerFilters[index - 1].key ? '<span class="filter-chip-divider"></span>' : ''}
+                    <label class="filter-chip">
+                        <input type="checkbox" data-filter="${filter.key}" value="${filter.value}">
+                        <span>${filter.label} <span class="filter-chip-count">${filter.count}</span></span>
+                    </label>`).join('')}
+                    <span class="table-search-summary" id="playersFilterCount" aria-live="polite"></span>
                 </div>
-                <p class="info table-search-count" id="playersStatusCount" hidden>No player has this status.</p>
             </div>` : ''}
             ${users.length + deleted.length ? `<div class="table-wrap">
                 <table class="favorites-table" id="playersTable">
@@ -8735,37 +8754,54 @@ function renderUsersListCard(
                 });
             })();</script>
             <script>(function () {
-                // Status filter: rows are only hidden (their data-status), so their buttons keep
-                // working. Every action re-renders the whole page: the choice is kept for the
-                // browser session, or deactivating a player would drop back to "All players".
-                var status = document.getElementById('playersStatus');
-                if (!status) { return; }
-                var count = document.getElementById('playersStatusCount');
+                // Filters: rows are only hidden (their data-status, data-visibility), so their
+                // buttons keep working. Every action re-renders the whole page: the choice is kept
+                // for the browser session, or deactivating a player would drop back to them all.
+                var filters = document.getElementById('playersFilters');
+                if (!filters) { return; }
+                var boxes = Array.prototype.slice.call(filters.querySelectorAll('input[data-filter]'));
+                var count = document.getElementById('playersFilterCount');
                 var rows = Array.prototype.slice.call(document.querySelectorAll('#playersTable tbody tr'));
-                var STATUS_KEY = 'bo.players.status';
+                var FILTERS_KEY = 'bo.players.filters';
+                function key(box) { return box.dataset.filter + ':' + box.value; }
                 try {
-                    var stored = sessionStorage.getItem(STATUS_KEY);
-                    if (stored && status.querySelector('option[value="' + CSS.escape(stored) + '"]')) {
-                        status.value = stored;
-                    }
+                    var stored = JSON.parse(sessionStorage.getItem(FILTERS_KEY) || '[]');
+                    boxes.forEach(function (box) { box.checked = stored.indexOf(key(box)) >= 0; });
                 } catch (error) { /* storage blocked: all the players are shown */ }
-                // The player just created or given a PIN is always shown: a filter that hides them
-                // goes back to all the players.
+                function shows(row) {
+                    var ticked = {};
+                    boxes.forEach(function (box) {
+                        if (box.checked) { (ticked[box.dataset.filter] = ticked[box.dataset.filter] || []).push(box.value); }
+                    });
+                    return Object.keys(ticked).every(function (kind) {
+                        return ticked[kind].indexOf(row.dataset[kind]) >= 0;
+                    });
+                }
+                // The player just created or given a PIN is always shown: filters that hide them
+                // are cleared.
                 var highlighted = document.querySelector('#playersTable tr.row-highlight');
-                if (highlighted && status.value !== '*' && highlighted.dataset.status !== status.value) {
-                    status.value = '*';
+                if (highlighted && !shows(highlighted)) {
+                    boxes.forEach(function (box) { box.checked = false; });
                 }
                 function render() {
                     var shown = 0;
                     rows.forEach(function (row) {
-                        row.hidden = status.value !== '*' && row.dataset.status !== status.value;
-                        if (!row.hidden) { shown++; }
+                        row.hidden = !shows(row);
+                        if (!row.hidden && !row.classList.contains('row-pin')) { shown++; }
                     });
-                    count.hidden = shown > 0;
+                    var players = rows.filter(function (row) { return !row.classList.contains('row-pin'); }).length;
+                    var filtering = boxes.some(function (box) { return box.checked; });
+                    count.textContent = !filtering ? '' : shown ? shown + ' of ' + players + ' players' : 'No player matches';
                 }
-                status.addEventListener('change', function () {
-                    try { sessionStorage.setItem(STATUS_KEY, status.value); } catch (error) { /* blocked */ }
-                    render();
+                boxes.forEach(function (box) {
+                    box.addEventListener('change', function () {
+                        try {
+                            sessionStorage.setItem(FILTERS_KEY, JSON.stringify(boxes.filter(function (other) {
+                                return other.checked;
+                            }).map(key)));
+                        } catch (error) { /* blocked */ }
+                        render();
+                    });
                 });
                 render();
             })();
