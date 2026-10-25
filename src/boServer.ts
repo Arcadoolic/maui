@@ -712,7 +712,7 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
     const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
 
     if (!favoritesPath) {
-        return {error: 'No favorites yet - add some from the MAME menu (Tab in game).'};
+        return {error: 'No game in the list yet - add some from the MAME menu (Tab in game: Add to favorites).'};
     }
 
     const romNames = getFavoriteRomNames(favoritesPath);
@@ -721,7 +721,7 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
     }
 
     if (!config.mamePath || !config.mameBinaryName) {
-        return {error: 'Configure the mame binary in the MAME tab to display the favorites\' names.'};
+        return {error: 'Configure the mame binary in the MAME tab to display the games\' names.'};
     }
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
@@ -6200,8 +6200,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         'Their scores go to the shared leaderboards. Unticked, they start private and the Players tab makes them public.')}
                     ${renderSettingCheckbox('voteEnabled', config.voteEnabled, 'Ask for a vote when a game is quit',
                         'Thumbs up / neutral / thumbs down. A neutral vote is asked again next time.')}
-                    ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the favorites',
-                        'Restorable from the Games tab\'s removed favorites.')}
+                    ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the list',
+                        'Restorable from the Games tab\'s "Removed from the list".')}
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>Updates</legend>
@@ -6871,7 +6871,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
             ${summary ? renderDownloadSummary(summary) : ''}
             <form method="post" action="/favorites/download-media" data-stream>
                 <p class="info">Downloads the missing marquees/flyers/logos from ScreenScraper for all
-                the favorites. Synchronous processing, may take several minutes depending on the number of favorites
+                the games of the list. Synchronous processing, may take several minutes depending on the number of games
                 (a delay is enforced between calls) - do not close this page during the download.</p>
                 <button type="submit">Download the missing artwork</button>
             </form>
@@ -7127,7 +7127,7 @@ function renderResolutionProgress(progress: {done: number; total: number}): stri
     return `
         <div class="import-progress" id="favoritesResolution">
             <div class="progress-label">
-                <span>Updating the favorites' names from MAME: the list reloads once they are all in.</span>
+                <span>Updating the games' names from MAME: the list reloads once they are all in.</span>
                 <span data-count>${progress.done} / ${progress.total}</span>
             </div>
             <div class="progress-track progress-track-thin">
@@ -7229,7 +7229,7 @@ function buildFavoritesListData(rows: FavoriteRow[], stats: Map<string, GameStat
                 </form>`,
             remove: `<form method="post" action="/favorites/delete">
                     <input type="hidden" name="romName" value="${rom}">
-                    ${renderIconButton('Remove from favorites', TRASH_ICON_PATHS)}
+                    ${renderIconButton('Remove from the list', TRASH_ICON_PATHS)}
                 </form>`,
             categoryIcons,
         },
@@ -7249,7 +7249,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
     if (favoritesInfo.error) {
         return `
             <section class="card">
-                <h2>Favorites</h2>
+                <h2>List</h2>
                 ${flash}
                 <p class="info">${escapeHtml(favoritesInfo.error)}</p>
             </section>
@@ -7292,16 +7292,16 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 ${renderVoteCell(favoritesInfo.stats?.get(row.romName))}
                 <form method="post" action="/favorites/restore">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
+                    ${renderIconButton('Restore to the list', RESTORE_ICON_PATHS, 'ok')}
                 </form>
             </div></td>
         </tr>`;
     }).join('');
     const removedCard = `
         <section class="card">
-            <h2>Removed favorites (${removed.length})</h2>
+            <h2>Removed from the list (${removed.length})</h2>
             ${removed.length ? `
-            <p class="info">"Restore" puts a removed favorite back into <code>favorites.ini</code> in
+            <p class="info">"Restore" puts a removed game back into MAME's <code>favorites.ini</code> in
             alphabetical order, exactly as MAME had written it. Same precaution as for removal: not
             while a MAME game is open.</p>
             <div class="table-wrap">
@@ -7324,7 +7324,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     </thead>
                     <tbody>${removedRows}</tbody>
                 </table>
-            </div>` : '<p class="info">No removed favorites.</p>'}
+            </div>` : '<p class="info">No game removed from the list.</p>'}
         </section>
     `;
 
@@ -7341,7 +7341,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
         }
     }
     const categoryFilter = favoritesInfo.stats ? `
-        <select id="favoritesCategory" aria-label="Filter the favorites by category">
+        <select id="favoritesCategory" aria-label="Filter the list by category">
             <option value="*">All categories (${sortedRows.length})</option>
             ${[...categoryCounts].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) =>
                 `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${count})</option>`).join('')}
@@ -7359,13 +7359,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
 
     return `
         <section class="card">
-            <h2>Favorites (${favoritesInfo.rows.length})</h2>
+            <h2>List (${favoritesInfo.rows.length})</h2>
             ${flash}
             ${favoritesInfo.resolving ? renderResolutionProgress(favoritesInfo.resolving) : ''}
             <div class="table-search">
                 <div class="table-search-controls">
                     <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
-                        autocomplete="off" aria-label="Search the favorites">
+                        autocomplete="off" aria-label="Search the list">
                     ${categoryFilter}
                 </div>
                 <div class="table-search-filters">
@@ -7570,8 +7570,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     prev.disabled = page === 0;
                     next.disabled = page >= pages - 1;
                     count.textContent = !filtering() ? ''
-                        : matches.length ? matches.length + ' of ' + games.length + ' favorites'
-                        : 'No favorite matches this search';
+                        : matches.length ? matches.length + ' of ' + games.length + ' games'
+                        : 'No game matches this search';
                 }
                 // A new search, category or page size starts over from the first page.
                 function applySearch() {
@@ -7609,8 +7609,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     if (event.key === 'Enter') { event.preventDefault(); }
                 });
             })();</script>
-            <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
-            roms and artwork stay on disk); it moves to the removed favorites below, from which it
+            <p class="info">Removing a game deletes its entry from MAME's <code>favorites.ini</code> (the
+            roms and artwork stay on disk); it moves to "Removed from the list" below, from which it
             can be restored. The game leaves the cabinet's list at once, or as soon as the game
             being played on it is quit, and its vote is no longer asked.</p>
             ${ASSET_PREVIEW_SCRIPT}
@@ -7622,7 +7622,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             <p class="info">Vote: the one the players give on the cabinet once a game is quit (star,
             thumbs up, neutral or thumbs down), changeable here. A star is a thumbs up that also puts
             the game in the cabinet's "My favourites" category. Whether a thumbs down also removes the
-            game from the favorites is set in the <a href="/maui">MAUI</a> tab.</p>
+            game from the list is set in the <a href="/maui">MAUI</a> tab.</p>
         </section>
         ${renderStarredCard(favoritesInfo)}
         ${removedCard}
@@ -7764,7 +7764,7 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer, repos
             <p class="error">${escapeHtml(mameInfo.error)}</p></section>`
         : renderRepoImportCard(mameInfo, packs, error, info, url);
     return renderSubtabbedPage('favorites', [
-        {id: 'favorites', label: 'Favorites', html: favoritesHtml},
+        {id: 'favorites', label: 'List', html: favoritesHtml},
         {id: 'repository', label: 'Repository', html: repositoryHtml},
     ], viewer, packs !== undefined || error !== undefined || info !== undefined ? 'repository' : undefined);
 }
@@ -7813,7 +7813,7 @@ function renderStarterPackCard(): string {
         <section class="card">
             <h2>Starter pack</h2>
             <p class="info">A selection of games to start with, downloaded from the repository with the
-            configuration pack. Adds them to the favorites; other games are left untouched.</p>
+            configuration pack. Adds them to the list; other games are left untouched.</p>
             ${action}
         </section>
     `;
@@ -9561,7 +9561,7 @@ export function createBoApp(
 
         favoritesChanged();
         res.send(await renderFavoritesTab(req, {
-            notice: `"${romName}" removed from the favorites and from the cabinet (it can be restored from the removed favorites below).`,
+            notice: `"${romName}" removed from the list and from the cabinet (it can be restored from "Removed from the list" below).`,
         }));
     });
 
@@ -9570,7 +9570,7 @@ export function createBoApp(
         const removed = readRemovedFavorites();
         const item = removed.find(candidate => candidate.romName === romName);
         if (!item) {
-            res.status(404).send(await renderFavoritesTab(req, {warning: `"${romName}" is not in the removed favorites.`}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: `"${romName}" is not in "Removed from the list".`}));
             return;
         }
         if (isMameConfigSessionAlive()) {
@@ -9614,8 +9614,8 @@ export function createBoApp(
         favoritesChanged();
         res.send(await renderFavoritesTab(req, {
             notice: updated === null
-                ? `"${romName}" was already in the favorites.`
-                : `"${romName}" restored to the favorites.`,
+                ? `"${romName}" was already in the list.`
+                : `"${romName}" restored to the list.`,
         }));
     });
 
@@ -9655,12 +9655,12 @@ export function createBoApp(
             && getFavoriteRomNames(favoritesPath).includes(romName)) {
             if (isMameConfigSessionAlive()) {
                 flash.warning = 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini. '
-                    + 'The game stays in the favorites for now.';
+                    + 'The game stays in the list for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
                 favoritesChanged();
                 frontTold = true;
-                flash.notice += ' Removed from the favorites and from the cabinet (restorable from the removed favorites,'
-                    + ' below the favorites list).';
+                flash.notice += ' Removed from the list and from the cabinet (restorable from "Removed from the list",'
+                    + ' below the list).';
             } else {
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
