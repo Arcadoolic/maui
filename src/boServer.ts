@@ -7,7 +7,8 @@ import {
 import {join, dirname, sep, basename} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
-import {ChildProcess, execFileSync, spawn} from 'child_process';
+import {ChildProcess, execFile, execFileSync, spawn} from 'child_process';
+import {promisify} from 'util';
 import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
@@ -43,7 +44,7 @@ import {
 import {addFavorite} from '@/class/MameIniParser';
 import {
     FavoritesCacheEntry, FavoritesCache, getFavoritesCachePath, readFavoritesCache,
-    writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
+    mergeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
     readRomsInfosCache, saveRomInfos, getRomsInfosCachePath,
 } from '@/class/FavoritesStore';
 import {
@@ -66,6 +67,7 @@ import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {chooseRelaunch, type RelaunchMode} from '@/class/AppRelaunch';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
+import {readMameVersion, UNKNOWN_MAME_VERSION} from '@/class/MameVersion';
 import {
     describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
     type StoredScore,
@@ -560,26 +562,33 @@ function getDeviceRomNames(xmlContent: string): string[] {
     return refNames.filter(name => hasRomsByName.get(name));
 }
 
+const execFileAsync = promisify(execFile);
+
 /**
  * Same per-rom lookup as MameService.getGameInformation(), but with regex tag/attribute
  * extraction instead of DOMParser: DOMParser is a browser global available in the renderer,
- * not in this main-process server.
+ * not in this main-process server. Asynchronous, not to block the main process meanwhile (the
+ * front's IPC goes through it).
  */
-function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): GameXmlInfo {
+async function readGameXmlInfo(mameBinary: string, iniPath: string, romName: string): Promise<GameXmlInfo> {
     try {
-        const xmlContent = execFileSync(
+        const {stdout} = await execFileAsync(
             mameBinary,
             ['-lx', romName, '-inipath', iniPath, '-homepath', iniPath],
-            {encoding: 'utf8', cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe']},
+            {encoding: 'utf8', cwd: iniPath, maxBuffer: 64 * 1024 * 1024, windowsHide: true},
         );
-        return {
-            description: extractXmlTagContent(xmlContent, 'description'),
-            biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
-            deviceRoms: getDeviceRomNames(xmlContent),
-        };
+        return parseGameXml(stdout);
     } catch {
         return {description: null, biosName: null, deviceRoms: []};
     }
+}
+
+function parseGameXml(xmlContent: string): GameXmlInfo {
+    return {
+        description: extractXmlTagContent(xmlContent, 'description'),
+        biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
+        deviceRoms: getDeviceRomNames(xmlContent),
+    };
 }
 
 interface FavoriteMediaStatus {
@@ -593,19 +602,17 @@ interface FavoriteRow extends FavoriteMediaStatus {
     fullname: string;
     biosName: string | null;
     deviceRoms: string[];
-    // False when this rom has no entry in the favorites cache yet (added since the last "Update
-    // favorites") - fullname then just falls back to romName and biosName/deviceRoms to
-    // empty, rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
+    // False when this rom has no entry in the favorites cache yet (being resolved, see
+    // updateFavoritesCache()) - fullname then just falls back to romName and biosName/deviceRoms
+    // to empty.
     cached: boolean;
 }
 
 interface FavoritesInfo {
     rows: FavoriteRow[];
     error?: string;
-    // ISO timestamp of the favorites cache this list's names/BIOS came from - null when the
-    // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
-    // always live, regardless of cache age - see getFavoriteMediaStatus().
-    cacheUpdatedAt?: string | null;
+    // Favorites whose names are being resolved in the background (see updateFavoritesCache()).
+    resolving?: {done: number; total: number} | null;
     // Launch count per rom (see loadGameStats()); a rom absent from it, or no map at all (database
     // not migrated yet), shows no count.
     stats?: Map<string, GameStats>;
@@ -698,7 +705,7 @@ function listFileNames(path: string | null): Set<string> {
 /**
  * Every cheap (fs/config) check getFavoritesInfo used to do up front, split out on its own so a
  * caller can start streaming a response immediately after this resolves, instead of only after
- * every favorite's slow, blocking `mame -lx` lookup (see resolveFavoriteRow()) has also run.
+ * every favorite's slow `mame -lx` lookup (see resolveFavorites()) has also run.
  */
 function getFavoritesContext(config: Config): FavoritesContext | {error: string} {
     const iniPath = getMameHomePath();
@@ -731,8 +738,7 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
 
 /**
  * Cheap (no `mame -lx`, folders listed once by getFavoritesContext()) marquee/flyer/logo presence
- * check for one favorite - shared by both the cached favorites list and resolveFavoriteRow()
- * below, so badges are always live even when the name/BIOS cache is stale.
+ * check for one favorite, so badges are always live even when the name/BIOS cache is stale.
  */
 function getFavoriteMediaStatus(context: FavoritesContext, romName: string): FavoriteMediaStatus {
     const file = romName.toLowerCase() + '.png';
@@ -744,29 +750,8 @@ function getFavoriteMediaStatus(context: FavoritesContext, romName: string): Fav
 }
 
 /**
- * Resolves a single favorite's row - the slow part (a blocking `mame -lx` process spawn per
- * call, see getGameXmlInfo()) callers should interleave with res.write() progress so a long
- * favorites list streams in instead of blocking the whole response. Only used by "Update
- * favorites" (POST /favorites/refresh) now - the normal favorites tab reads the cache this
- * populates instead (see favoriteRowFromCache()).
- */
-function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
-    const {mameBinary, iniPath} = context;
-    const {description, biosName, deviceRoms} = getGameXmlInfo(mameBinary, iniPath, romName);
-    return {
-        romName,
-        fullname: description || romName,
-        biosName,
-        deviceRoms,
-        cached: true,
-        ...getFavoriteMediaStatus(context, romName),
-    };
-}
-
-/**
- * Same shape as resolveFavoriteRow(), but reads fullname/biosName/deviceRoms from the favorites
- * cache (no `mame -lx` call) - falls back to the bare romName/null/empty when this rom isn't in
- * the cache yet (cached: false), same as before any refresh has ever run.
+ * A favorite's row, its fullname/biosName/deviceRoms from the favorites cache (no `mame -lx` call) -
+ * falls back to the bare romName/null/empty when this rom isn't in the cache yet (cached: false).
  */
 function favoriteRowFromCache(context: FavoritesContext, romName: string, cache: FavoritesCache | null): FavoriteRow {
     const entry = cache?.entries[romName];
@@ -780,63 +765,105 @@ function favoriteRowFromCache(context: FavoritesContext, romName: string, cache:
     };
 }
 
-/**
- * Re-resolves every favorite's name/BIOS (a blocking `mame -lx` per rom, see resolveFavoriteRow())
- * and rewrites the favorites cache, streaming one progress line per favorite to `res` as they
- * resolve. Shared by "Update favorites" (POST /favorites/refresh) and both starting pack imports
- * (see streamFavoritesRefreshAfterImport()). The caller has already sent the response head;
- * this writes the open "Updating favorites" card and closes it again.
- */
-function streamFavoritesRefresh(
-    res: Response, context: FavoritesContext,
-): {rows: FavoriteRow[]; cache: FavoritesCache} {
-    // Stream the page as favorites are resolved instead of blocking on the whole list: each
-    // one is a blocking `mame -lx` process spawn, so with enough favorites the unstreamed
-    // version could take a long time to send anything at all - same fix already applied to
-    // /favorites/download-media.
-    res.write(`
-        <section class="card">
-            <h2>Updating favorites (${context.romNames.length})…</h2>
-            ${PROGRESS_LOG_OPEN}
-    `);
+// `mame -version` of the binary, kept by its path and modification time: asked again once replaced.
+let knownMameVersion: {binary: string; version: string} | null = null;
 
-    const result = resolveFavorites(context, row => {
-        res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+async function getMameVersion(mameBinary: string): Promise<string> {
+    let binary: string;
+    try {
+        binary = `${mameBinary}:${statSync(mameBinary).mtimeMs}`;
+    } catch {
+        return UNKNOWN_MAME_VERSION;
+    }
+    if (knownMameVersion?.binary !== binary) {
+        knownMameVersion = {binary, version: await readMameVersion(mameBinary)};
+    }
+    return knownMameVersion.version;
+}
+
+/**
+ * Resolves these favorites' name/BIOS/devices (a `mame -lx` each, one after the other) and adds
+ * them to the favorites cache, calling `onEntry` after each one so the caller can report progress.
+ * `mameVersion`: given when these are all the favorites, resolved with that MAME.
+ */
+async function resolveFavorites(
+    context: FavoritesContext, romNames: string[], mameVersion?: string,
+    onEntry?: (romName: string, entry: FavoritesCacheEntry, index: number) => void,
+): Promise<FavoritesCache> {
+    const entries: { [romName: string]: FavoritesCacheEntry } = {};
+    for (const [index, romName] of romNames.entries()) {
+        const {description, biosName, deviceRoms} = await readGameXmlInfo(context.mameBinary, context.iniPath, romName);
+        entries[romName] = {fullname: description || romName, biosName, deviceRoms};
+        onEntry?.(romName, entries[romName], index);
+    }
+    return mergeFavoritesCache(entries, mameVersion);
+}
+
+// The favorites being resolved in the background (see updateFavoritesCache()), null when none are.
+let favoritesResolution: {done: number; total: number} | null = null;
+
+// At most this many favorites are resolved before the Games tab is shown; more go to the background.
+const FAVORITES_RESOLVED_INLINE = 5;
+
+/**
+ * Brings the favorites cache up to date for the Games tab: the favorites it doesn't know yet
+ * (added from MAME's own menu: a pack import resolves its own games) and, when the MAME version
+ * changed, all of them again. A few are resolved before the page is shown; more in the background,
+ * the page saying so and showing the names it has meanwhile.
+ */
+async function updateFavoritesCache(context: FavoritesContext): Promise<FavoritesCache | null> {
+    const cache = readFavoritesCache();
+    if (favoritesResolution) {
+        return cache;
+    }
+    const mameVersion = await getMameVersion(context.mameBinary);
+    const knownVersion = mameVersion === UNKNOWN_MAME_VERSION ? undefined : mameVersion;
+    const outdated = !cache || (!!knownVersion && cache.mameVersion !== knownVersion);
+    const romNames = outdated ? context.romNames : context.romNames.filter(romName => !cache.entries[romName]);
+    const version = outdated ? knownVersion : undefined;
+    if (!romNames.length) {
+        return cache;
+    }
+    if (romNames.length <= FAVORITES_RESOLVED_INLINE) {
+        return resolveFavorites(context, romNames, version);
+    }
+    const progress = {done: 0, total: romNames.length};
+    favoritesResolution = progress;
+    resolveFavorites(context, romNames, version, (_romName, _entry, index) => {
+        progress.done = index + 1;
+    }).catch(() => undefined).finally(() => {
+        favoritesResolution = null;
     });
-    res.write('</ul></section>');
-    return result;
+    return cache;
 }
 
 /**
  * After a starting pack import (ZIP upload or repository), which just rewrote favorites.ini:
- * resolves the new games' names/BIOS now instead of leaving the favorites tab on "not resolved
- * yet" until "Update favorites" is clicked.
+ * resolves the new games' names/BIOS now, streaming one progress line per game to `res`. The
+ * caller has already sent the response head.
  */
-function streamFavoritesRefreshAfterImport(res: Response, config: Config): void {
+async function streamFavoritesRefreshAfterImport(res: Response, config: Config): Promise<void> {
     const context = getFavoritesContext(config);
     if ('error' in context) {
         res.write(`<section class="card"><h2>Updating favorites</h2>
             <p class="info">Favorites not updated: ${escapeHtml(context.error)}</p></section>`);
-    } else {
-        streamFavoritesRefresh(res, context);
+        return;
     }
-}
-
-/**
- * Resolves every favorite (see resolveFavoriteRow()) and rewrites the favorites cache with them,
- * calling `onRow` after each one so the caller can report progress as it goes.
- */
-function resolveFavorites(
-    context: FavoritesContext, onRow: (row: FavoriteRow, index: number) => void,
-): {rows: FavoriteRow[]; cache: FavoritesCache} {
-    const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
-    const rows: FavoriteRow[] = context.romNames.map((romName, index) => {
-        const row = resolveFavoriteRow(context, romName);
-        cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
-        onRow(row, index);
-        return row;
-    });
-    return {rows, cache: writeFavoritesCache(cacheEntries)};
+    const cache = readFavoritesCache();
+    const romNames = context.romNames.filter(romName => !cache?.entries[romName]);
+    if (!romNames.length) {
+        return;
+    }
+    res.write(`
+        <section class="card">
+            <h2>Updating favorites (${romNames.length})…</h2>
+            ${PROGRESS_LOG_OPEN}
+    `);
+    // A first cache holds every favorite: it is from this MAME.
+    const mameVersion = cache ? undefined : await getMameVersion(context.mameBinary);
+    await resolveFavorites(context, romNames, mameVersion === UNKNOWN_MAME_VERSION ? undefined : mameVersion,
+        (romName, entry) => res.write(`<li>${escapeHtml(romName)} : ${escapeHtml(entry.fullname)}</li>`));
+    res.write('</ul></section>');
 }
 
 // The BO account's seeded password (see migrations/20260917061122-create-bo-user.js), public by
@@ -1774,21 +1801,6 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         ol.info li + li {
             margin-top: 6px;
-        }
-        /* Info line with an action at its far end (favorites: cache date + "Update favorites").
-           The button selector out-ranks the generic "form > button:last-child" 24px top margin. */
-        .status-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px 16px;
-        }
-        .status-row form {
-            margin: 0;
-        }
-        .status-row form > button[type="submit"]:last-child {
-            margin-top: 0;
         }
         .path-row {
             display: flex;
@@ -6898,102 +6910,6 @@ function getFavoriteSearchText(row: FavoriteRow): string {
     return [row.romName, row.fullname, ...(row.biosName ? [row.biosName] : []), ...row.deviceRoms].join(' ');
 }
 
-/**
- * "Update favorites" modal: takes over the form's submit (preventDefault, so neither the page
- * tail's AJAX handler nor a navigation runs), POSTs with Accept: application/x-ndjson and reads
- * the response as a stream (see POST /favorites/refresh), logging each favorite as it is
- * resolved. Closable only once finished, with an explicit end message; closing reloads the page
- * so the list shows the updated names.
- */
-const FAVORITES_REFRESH_MODAL = `
-            <dialog class="modal" id="favoritesRefreshModal" aria-labelledby="favoritesRefreshTitle">
-                <div class="modal-header">
-                    <h3 id="favoritesRefreshTitle">Updating favorites</h3>
-                    <button type="button" class="modal-close" id="favoritesRefreshClose" aria-label="Close" disabled>×</button>
-                </div>
-                <progress id="favoritesRefreshProgress" max="1" value="0"></progress>
-                <p class="info" id="favoritesRefreshStatus" aria-live="polite">Starting…</p>
-                <ul class="progress-log" id="favoritesRefreshLog"></ul>
-            </dialog>
-            <script>(function () {
-                var form = document.getElementById('favoritesRefreshForm');
-                var modal = document.getElementById('favoritesRefreshModal');
-                var close = document.getElementById('favoritesRefreshClose');
-                var progress = document.getElementById('favoritesRefreshProgress');
-                var status = document.getElementById('favoritesRefreshStatus');
-                var log = document.getElementById('favoritesRefreshLog');
-                var running = false;
-                var total = 0;
-
-                function finish(message, failed) {
-                    running = false;
-                    status.textContent = message;
-                    status.className = failed ? 'error' : 'info modal-done';
-                    close.disabled = false;
-                    close.focus();
-                }
-                function handle(event) {
-                    if (event.type === 'start') {
-                        total = event.total;
-                        progress.max = Math.max(1, total);
-                        status.textContent = '0 / ' + total;
-                    } else if (event.type === 'row') {
-                        var item = document.createElement('li');
-                        item.textContent = event.romName + ' : ' + event.fullname;
-                        log.appendChild(item);
-                        log.scrollTop = log.scrollHeight;
-                        progress.value = event.index;
-                        status.textContent = event.index + ' / ' + total;
-                    } else if (event.type === 'done') {
-                        progress.value = progress.max;
-                        finish('✓ Update complete: ' + event.total + ' favorite(s) updated. You can close this window.', false);
-                    } else if (event.type === 'error') {
-                        finish(event.message, true);
-                    }
-                }
-
-                form.addEventListener('submit', function (event) {
-                    event.preventDefault();
-                    if (running) { return; }
-                    running = true;
-                    log.textContent = '';
-                    progress.value = 0;
-                    status.className = 'info';
-                    status.textContent = 'Starting…';
-                    close.disabled = true;
-                    modal.showModal();
-                    fetch(form.action, {method: 'POST', headers: {'Accept': 'application/x-ndjson'}})
-                        .then(function (response) {
-                            var reader = response.body.getReader();
-                            var decoder = new TextDecoder();
-                            var buffer = '';
-                            function read() {
-                                return reader.read().then(function (chunk) {
-                                    buffer += decoder.decode(chunk.value || new Uint8Array(), {stream: !chunk.done});
-                                    var lines = buffer.split('\\n');
-                                    buffer = lines.pop();
-                                    lines.filter(Boolean).forEach(function (line) { handle(JSON.parse(line)); });
-                                    if (chunk.done) {
-                                        if (running) { finish('The update ended without confirmation - check the list.', true); }
-                                        return;
-                                    }
-                                    return read();
-                                });
-                            }
-                            return read();
-                        })
-                        .catch(function () {
-                            finish('Connection lost during the update - it may still have completed, reload to check.', true);
-                        });
-                });
-                // Esc would close the dialog mid-update: only allowed once it is finished.
-                modal.addEventListener('cancel', function (event) {
-                    if (running) { event.preventDefault(); }
-                });
-                modal.addEventListener('close', function () { location.reload(); });
-                close.addEventListener('click', function () { modal.close(); });
-            })();</script>`;
-
 const FAVORITES_PAGE_SIZES = [10, 30, 50, 100];
 const FAVORITES_DEFAULT_PAGE_SIZE = 30;
 
@@ -7114,8 +7030,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
     }
 
     // favorites.ini keeps mame's own order (new favorites are appended at the end), so the list is
-    // sorted here, by name, for both the tab and the "Update favorites" result. A favorite not
-    // resolved yet has no name, its romName stands in until the next update.
+    // sorted here, by name. A favorite not resolved yet has no name, its romName stands in
+    // until it is (see updateFavoritesCache()).
     const sortedRows = [...favoritesInfo.rows].sort((a, b) => a.fullname.localeCompare(b.fullname));
     // undefined: no category known at all (database unreadable) - no icons, no category filter.
     const categoryOf = (row: FavoriteRow): GameCategory | null | undefined => favoritesInfo.stats
@@ -7216,26 +7132,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
         ...(favoritesInfo.stats ? [{id: 'favoritesPlayerScores', label: 'Players\' hiscores', count: countOf(game => game.playerScores)}] : []),
     ];
 
-    const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
-    const cacheStatus = favoritesInfo.cacheUpdatedAt
-        ? `Names up to date as of ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('en-GB', {
-            dateStyle: 'short', timeStyle: 'short',
-        }))}.`
-        : 'Names never updated.';
-
     return `
         <section class="card">
             <h2>Favorites (${favoritesInfo.rows.length})</h2>
             ${flash}
-            <div class="info status-row">
-                <span>${cacheStatus}${unresolvedCount
-                    ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
-                    : ''}</span>
-                <form method="post" action="/favorites/refresh" data-stream id="favoritesRefreshForm">
-                    <button type="submit">Update favorites</button>
-                </form>
-            </div>
-            ${FAVORITES_REFRESH_MODAL}
+            ${favoritesInfo.resolving ? `<p class="info">Updating the favorites' names from MAME
+            (${favoritesInfo.resolving.done} / ${favoritesInfo.resolving.total}): reload the page in a
+            moment to see them.</p>` : ''}
             <div class="table-search">
                 <div class="table-search-controls">
                     <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
@@ -9297,14 +9200,12 @@ export function createBoApp(
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
-        // otherwise costs a blocking `mame -lx` process spawn - see resolveFavoriteRow()), so this
-        // tab loads instantly regardless of favorites count. Media badges stay live either way
-        // (getFavoriteMediaStatus() is a cheap fs check). See POST /favorites/refresh below for
-        // the button that re-resolves everything and rewrites the cache.
-        const cache = readFavoritesCache();
+        // otherwise costs a `mame -lx` process spawn), so this tab loads at once whatever the
+        // number of favorites; updateFavoritesCache() resolves those it lacks.
+        const cache = await updateFavoritesCache(context);
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
-            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...flash},
+            {rows, resolving: favoritesResolution, stats: await loadGameStats() ?? undefined, ...flash},
             getViewer(req),
             repositorySection,
         );
@@ -9536,52 +9437,6 @@ export function createBoApp(
                 warning: 'Database not ready yet - launch the application once, then retry.',
             }));
         }
-    });
-
-    app.post('/favorites/refresh', async (req, res) => {
-        const config = new Config();
-        config.load();
-        const context = getFavoritesContext(config);
-
-        // The favorites list's update modal (see FAVORITES_REFRESH_MODAL) asks for its progress as
-        // newline-delimited JSON events instead of a page: start (total), row (each favorite as it
-        // is resolved), then done or error. The HTML stream below is the no-JS fallback.
-        if (req.get('Accept') === 'application/x-ndjson') {
-            res.writeHead(200, {'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache'});
-            res.socket?.setNoDelay(true);
-            const send = (event: object) => res.write(JSON.stringify(event) + '\n');
-            if ('error' in context) {
-                send({type: 'error', message: context.error});
-                res.end();
-                return;
-            }
-            send({type: 'start', total: context.romNames.length});
-            try {
-                const {rows} = resolveFavorites(context, (row, index) => {
-                    send({type: 'row', index: index + 1, romName: row.romName, fullname: row.fullname});
-                });
-                send({type: 'done', total: rows.length});
-            } catch (error) {
-                send({type: 'error', message: `Update interrupted: ${error instanceof Error ? error.message : String(error)}`});
-            }
-            res.end();
-            return;
-        }
-
-        if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}, getViewer(req)));
-            return;
-        }
-
-        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-        res.socket?.setNoDelay(true);
-        res.write(renderPageHead('favorites', getViewer(req)));
-        const {rows, cache} = streamFavoritesRefresh(res, context);
-        res.write(renderFavoritesCard({
-            rows, cacheUpdatedAt: cache.updatedAt, stats: await loadGameStats() ?? undefined,
-        }, getViewer(req)));
-        res.write(renderPageTail());
-        res.end();
     });
 
     /**
@@ -10010,7 +9865,7 @@ export function createBoApp(
         }
 
         // Only romName + media status is needed here (see downloadMissingFavoriteMedia() below) -
-        // a cheap fs check, unlike resolveFavoriteRow()'s `mame -lx` spawn per rom, which this
+        // a cheap fs check, unlike resolveFavorites()'s `mame -lx` per rom, which this
         // route has no use for (progress lines below only ever print row.romName).
         const rows = context.romNames.map(romName => ({romName, ...getFavoriteMediaStatus(context, romName)}));
 
@@ -10189,7 +10044,7 @@ export function createBoApp(
             } else {
                 const title = `Starter pack import in progress… (${escapeHtml(STARTER_PACK_FILENAME)})`;
                 await runRepositoryImport(res, config, repository, title, STARTER_PACK_FILENAME);
-                streamFavoritesRefreshAfterImport(res, config);
+                await streamFavoritesRefreshAfterImport(res, config);
             }
         }
 
@@ -10286,7 +10141,7 @@ export function createBoApp(
             res.write('</div></section>');
         }
 
-        streamFavoritesRefreshAfterImport(res, config);
+        await streamFavoritesRefreshAfterImport(res, config);
 
         if (imported) {
             // Back to the list of games, which now holds the new ones. replace(): this page is the
