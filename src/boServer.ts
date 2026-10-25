@@ -839,8 +839,10 @@ async function updateFavoritesCache(context: FavoritesContext): Promise<Favorite
 
 /**
  * After a starting pack import (ZIP upload or repository), which just rewrote favorites.ini:
- * resolves the new games' names/BIOS now, streaming one progress line per game to `res`. The
- * caller has already sent the response head.
+ * resolves the new games' names/BIOS now, a progress bar on one line moving with each game (a
+ * `mame -lx` each, seconds on a Raspberry Pi: without it the page seemed stuck). It stays on the
+ * page, `finishImportProgress()` saying what comes next. The caller has already sent the response
+ * head.
  */
 async function streamFavoritesRefreshAfterImport(res: Response, config: Config): Promise<void> {
     const context = getFavoritesContext(config);
@@ -851,19 +853,45 @@ async function streamFavoritesRefreshAfterImport(res: Response, config: Config):
     }
     const cache = readFavoritesCache();
     const romNames = context.romNames.filter(romName => !cache?.entries[romName]);
+    res.write(`
+        <section class="card">
+            <h2>Updating favorites</h2>
+            <div class="import-progress" id="favoritesUpdate">
+                <div class="progress-label"><span data-label>Resolving the names of ${romNames.length} new game(s)…</span>
+                    <span data-percent></span></div>
+                <div class="progress-track"><div class="progress-fill${romNames.length ? '' : ' progress-done'}" data-fill
+                    style="width: ${romNames.length ? 0 : 100}%"></div></div>
+            </div>
+            <script>
+            window.mauiFavoritesUpdate = function (done, total, label, waiting) {
+                var root = document.getElementById('favoritesUpdate');
+                var fill = root.querySelector('[data-fill]');
+                fill.style.width = (total ? 100 * done / total : 100) + '%';
+                fill.classList.toggle('progress-indeterminate', !!waiting);
+                fill.classList.toggle('progress-done', done >= total && !waiting);
+                root.querySelector('[data-label]').textContent = label;
+                root.querySelector('[data-percent]').textContent = total && !waiting ? done + ' / ' + total : '';
+            };
+            </script>
+        </section>
+    `);
+    // Asked now, while the page waits anyway: the games list asks for it (updateFavoritesCache()).
+    const mameVersion = await getMameVersion(context.mameBinary);
     if (!romNames.length) {
         return;
     }
-    res.write(`
-        <section class="card">
-            <h2>Updating favorites (${romNames.length})…</h2>
-            ${PROGRESS_LOG_OPEN}
-    `);
+    const update = (done: number, label: string): void => {
+        res.write(`<script>mauiFavoritesUpdate(${done},${romNames.length},${JSON.stringify(label).replace(/</g, '\\u003c')})</script>`);
+    };
     // A first cache holds every favorite: it is from this MAME.
-    const mameVersion = cache ? undefined : await getMameVersion(context.mameBinary);
-    await resolveFavorites(context, romNames, mameVersion === UNKNOWN_MAME_VERSION ? undefined : mameVersion,
-        (romName, entry) => res.write(`<li>${escapeHtml(romName)} : ${escapeHtml(entry.fullname)}</li>`));
-    res.write('</ul></section>');
+    await resolveFavorites(context, romNames, cache || mameVersion === UNKNOWN_MAME_VERSION ? undefined : mameVersion,
+        (romName, entry, index) => update(index + 1, entry.fullname));
+    update(romNames.length, `${romNames.length} name(s) resolved`);
+}
+
+/** The favorites step's bar (streamFavoritesRefreshAfterImport()) saying what the page does next. */
+function finishImportProgress(res: Response, label: string): void {
+    res.write(`<script>window.mauiFavoritesUpdate && mauiFavoritesUpdate(1, 1, ${JSON.stringify(label)}, true)</script>`);
 }
 
 // The BO account's seeded password (see migrations/20260917061122-create-bo-user.js), public by
@@ -10345,9 +10373,12 @@ export function createBoApp(
             // answer to a POST, and going back to the pack picker before it would show the games
             // just imported as still to download. A failed import stays here, with its log.
             const asked = [...selection.values()].reduce((total, romNames) => total + romNames.length, 0);
+            finishImportProgress(res, 'Opening the games list…');
             res.write(`<script>location.replace('/favorites?imported=${asked}')</script>`);
+        } else {
+            // Not when leaving: it costs the server time the games list waits for.
+            res.write(renderRepoImportCard(getMameInfo(config)));
         }
-        res.write(renderRepoImportCard(getMameInfo(config)));
         res.write(renderPageTail());
         res.end();
 
