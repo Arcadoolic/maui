@@ -5623,11 +5623,8 @@ function renderForm(
     const config = new Config();
     config.load();
 
-    const sections: Subsection[] = [
-        // The MAME information (paths resolved from the binary) right under the form that sets it.
-        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)
-            + renderMameInfoCard(mameInfo, mameInfoMessage)},
-    ];
+    // Controls first, the tab shown by default (everyday cabinet tuning); Config, set once, last.
+    const sections: Subsection[] = [];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
     // configured and validated (mameInfo.error unset), those paths don't exist, so none of these
@@ -5674,6 +5671,9 @@ function renderForm(
             });
         }
     }
+    // The MAME information (paths resolved from the binary) right under the form that sets it.
+    sections.push({id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)
+        + renderMameInfoCard(mameInfo, mameInfoMessage)});
     // Which of the params above is actually filled in tells us which section this specific
     // response is about - e.g. a POST to /reset only ever sets dangerZoneInfo, nothing
     // else, regardless of what other sections might separately have a standing .flash warning
@@ -5684,7 +5684,8 @@ function renderForm(
             : (deviceProbeState !== undefined || remapState !== undefined
                 || gameRemapState !== undefined || analogDevicesState !== undefined) ? 'controls'
                 : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
-                    : undefined;
+                    // Controls otherwise, even when Config holds a standing warning (missing plugins...).
+                    : sections.some(section => section.id === 'controls') ? 'controls' : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
     // launches/closes the shared MAME config session the Controls cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Controls tab itself.
