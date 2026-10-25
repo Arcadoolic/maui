@@ -6934,6 +6934,21 @@ function getFavoriteSearchText(row: FavoriteRow): string {
     return [row.romName, row.fullname, ...(row.biosName ? [row.biosName] : []), ...row.deviceRoms].join(' ');
 }
 
+/** The background resolution of the favorites' names (updateFavoritesCache()), followed by the list's script. */
+function renderResolutionProgress(progress: {done: number; total: number}): string {
+    return `
+        <div class="import-progress" id="favoritesResolution">
+            <div class="progress-label">
+                <span>Updating the favorites' names from MAME: the list reloads once they are all in.</span>
+                <span data-count>${progress.done} / ${progress.total}</span>
+            </div>
+            <div class="progress-track progress-track-thin">
+                <div class="progress-fill" data-fill style="width: ${100 * progress.done / progress.total}%"></div>
+            </div>
+        </div>
+    `;
+}
+
 const FAVORITES_PAGE_SIZES = [10, 30, 50, 100];
 const FAVORITES_DEFAULT_PAGE_SIZE = 30;
 
@@ -7160,9 +7175,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
         <section class="card">
             <h2>Favorites (${favoritesInfo.rows.length})</h2>
             ${flash}
-            ${favoritesInfo.resolving ? `<p class="info">Updating the favorites' names from MAME
-            (${favoritesInfo.resolving.done} / ${favoritesInfo.resolving.total}): reload the page in a
-            moment to see them.</p>` : ''}
+            ${favoritesInfo.resolving ? renderResolutionProgress(favoritesInfo.resolving) : ''}
             <div class="table-search">
                 <div class="table-search-controls">
                     <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
@@ -7242,7 +7255,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 // A form posted from the list (vote, remove) re-renders the whole page: its search,
                 // category and page are stashed on submit and put back once, on that re-render only.
                 var VIEW_KEY = 'bo.favorites.view';
-                document.getElementById('favoritesTable').addEventListener('submit', function () {
+                function keepView() {
                     try {
                         sessionStorage.setItem(VIEW_KEY, JSON.stringify({
                             search: search.value, category: category ? category.value : '*', page: page,
@@ -7250,7 +7263,28 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                                 .filter(function (id) { return document.getElementById(id).checked; }),
                         }));
                     } catch (error) { /* storage blocked: the list just starts over */ }
-                });
+                }
+                document.getElementById('favoritesTable').addEventListener('submit', keepView);
+                // While the names are resolved in the background (renderResolutionProgress()): its
+                // progress every second, then the list again, with them, in the same view.
+                var resolution = document.getElementById('favoritesResolution');
+                if (resolution) {
+                    var resolutionTimer = setInterval(function () {
+                        fetch('/favorites/resolution', {headers: {'Accept': 'application/json'}})
+                            .then(function (response) { return response.json(); })
+                            .then(function (progress) {
+                                if (!progress.total) {
+                                    clearInterval(resolutionTimer);
+                                    keepView();
+                                    location.reload();
+                                    return;
+                                }
+                                resolution.querySelector('[data-count]').textContent = progress.done + ' / ' + progress.total;
+                                resolution.querySelector('[data-fill]').style.width = (100 * progress.done / progress.total) + '%';
+                            })
+                            .catch(function () { /* the next tick tries again */ });
+                    }, 1000);
+                }
                 // The chosen page size is kept for this browser only (a convenience, not state).
                 try {
                     var storedSize = localStorage.getItem('bo.favorites.pageSize');
@@ -9234,6 +9268,11 @@ export function createBoApp(
             repositorySection,
         );
     };
+
+    // The favorites' names being resolved in the background, polled by the Games tab: {} once done.
+    app.get('/favorites/resolution', (req, res) => {
+        res.set('Cache-Control', 'no-store').json(favoritesResolution ?? {});
+    });
 
     app.get('/favorites', async (req, res) => {
         // Where a repository import sends the page once it is through (POST /import/from-url).
