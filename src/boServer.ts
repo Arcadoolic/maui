@@ -142,7 +142,7 @@ import type {BoApp} from '@/class/BoOnDemand';
 // The models registered on boCore.ts's connection (see its comment on why Database.class.ts is
 // not imported in the main process).
 import Category from '@/model/Category.model';
-import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
+import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, confPackVersion, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
@@ -847,7 +847,7 @@ async function updateFavoritesCache(context: FavoritesContext): Promise<Favorite
 async function streamFavoritesRefreshAfterImport(res: Response, config: Config): Promise<void> {
     const context = getFavoritesContext(config);
     if ('error' in context) {
-        res.write(`<section class="card"><h2>Updating favorites</h2>
+        res.write(`<section class="card"><h2>Updating MAME Favorites…</h2>
             <p class="info">Favorites not updated: ${escapeHtml(context.error)}</p></section>`);
         return;
     }
@@ -855,7 +855,7 @@ async function streamFavoritesRefreshAfterImport(res: Response, config: Config):
     const romNames = context.romNames.filter(romName => !cache?.entries[romName]);
     res.write(`
         <section class="card">
-            <h2>Updating favorites</h2>
+            <h2>Updating MAME Favorites…</h2>
             <div class="import-progress" id="favoritesUpdate">
                 <div class="progress-label"><span data-label>Resolving the names of ${romNames.length} new game(s)…</span>
                     <span data-percent></span></div>
@@ -1206,12 +1206,40 @@ function getPackImportTargets(config: Config): PackImportTargets {
  * Imports the repository's configuration pack (a plain `folders/` ZIP, so the whole file) into
  * an already-headed streamed response.
  */
-function runConfPackImport(
-    res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>,
+// The configuration pack version installed last (confPackVersion()), beside the favorites cache.
+function getInstalledConfPackPath(): string {
+    return join(dirname(getFavoritesCachePath()), 'conf-pack.json');
+}
+
+function readInstalledConfPackVersion(): string | null {
+    try {
+        const {version} = JSON.parse(readFileSync(getInstalledConfPackPath(), 'utf8')) as {version?: unknown};
+        return typeof version === 'string' ? version : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Installs the repository's configuration pack. `onlyWhenChanged` (before a game pack import):
+ * not when the version installed last is the repository's and its files are in place - nothing
+ * shows then. Resolves with whether its files are in place afterwards.
+ */
+async function runConfPackImport(
+    res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, onlyWhenChanged = false,
 ): Promise<boolean> {
-    return runRepositoryImport(
-        res, config, repository, `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
+    const version = confPackVersion(await fetchRepoManifest(repository.url, CONF_PACK_FILENAME, repository.headers));
+    const installed = (): boolean => !getMissingConfPackFiles(getMameInfo(config)).length;
+    if (onlyWhenChanged && version && version === readInstalledConfPackVersion() && installed()) {
+        return true;
+    }
+    const ok = await runRepositoryImport(
+        res, config, repository, `Updating the configuration pack… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
     );
+    if (ok && version) {
+        writeFileSync(getInstalledConfPackPath(), JSON.stringify({version}));
+    }
+    return installed();
 }
 
 /**
@@ -10262,9 +10290,9 @@ export function createBoApp(
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead(fromSetup ? 'setup' : 'mame', getViewer(req)));
-        await runConfPackImport(res, config, repository);
+        const confPackInstalled = await runConfPackImport(res, config, repository);
         if (withStarterPack) {
-            if (getMissingConfPackFiles(getMameInfo(config)).length) {
+            if (!confPackInstalled) {
                 res.write('<p class="error flash">The configuration pack could not be installed: starter pack not imported.</p>');
             } else {
                 const title = `Starter pack import in progress… (${escapeHtml(STARTER_PACK_FILENAME)})`;
@@ -10331,10 +10359,9 @@ export function createBoApp(
 
         // Packs are imported one after the other (one progress card each): an import rewrites
         // favorites.ini and shared category files, so they must not overlap.
-        // The configuration pack first, every time (see ConfPack.ts): game packs no longer ship
-        // the category files, so this keeps them matching the repository's.
-        await runConfPackImport(res, config, repository);
-        if (getMissingConfPackFiles(getMameInfo(config)).length) {
+        // The configuration pack first when the repository's changed (see ConfPack.ts): game packs
+        // no longer ship the category files, so this keeps them matching the repository's.
+        if (!await runConfPackImport(res, config, repository, true)) {
             res.write('<p class="error flash">The configuration pack could not be installed: game packs not imported.</p>');
             res.write(renderPageTail());
             res.end();

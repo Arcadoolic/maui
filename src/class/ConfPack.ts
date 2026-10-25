@@ -36,3 +36,13 @@ export function getMissingConfPackFiles(paths: ConfPackPaths): string[] {
 export function isGamePack(filename: string): boolean {
     return filename !== CONF_PACK_FILENAME;
 }
+
+/**
+ * Which version of the configuration pack a repository serves, from its companion manifest (the
+ * zip's size and date): null when the companion doesn't say. Kept once the pack is installed, so
+ * that a game pack import only installs it again when the repository's changed.
+ */
+export function confPackVersion(companion: unknown): string | null {
+    const zip = (companion as {zip?: {size?: unknown; mtime?: unknown}} | null)?.zip;
+    return typeof zip?.size === 'number' && typeof zip?.mtime === 'number' ? `${zip.size}:${zip.mtime}` : null;
+}
