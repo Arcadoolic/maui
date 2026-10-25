@@ -1760,13 +1760,26 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             transition: outline-color 0.15s ease;
         }
         /* Safari draws a search field its own way (small, rounded) and ignores the padding above. */
-        input[type="search"] {
+        input[type="search"], select {
             -webkit-appearance: none;
             appearance: none;
             border: 1px solid #767676;
-            border-radius: 2px;
+            border-radius: 4px;
             background-color: #ffffff;
             color: #000000;
+        }
+        /* Without its native look a select needs its own arrow. */
+        select {
+            padding-right: 32px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23333' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 14px;
+            cursor: pointer;
+        }
+        select:disabled {
+            cursor: default;
+            opacity: 0.6;
         }
         input:focus, select:focus {
             outline: 2px solid var(--accent);
@@ -2537,10 +2550,68 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .table-search-filters {
             display: flex;
             flex-wrap: wrap;
-            gap: 0 24px;
+            align-items: center;
+            gap: 8px;
+            margin: 10px 0 8px;
         }
-        .table-search-filters .checkbox-row {
-            margin-top: 8px;
+        /* A filter: a checkbox drawn as a pill, lit up while ticked. */
+        .filter-chip {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border: 1px solid #555555;
+            border-radius: 999px;
+            font-size: 0.9em;
+            color: #cccccc;
+            cursor: pointer;
+            user-select: none;
+        }
+        .filter-chip input {
+            position: absolute;
+            opacity: 0;
+            width: 1px;
+            height: 1px;
+            margin: 0;
+        }
+        .filter-chip:has(input:checked) {
+            border-color: var(--accent);
+            background-color: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+        }
+        .filter-chip:has(input:focus-visible) {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        .filter-chip-count {
+            margin-left: 4px;
+            color: #888888;
+        }
+        .table-search-summary {
+            margin-left: auto;
+            font-size: 0.9em;
+            color: #cccccc;
+        }
+        /* A sortable column's header: the header's own text, its arrow once sorted by it. */
+        button.sort-header {
+            padding: 0;
+            margin: 0;
+            color: inherit;
+            font-weight: inherit;
+            background: none;
+            border: none;
+            cursor: pointer;
+        }
+        button.sort-header:hover {
+            text-decoration: underline;
+        }
+        th[aria-sort="ascending"] > button.sort-header::after {
+            content: " ▲";
+            font-size: 0.75em;
+        }
+        th[aria-sort="descending"] > button.sort-header::after {
+            content: " ▼";
+            font-size: 0.75em;
         }
         .table-pager {
             display: flex;
@@ -7216,12 +7287,12 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 </div>
                 <div class="table-search-filters">
                     ${filters.map(filter => `
-                    <label class="checkbox-row">
+                    <label class="filter-chip">
                         <input type="checkbox" id="${filter.id}">
-                        <span>${escapeHtml(filter.label)} (${filter.count})</span>
+                        <span>${escapeHtml(filter.label)} <span class="filter-chip-count">${filter.count}</span></span>
                     </label>`).join('')}
+                    <span class="table-search-summary" id="favoritesSearchCount" aria-live="polite"></span>
                 </div>
-                <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
             </div>
             <div class="table-wrap">
                 <table class="favorites-table fixed-columns" id="favoritesTable">
@@ -7234,10 +7305,10 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     </colgroup>
                     <thead>
                         <tr>
-                            <th>Name</th>
-                            <th>RomName</th>
+                            <th aria-sort="ascending"><button type="button" class="sort-header" data-sort="name">Name</button></th>
+                            <th><button type="button" class="sort-header" data-sort="romName">RomName</button></th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
-                            <th class="center" title="Times the game was launched">Plays</th>
+                            <th class="center" title="Times the game was launched"><button type="button" class="sort-header" data-sort="playCount">Plays</button></th>
                             <th class="center">Vote / actions</th>
                         </tr>
                     </thead>
@@ -7286,7 +7357,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 function keepView() {
                     try {
                         sessionStorage.setItem(VIEW_KEY, JSON.stringify({
-                            search: search.value, category: category ? category.value : '*', page: page,
+                            search: search.value, category: category ? category.value : '*', page: page, sort: sort,
                             filters: filters.map(function (filter) { return filter.box.id; })
                                 .filter(function (id) { return document.getElementById(id).checked; }),
                         }));
@@ -7362,6 +7433,38 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         return (index < 2 ? '<td>' : '<td class="center">') + cell + '</td>';
                     }).join('') + '</tr>';
                 }
+                // Sorted by a column header: the name (the server's order) and the rom name A to Z
+                // first, the plays most first; a second click reverses it.
+                var sort = {key: 'name', reversed: false};
+                var headers = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable .sort-header'));
+                games.forEach(function (game, index) { game.order = index; });
+                var SORTS = {
+                    name: function (a, b) { return a.order - b.order; },
+                    romName: function (a, b) { return a.romName.localeCompare(b.romName); },
+                    playCount: function (a, b) { return b.playCount - a.playCount || a.order - b.order; },
+                };
+                function sorted(list) {
+                    return list.slice().sort(function (a, b) {
+                        return (sort.reversed ? -1 : 1) * SORTS[sort.key](a, b);
+                    });
+                }
+                function showSort() {
+                    headers.forEach(function (header) {
+                        var on = header.dataset.sort === sort.key;
+                        var ascending = (sort.key === 'playCount') === sort.reversed;
+                        if (on) {
+                            header.parentNode.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
+                        } else {
+                            header.parentNode.removeAttribute('aria-sort');
+                        }
+                    });
+                }
+                headers.forEach(function (header) {
+                    header.addEventListener('click', function () {
+                        sort = {key: header.dataset.sort, reversed: sort.key === header.dataset.sort && !sort.reversed};
+                        applySearch();
+                    });
+                });
                 function filtering() {
                     return search.value.trim() !== '' || (category && category.value !== '*')
                         || filters.some(function (filter) { return filter.box.checked; });
@@ -7370,11 +7473,12 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     var terms = fold(search.value).split(/\\s+/).filter(Boolean);
                     var chosen = category ? category.value : '*';
                     var ticked = filters.filter(function (filter) { return filter.box.checked; });
-                    var matches = games.filter(function (game) {
+                    var matches = sorted(games.filter(function (game) {
                         return terms.every(function (term) { return game.search.indexOf(term) >= 0; })
                             && (chosen === '*' || game.category === chosen)
                             && ticked.every(function (filter) { return filter.keep(game); });
-                    });
+                    }));
+                    showSort();
                     var size = Number(pageSize.value);
                     var pages = Math.max(1, Math.ceil(matches.length / size));
                     page = Math.min(page, pages - 1);
@@ -7382,10 +7486,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     pageInfo.textContent = 'Page ' + (page + 1) + ' / ' + pages;
                     prev.disabled = page === 0;
                     next.disabled = page >= pages - 1;
-                    count.hidden = !filtering();
-                    count.textContent = matches.length
-                        ? matches.length + ' favorite(s) found out of ' + games.length + '.'
-                        : 'No favorite matches this search.';
+                    count.textContent = !filtering() ? ''
+                        : matches.length ? matches.length + ' of ' + games.length + ' favorites'
+                        : 'No favorite matches this search';
                 }
                 // A new search, category or page size starts over from the first page.
                 function applySearch() {
@@ -7413,6 +7516,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             filter.box.checked = Array.isArray(view.filters) && view.filters.indexOf(filter.box.id) >= 0;
                         });
                         page = Number(view.page) || 0;
+                        if (view.sort && SORTS[view.sort.key]) {
+                            sort = {key: view.sort.key, reversed: !!view.sort.reversed};
+                        }
                     }
                 } catch (error) { /* storage blocked or unreadable: the list just starts over */ }
                 render();
