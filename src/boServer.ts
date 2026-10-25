@@ -1759,6 +1759,15 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             margin-top: 4px;
             transition: outline-color 0.15s ease;
         }
+        /* Safari draws a search field its own way (small, rounded) and ignores the padding above. */
+        input[type="search"] {
+            -webkit-appearance: none;
+            appearance: none;
+            border: 1px solid #767676;
+            border-radius: 2px;
+            background-color: #ffffff;
+            color: #000000;
+        }
         input:focus, select:focus {
             outline: 2px solid var(--accent);
             outline-offset: -1px;
@@ -2053,7 +2062,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             min-width: 340px;
         }
         .col-plays { width: 64px; }
-        .col-vote { width: 140px; }
+        /* The vote buttons, then the row's own actions (see .row-actions). */
+        .col-actions { width: 236px; }
+        .col-actions-restore { width: 196px; }
         .col-action { width: 56px; }
         table.favorites-table th.center,
         table.favorites-table td.center {
@@ -2330,6 +2341,28 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .vote-buttons {
             display: inline-flex;
             gap: 6px;
+        }
+        /* A games list row's buttons in one cell: its vote, a divider, then show / remove / restore. */
+        .row-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .row-actions form {
+            margin: 0;
+        }
+        .row-actions .vote-buttons {
+            gap: 4px;
+            padding-right: 8px;
+            border-right: 1px solid #444444;
+        }
+        /* Compact with a mouse; touch screens keep their finger-sized ones (pointer: coarse below). */
+        @media (pointer: fine) {
+            table.favorites-table .row-actions form > button.icon-button[type="submit"] {
+                min-width: 28px;
+                min-height: 28px;
+                padding: 5px;
+            }
         }
         /* The three vote icons of a row: unlike the single Remove/Restore button above (styled as a
            form's :last-child), each needs the icon-button look. The selected one is lit up in its
@@ -7100,13 +7133,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             <td>${renderRomNameCell(row)}</td>
             <td>${escapeHtml(removedOn)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
-            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
-            <td class="center">
+            <td class="center"><div class="row-actions">
+                ${renderVoteCell(favoritesInfo.stats?.get(row.romName))}
                 <form method="post" action="/favorites/restore">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
                     ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
                 </form>
-            </td>
+            </div></td>
         </tr>`;
     }).join('');
     const removedCard = `
@@ -7123,8 +7156,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         <col class="col-romname">
                         <col class="col-date">
                         <col class="col-plays">
-                        <col class="col-vote">
-                        <col class="col-action">
+                        <col class="col-actions-restore">
                     </colgroup>
                     <thead>
                         <tr>
@@ -7132,8 +7164,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             <th>RomName</th>
                             <th>Removed on</th>
                             <th class="center" title="Times the game was launched">Plays</th>
-                            <th class="center">Vote</th>
-                            <th class="center"></th>
+                            <th class="center">Vote / restore</th>
                         </tr>
                     </thead>
                     <tbody>${removedRows}</tbody>
@@ -7198,9 +7229,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         <col class="col-romname">
                         <col class="col-assets">
                         <col class="col-plays">
-                        <col class="col-vote">
-                        <col class="col-action">
-                        <col class="col-action">
+                        <col class="col-actions">
                     </colgroup>
                     <thead>
                         <tr>
@@ -7208,9 +7237,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             <th>RomName</th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
                             <th class="center" title="Times the game was launched">Plays</th>
-                            <th class="center">Vote</th>
-                            <th class="center"></th>
-                            <th class="center"></th>
+                            <th class="center">Vote / actions</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -7326,9 +7353,9 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             return fill(templates.assets[kind][found ? 1 : 0], rom);
                         }).join('') + '</span>',
                         game.playCount ? String(game.playCount) : '<em>-</em>',
-                        game.vote === null ? '<em>-</em>' : fill(templates.votes[game.vote], rom),
-                        fill(templates.show, rom),
-                        fill(templates.remove, rom),
+                        '<div class="row-actions">'
+                            + (game.vote === null ? '<em>-</em>' : fill(templates.votes[game.vote], rom))
+                            + fill(templates.show, rom) + fill(templates.remove, rom) + '</div>',
                     ];
                     return '<tr>' + cells.map(function (cell, index) {
                         return (index < 2 ? '<td>' : '<td class="center">') + cell + '</td>';
