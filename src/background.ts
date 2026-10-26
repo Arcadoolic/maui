@@ -17,7 +17,7 @@ import {readSetupFacts} from '@/class/SetupFacts';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
-import {FRONT_UPDATE_GLOBAL, UPDATE_PROGRESS_CHANNEL} from '@/class/FrontUpdateBridge';
+import {FRONT_UPDATE_GLOBAL, UPDATE_AVAILABLE_CHANNEL, UPDATE_PROGRESS_CHANNEL} from '@/class/FrontUpdateBridge';
 import {FrontUpdate, simulateInstall} from '@/class/FrontUpdate';
 import {findInstallAsset, installAndRestart, isSelfUpdateCapable} from '@/class/SelfUpdate';
 import {
@@ -366,6 +366,16 @@ app.on('ready', async () => {
         },
     });
     (global as Record<string, unknown>)[FRONT_UPDATE_GLOBAL] = frontUpdate;
+    // A version to offer found by a check (the first one is 30 s after the start): the front offers
+    // it at once (Home.vue), each version once in a run, rather than at its next wake from idle.
+    let toldOffer: string | null = null;
+    bo.updates.onCheck(() => {
+        const version = frontUpdate.offer();
+        if (version && version !== toldOffer && win && !win.isDestroyed()) {
+            toldOffer = version;
+            win.webContents.send(UPDATE_AVAILABLE_CHANNEL);
+        }
+    });
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;

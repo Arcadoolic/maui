@@ -22,7 +22,7 @@
 
         <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
 
-        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer"></update-modal>
+        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer" @expire="onUpdateExpire"></update-modal>
 
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
@@ -130,7 +130,7 @@ import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
 import {
-    FRONT_UPDATE_GLOBAL, UPDATE_PROGRESS_CHANNEL, type FrontUpdateControl, type UpdateStep,
+    FRONT_UPDATE_GLOBAL, UPDATE_AVAILABLE_CHANNEL, UPDATE_PROGRESS_CHANNEL, type FrontUpdateControl, type UpdateStep,
 } from '@/class/FrontUpdateBridge';
 import UpdateModal from '@/components/UpdateModal.vue';
 import UpdateProgress from '@/components/UpdateProgress.vue';
@@ -276,13 +276,47 @@ function frontUpdate(): FrontUpdateControl | undefined {
     }
 }
 
+// The offer on the screen came at the start of MAUI (onUpdateAvailable()) rather than with the key
+// that woke the cabinet: nobody may be there to answer it.
+let updateOfferAtStart = false;
+
 /** On waking up from idle: the newer version of MAUI, when the BO lets the front install it. */
 function offerUpdate() {
+    updateOfferAtStart = false;
     try {
         updateOffer.value = frontUpdate()?.offer() ?? null;
     } catch (err) {
         Log.warn('[Home] Update offer not read: ' + (err instanceof Error ? err.message : String(err)));
     }
+}
+
+/**
+ * A check found a version to offer (UPDATE_AVAILABLE_CHANNEL, mostly 30 s after the start): offered
+ * at once, unless a game, a question or sleep is in the way, in which case the next wake does.
+ */
+const onUpdateAvailable = () => {
+    if (updateOffer.value || updating.value || gameRunning || isBoMameRunning() || asleep.value || showAddUser.value
+        || whoPlayed.value || voteGame.value || backOfficeUrl.value) {
+        return;
+    }
+    try {
+        const version = frontUpdate()?.offer() ?? null;
+        if (version) {
+            updateOfferAtStart = true;
+            updateOffer.value = version;
+        }
+    } catch (err) {
+        Log.warn('[Home] Update offer not read: ' + (err instanceof Error ? err.message : String(err)));
+    }
+};
+
+/** Nobody answered: a no after a wake, nothing at the start (asked again at the next wake). */
+function onUpdateExpire() {
+    if (updateOfferAtStart) {
+        updateOffer.value = null;
+        return;
+    }
+    onUpdateAnswer(false);
 }
 
 function onUpdateAnswer(install: boolean) {
@@ -1125,6 +1159,7 @@ onUnmounted(() => {
     ipcRenderer.off(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);
     ipcRenderer.off(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
     ipcRenderer.off(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
+    ipcRenderer.off(UPDATE_AVAILABLE_CHANNEL, onUpdateAvailable);
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
@@ -1263,6 +1298,7 @@ if (!getIsInit()) {
         ipcRenderer.on(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
         uiSounds.setSettings(uiSoundSettings(getConfiguration()));
         ipcRenderer.on(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
+        ipcRenderer.on(UPDATE_AVAILABLE_CHANNEL, onUpdateAvailable);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();

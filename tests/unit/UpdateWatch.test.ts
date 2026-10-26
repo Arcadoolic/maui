@@ -30,6 +30,29 @@ describe('newestStableAbove', () => {
 });
 
 describe('UpdateWatch', () => {
+    it('tells after each check GitHub answered, not after a failed one', async () => {
+        let fails = false;
+        const watch = new UpdateWatch('2.14.0', async () => {
+            if (fails) {
+                throw new Error('offline');
+            }
+            return [release('2.15.0')];
+        });
+        let told = 0;
+        watch.onCheck(() => {
+            told++;
+        });
+
+        await watch.check();
+        expect(told).toBe(1);
+        expect(watch.available()).toBe('2.15.0');
+
+        fails = true;
+        await watch.check();
+        expect(told).toBe(1);
+        expect(watch.available()).toBe('2.15.0');
+    });
+
     it('only gives a version this machine can install', async () => {
         const withFiles = (tag: string, assets: string[], publishedAt: string) => ({
             tag_name: tag, prerelease: true, published_at: publishedAt,

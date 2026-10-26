@@ -27,6 +27,7 @@ async function fetchReleases(): ReturnType<ReleasesFetcher> {
 export class UpdateWatch {
     private releases: WatchedRelease[] = [];
     private timers: ReturnType<typeof setTimeout>[] = [];
+    private readonly listeners: (() => void)[] = [];
 
     /**
      * `canInstall`: whether this machine can install a version from its files' names (a Windows
@@ -48,13 +49,20 @@ export class UpdateWatch {
         this.timers.push(first, every);
     }
 
+    /** Called after each check GitHub answered: the front's offer at the start (background.ts). */
+    public onCheck(listener: () => void): void {
+        this.listeners.push(listener);
+    }
+
     /** A failure keeps what was known. Never throws. */
     public async check(): Promise<void> {
         try {
             this.releases = await this.fetcher();
         } catch {
             // Out of reach for now: tried again at the next check.
+            return;
         }
+        this.listeners.forEach(listener => listener());
     }
 
     /**
