@@ -54,6 +54,19 @@ export default class HiscoreService {
     }
 
     /**
+     * The best score an active player of this cabinet holds on `game`, 0 when none: compared before
+     * and after a game for the front's fanfare (UiSounds.ts champion).
+     */
+    public async loadCabinetBest(game: Game): Promise<number> {
+        const best = await Hiscore.findOne({
+            where: {id_game: game.id_game},
+            include: [{model: User, required: true, where: {active: true}}],
+            order: [['score', 'DESC']],
+        });
+        return best?.score ?? 0;
+    }
+
+    /**
      * Save hiscores from one or multiples Game
      * TODO : Better error handling
      * @param games

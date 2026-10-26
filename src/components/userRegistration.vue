@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-    import {ref, computed} from 'vue';
+    import {ref, computed, watch} from 'vue';
     import {useControllable} from '@/composables/useControllable';
     import {MAUI_KEYS} from '@/class/MauiControls';
     import {controlKey} from '@/class/MauiControlsRuntime';
@@ -71,6 +71,7 @@
     import {createOnlineClient} from '@/class/OnlineClient';
     import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
     import {newPseudo3Error} from '@/class/Pseudo3';
+    import {uiSounds} from '@/class/UiSounds';
     import type {OnlinePlayer} from '@/class/MauiApiClient';
     import Modal from '@/components/Modal.vue';
     import ControlIcon from '@/components/ControlIcon.vue';
@@ -95,6 +96,14 @@
     const returning = ref(false);
 
     const usernameString = computed(() => username.value[0] + username.value[1] + username.value[2]);
+
+    // The player is in: created (its PIN shown in ONLINE mode, at once otherwise) or linked here.
+    // Not again when the PIN shown is acknowledged.
+    watch(step, (next, previous) => {
+        if (next === 'pin_shown' || (next === 'success' && previous !== 'pin_shown')) {
+            uiSounds.play('newPlayer');
+        }
+    });
 
     function cycle(value: number, delta: number, size: number): number {
         return (value + delta + size) % size;

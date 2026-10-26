@@ -119,7 +119,7 @@ import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
-import {uiSounds, uiSoundSettings} from '@/class/UiSounds';
+import {uiSounds, uiSoundSettings, voteSound} from '@/class/UiSounds';
 import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
@@ -233,6 +233,8 @@ const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
         if (isAsleep) {
             stopRoll();
             uiSounds.release();
+        } else {
+            uiSounds.play('wake');
         }
         if (screenOff) {
             // A keyboard key wakes the screen by itself, a gamepad button only through this.
@@ -288,6 +290,9 @@ function onUpdateAnswer(install: boolean) {
 }
 
 const onUpdateStep = (_event: unknown, step: UpdateStep) => {
+    if (step.step === 'restart') {
+        uiSounds.play('updated');
+    }
     if (updating.value) {
         updating.value = {...updating.value, step};
     }
@@ -666,12 +671,19 @@ function startGame() {
                 uiSounds.resume();
                 uiSounds.play('back');
                 const pending = endScoreCapture(game.romName);
-                hiService.saveHiscores(game).then(async () => {
+                // The cabinet's best score on the game before and after it: a fanfare when it went up.
+                hiService.loadCabinetBest(game).then(async (bestBefore) => {
+                    await hiService.saveHiscores(game);
+                    return bestBefore;
+                }).then(async (bestBefore) => {
                     emitter.emit('game-quit');
                     if (favoritesChangedDuringGame) {
                         await syncFavorites();
                     }
                     await onScoresChanged();
+                    if (await hiService.loadCabinetBest(game) > bestBefore) {
+                        await uiSounds.playAndWait('champion');
+                    }
                     await askWhoPlayed(await pending);
                     return askVote(game);
                 }).catch((err) => {
@@ -711,6 +723,10 @@ async function askVote(game: Game) {
 async function onVote(vote: Vote, starred: boolean) {
     const game = voteGame.value;
     voteGame.value = null;
+    const sound = game && voteSound(vote, starred);
+    if (sound) {
+        uiSounds.play(sound);
+    }
     if (!game || vote === VOTE_NEUTRAL) {
         // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again.
         return;
@@ -973,9 +989,11 @@ const hotkeys = new HotkeyEngine(getHotkeys(), {
         loaderDuration.value = hotkey.holdMs / 1000;
         loaderTitle.value = HOTKEY_HOLD_TITLES[hotkey.action];
         showLoader.value = true;
+        uiSounds.startCharge(hotkey.holdMs);
     },
     holdEnd: () => {
         showLoader.value = false;
+        uiSounds.stopCharge();
     },
 });
 const stopHotkeysListener = onControlsChanged(() => hotkeys.setHotkeys(getHotkeys()));
