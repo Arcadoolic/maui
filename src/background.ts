@@ -371,10 +371,19 @@ app.on('ready', async () => {
     await bo.databaseReady;
     onlineSession = bo.online;
     // Games started and ended by the front (Home.vue): their new scores go to MAUI-API.
-    const playStarted: PlayNotifier = (romName, reportDir) => bo.scores.started(romName, reportDir ?? null);
+    // While a game is played, ONLINE only sends its heartbeat (OnlineSession.pause()); once it
+    // ends, the game's scores are read, then sent, and the leaderboards refreshed, its own first.
+    const playStarted: PlayNotifier = (romName, reportDir) => {
+        bo.online.pause();
+        return bo.scores.started(romName, reportDir ?? null);
+    };
     const playEnded: PlayEndNotifier = async (romName) => {
-        const ask = await bo.scores.ended(romName);
-        return ask ? JSON.stringify(ask) : null;
+        try {
+            const ask = await bo.scores.ended(romName);
+            return ask ? JSON.stringify(ask) : null;
+        } finally {
+            bo.online.resume(romName);
+        }
     };
     // The player picked on the cabinet for a score the game wrote without a name (WhoPlayedModal.vue).
     const attributeScore: ScoreAttributor = (romName, score, playerId) => bo.scores.attribute(romName, score, playerId);

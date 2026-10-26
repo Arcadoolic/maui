@@ -1,11 +1,11 @@
 <template>
     <div class="champions">
-        <div class="championsContainer" :class="{astride: astride}" v-if="champions.length">
-            <div v-for="(champion, index) of champions" :key="champion.key" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%'}">
+        <TransitionGroup tag="div" name="champion" class="championsContainer" :class="{astride, animated}" :css="animated" v-if="champions.length">
+            <div v-for="(champion, index) of champions" :key="champion.player" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%'}">
                 <img v-if="champion.avatar" :src="champion.avatar" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
                 <img v-else src="../assets/defaultPlayer.png" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
             </div>
-        </div>
+        </TransitionGroup>
         <img v-else class="default" src="../assets/hiscores.svg" alt="">
     </div>
 </template>
@@ -28,6 +28,12 @@ const loading = ref(true);
 const astride = computed(() => champions.value.length < 3);
 const edgeOffset = computed(() => astride.value ? 10 : 0);
 let stopListening: (() => void) | null = null;
+// New scores (a game was quit, MAUI-API's leaderboards changed): the podium moves in view, a new
+// player popping in, the others sliding to their new place, the one pushed off fading out. Not
+// when the list scrolls to another game, whose podium simply replaces this one.
+const ANIMATION_MS = 1000;
+const animated = ref(false);
+let stopAnimating: ReturnType<typeof setTimeout> | undefined;
 
 async function onGameChange() {
     loading.value = true;
@@ -35,14 +41,23 @@ async function onGameChange() {
     loading.value = false;
 }
 
+async function onScoresChange() {
+    animated.value = true;
+    clearTimeout(stopAnimating);
+    await onGameChange();
+    stopAnimating = setTimeout(() => {
+        animated.value = false;
+    }, ANIMATION_MS);
+}
+
 watch(() => props.game, onGameChange);
 
 onMounted(async () => {
     await onGameChange();
 
-    emitter.on('game-quit', onGameChange);
+    emitter.on('game-quit', onScoresChange);
     emitter.on('hiscores-loaded', onGameChange);
-    stopListening = onLeaderboardsChanged(onGameChange);
+    stopListening = onLeaderboardsChanged(onScoresChange);
 });
 
 // `emitter` is a module-level mitt singleton, so it outlives every component instance that
@@ -51,9 +66,10 @@ onMounted(async () => {
 // never called `EventBus.$off` either, but there the bus was a Vue instance torn down with the
 // app; here nothing ever removes the handler but this.
 onUnmounted(() => {
-    emitter.off('game-quit', onGameChange);
+    emitter.off('game-quit', onScoresChange);
     emitter.off('hiscores-loaded', onGameChange);
     stopListening?.();
+    clearTimeout(stopAnimating);
 });
 </script>
 
@@ -78,6 +94,37 @@ onUnmounted(() => {
 
     .astride .champion {
         transform: translateX(50%);
+    }
+
+    /* New scores (onScoresChange()): a player keeps their element, keyed by player, so a new
+       place only changes `right`, which slides. The pop and the fade act on the picture: the
+       element's own transform places it astride the marquee's end. */
+    .animated .champion {
+        transition: right 0.6s ease-in-out;
+    }
+
+    .champion-enter-active img {
+        animation: champion-pop 0.6s ease-out both;
+    }
+
+    .champion-leave-active {
+        transition: opacity 0.4s;
+    }
+
+    .champion-leave-to {
+        opacity: 0;
+    }
+
+    @keyframes champion-pop {
+        0% {
+            transform: scale(0);
+        }
+        70% {
+            transform: scale(1.2);
+        }
+        100% {
+            transform: scale(1);
+        }
     }
 
     .champion:nth-child(1) {

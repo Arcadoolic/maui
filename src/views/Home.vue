@@ -66,7 +66,7 @@
                     :mouse="mouseNav" @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
 
         <transition name="slide">
-            <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
+            <Hiscores :game="selectedGame" :fresh="revealedScores" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
         <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
@@ -94,7 +94,8 @@ import {
     CarouselCategory, ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
 import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
-import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {loadBeatThisGames, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {freshScores as newScoreKeys} from '@/class/ScoreReveal';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
@@ -156,7 +157,19 @@ const timeouts: {
     hold?: number,
     holdRepeat?: number,
     roll?: number,
+    hideReveal?: number,
 } = {};
+
+// The scores a game just played added to its leaderboard (ScoreReveal.ts): the hiscores panel
+// opens a few seconds to show them, once the questions after the game are answered and while the
+// list is still on that game. The leaderboard as it was at the launch, and until when (after the
+// game ended) its changes are still looked for: ONLINE ones come back from MAUI-API a little later.
+const REVEAL_SHOWN_MS = 6000;
+const REVEAL_WATCH_MS = 2 * 60_000;
+let revealWatch: {game: Game; before: string[]; until: number} | null = null;
+let pendingReveal: {romName: string; keys: string[]} | null = null;
+// The rows Hiscores.vue draws as new (Hiscores.vue's `fresh`).
+const revealedScores = ref<string[]>([]);
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
 // in Lite mode.
@@ -651,6 +664,7 @@ function startGame() {
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     // The capture daemon's directory first: the game's report on itself goes with its scores.
     const capture = mameService.prepareCapture(game.romName);
+    void watchScoreReveal(game);
     // The launch sound, then the sound card let go for MAME (UiSounds.ts).
     void uiSounds.playThenSuspend('launch').then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
         .then(() => mameService.startGame(game.romName, capture)).then(
@@ -663,6 +677,8 @@ function startGame() {
             gameProcess.on('error', () => {
                 uiSounds.resume();
                 unlockFront();
+                // ONLINE waits for the end of the game (OnlineSession.pause()): it never came.
+                void endScoreCapture(game.romName);
             });
             gameProcess.on('close', () => {
                 // Before the questions asked after a game (who played, vote), answered with the
@@ -685,7 +701,8 @@ function startGame() {
                         await uiSounds.playAndWait('champion');
                     }
                     await askWhoPlayed(await pending);
-                    return askVote(game);
+                    await askVote(game);
+                    return checkScoreReveal();
                 }).catch((err) => {
                     Log.error('[Home] Error after game ' + game.id_game + ' quit.');
                     Log.error(err);
@@ -695,10 +712,84 @@ function startGame() {
         (err) => {
             uiSounds.resume();
             unlockFront();
+            void endScoreCapture(game.romName);
             Log.error('[Home] Error on game ' + game.id_game + ' launch.');
             Log.error(err);
         },
     );
+}
+
+/** The leaderboard of a game being launched, to tell its new scores once it is quit. Never throws. */
+async function watchScoreReveal(game: Game) {
+    revealWatch = null;
+    pendingReveal = null;
+    if (!game.hi) {
+        return;
+    }
+    try {
+        const before = (await loadHiscores(game)).map(row => row.key);
+        revealWatch = {game, before, until: Infinity};
+    } catch (err) {
+        Log.warn('[Home] Leaderboard not read before the game: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
+/**
+ * After a game, and each time the leaderboards change for a little while after it: the scores the
+ * game added are shown (revealScores()). Never throws.
+ */
+async function checkScoreReveal() {
+    const watch = revealWatch;
+    if (!watch || gameRunning) {
+        return;
+    }
+    if (watch.until === Infinity) {
+        watch.until = Date.now() + REVEAL_WATCH_MS;
+    } else if (Date.now() > watch.until) {
+        revealWatch = null;
+        return;
+    }
+    try {
+        const rows = await loadHiscores(watch.game);
+        const keys = newScoreKeys(watch.before, rows);
+        if (!keys.length) {
+            return;
+        }
+        // Shown once: a later change is compared to what is on the board now.
+        watch.before = rows.map(row => row.key);
+        pendingReveal = {romName: watch.game.romName, keys: [...(pendingReveal?.keys ?? []), ...keys]};
+        revealScores();
+    } catch (err) {
+        Log.warn('[Home] Leaderboard not read after the game: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
+/**
+ * Opens the hiscores panel REVEAL_SHOWN_MS with the new scores drawn as such, then closes it again
+ * (unless it was open already). Waits for the questions after the game and any other modal; given
+ * up when the list moved to another game meanwhile.
+ */
+function revealScores() {
+    const reveal = pendingReveal;
+    if (!reveal || gameRunning || asleep.value || showAddUser.value || whoPlayed.value || voteGame.value
+        || updateOffer.value || updating.value || backOfficeUrl.value) {
+        return;
+    }
+    pendingReveal = null;
+    if (selectedGame.value?.romName !== reveal.romName) {
+        return;
+    }
+    const wasShown = showHiscores.value && !timeouts.hideReveal;
+    revealedScores.value = reveal.keys;
+    showHiscores.value = true;
+    clearTimeout(timeouts.hideReveal);
+    timeouts.hideReveal = window.setTimeout(() => {
+        timeouts.hideReveal = undefined;
+        revealedScores.value = [];
+        if (!wasShown) {
+            showHiscores.value = false;
+        }
+    }, REVEAL_SHOWN_MS);
 }
 
 /**
@@ -1037,6 +1128,7 @@ onUnmounted(() => {
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
+    clearTimeout(timeouts.hideReveal);
     idleWatch.stop();
     if (gameRunning) {
         unlockFront();
@@ -1051,7 +1143,10 @@ watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!upda
     if (modal) {
         stopHold();
         hotkeys.reset();
+        return;
     }
+    // New scores waiting for the questions after the game to be answered.
+    revealScores();
 });
 watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
     !!backOfficeUrl.value, noGames.value], syncIdleBlock);
@@ -1157,7 +1252,11 @@ if (!getIsInit()) {
         registerKeyMapping();
         syncIdleBlock();
         idleWatch.start();
-        stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
+        stopLeaderboardsListener = onLeaderboardsChanged(() => {
+            void onScoresChanged();
+            // MAUI-API's answer to the game just played: its new scores, if any.
+            void checkScoreReveal();
+        });
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
         ipcRenderer.on(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
         ipcRenderer.on(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);

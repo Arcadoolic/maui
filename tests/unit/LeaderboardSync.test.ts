@@ -35,6 +35,27 @@ describe('LeaderboardSync', () => {
         expect(listener).toHaveBeenCalledTimes(1);
     });
 
+    it('asks the game just played first, on its own, and tells the front at once', async () => {
+        const romnames = ['dkong', 'galaga', 'mslug'];
+        const h = harness(romnames, batch => ({kind: 'ok', value: {notModified: false, etag: null, value: batch.map(r => board(r))}}));
+        const calls: number[] = [];
+        h.sync.onChange(() => calls.push(h.getLeaderboards.mock.calls.length));
+
+        await h.sync.refresh(h.client, 'mslug');
+
+        expect(h.getLeaderboards.mock.calls.map(call => call[0])).toEqual([['mslug'], romnames]);
+        // Told after the game played, before the others were asked, then once more at the end.
+        expect(calls).toEqual([1, 2]);
+    });
+
+    it('asks no game first when the one played is not in the list', async () => {
+        const h = harness(['dkong'], batch => ({kind: 'ok', value: {notModified: false, etag: null, value: batch.map(r => board(r))}}));
+
+        await h.sync.refresh(h.client, 'puckman');
+
+        expect(h.getLeaderboards.mock.calls.map(call => call[0])).toEqual([['dkong']]);
+    });
+
     it('sends the ETag back, and a 304 changes nothing', async () => {
         const h = harness(['dkong'], (batch, etag) => etag === '"v1"'
             ? {kind: 'ok', value: {notModified: true}}

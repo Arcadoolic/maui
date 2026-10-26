@@ -3,7 +3,7 @@
         <p v-if="loading">Loading hiscores...</p>
         <p v-else-if="!scores.length" class="no-hiscores">No Hiscores Yet !</p>
         <template v-else>
-            <div class="hiscore" :class="{first: index === 0}" v-for="(score, index) of scores" :key="score.key">
+            <div class="hiscore" :class="{first: index === 0, fresh: fresh?.includes(score.key)}" v-for="(score, index) of scores" :key="score.key">
                 <div class="icon">
                     <img :src="score.avatar" v-if="score.avatar" alt="">
                     <img v-else src="../assets/defaultPlayer.png" alt="">
@@ -26,7 +26,8 @@ import Game from '@/model/Game.model';
 import {emitter} from '@/emitter';
 import {loadHiscores, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
 
-const props = defineProps<{game: Game}>();
+// `fresh`: the rows a game just played added (Home.vue's score reveal), drawn arriving.
+const props = defineProps<{game: Game; fresh?: string[]}>();
 
 // 9 rows (LeaderboardSource.ts): the best one is drawn on its own above the box (.first), the rest
 // fill the 3-column grid below it. Local scores in LOCAL mode, MAUI-API's in ONLINE mode.
@@ -168,6 +169,34 @@ onUnmounted(() => {
     .hiscore.first .info .score_name {
         font-size: 1.8vw;
         line-height: 2.5vw;
+    }
+
+    /* A score the game just played added (Home.vue's score reveal): its avatar pops in, then the
+       row blinks three times. On the inner elements: .first is placed with a transform of its own. */
+    .hiscore.fresh .icon img {
+        animation: score-pop 0.7s ease-out both;
+    }
+
+    .hiscore.fresh .info {
+        animation: score-blink 0.5s steps(1) 0.7s 6;
+    }
+
+    @keyframes score-pop {
+        0% {
+            transform: scale(0);
+        }
+        70% {
+            transform: scale(1.25);
+        }
+        100% {
+            transform: scale(1);
+        }
+    }
+
+    @keyframes score-blink {
+        50% {
+            opacity: 0.15;
+        }
     }
 
 </style>
