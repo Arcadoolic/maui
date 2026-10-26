@@ -43,7 +43,9 @@ import {applyDisplayMode} from '@/class/DisplayMode';
 import {applyVideoOutput, currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
 import {applyAudioOutput, listAudioDevices, resolveAudioOutput} from '@/class/AudioOutput';
 import {resolveUiMode} from '@/class/UiMode';
+import {setUpMainLog} from '@/class/MainLog';
 
+setUpMainLog();
 remoteMain.initialize();
 
 const isDevelopment = process.env.NODE_ENV !== 'production';

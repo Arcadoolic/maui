@@ -9,7 +9,7 @@ import GameService from '@/class/GameService.class';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import Hiscore from '@/model/Hiscore.model';
-import * as Log from 'electron-log';
+import Log from 'electron-log';
 import {runMigrations} from '@/class/Migrations';
 
 export default class Database {

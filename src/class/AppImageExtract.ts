@@ -1,5 +1,5 @@
 import {spawn} from 'child_process';
-import {readdir} from 'fs/promises';
+import {plainFs} from '@/class/PlainFs';
 
 // Extracting a downloaded AppImage (`--appimage-extract`, SelfUpdate.ts) without blocking the main
 // process: thousands of files, a minute or more on a Raspberry Pi, during which neither the BO nor
@@ -14,7 +14,8 @@ const EXTRACT_REPORT_FILES = 50;
  */
 export async function countEntries(path: string): Promise<number> {
     try {
-        return (await readdir(path, {recursive: true})).length;
+        // Not Electron's fs: it would count the files packed in app.asar (PlainFs.ts).
+        return (await plainFs.promises.readdir(path, {recursive: true})).length;
     } catch {
         return 0;
     }

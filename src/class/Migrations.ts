@@ -19,10 +19,9 @@ export function getMigrationsPath(): string {
 }
 
 /**
- * Where the migrations report to. Passed in rather than imported: boServer.ts (main process) imports
- * this file, and the main process must not load electron-log on its own - the renderer's
- * electron-log requires it there itself, and having it already loaded at startup made the renderer
- * fail with an unhandled "An object could not be cloned" rejection.
+ * Where the migrations report to. Passed in rather than imported: both processes run them, the
+ * renderer with its electron-log, the main process with its console, which MainLog.ts sends to the
+ * same log file.
  */
 export interface MigrationLogger {
     log(message: string): void;

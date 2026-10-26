@@ -8,7 +8,7 @@
 import * as remote from '@electron/remote';
 import {ref, onMounted, nextTick} from 'vue';
 import router from '@/router';
-import * as Log from 'electron-log';
+import Log from 'electron-log';
 import {emitter} from '@/emitter';
 import {removeReturnedFavorites} from '@/class/FavoritesStore';
 import {

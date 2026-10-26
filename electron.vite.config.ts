@@ -101,6 +101,10 @@ const rendererCjsModules = {
     umzug: {type: 'cjs' as const},
     // Default avatars (src/class/DefaultAvatar.ts): a native module, loaded by Node itself.
     '@resvg/resvg-js': {type: 'cjs' as const},
+    // electron-log 5: bundled, Vite takes its "browser" build, which leaves out the preload that
+    // connects it to the main process (window.__electronLog), and every log line is lost. On
+    // require(), its own entry point sees a renderer and loads the preload (MainLog.ts).
+    'electron-log': {type: 'cjs' as const},
 };
 
 const alias = {
