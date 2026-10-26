@@ -4,7 +4,7 @@ import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import {latestBestMessages, type BandMessage} from '@/class/CabinetMessages';
-import * as Log from 'electron-log';
+import Log from 'electron-log';
 import {scorePseudo3} from '@/class/HiscoreSupport';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 

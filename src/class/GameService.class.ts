@@ -4,7 +4,6 @@ import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
 import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
-import Log from 'electron-log';
 import {splitGameTitle} from '@/class/GameTitle';
 // Sequelize's own helpers (literal...) come from sequelize-typescript, never from the sequelize package
 // itself: imported in the renderer, that makes vite-plugin-electron-renderer generate a module
@@ -133,7 +132,6 @@ export default class GameService {
         }
         await Game.bulkCreate(games, {
             updateOnDuplicate: ['hi', 'id_category', 'player_alt', 'player_sim'],
-            logging: Log.log,
         });
         // The list loadGames() cached no longer matches the table.
         this.games = undefined;

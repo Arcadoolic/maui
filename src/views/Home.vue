@@ -103,7 +103,7 @@ import {controlInput, controlKey, getHotkeys, onControlsChanged} from '@/class/M
 import {HOTKEY_HOLD_TITLES, HotkeyEngine, type HotkeyAction} from '@/class/Hotkeys';
 import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
-import * as Log from 'electron-log';
+import Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
