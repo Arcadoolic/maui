@@ -2,7 +2,10 @@ import {describe, it, expect, afterEach} from 'vitest';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
-import {applyGameSoundOutput, soundMapTags, speakerTagsFromListXml, withSoundOutput} from '@/class/MameSoundMap';
+import {existsSync} from 'fs';
+import {
+    applyGameSoundOutput, resetBrokenGameSoundMaps, soundMapTags, speakerTagsFromListXml, withBrokenSoundMapsReset, withSoundOutput,
+} from '@/class/MameSoundMap';
 
 const HDMI = 'vc4-hdmi-0, MAI PCM i2s-hifi-0';
 
@@ -62,6 +65,12 @@ describe('withSoundOutput', () => {
         expect(soundMapTags(next)).toEqual([':mono']);
     });
 
+    it('maps a speaker to the default output', () => {
+        const next = withSoundOutput(RTYPE2_CFG, 'rtype2', [':speaker'], '');
+        expect(next).toContain('<node_mapping node="" db="0.000000" />');
+        expect(next).not.toContain('Headphones');
+    });
+
     it('writes a whole file for a game played for the first time', () => {
         const next = withSoundOutput(null, 'dkong', [':mono'], HDMI);
         expect(next).toContain('<system name="dkong">');
@@ -86,10 +95,79 @@ describe('applyGameSoundOutput', () => {
         expect(readFileSync(join(dir, 'rtype2.cfg'), 'utf8')).toContain(`node="o:${HDMI}"`);
     });
 
+    it('writes no file, nor asks MAME, for the default output of a game without one', () => {
+        dir = mkdtempSync(join(tmpdir(), 'maui-cfg-'));
+        applyGameSoundOutput(dir, 'dkong', '', () => {
+            throw new Error('MAME asked');
+        });
+        expect(existsSync(join(dir, 'dkong.cfg'))).toBe(false);
+    });
+
     it('asks MAME for the speakers of a game without a cfg file', () => {
         dir = mkdtempSync(join(tmpdir(), 'maui-cfg-'));
         const cfgDir = join(dir, 'cfg');
         applyGameSoundOutput(cfgDir, 'dkong', HDMI, () => [':mono']);
         expect(soundMapTags(readFileSync(join(cfgDir, 'dkong.cfg'), 'utf8'))).toEqual([':mono']);
+    });
+});
+
+// 1943's cfg file on a Raspberry Pi 5 with PipeWire: MAME dropped the ALSA name the front wrote
+// and left the speaker mapped to nothing.
+const SILENT_CFG = `<mameconfig version="10">
+    <system name="1943">
+        <mixer>
+            <sound_map tag=":mono" />
+            <sound_map tag=":left">
+                <node_mapping node="o:${HDMI}" db="0.000000" />
+            </sound_map>
+            <sound_map tag=":right">
+                <node_mapping node="o:Built-in Audio Digital Stereo (HDMI)" db="-3.000000" />
+            </sound_map>
+            <sound_map tag=":sub">
+                <node_mapping node="" db="0.000000" />
+            </sound_map>
+            <sound_map tag=":rear">
+                <node_channel_mapping node="o:Built-in Audio Digital Stereo (HDMI)" guest_channel="0" node_channel="1" db="0.000000" />
+            </sound_map>
+        </mixer>
+    </system>
+</mameconfig>
+`;
+
+describe('withBrokenSoundMapsReset', () => {
+    const reset = withBrokenSoundMapsReset(SILENT_CFG, [HDMI]);
+
+    it('puts an empty map and a map to an ALSA name back on the default output', () => {
+        expect(reset).not.toContain('<sound_map tag=":mono" />');
+        expect(reset).not.toContain(`o:${HDMI}`);
+        expect(reset.match(/<node_mapping node="" db="0.000000" \/>/g)).toHaveLength(3);
+        expect(soundMapTags(reset)).toEqual([':mono', ':left', ':right', ':sub', ':rear']);
+    });
+
+    it('leaves the outputs the sound server knows as they are', () => {
+        expect(reset).toContain('<node_mapping node="o:Built-in Audio Digital Stereo (HDMI)" db="-3.000000" />');
+        expect(reset).toContain('<node_channel_mapping node="o:Built-in Audio Digital Stereo (HDMI)" guest_channel="0"');
+    });
+
+    it('changes nothing in a file without a broken map', () => {
+        expect(withBrokenSoundMapsReset(reset, [HDMI])).toBe(reset);
+    });
+});
+
+describe('resetBrokenGameSoundMaps', () => {
+    let dir: string;
+    afterEach(() => rmSync(dir, {recursive: true, force: true}));
+
+    it('rewrites the cfg file of a silent game', () => {
+        dir = mkdtempSync(join(tmpdir(), 'maui-cfg-'));
+        writeFileSync(join(dir, '1943.cfg'), SILENT_CFG);
+        resetBrokenGameSoundMaps(dir, '1943', [HDMI]);
+        expect(readFileSync(join(dir, '1943.cfg'), 'utf8')).not.toContain('<sound_map tag=":mono" />');
+    });
+
+    it('writes no file for a game without one', () => {
+        dir = mkdtempSync(join(tmpdir(), 'maui-cfg-'));
+        resetBrokenGameSoundMaps(dir, 'dkong', [HDMI]);
+        expect(existsSync(join(dir, 'dkong.cfg'))).toBe(false);
     });
 });

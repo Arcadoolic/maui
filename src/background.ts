@@ -41,7 +41,7 @@ import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
 import {applyVideoOutput, currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
-import {applyAudioOutput, listAudioDevices, resolveAudioOutput} from '@/class/AudioOutput';
+import {applyAudioOutput, listAudioDevices, removeAudioOutput, resolveAudioOutput, soundServerRunning} from '@/class/AudioOutput';
 import {resolveUiMode} from '@/class/UiMode';
 import {setUpMainLog} from '@/class/MainLog';
 
@@ -185,7 +185,12 @@ function setCabinetDisplayMode(): void {
     }
     try {
         // After the screen output, which the sound follows by default. The BO writes it when it
-        // changes; written again here in case ~/.asoundrc was lost or the screen moved.
+        // changes; written again here in case ~/.asoundrc was lost or the screen moved. A sound
+        // server picks the output itself: the ~/.asoundrc of an earlier start would go round it.
+        if (soundServerRunning()) {
+            removeAudioOutput();
+            return;
+        }
         let screen = '';
         try {
             screen = currentScreenOutput(config.videoOutput, listScreenOutputs());

@@ -1,4 +1,4 @@
-import {existsSync, readFileSync, writeFileSync} from 'fs';
+import {existsSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {join} from 'path';
 import {currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
@@ -13,6 +13,9 @@ import {currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
 // available"), ~/.asoundrc also makes `hw:` go through plug, as /etc/asound.conf's default
 // does. The default, FOLLOW_SCREEN, takes the HDMI card of the screen output (VideoOutput.ts);
 // '' leaves the default output to the system. A ~/.asoundrc MAUI did not write is never touched.
+// All of this only where MAME plays straight on ALSA: where a sound server runs (PipeWire, as on
+// Raspberry Pi OS desktop), it owns the cards and picks the output, MAME goes through it, and the
+// ALSA names above mean nothing to it (soundServerRunning()).
 
 export interface AudioDevice {
     // "card,device", the card by its id: "vc4hdmi0,0", "PCH,3".
@@ -24,6 +27,15 @@ export interface AudioDevice {
 
 const MARKER = '# Written by MAUI (BO > MAUI > Screen > Sound output): any change here is overwritten.';
 const DEVICE_ID = /^([A-Za-z0-9_]{1,32}),(\d{1,2})$/;
+
+/**
+ * Whether a sound server (PipeWire, PulseAudio) runs for this user, seen from its socket: it then
+ * picks the output, MAME plays through it (a system MAME uses its pulse module whatever
+ * SDL_AUDIO_DRIVER says), and a game's cfg mapped to an ALSA name stays silent.
+ */
+export function soundServerRunning(runtimeDir: string | undefined = process.env.XDG_RUNTIME_DIR): boolean {
+    return !!runtimeDir && ['pipewire-0', join('pulse', 'native')].some(socket => existsSync(join(runtimeDir, socket)));
+}
 
 /** The setting that sends the sound where the picture goes: the HDMI port of the screen. */
 export const FOLLOW_SCREEN = 'screen';
@@ -156,6 +168,16 @@ export function applyAudioOutput(id: string, path: string = getAsoundrcPath()): 
         throw new Error(`${path} was not written by MAUI: it is left as it is.`);
     }
     writeFileSync(path, renderAsoundrc(id));
+}
+
+/**
+ * Removes the ~/.asoundrc MAUI wrote, where a sound server makes it pointless: its default output
+ * would go round the server. A file MAUI did not write is left as it is.
+ */
+export function removeAudioOutput(path: string = getAsoundrcPath()): void {
+    if (existsSync(path) && readFileSync(path, 'utf8').startsWith(MARKER)) {
+        unlinkSync(path);
+    }
 }
 
 /**

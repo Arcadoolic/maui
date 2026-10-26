@@ -55,7 +55,7 @@ import {humanSize, importRepositoryPack, PackGameStore, PackImportTargets} from 
 import {verifyRoms} from '@/class/MameVerifyRoms';
 import {currentScreenOutput, listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
 import {
-    applyAudioOutput, FOLLOW_SCREEN, listAudioDevices, parseAudioOutputSetting, resolveAudioOutput,
+    applyAudioOutput, FOLLOW_SCREEN, listAudioDevices, parseAudioOutputSetting, resolveAudioOutput, soundServerRunning,
 } from '@/class/AudioOutput';
 import {
     downloadWindowsInstaller, findInstallAsset, installAppImage, isKioskInstall, isSelfUpdateCapable, isWindowsInstall,
@@ -6202,11 +6202,16 @@ function renderCabinetOutputSelects(config: Config): string {
         ...(config.audioOutput && config.audioOutput !== FOLLOW_SCREEN && !devices.some(device => device.id === config.audioOutput)
             ? [option(config.audioOutput, `${config.audioOutput} - not found now`, true)] : []),
     ].join('');
+    // A sound server picks the output itself (AudioOutput.ts soundServerRunning()): no choice here.
+    const audioSelect = soundServerRunning()
+        ? `<label for="audioOutput">Sound output <span class="checkbox-row-detail">A sound server (PipeWire or PulseAudio) runs on this machine: it picks the output, MAME and MAUI play on its default one.</span></label>
+        <select id="audioOutput" disabled><option>Set by the sound server</option></select>`
+        : `<label for="audioOutput">Sound output <span class="checkbox-row-detail">HDMI sound comes out of the screen (its speakers or its headphone socket). The next game uses it at once, MAUI's own sounds at its next start.</span></label>
+        <select id="audioOutput" name="audioOutput">${audioOptions}</select>`;
     return `
         <label for="videoOutput">Screen output <span class="checkbox-row-detail">The port the screen is plugged in. Applied the next time the cabinet starts; MAME follows it.</span></label>
         <select id="videoOutput" name="videoOutput">${videoOptions}</select>
-        <label for="audioOutput">Sound output <span class="checkbox-row-detail">HDMI sound comes out of the screen (its speakers or its headphone socket). The next game uses it at once, MAUI's own sounds at its next start.</span></label>
-        <select id="audioOutput" name="audioOutput">${audioOptions}</select>
+        ${audioSelect}
     `;
 }
 
@@ -10773,7 +10778,7 @@ export function createBoApp(
             config.videoOutput = parseVideoOutputSetting(req.body.videoOutput);
         }
         let audioError: string | undefined;
-        if (typeof req.body.audioOutput === 'string') {
+        if (typeof req.body.audioOutput === 'string' && !soundServerRunning()) {
             const audioOutput = parseAudioOutputSetting(req.body.audioOutput);
             let outputs: ScreenOutputInfo[] = [];
             try {
