@@ -423,6 +423,9 @@ function createSplashWin() {
         },
         backgroundColor: '#000000',
         frame: false,
+        // A dedicated cabinet's window fills the screen from the start (its window manager would
+        // stretch it anyway): the splash is shown once, at that size (Init.vue).
+        ...(isKioskLayout(app.isPackaged) ? {fullscreen: true} : {}),
         // Linux only: see getAppIconPath().
         ...(process.platform === 'linux' ? {icon: getAppIconPath()} : {}),
     }, 'init');
