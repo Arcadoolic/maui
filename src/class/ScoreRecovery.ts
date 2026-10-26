@@ -2,8 +2,8 @@ import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {dirname, join} from 'path';
 import {MameHiExtractor} from '@arcadoolic/mhiex';
-import {hasHiscoreExtraction, scorePseudo3} from '@/class/HiscoreSupport';
-import type {ApiFailure, MauiApiClient, RecoveryNotFoundReason, ScoreRecoveryRequest} from '@/class/MauiApiClient';
+import {hasHiscoreExtraction, isNameless, scorePseudo3} from '@/class/HiscoreSupport';
+import type {ApiFailure, MauiApiClient, RecoveryNotFoundReason} from '@/class/MauiApiClient';
 import type {ScoreStore} from '@/class/ScoreOutbox';
 import type {TableRow} from '@/class/ScoreDiff';
 
@@ -111,9 +111,12 @@ export async function readRecoveryTable(mameHome: string, romname: string, table
     }
 }
 
-/** The row with these initials and exactly this score. */
+/**
+ * The row with exactly this score and these initials, or no name at all: a game that writes none
+ * (1942) cannot tell whose it is, the administrator who asked for it checked.
+ */
 export function findRow(rows: TableRow[], pseudo3: string, score: number): TableRow | null {
-    return rows.find(row => scorePseudo3(row.name) === pseudo3 && Number(row.score) === score) ?? null;
+    return rows.find(row => Number(row.score) === score && (scorePseudo3(row.name) === pseudo3 || isNameless(row.name))) ?? null;
 }
 
 const KEEP = 50;
