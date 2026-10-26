@@ -1,5 +1,6 @@
 import {resolve} from 'path';
 import {execSync} from 'child_process';
+import {readFileSync} from 'fs';
 import {defineConfig, swcPlugin} from 'electron-vite';
 import vue from '@vitejs/plugin-vue';
 import renderer from 'vite-plugin-electron-renderer';
@@ -148,10 +149,19 @@ const buildVersionSuffix = (() => {
     }
 })();
 
+// The installed mhiex's version, which a diagnostic reports (see src/definitions.d.ts).
+const mhiexVersion = (() => {
+    try {
+        return JSON.parse(readFileSync(resolve(__dirname, 'node_modules/@arcadoolic/mhiex/package.json'), 'utf8')).version as string;
+    } catch {
+        return 'unknown';
+    }
+})();
+
 export default defineConfig({
     main: {
         plugins: [swcPlugin(swcOptions)],
-        define: {MAUI_BUILD_VERSION_SUFFIX: JSON.stringify(buildVersionSuffix)},
+        define: {MAUI_BUILD_VERSION_SUFFIX: JSON.stringify(buildVersionSuffix), MHIEX_VERSION: JSON.stringify(mhiexVersion)},
         resolve: {alias},
         build: {
             // The main process is emitted as CommonJS and electron-vite leaves every `dependencies`

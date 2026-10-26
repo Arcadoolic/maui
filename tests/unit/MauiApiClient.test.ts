@@ -579,6 +579,32 @@ describe('avatars', () => {
         expect((second.body as FormData).has('replaces')).toBe(false);
     });
 
+    it('sends a diagnostic as multipart, each file with its area, name and date (maui-api D92)', async () => {
+        const {client, fetchImpl} = clientReturning(json(201, {id: 'd1', received_at: '2026-10-26T10:00:00Z'}));
+
+        expect(await client.sendDiagnostic({
+            romName: 'mslug', comment: '300k NOB', report: {state: 'ok'},
+            files: [{area: 'nvram', name: 'saveram', modified: new Date('2026-10-25T16:21:59Z'), content: Buffer.from([0, 1])}],
+        })).toEqual({kind: 'ok', value: 'd1'});
+        const {url, init} = requestOf(fetchImpl);
+        const form = init.body as FormData;
+        expect(url).toBe('https://api.example.org/api/v1/diagnostics');
+        expect(form.get('romname')).toBe('mslug');
+        expect(form.get('comment')).toBe('300k NOB');
+        expect(JSON.parse(form.get('report') as string)).toEqual({state: 'ok'});
+        expect(form.get('files[0][area]')).toBe('nvram');
+        expect(form.get('files[0][name]')).toBe('saveram');
+        expect(form.get('files[0][modified]')).toBe('2026-10-25T16:21:59.000Z');
+        expect(Buffer.from(await (form.get('files[0][content]') as Blob).arrayBuffer())).toEqual(Buffer.from([0, 1]));
+    });
+
+    it('sends no comment field without a comment', async () => {
+        const {client, fetchImpl} = clientReturning(json(201, {id: 'd1', received_at: '2026-10-26T10:00:00Z'}));
+
+        await client.sendDiagnostic({romName: 'mslug', comment: null, report: {}, files: []});
+        expect((requestOf(fetchImpl).init.body as FormData).has('comment')).toBe(false);
+    });
+
     it('maps avatar_not_found', async () => {
         const {client} = clientReturning(problem({type: 'about:blank', title: 'Not Found', status: 404, code: 'avatar_not_found'}));
         expect(await client.getAvatar('p1')).toEqual({kind: 'rejected', status: 404, code: 'avatar_not_found'});

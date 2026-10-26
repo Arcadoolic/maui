@@ -3,6 +3,7 @@
 // LOCAL mode. Branches on the problem `code`, never on `title` or `detail`, as the contract asks.
 
 import type {GameOpinion} from '@/class/OpinionReport';
+import type {DiagnosticBundle} from '@/class/DiagnosticBundle';
 import type {GameIntegrityReport} from '@/class/GameIntegrity';
 
 export interface MauiApiCredentials {
@@ -511,6 +512,31 @@ export class MauiApiClient {
             },
             form,
         );
+    }
+
+    /**
+     * The files of a game and what the cabinet makes of them, for an administrator to look into a
+     * missing score (maui-api D92): its id in MAUI-API.
+     */
+    public sendDiagnostic(bundle: DiagnosticBundle): Promise<ApiResult<string>> {
+        const form = new FormData();
+        form.append('romname', bundle.romName);
+        if (bundle.comment !== null) {
+            form.append('comment', bundle.comment);
+        }
+        form.append('report', JSON.stringify(bundle.report));
+        bundle.files.forEach((file, index) => {
+            form.append(`files[${index}][area]`, file.area);
+            form.append(`files[${index}][name]`, file.name);
+            if (file.modified) {
+                form.append(`files[${index}][modified]`, file.modified.toISOString());
+            }
+            form.append(`files[${index}][content]`, new Blob([new Uint8Array(file.content)]), file.name);
+        });
+        return this.call('POST', '/diagnostics', 201, async (response) => {
+            const body = await readJson(response);
+            return isObject(body) && typeof body.id === 'string' ? body.id : null;
+        }, form);
     }
 
     private headers(hasBody: boolean): Record<string, string> {

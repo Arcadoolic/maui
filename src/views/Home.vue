@@ -635,7 +635,7 @@ function startGame() {
     lockFront();
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     // The capture daemon's directory first: the game's report on itself goes with its scores.
-    const capture = mameService.prepareCapture();
+    const capture = mameService.prepareCapture(game.romName);
     void notifyScoreCapture(game.romName, capture?.dir ?? null).then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {

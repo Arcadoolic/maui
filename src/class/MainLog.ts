@@ -31,7 +31,7 @@ export function setUpMainLog(): void {
     };
     Object.assign(console, log.functions);
 
-    const dir = dirname(log.transports.file.getFile().path);
+    const dir = getLogDirectory();
     adoptLegacyLogs([
         join(app.getPath('userData'), 'log.log'),
         join(app.getPath('userData'), 'log.old.log'),
@@ -39,4 +39,9 @@ export function setUpMainLog(): void {
         join(dir, 'log.old.log'),
     ], dir);
     void tidyArchives(dir);
+}
+
+/** Where maui.log and its archives are. */
+export function getLogDirectory(): string {
+    return dirname(log.transports.file.getFile().path);
 }
