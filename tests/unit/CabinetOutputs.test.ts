@@ -1,13 +1,13 @@
 import {describe, it, expect, afterEach} from 'vitest';
-import {mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync} from 'fs';
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
 import {
     applyVideoOutput, parseVideoOutputSetting, parseXrandrOutputs, videoOutputArgs,
 } from '@/class/VideoOutput';
 import {
-    applyAudioOutput, audioDeviceForScreen, FOLLOW_SCREEN, parseAlsaDevices, parseAudioOutputSetting, renderAsoundrc,
-    resolveAudioOutput,
+    applyAudioOutput, audioDeviceForScreen, FOLLOW_SCREEN, parseAlsaDevices, parseAudioOutputSetting, removeAudioOutput, renderAsoundrc,
+    resolveAudioOutput, soundServerRunning,
 } from '@/class/AudioOutput';
 import {currentScreenOutput} from '@/class/VideoOutput';
 
@@ -145,5 +145,31 @@ describe('sound output', () => {
         writeFileSync(path, 'pcm.!default { type hw card 1 }\n');
         expect(() => applyAudioOutput('vc4hdmi0,0', path)).toThrow(/not written by MAUI/);
         expect(readFileSync(path, 'utf8')).toBe('pcm.!default { type hw card 1 }\n');
+    });
+
+    it('removes its own ~/.asoundrc, never one it did not write', () => {
+        dir = mkdtempSync(join(tmpdir(), 'maui-asoundrc-'));
+        const path = join(dir, '.asoundrc');
+        removeAudioOutput(path);
+        applyAudioOutput('vc4hdmi0,0', path);
+        removeAudioOutput(path);
+        expect(existsSync(path)).toBe(false);
+
+        writeFileSync(path, 'pcm.!default { type hw card 1 }\n');
+        removeAudioOutput(path);
+        expect(readFileSync(path, 'utf8')).toBe('pcm.!default { type hw card 1 }\n');
+    });
+
+    it('tells a sound server from its socket', () => {
+        dir = mkdtempSync(join(tmpdir(), 'maui-runtime-'));
+        expect(soundServerRunning(undefined)).toBe(false);
+        expect(soundServerRunning(dir)).toBe(false);
+        // PipeWire's own socket, then PulseAudio's (pipewire-pulse makes this one too).
+        writeFileSync(join(dir, 'pipewire-0'), '');
+        expect(soundServerRunning(dir)).toBe(true);
+        rmSync(join(dir, 'pipewire-0'));
+        mkdirSync(join(dir, 'pulse'));
+        writeFileSync(join(dir, 'pulse', 'native'), '');
+        expect(soundServerRunning(dir)).toBe(true);
     });
 });
