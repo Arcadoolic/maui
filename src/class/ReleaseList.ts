@@ -129,13 +129,16 @@ function isSameVersion(a: string, b: string): boolean {
  * carries the number of the release before it ("2.17.0+dev.1a2b3c4", see build.yml): two versions
  * of the same number are told apart by their publication, newer when published after the running
  * one. A running version GitHub does not list (too old, or a local build) has no date: only a
- * higher number is newer then. Drafts never count.
+ * higher number is newer then. Drafts never count, nor a version `installable` turns down (a
+ * development build published without this machine's file, see build.yml): the running one is
+ * still dated by the whole list.
  */
-export function newestAbove(
-    releases: readonly ListedRelease[], currentVersion: string, channel: UpdateChannel,
+export function newestAbove<R extends ListedRelease>(
+    releases: readonly R[], currentVersion: string, channel: UpdateChannel,
+    installable: (release: R) => boolean = () => true,
 ): string | null {
     if (channel === 'releases') {
-        return newestStableAbove(releases, currentVersion);
+        return newestStableAbove(releases.filter(installable), currentVersion);
     }
     const running = releases.find(release => release.tag_name === currentVersion);
     const runningTime = running ? publishedTime(running) : NaN;
@@ -145,7 +148,7 @@ export function newestAbove(
 
     let newest: ListedRelease | null = null;
     for (const release of releases) {
-        if (release.draft || release.tag_name === currentVersion || !isNewer(release, currentVersion, runningTime)) {
+        if (release.draft || release.tag_name === currentVersion || !installable(release) || !isNewer(release, currentVersion, runningTime)) {
             continue;
         }
         if (newest === null || isNewer(release, newest.tag_name, publishedTime(newest))) {

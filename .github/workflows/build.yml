@@ -7,8 +7,9 @@ name: Build
 # Release) lives in release.yml instead - see its comment on why that can't
 # be a separate `release: published` triggered workflow.
 #
-# Matrix covers linux-x64, linux-arm64 (Raspberry Pi), macos-arm64, and
-# windows-x64.
+# Linux x64 and arm64 (Raspberry Pi) are always built: that is what the cabinets install. Windows
+# x64 and macOS arm64 only when ticked in the run UI (inputs below): rarely needed for a develop
+# build, and the macOS runners can queue for a long time. release.yml always builds all four.
 #
 # The publish-develop-prerelease job below additionally republishes every
 # platform's build (Linux AppImages, macOS zip, Windows exe) as a GitHub
@@ -20,32 +21,49 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      windows:
+        description: Also build Windows x64
+        type: boolean
+        default: false
+      macos:
+        description: Also build macOS arm64
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  # The build matrix: the two Linux builds, plus Windows and macOS when asked for.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Choose the platforms
+        id: matrix
+        env:
+          WINDOWS: ${{ inputs.windows }}
+          MACOS: ${{ inputs.macos }}
+        run: |
+          include='[
+            {"name": "linux-x64", "runner": "ubuntu-latest", "build_args": "--linux --x64", "artifact_glob": "dist_electron/*.AppImage"},
+            {"name": "linux-arm64", "runner": "ubuntu-24.04-arm", "build_args": "--linux --arm64", "artifact_glob": "dist_electron/*.AppImage"}
+          ]'
+          if [ "$MACOS" = "true" ]; then
+            include=$(jq -c '. + [{"name": "macos-arm64", "runner": "macos-14", "build_args": "--mac --arm64", "artifact_glob": "dist_electron/*.zip"}]' <<< "$include")
+          fi
+          if [ "$WINDOWS" = "true" ]; then
+            include=$(jq -c '. + [{"name": "windows-x64", "runner": "windows-latest", "build_args": "--win --x64", "artifact_glob": "dist_electron/*.exe"}]' <<< "$include")
+          fi
+          echo "matrix=$(jq -c '{include: .}' <<< "$include")" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: linux-x64
-            runner: ubuntu-latest
-            build_args: --linux --x64
-            artifact_glob: dist_electron/*.AppImage
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-            build_args: --linux --arm64
-            artifact_glob: dist_electron/*.AppImage
-          - name: macos-arm64
-            runner: macos-14
-            build_args: --mac --arm64
-            artifact_glob: dist_electron/*.zip
-          - name: windows-x64
-            runner: windows-latest
-            build_args: --win --x64
-            artifact_glob: dist_electron/*.exe
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -102,9 +120,10 @@ jobs:
           path: ${{ matrix.artifact_glob }}
           retention-days: 7
 
-  # All platforms are published, so macOS/Windows dev builds can be downloaded for testing
-  # beyond the 7-day workflow artifact retention above. The BO's self-update still only ever
-  # installs the Linux AppImage (see isSelfUpdateCapable()/getUpdateInfo() in src/boServer.ts).
+  # Every platform built is published, so macOS/Windows dev builds can be downloaded for testing
+  # beyond the 7-day workflow artifact retention above. A cabinet is only offered a dev build
+  # holding a file it can install (newestAbove() in src/class/ReleaseList.ts): a Windows one stays
+  # on the latest dev build that has an installer.
   publish-develop-prerelease:
     needs: build
     if: github.event_name == 'workflow_dispatch'
@@ -132,12 +151,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" \
-            dist_electron/*.AppImage dist_electron/*.zip dist_electron/*.exe \
+          # Only the platforms built in this run: no Windows or macOS file unless asked for.
+          shopt -s nullglob
+          files=(dist_electron/*.AppImage dist_electron/*.zip dist_electron/*.exe)
+          gh release create "${{ steps.tag.outputs.tag }}" "${files[@]}" \
             --repo "${{ github.repository }}" \
             --title "Dev build ${{ steps.tag.outputs.tag }}" \
-            --notes "Automated build from develop@${{ github.sha }}. Not reviewed, not merged to main." \
-            --target develop \
+            --notes "Automated build from ${{ github.ref_name }}@${{ github.sha }}. Not reviewed, not merged to main." \
+            --target "${{ github.sha }}" \
             --prerelease
 
       - name: Prune old dev prereleases
