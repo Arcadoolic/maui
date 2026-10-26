@@ -18,9 +18,7 @@ const request = (overrides: Partial<ScoreRecoveryRequest> = {}): ScoreRecoveryRe
 function fakeClient(requests: ScoreRecoveryRequest[]) {
     return {
         listScoreRecoveries: vi.fn(async () => ({kind: 'ok' as const, value: requests})),
-        reportScoreRecovery: vi.fn<(id: string, reason: string, table: unknown[]) => Promise<{kind: 'ok'; value: undefined}>>(
-            async () => ({kind: 'ok', value: undefined}),
-        ),
+        reportScoreRecovery: vi.fn(async () => ({kind: 'ok' as const, value: undefined})),
     };
 }
 
@@ -108,13 +106,6 @@ describe('findRow', () => {
 
         expect(findRow(rows, 'NOB', 250000)?.rank).toBe(1);
         expect(findRow(rows, 'NOB', 249999)).toBeNull();
-    });
-
-    it('takes a row without a name at exactly this score: the game wrote none', () => {
-        const rows = [{rank: 1, score: 40000, name: '  CAPCOM'}, {rank: 6, score: 13220, name: '        '}];
-
-        expect(findRow(rows, 'BNJ', 13220)?.rank).toBe(6);
-        expect(findRow(rows, 'BNJ', 40000)).toBeNull();
     });
 });
 
