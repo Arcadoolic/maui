@@ -118,6 +118,8 @@ import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
+import {uiSounds, uiSoundSettings} from '@/class/UiSounds';
 import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
@@ -230,6 +232,7 @@ const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
         asleep.value = isAsleep;
         if (isAsleep) {
             stopRoll();
+            uiSounds.release();
         }
         if (screenOff) {
             // A keyboard key wakes the screen by itself, a gamepad button only through this.
@@ -381,6 +384,7 @@ function selectGame(index: number) {
 }
 
 function onGameChange(previous: boolean) {
+    uiSounds.play('move');
     selectGame(previous ?
         ((selectedGameIndex.value <= 0) ? games.value.length - 1 : selectedGameIndex.value - 1) :
         ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1));
@@ -401,9 +405,14 @@ function startHold(previous: boolean) {
         const selected = categories.value[selectedCategoryIndex.value];
         const alpha = !!selected && isDynamicCategory(selected)
             && (selected.dynamic === 'all' || selected.dynamic === 'hiscores');
-        const step = () => alpha
-            ? selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous))
-            : onGameChange(previous);
+        const step = () => {
+            if (!alpha) {
+                onGameChange(previous);
+                return;
+            }
+            uiSounds.play('alphaJump');
+            selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous));
+        };
         alphaJumping.value = alpha;
         timeouts.holdRepeat = window.setInterval(step, alpha ? HOLD_MS.alphaJump : HOLD_MS.fastScroll);
         step();
@@ -450,6 +459,7 @@ function onCategoryChange(previous: boolean) {
 
 function goToCategory(index: number) {
     stopHold();
+    uiSounds.play('category');
     const showGameFn = async () => {
         // The title finished sliding out (showTitle is false since the switch started): swap its
         // text now, it slides back in with the new name once the games are loaded below.
@@ -636,18 +646,25 @@ function startGame() {
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     // The capture daemon's directory first: the game's report on itself goes with its scores.
     const capture = mameService.prepareCapture(game.romName);
-    void notifyScoreCapture(game.romName, capture?.dir ?? null).then(() => mameService.startGame(game.romName, capture)).then(
+    // The launch sound, then the sound card let go for MAME (UiSounds.ts).
+    void uiSounds.playThenSuspend('launch').then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
+        .then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
             // A game that could not even start (mame missing) may only say so here.
-            gameProcess.on('error', unlockFront);
+            gameProcess.on('error', () => {
+                uiSounds.resume();
+                unlockFront();
+            });
             gameProcess.on('close', () => {
                 // Before the questions asked after a game (who played, vote), answered with the
                 // controller.
                 unlockFront();
+                uiSounds.resume();
+                uiSounds.play('back');
                 const pending = endScoreCapture(game.romName);
                 hiService.saveHiscores(game).then(async () => {
                     emitter.emit('game-quit');
@@ -664,6 +681,7 @@ function startGame() {
             });
         },
         (err) => {
+            uiSounds.resume();
             unlockFront();
             Log.error('[Home] Error on game ' + game.id_game + ' launch.');
             Log.error(err);
@@ -961,7 +979,15 @@ const hotkeys = new HotkeyEngine(getHotkeys(), {
     },
 });
 const stopHotkeysListener = onControlsChanged(() => hotkeys.setHotkeys(getHotkeys()));
-const stopBoMameListener = onBoMameChanged(syncIdleBlock);
+const stopBoMameListener = onBoMameChanged(() => {
+    // A MAME the BO launched needs the sound card too (UiSounds.ts).
+    if (isBoMameRunning()) {
+        uiSounds.suspend();
+    } else if (!gameRunning) {
+        uiSounds.resume();
+    }
+    syncIdleBlock();
+});
 
 const {onKeydown, onKeyup} = useControllable();
 
@@ -974,6 +1000,12 @@ const onShowGame = (_event: unknown, romName: string) => {
     void showGame(romName);
 };
 const onFavoritesChanged = () => void syncFavorites();
+const onUiSoundsChanged = () => {
+    const config = getConfiguration();
+    config.load();
+    uiSounds.setSettings(uiSoundSettings(config));
+};
+const onUiSoundsTest = (_event: unknown, volume: number) => uiSounds.test(volume);
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     stopHotkeysListener();
@@ -981,6 +1013,8 @@ onUnmounted(() => {
     hotkeys.reset();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
+    ipcRenderer.off(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);
+    ipcRenderer.off(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
     ipcRenderer.off(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
     window.removeEventListener('blur', stopHold);
     stopHold();
@@ -1108,6 +1142,9 @@ if (!getIsInit()) {
         stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
         ipcRenderer.on(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
+        ipcRenderer.on(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);
+        ipcRenderer.on(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
+        uiSounds.setSettings(uiSoundSettings(getConfiguration()));
         ipcRenderer.on(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
 
         flyersPath.value = mameService.flyerPath;

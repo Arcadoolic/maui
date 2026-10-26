@@ -26,6 +26,7 @@ import {
 } from '@/class/ScoreCaptureBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
 import {
     CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, MAME_SESSION_CHANNEL, PAD_CAPTURED_CHANNEL,
     type FrontControls,
@@ -320,6 +321,20 @@ app.on('ready', async () => {
         if (win && !win.isDestroyed()) {
             win.webContents.send(FAVORITES_CHANGED_CHANNEL);
         }
+    }, {
+        // The BO's MAUI tab saved the front's sounds, or tests them on the cabinet (UiSounds.ts).
+        changed: () => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(UI_SOUNDS_CHANGED_CHANNEL);
+            }
+        },
+        test: (volume) => {
+            if (!win || win.isDestroyed()) {
+                return false;
+            }
+            win.webContents.send(UI_SOUNDS_TEST_CHANNEL, volume);
+            return true;
+        },
     });
     core = bo;
     // The front's update of MAUI (FrontUpdate.ts): offered when it wakes up from idle (Home.vue),
@@ -425,6 +440,9 @@ function createSplashWin() {
             nodeIntegration: true,
             contextIsolation: false,
             sandbox: false,
+            // The front's sounds (UiSounds.ts) play before any click or key: a gamepad does not
+            // count as one for Chromium.
+            autoplayPolicy: 'no-user-gesture-required',
         },
         backgroundColor: '#000000',
         frame: false,
