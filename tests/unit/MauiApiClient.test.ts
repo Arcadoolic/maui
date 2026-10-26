@@ -605,6 +605,36 @@ describe('avatars', () => {
         expect((requestOf(fetchImpl).init.body as FormData).has('comment')).toBe(false);
     });
 
+    it('lists the score recovery requests (maui-api D93)', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {recoveries: [{
+            id: 'r1', player_id: 'p1', romname: 'atetris', table: 'default', score: 250000, achieved_at: '2026-10-20T20:30:00Z',
+        }]}));
+
+        expect(await client.listScoreRecoveries()).toEqual({kind: 'ok', value: [{
+            id: 'r1', playerId: 'p1', romname: 'atetris', table: 'default', score: 250000, achievedAt: '2026-10-20T20:30:00Z',
+        }]});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/score-recoveries');
+    });
+
+    it('reports a requested score not found, with the table read', async () => {
+        const {client, fetchImpl} = clientReturning(new Response(null, {status: 204}));
+
+        expect(await client.reportScoreRecovery('r1', 'not_in_table', [{rank: 1, score: 100, name: 'ABC'}])).toEqual({kind: 'ok', value: undefined});
+        const {url, init} = requestOf(fetchImpl);
+        expect(url).toBe('https://api.example.org/api/v1/score-recoveries/r1/result');
+        expect(JSON.parse(init.body as string)).toEqual({outcome: 'not_found', reason: 'not_in_table', table: [{rank: 1, score: 100, name: 'ABC'}]});
+    });
+
+    it('sends a recovered score with its request', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {results: [{id: 'r1', status: 'accepted', best: 250000}]}));
+
+        await client.postScores([{
+            id: 'r1', recoveryId: 'r1', playerId: 'p1', romname: 'atetris', table: 'default', score: 250000,
+            achievedAt: '2026-10-20T20:30:00Z', attribution: 'recovered',
+        }]);
+        expect(JSON.parse(requestOf(fetchImpl).init.body as string).scores[0]).toMatchObject({recovery_id: 'r1', attribution: 'recovered'});
+    });
+
     it('maps avatar_not_found', async () => {
         const {client} = clientReturning(problem({type: 'about:blank', title: 'Not Found', status: 404, code: 'avatar_not_found'}));
         expect(await client.getAvatar('p1')).toEqual({kind: 'rejected', status: 404, code: 'avatar_not_found'});

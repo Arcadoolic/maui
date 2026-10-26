@@ -21,6 +21,7 @@ import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
 import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
 import {syncPlayers} from '@/class/PlayerSync';
+import {answerScoreRecoveries, readRecoveryTable, recordRecoveryAnswer} from '@/class/ScoreRecovery';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {BoOnDemand, type BoApp} from '@/class/BoOnDemand';
@@ -235,6 +236,12 @@ export function startCore(
         flushScores: client => flushOutbox(scoreStore, client),
         reportOpinions: client => reportOpinions(opinionStore, client),
         refreshLeaderboards: client => leaderboards.refresh(client),
+        answerRecoveries: client => answerScoreRecoveries(client, {
+            players: () => User.findAll(),
+            readTable: (romname, table) => readRecoveryTable(getMameHomePath(), romname, table),
+            store: scoreStore,
+            record: recordRecoveryAnswer,
+        }),
     });
     const scores = new ScoreCapture({
         mameHome: getMameHomePath,
