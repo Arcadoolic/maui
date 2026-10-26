@@ -1,5 +1,5 @@
 <template>
-    <div :class="{leaving}">
+    <div :class="{leaving, kiosk}">
         <p v-if="error" class="error">{{ error }}</p>
     </div>
 </template>
@@ -11,6 +11,7 @@ import router from '@/router';
 import Log from 'electron-log';
 import {emitter} from '@/emitter';
 import {removeReturnedFavorites} from '@/class/FavoritesStore';
+import {isKioskLayout} from '@/class/KioskRestart';
 import {
     getConfiguration,
     getDatabase,
@@ -33,10 +34,15 @@ async function blankSplash() {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
-remote.getCurrentWindow().setResizable(true);
-remote.getCurrentWindow().setFullScreen(false);
-remote.getCurrentWindow().setSize(346, 354);
-remote.getCurrentWindow().center();
+// A dedicated cabinet's window is already full screen (background.ts): the logo is centred in it,
+// whole. Elsewhere, a small window the size of the logo.
+const kiosk = isKioskLayout(remote.app.isPackaged);
+if (!kiosk) {
+    remote.getCurrentWindow().setResizable(true);
+    remote.getCurrentWindow().setFullScreen(false);
+    remote.getCurrentWindow().setSize(346, 354);
+    remote.getCurrentWindow().center();
+}
 
 onMounted(async () => {
     const config = getConfiguration();
@@ -120,6 +126,13 @@ onMounted(async () => {
         background-size: cover;
         background-repeat: repeat;
         background-position: 0 0;
+    }
+    /* Full screen: the square logo centred, smaller than the screen's shorter side so that it is
+       seen whole. */
+    div.kiosk {
+        background-size: min(60vw, 60vh);
+        background-repeat: no-repeat;
+        background-position: center;
     }
     div.leaving {
         background-image: none;
