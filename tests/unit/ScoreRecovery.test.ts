@@ -18,7 +18,9 @@ const request = (overrides: Partial<ScoreRecoveryRequest> = {}): ScoreRecoveryRe
 function fakeClient(requests: ScoreRecoveryRequest[]) {
     return {
         listScoreRecoveries: vi.fn(async () => ({kind: 'ok' as const, value: requests})),
-        reportScoreRecovery: vi.fn(async () => ({kind: 'ok' as const, value: undefined})),
+        reportScoreRecovery: vi.fn<(id: string, reason: string, table: unknown[]) => Promise<{kind: 'ok'; value: undefined}>>(
+            async () => ({kind: 'ok', value: undefined}),
+        ),
     };
 }
 

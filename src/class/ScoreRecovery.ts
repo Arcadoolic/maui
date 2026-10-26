@@ -3,7 +3,7 @@ import {homedir} from 'os';
 import {dirname, join} from 'path';
 import {MameHiExtractor} from '@arcadoolic/mhiex';
 import {hasHiscoreExtraction, scorePseudo3} from '@/class/HiscoreSupport';
-import type {ApiFailure, MauiApiClient, RecoveryNotFoundReason, ScoreRecoveryRequest} from '@/class/MauiApiClient';
+import type {ApiFailure, MauiApiClient, RecoveryNotFoundReason} from '@/class/MauiApiClient';
 import type {ScoreStore} from '@/class/ScoreOutbox';
 import type {TableRow} from '@/class/ScoreDiff';
 
