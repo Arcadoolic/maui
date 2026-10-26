@@ -103,7 +103,8 @@ import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
 import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
-import {parseUiSoundsVolume} from '@/class/UiSounds';
+import {DEFAULT_UI_SOUNDS_VOLUME} from '@/class/UiSounds';
+import {parseVolumePercent} from '@/class/Volume';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
@@ -6284,6 +6285,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>Sounds</legend>
+                    <label for="gamesVolume">Volume of the games, in % <span class="checkbox-row-detail">From the next game launched. 100 leaves MAME's own level.</span></label>
+                    <input type="number" id="gamesVolume" name="gamesVolume" min="0" max="100" step="5" value="${config.gamesVolume}">
                     ${renderSettingCheckbox('uiSoundsEnabled', config.uiSoundsEnabled, 'MAUI\'s sounds',
                         'Short bleeps on the list of games and when a game is launched. The games\' own sound is not affected.')}
                     <label for="uiSoundsVolume">Volume of MAUI's sounds, in % <span class="checkbox-row-detail">Of the system's volume, which stays as it is.</span></label>
@@ -10792,7 +10795,8 @@ export function createBoApp(
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         config.onlineBadgeHideIp = req.body.onlineBadgeHideIp === 'on';
         config.uiSoundsEnabled = req.body.uiSoundsEnabled === 'on';
-        config.uiSoundsVolume = parseUiSoundsVolume(req.body.uiSoundsVolume);
+        config.gamesVolume = parseVolumePercent(req.body.gamesVolume, config.gamesVolume);
+        config.uiSoundsVolume = parseVolumePercent(req.body.uiSoundsVolume, config.uiSoundsVolume);
         config.uiSoundsNavigation = req.body.uiSoundsNavigation === 'on';
         // Read again by userRegistration.vue at each registration: no reload of the front.
         config.cabinetPlayersPublic = req.body.cabinetPlayersPublic === 'on';
@@ -10842,7 +10846,7 @@ export function createBoApp(
             res.status(403).end();
             return;
         }
-        res.status(uiSounds.test(parseUiSoundsVolume(req.body.volume)) ? 204 : 409).end();
+        res.status(uiSounds.test(parseVolumePercent(req.body.volume, DEFAULT_UI_SOUNDS_VOLUME)) ? 204 : 409).end();
     });
 
     app.post('/maui/online/save', async (req, res) => {

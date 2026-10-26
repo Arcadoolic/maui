@@ -56,12 +56,6 @@ const NAVIGATION_MIN_GAP_MS = 60;
 
 export const DEFAULT_UI_SOUNDS_VOLUME = 60;
 
-/** The volume of the BO's form or config file: an integer from 0 to 100, else the default. */
-export function parseUiSoundsVolume(value: unknown): number {
-    const volume = typeof value === 'number' || (typeof value === 'string' && value.trim() !== '') ? Number(value) : NaN;
-    return Number.isInteger(volume) && volume >= 0 && volume <= 100 ? volume : DEFAULT_UI_SOUNDS_VOLUME;
-}
-
 export function uiSoundSettings(config: Config): UiSoundSettings {
     return {enabled: config.uiSoundsEnabled, volume: config.uiSoundsVolume, navigation: config.uiSoundsNavigation};
 }

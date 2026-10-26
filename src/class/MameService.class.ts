@@ -6,6 +6,7 @@ import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
+import {gameVolumeArgs} from '@/class/Volume';
 import {gameSoundNode} from '@/class/AudioOutput';
 import {applyGameSoundOutput, speakerTagsFromListXml} from '@/class/MameSoundMap';
 
@@ -229,6 +230,13 @@ export default class MameService {
         );
     }
 
+    /** The games' volume set in the BO (Volume.ts), read each time: the BO may have changed it. */
+    protected readGameVolumeArgs(): string[] {
+        const config = new Config();
+        config.load();
+        return gameVolumeArgs(config.gamesVolume);
+    }
+
     /**
      * Start game on mame
      * @param romName
@@ -241,7 +249,7 @@ export default class MameService {
             // while it's being played (see CaptureDaemon.ts), and which reports on the game for its
             // scores (ScoreCapture.ts): `capture` prepared beforehand to say where.
             this.gameProcess = execFile(this.mameBinary, [
-                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS,
+                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS, ...this.readGameVolumeArgs(),
                 ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
             ], {
                 killSignal: 'SIGQUIT',

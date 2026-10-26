@@ -346,6 +346,7 @@ describe('Config front idle', () => {
     it('plays the front\'s sounds by default, and reads their settings back', () => {
         const defaults = new Config();
         expect([defaults.uiSoundsEnabled, defaults.uiSoundsVolume, defaults.uiSoundsNavigation]).toEqual([true, 60, true]);
+        expect(defaults.gamesVolume).toBe(100);
         for (const [enabled, volume, navigation, expected] of [
             [false, 0, false, [false, 0, false]],
             [undefined, undefined, undefined, [true, 60, true]],
@@ -359,6 +360,19 @@ describe('Config front idle', () => {
             const config = new Config();
             config.load();
             expect([config.uiSoundsEnabled, config.uiSoundsVolume, config.uiSoundsNavigation]).toEqual(expected);
+        }
+    });
+
+    it('reads the games\' volume back, 100 when missing or out of range', () => {
+        for (const [written, expected] of [[30, 30], [0, 0], [undefined, 100], [140, 100], ['loud', 100]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.gamesVolume = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.gamesVolume).toBe(expected);
         }
     });
 });
@@ -409,6 +423,7 @@ describe('Config.save', () => {
             'frontSleepScreenOff',
             'frontUpdateEnabled',
             'fullscreen',
+            'gamesVolume',
             'mameBinaryName',
             'mamePath',
             'onlineBadgeDotOnly',

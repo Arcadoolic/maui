@@ -1,7 +1,5 @@
 import {describe, it, expect, beforeEach, vi, afterEach} from 'vitest';
-import {
-    DEFAULT_UI_SOUNDS_VOLUME, parseUiSoundsVolume, UI_SOUNDS, UiSoundPlayer, uiSoundMs, type UiSoundName,
-} from '@/class/UiSounds';
+import {UI_SOUNDS, UiSoundPlayer, uiSoundMs, type UiSoundName} from '@/class/UiSounds';
 
 // What the player does with a context: the notes started, their peak gain, and whether it closed.
 class FakeContext {
@@ -149,17 +147,6 @@ describe('the sounds', () => {
                 expect(note.gain).toBeGreaterThan(0);
                 expect(note.gain).toBeLessThanOrEqual(1);
             }
-        }
-    });
-});
-
-describe('parseUiSoundsVolume', () => {
-    it('takes an integer from 0 to 100, else the default', () => {
-        expect(parseUiSoundsVolume(0)).toBe(0);
-        expect(parseUiSoundsVolume('35')).toBe(35);
-        expect(parseUiSoundsVolume(100)).toBe(100);
-        for (const value of [undefined, '', 'loud', 101, -1, 12.5, null]) {
-            expect(parseUiSoundsVolume(value)).toBe(DEFAULT_UI_SOUNDS_VOLUME);
         }
     });
 });
