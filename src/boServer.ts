@@ -51,7 +51,7 @@ import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
-import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
+import {humanSize, importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
 import {currentScreenOutput, listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
 import {
@@ -112,12 +112,17 @@ import {OnlineSession} from '@/class/OnlineSession';
 import {readCabinetTables} from '@/class/HiscoreBackfill';
 import {describeFlush, queueScores} from '@/class/ScoreOutbox';
 import {createOnlineClient} from '@/class/OnlineClient';
+import {buildDiagnosticBundle} from '@/class/DiagnosticBundle';
+import {diagnosticZip} from '@/class/DiagnosticZip';
+import {readSentDiagnostics, recordSentDiagnostic} from '@/class/DiagnosticHistory';
+import {getLogDirectory} from '@/class/MainLog';
+import {archiveStamp} from '@/class/LogArchive';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
 import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
     renderPinReveal, type OnlineBoMessage,
 } from '@/class/OnlinePlayersBo';
-import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
+import type {ApiFailure, MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
 import {
     describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, resolveRepository,
@@ -4661,7 +4666,7 @@ function startMameConfigSession(
         stopMameConfigSession();
     }
 
-    const {dir, scriptPath} = prepareCaptureDir(getStaticPath());
+    const {dir, scriptPath} = prepareCaptureDir(getStaticPath(), romName);
 
     const child = spawn(
         mameBinary,
@@ -9010,7 +9015,76 @@ function renderHiscoresListPage(entries: HiscoreListEntry[], viewer: Viewer, mam
 }
 
 /** One game: its files (with a hex dump), then every table mhiex decodes, row by row. */
-function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewer: Viewer): string {
+/** The game, if the database knows it, and what its hiscore files hold (HiscoreInspector.ts). */
+async function inspectGameHiscores(romName: string): Promise<{game: Game | null; report: HiscoreReport}> {
+    const mameHome = getMameHomePath();
+    let game: Game | null = null;
+    let players = new Set<string>();
+    let stored: StoredScore[] = [];
+    try {
+        game = await Game.findOne({where: {romName}});
+        players = new Set((await User.findAll()).map(user => user.pseudo_3));
+        if (game) {
+            stored = (await getStoredScores(game.id_game)).get(game.id_game) || [];
+        }
+    } catch {
+        // No database yet: the files and mhiex's decoding are still worth showing
+    }
+    const report = await inspectHiscores(mameHome, romName, players, stored, readHiscoreDatSizes(getHiscoreDatPath(mameHome)));
+    return {game, report};
+}
+
+function describeDiagnosticFailure(result: ApiFailure): string {
+    if (result.kind === 'rejected' && result.code === 'insufficient_ability') {
+        return 'MAUI-API does not take diagnostics from this cabinet yet (too old, or a token without diagnostics:write). Download the zip instead.';
+    }
+    if (result.kind === 'rejected' && result.errors) {
+        return `MAUI-API refused the diagnostic: ${Object.values(result.errors).flat().join(' ')}`;
+    }
+    return `Not sent: ${describeFailure(result, 'MAUI-API')}`;
+}
+
+interface HiscoreDetailState {
+    notice?: string;
+    error?: string;
+    comment?: string;
+    withLogs?: boolean;
+}
+
+/**
+ * The form sending a diagnostic of the game (maui-api D92), and the ones this cabinet already sent
+ * for it.
+ */
+function renderDiagnosticCard(romName: string, state: HiscoreDetailState): string {
+    const sent = readSentDiagnostics().filter(diagnostic => diagnostic.romName === romName);
+    const history = sent.length === 0 ? '' : `
+        <h3>Sent from this cabinet</h3>
+        <ul>${sent.map(diagnostic => `<li>${escapeHtml(formatDateTime(new Date(diagnostic.sentAt)))}: ${diagnostic.files} file(s), ${humanSize(diagnostic.size)}${diagnostic.logs ? ', logs attached' : ''} <code>${escapeHtml(diagnostic.id)}</code></li>`).join('')}</ul>`;
+    return `
+        <section class="card" id="diagnostic">
+            <h2>Report a missing score</h2>
+            <p>Sends the files MAME wrote for this game, its latest session reports and what MAUI reads in them,
+                for an administrator to find out why a score did not reach the leaderboards.</p>
+            ${state.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state.notice ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : ''}
+            <form method="post" action="/hiscores/${escapeHtml(romName)}/diagnostic">
+                <label for="diagnostic-comment">What is missing</label>
+                <textarea id="diagnostic-comment" name="comment" maxlength="1000" rows="3"
+                    placeholder="e.g. 300 000 points by NOB on 25/10 around 17:00">${escapeHtml(state.comment ?? '')}</textarea>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="logs"${state.withLogs === false ? '' : ' checked'}>
+                    <span>Attach MAUI's logs of the last 7 days (database queries left out, passwords and tokens masked)</span>
+                </label>
+                <p>
+                    <button type="submit" name="action" value="send">Send to MAUI-API</button>
+                    <button type="submit" name="action" value="zip">Download the zip</button>
+                </p>
+            </form>
+            ${history}
+        </section>`;
+}
+
+function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewer: Viewer, state: HiscoreDetailState = {}): string {
     const title = game ? (game.fullname || game.romName) : report.romName;
     const files = report.files.map(file => {
         const {lines, truncated} = hexDump(readFileSync(file.path));
@@ -9059,6 +9133,7 @@ function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewe
             ].filter(Boolean).join(' + ')}</p>` : ''}
             ${decoded}
         </section>
+        ${renderDiagnosticCard(report.romName, state)}
         <section class="card">
             <h2>Files</h2>
             ${files || '<p><em>No file</em></p>'}
@@ -9908,27 +9983,72 @@ export function createBoApp(
             res.redirect('/');
             return;
         }
-        const mameHome = getMameHomePath();
         const romName = String(req.params.romName);
         // Only a plain rom name: it becomes a path under the mame home directory
         if (!/^[a-z0-9_]+$/i.test(romName)) {
             res.status(404).send(renderPage('<section class="card"><p class="error">Unknown rom.</p></section>', 'hiscores', getViewer(req)));
             return;
         }
-        let game: Game | null = null;
-        let players = new Set<string>();
-        let stored: StoredScore[] = [];
-        try {
-            game = await Game.findOne({where: {romName}});
-            players = new Set((await User.findAll()).map(user => user.pseudo_3));
-            if (game) {
-                stored = (await getStoredScores(game.id_game)).get(game.id_game) || [];
-            }
-        } catch {
-            // No database yet: the files and mhiex's decoding are still worth showing
+        const {game, report} = await inspectGameHiscores(romName);
+        const sent = typeof req.query.sent === 'string' ? req.query.sent : '';
+        res.send(renderHiscoreDetailPage(game, report, getViewer(req), {
+            notice: sent ? `Diagnostic sent to MAUI-API (${sent}).` : undefined,
+        }));
+    });
+
+    // A diagnostic of the game, when a player says a score is missing (maui-api D92): sent to
+    // MAUI-API, or saved as a zip for a cabinet that is not ONLINE.
+    app.post('/hiscores/:romName/diagnostic', async (req, res) => {
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
+            return;
         }
-        const report = await inspectHiscores(mameHome, romName, players, stored, readHiscoreDatSizes(getHiscoreDatPath(mameHome)));
-        res.send(renderHiscoreDetailPage(game, report, getViewer(req)));
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const romName = String(req.params.romName);
+        if (!/^[a-z0-9_]+$/.test(romName)) {
+            res.status(404).send(renderPage('<section class="card"><p class="error">Unknown rom.</p></section>', 'hiscores', getViewer(req)));
+            return;
+        }
+        const {game, report} = await inspectGameHiscores(romName);
+        const config = new Config();
+        const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
+        const comment = String(req.body.comment || '').slice(0, 1000);
+        const withLogs = req.body.logs === 'on';
+        const bundle = buildDiagnosticBundle({
+            romName, comment, inspection: report,
+            versions: {
+                maui: getRunningVersion(),
+                mhiex: typeof MHIEX_VERSION === 'string' ? MHIEX_VERSION : 'unknown',
+                mame: mameBinary ? await getMameVersion(mameBinary) : UNKNOWN_MAME_VERSION,
+            },
+            logDir: withLogs ? getLogDirectory() : null,
+        });
+        if (req.body.action === 'zip') {
+            res.attachment(`diagnostic-${romName}-${archiveStamp(new Date())}.zip`);
+            res.type('application/zip').send(diagnosticZip(bundle));
+            return;
+        }
+        const fail = (status: number, error: string) => res.status(status).send(renderHiscoreDetailPage(game, report, getViewer(req), {
+            error, comment, withLogs,
+        }));
+        const client = await createOnlineClient();
+        if (!client) {
+            fail(409, 'This cabinet is not ONLINE: download the zip and send it by mail instead.');
+            return;
+        }
+        const result = await client.sendDiagnostic(bundle);
+        if (result.kind !== 'ok') {
+            fail(502, describeDiagnosticFailure(result));
+            return;
+        }
+        recordSentDiagnostic({
+            romName, id: result.value, sentAt: new Date().toISOString(), files: bundle.files.length,
+            size: bundle.files.reduce((size, file) => size + file.content.length, 0), logs: withLogs,
+        });
+        res.redirect(`/hiscores/${romName}?sent=${encodeURIComponent(result.value)}`);
     });
 
     app.post('/users/create', async (req, res) => {

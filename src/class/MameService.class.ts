@@ -233,7 +233,7 @@ export default class MameService {
      * Start game on mame
      * @param romName
      */
-    public startGame(romName: string, capture = this.prepareCapture()): Promise<ChildProcess> {
+    public startGame(romName: string, capture = this.prepareCapture(romName)): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
             this.prepareSoundOutput(romName);
@@ -269,9 +269,9 @@ export default class MameService {
      * The game still launches without it (the BO then can't configure it live) if the script
      * can't be set up.
      */
-    public prepareCapture(): {dir: string; scriptPath: string} | null {
+    public prepareCapture(romName: string): {dir: string; scriptPath: string} | null {
         try {
-            return prepareCaptureDir(getRendererPublicPath());
+            return prepareCaptureDir(getRendererPublicPath(), romName);
         } catch (error) {
             console.error('[MameService] Capture daemon unavailable:', error);
             return null;
