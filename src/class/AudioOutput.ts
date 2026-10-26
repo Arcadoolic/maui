@@ -1,4 +1,4 @@
-import {existsSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
+import {existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {join} from 'path';
 import {currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
@@ -181,11 +181,11 @@ export function removeAudioOutput(path: string = getAsoundrcPath()): void {
 }
 
 /**
- * What a game launched now must play on, as MAME names it (MameSoundMap.ts): the output the BO
- * set, the screen's HDMI card by default. '' to leave MAME to itself: the system's default, or
- * an output this machine does not have.
+ * What a game launched now must play on (its `node` is how MAME names it, MameSoundMap.ts): the
+ * output the BO set, the screen's HDMI card by default. Undefined to leave MAME to itself: the
+ * system's default, or an output this machine does not have.
  */
-export function gameSoundNode(setting: string, videoSetting: string): string {
+export function gameSoundDevice(setting: string, videoSetting: string): AudioDevice | undefined {
     const devices = listAudioDevices();
     let screen = '';
     try {
@@ -194,5 +194,40 @@ export function gameSoundNode(setting: string, videoSetting: string): string {
         // No xrandr answer: no screen output to follow.
     }
     const id = resolveAudioOutput(setting, screen, devices);
-    return devices.find(device => device.id === id)?.node ?? '';
+    return devices.find(device => device.id === id);
+}
+
+/**
+ * Whether a playback stream of `card` (its id, "vc4hdmi0"), or of any card when none is given,
+ * is open: what /proc/asound/<card>/pcm<N>p/sub<N>/status says, "closed" when it is not. False
+ * where /proc/asound is not there.
+ */
+export function playbackOpen(card?: string, root: string = '/proc/asound'): boolean {
+    try {
+        const cards = card ? [card] : readdirSync(root).filter(name => /^card\d+$/.test(name));
+        return cards.some(name => readdirSync(join(root, name)).filter(pcm => /^pcm\d+p$/.test(pcm)).some(pcm =>
+            readdirSync(join(root, name, pcm)).filter(sub => /^sub\d+$/.test(sub)).some(sub =>
+                !readFileSync(join(root, name, pcm, sub, 'status'), 'utf8').startsWith('closed'))));
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Waits for `card` to be let go (playbackOpen()), `timeoutMs` at most. Without a sound server,
+ * a card is opened by one program at a time: Chromium keeps the front's output open a few
+ * seconds after its last sound (UiSounds.ts), and a MAME started meanwhile finds the card busy
+ * and plays its whole game silent. Resolves with the time waited, null when it was still open.
+ */
+export async function waitForPlaybackClosed(
+    card: string | undefined, timeoutMs: number, isOpen: (card?: string) => boolean = playbackOpen, pollMs: number = 100,
+): Promise<number | null> {
+    const start = Date.now();
+    while (isOpen(card)) {
+        if (Date.now() - start >= timeoutMs) {
+            return null;
+        }
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+    return Date.now() - start;
 }

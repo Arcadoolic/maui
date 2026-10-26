@@ -1,4 +1,4 @@
-import {describe, it, expect, afterEach} from 'vitest';
+import {describe, it, expect, afterEach, vi} from 'vitest';
 import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
@@ -7,7 +7,7 @@ import {
 } from '@/class/VideoOutput';
 import {
     applyAudioOutput, audioDeviceForScreen, FOLLOW_SCREEN, parseAlsaDevices, parseAudioOutputSetting, removeAudioOutput, renderAsoundrc,
-    resolveAudioOutput, soundServerRunning,
+    playbackOpen, resolveAudioOutput, soundServerRunning, waitForPlaybackClosed,
 } from '@/class/AudioOutput';
 import {currentScreenOutput} from '@/class/VideoOutput';
 
@@ -171,5 +171,56 @@ describe('sound output', () => {
         mkdirSync(join(dir, 'pulse'));
         writeFileSync(join(dir, 'pulse', 'native'), '');
         expect(soundServerRunning(dir)).toBe(true);
+    });
+});
+
+describe('sound card let go before a game', () => {
+    let dir: string;
+    afterEach(() => {
+        rmSync(dir, {recursive: true, force: true});
+        vi.useRealTimers();
+    });
+
+    // A Raspberry Pi 4's /proc/asound: the jack, and the two HDMI cards, by number and by id.
+    function procAsound(hdmiStatus: string): string {
+        dir = mkdtempSync(join(tmpdir(), 'maui-asound-'));
+        const status = {Headphones: 'closed\n', vc4hdmi0: hdmiStatus, vc4hdmi1: 'closed\n'};
+        Object.entries(status).forEach(([id, text], index) => {
+            for (const name of [`card${index}`, id]) {
+                mkdirSync(join(dir, name, 'pcm0p', 'sub0'), {recursive: true});
+                writeFileSync(join(dir, name, 'pcm0p', 'sub0', 'status'), text);
+                writeFileSync(join(dir, name, 'pcm0p', 'info'), 'card: 0\n');
+            }
+        });
+        return dir;
+    }
+
+    it('tells a card in use from one let go, by its id or among all of them', () => {
+        const root = procAsound('state: RUNNING\nowner_pid   : 5182\n');
+        expect(playbackOpen('vc4hdmi0', root)).toBe(true);
+        expect(playbackOpen('vc4hdmi1', root)).toBe(false);
+        expect(playbackOpen(undefined, root)).toBe(true);
+        writeFileSync(join(root, 'vc4hdmi0', 'pcm0p', 'sub0', 'status'), 'closed\n');
+        writeFileSync(join(root, 'card1', 'pcm0p', 'sub0', 'status'), 'closed\n');
+        expect(playbackOpen('vc4hdmi0', root)).toBe(false);
+        expect(playbackOpen(undefined, root)).toBe(false);
+        // Nothing to read (macOS, a card gone): nothing to wait for.
+        expect(playbackOpen('vc4hdmi0', join(root, 'nope'))).toBe(false);
+    });
+
+    it('waits for the card to be let go, and no longer than told', async () => {
+        dir = mkdtempSync(join(tmpdir(), 'maui-asound-'));
+        vi.useFakeTimers();
+        let open = true;
+        const waited = waitForPlaybackClosed('vc4hdmi0', 10_000, () => open);
+        await vi.advanceTimersByTimeAsync(3000);
+        open = false;
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await waited).toBeGreaterThanOrEqual(3000);
+
+        const never = waitForPlaybackClosed('vc4hdmi0', 10_000, () => true);
+        await vi.advanceTimersByTimeAsync(10_100);
+        expect(await never).toBeNull();
+        expect(await waitForPlaybackClosed('vc4hdmi0', 10_000, () => false)).toBe(0);
     });
 });

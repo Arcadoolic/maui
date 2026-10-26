@@ -2,13 +2,17 @@ import {existsSync, readFileSync, rmSync, writeFileSync} from 'fs';
 import {isAbsolute, join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
+import Log from 'electron-log';
 import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
 import {gameVolumeArgs} from '@/class/Volume';
-import {gameSoundNode, listAudioDevices, soundServerRunning} from '@/class/AudioOutput';
+import {gameSoundDevice, listAudioDevices, soundServerRunning, waitForPlaybackClosed} from '@/class/AudioOutput';
 import {applyGameSoundOutput, resetBrokenGameSoundMaps, speakerTagsFromListXml} from '@/class/MameSoundMap';
+
+// How long a game's launch waits for its sound card (waitForSoundCard()).
+const SOUND_CARD_WAIT_MS = 10_000;
 
 export default class MameService {
     public mameIni: { [key: string]: string[] } = {};
@@ -120,7 +124,7 @@ export default class MameService {
      * default output. Read from the config file each time, the BO may have changed it. Never what
      * keeps a game from starting.
      */
-    protected prepareSoundOutput(romName: string): string[] {
+    protected async prepareSoundOutput(romName: string): Promise<string[]> {
         if (process.platform !== 'linux') {
             return [];
         }
@@ -131,15 +135,31 @@ export default class MameService {
             }
             const config = new Config();
             config.load();
-            applyGameSoundOutput(this.cfgDirectory, romName, gameSoundNode(config.audioOutput, config.videoOutput), () => speakerTagsFromListXml(execFileSync(
+            const device = gameSoundDevice(config.audioOutput, config.videoOutput);
+            applyGameSoundOutput(this.cfgDirectory, romName, device?.node ?? '', () => speakerTagsFromListXml(execFileSync(
                 this.mameBinary,
                 ['-listxml', romName, ...this.mameHomeArgs],
                 {encoding: 'utf8', cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024},
             )));
+            await this.waitForSoundCard(romName, device?.id.split(',')[0]);
             return ['-sound', 'sdl'];
         } catch (error) {
             console.warn('[MameService] Sound output not set for ' + romName + ':', error);
             return [];
+        }
+    }
+
+    /**
+     * Without a sound server, the card the game plays on (any card when MAME picks it) must be
+     * let go by the front's sounds before MAME opens it (AudioOutput.ts waitForPlaybackClosed()).
+     * Launched anyway past SOUND_CARD_WAIT_MS: a silent game rather than none.
+     */
+    protected async waitForSoundCard(romName: string, card: string | undefined): Promise<void> {
+        const waited = await waitForPlaybackClosed(card, SOUND_CARD_WAIT_MS);
+        if (waited === null) {
+            Log.warn(`[MameService] ${card ?? 'A sound card'} still busy after ${SOUND_CARD_WAIT_MS} ms: ${romName} may be silent.`);
+        } else if (waited > 0) {
+            Log.info(`[MameService] Waited ${waited} ms for ${card ?? 'the sound cards'} to be let go before ${romName}.`);
         }
     }
 
@@ -249,7 +269,7 @@ export default class MameService {
     public startGame(romName: string, capture = this.prepareCapture(romName)): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
-            const soundArgs = this.prepareSoundOutput(romName);
+            const soundArgs = await this.prepareSoundOutput(romName);
             // With the BO's capture daemon, so the BO can list and rebind this game's controls
             // while it's being played (see CaptureDaemon.ts), and which reports on the game for its
             // scores (ScoreCapture.ts): `capture` prepared beforehand to say where.
