@@ -342,6 +342,25 @@ describe('Config front idle', () => {
             expect(config.frontSleepScreenOff).toBe(expected);
         }
     });
+
+    it('plays the front\'s sounds by default, and reads their settings back', () => {
+        const defaults = new Config();
+        expect([defaults.uiSoundsEnabled, defaults.uiSoundsVolume, defaults.uiSoundsNavigation]).toEqual([true, 60, true]);
+        for (const [enabled, volume, navigation, expected] of [
+            [false, 0, false, [false, 0, false]],
+            [undefined, undefined, undefined, [true, 60, true]],
+            ['no', 250, 'no', [true, 60, true]],
+        ] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            Object.assign(raw, {uiSoundsEnabled: enabled, uiSoundsVolume: volume, uiSoundsNavigation: navigation});
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect([config.uiSoundsEnabled, config.uiSoundsVolume, config.uiSoundsNavigation]).toEqual(expected);
+        }
+    });
 });
 
 describe('Config.save', () => {
@@ -406,6 +425,9 @@ describe('Config.save', () => {
             'ssUserPassword',
             'thumbsDownRemovesFavorite',
             'uiMode',
+            'uiSoundsEnabled',
+            'uiSoundsNavigation',
+            'uiSoundsVolume',
             'updateChannel',
             'videoOutput',
             'voteEnabled',

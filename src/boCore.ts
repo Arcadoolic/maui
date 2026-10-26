@@ -13,6 +13,7 @@ import {SqliteOpinionStore} from '@/class/SqliteOpinionStore';
 import {ScoreCapture} from '@/class/ScoreCapture';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
+import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
@@ -182,12 +183,12 @@ const IDLE_CHECK_MS = 60 * 1000;
 /**
  * Starts what always runs, and opens the BO's port. `databaseReady` resolves once the database
  * exists and is migrated (see bootstrapDatabase()); BO requests arriving before wait for it.
- * `reloadFront`, `onReset`, `showGameOnFront`, `frontControls` and `favoritesChanged` are handed to
- * the BO when it is loaded (see createBoApp()).
+ * `reloadFront`, `onReset`, `showGameOnFront`, `frontControls`, `favoritesChanged` and `uiSounds` are
+ * handed to the BO when it is loaded (see createBoApp()).
  */
 export function startCore(
     port: number, reloadFront: () => void, onReset: () => void, showGameOnFront: FrontGameShower,
-    frontControls: FrontControls, favoritesChanged: FrontFavoritesNotifier,
+    frontControls: FrontControls, favoritesChanged: FrontFavoritesNotifier, uiSounds: FrontUiSounds,
 ): StartedCore {
     const refusedAvatars = new Set<string>();
     // Default avatars written as SVG by an earlier version become PNGs (see DefaultAvatar.ts). A
@@ -270,7 +271,7 @@ export function startCore(
         // from the disk before this.
         load: async (): Promise<BoApp> => {
             const {createBoApp} = await import('@/boServer');
-            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront, frontControls, favoritesChanged);
+            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront, frontControls, favoritesChanged, uiSounds);
         },
         idleMs: () => {
             const config = new Config();
