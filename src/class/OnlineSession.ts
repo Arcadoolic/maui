@@ -13,6 +13,7 @@ import {buildApiCredentials, isOnlineConfigured} from '@/class/OnlineCredentials
 import {readOsName} from '@/class/OsName';
 import type {FlushSummary} from '@/class/ScoreOutbox';
 import type {OpinionReportSummary} from '@/class/OpinionReport';
+import type {RecoverySummary} from '@/class/ScoreRecovery';
 
 // ONLINE mode for one run of MAUI: a startup report, then a heartbeat at a fixed interval (no
 // backoff: MAUI-API shows a cabinet offline after 3 minutes without one, see docs/DECISIONS.md).
@@ -52,6 +53,9 @@ export interface OnlineSessionDeps {
     // Refreshes the cache of the shared leaderboards (LeaderboardSync.ts): after the startup report,
     // with the player sync, and after scores were accepted. None: no leaderboards (tests).
     refreshLeaderboards?: (client: MauiApiClient) => Promise<unknown>;
+    // Answers the administrators' requests to recover a score (ScoreRecovery.ts, maui-api D93):
+    // after the player sync, at startup and every PLAYER_SYNC_EVERY heartbeats. None: no requests.
+    answerRecoveries?: (client: MauiApiClient) => Promise<RecoverySummary>;
 }
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -153,7 +157,7 @@ export class OnlineSession {
             this.identify(startup.value);
             this.heartbeats = 0;
             this.caughtUp = true;
-            void this.syncPlayers(client);
+            void this.syncPlayers(client).then(() => this.answerRecoveries(client));
             void this.flushScores(client).then(() => this.refreshLeaderboards(client));
             void this.reportOpinions(client);
         }
@@ -321,6 +325,30 @@ export class OnlineSession {
         return this.flushing;
     }
 
+    /**
+     * Never throws: a failure is logged, the requests stay open for the next turn. A score found
+     * goes with the next flush: now, or with the one in progress or the next heartbeat's.
+     */
+    private async answerRecoveries(client: MauiApiClient): Promise<void> {
+        if (!this.deps.answerRecoveries) {
+            return;
+        }
+        try {
+            const summary = await this.deps.answerRecoveries(client);
+            if (summary.failure) {
+                this.log(`[online] Score recovery requests not all answered (${summary.failure.kind}): tried again later.`);
+            }
+            if (summary.queued > 0 || summary.notFound > 0) {
+                this.log(`[online] Score recovery requests: ${summary.queued} found and queued, ${summary.notFound} not found.`);
+            }
+            if (summary.queued > 0) {
+                void this.flushScores(client);
+            }
+        } catch (error) {
+            this.log(`[online] Score recovery requests not answered: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
     /** Never throws: a failed sync is logged and retried at the next turn. Resolves to its success. */
     private syncPlayers(client: MauiApiClient): Promise<boolean> {
         if (!this.deps.syncPlayers) {
@@ -347,7 +375,7 @@ export class OnlineSession {
             if (generation === this.generation) {
                 if (result.kind === 'ok' && (++this.heartbeats % PLAYER_SYNC_EVERY === 0 || !this.caughtUp)) {
                     this.caughtUp = true;
-                    void this.syncPlayers(client);
+                    void this.syncPlayers(client).then(() => this.answerRecoveries(client));
                     void this.refreshLeaderboards(client);
                 }
                 if (result.kind === 'ok') {

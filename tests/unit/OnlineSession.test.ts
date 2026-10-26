@@ -445,6 +445,32 @@ describe('player sync', () => {
     });
 });
 
+describe('score recovery requests', () => {
+    it('answers them after the player sync, then every 10 heartbeats', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const order: string[] = [];
+        const syncPlayers = vi.fn(async () => {
+            order.push('sync');
+            return {kind: 'ok' as const, value: 0};
+        });
+        const answerRecoveries = vi.fn(async () => {
+            order.push('answer');
+            return {queued: 1, notFound: 0, failure: null};
+        });
+        const flushScores = vi.fn(async () => ({sent: 0, accepted: 0, notImproved: 0, rejected: {}}));
+        const {instance} = session(fetchImpl, {syncPlayers, answerRecoveries, flushScores});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(order).toEqual(['sync', 'answer']);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(answerRecoveries).toHaveBeenCalledTimes(2);
+        instance.stop();
+    });
+});
+
 describe('score flush', () => {
     const empty = {sent: 0, accepted: 0, notImproved: 0, rejected: {}};
 

@@ -122,7 +122,8 @@ import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
     renderPinReveal, type OnlineBoMessage,
 } from '@/class/OnlinePlayersBo';
-import type {ApiFailure, MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
+import type {ApiFailure, MauiApiClient, OnlinePlayer, RecoveryNotFoundReason} from '@/class/MauiApiClient';
+import {readRecoveryAnswers} from '@/class/ScoreRecovery';
 import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
 import {
     describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, resolveRepository,
@@ -6802,7 +6803,37 @@ function renderOnlineSection(messages: MauiPageMessages): string {
         ? {stopped: status.state === 'stopped', status: describeOnlineStatus(status, view.url)}
         : undefined;
     return renderOnlineCard(view, {error: messages.onlineError, info: messages.onlineInfo}, session)
+        + renderScoreRecoveriesCard()
         + (process.env.NODE_ENV === 'development' && onlineSession?.currentClient() ? renderScoresBackfillCard(messages) : '');
+}
+
+const RECOVERY_REASONS: Record<RecoveryNotFoundReason, string> = {
+    not_in_table: 'not in the table',
+    player_not_on_cabinet: 'player not on this cabinet',
+    unsupported: 'no extractor for this game',
+    no_file: 'no hiscore file yet',
+    unreadable: 'file or table unreadable',
+};
+
+/**
+ * The administrators' requests to recover a score this cabinet answered (maui-api D93,
+ * ScoreRecovery.ts): its owner knows what MAUI-API asked for. Nothing before the first one.
+ */
+function renderScoreRecoveriesCard(): string {
+    const answers = readRecoveryAnswers();
+    if (answers.length === 0) {
+        return '';
+    }
+    return `
+        <section class="card">
+            <h2>Scores recovered on request</h2>
+            <p>MAUI-API asked this cabinet for scores its files hold but MAUI-API never got: MAUI looked for each one
+            in the game's table and sent it when it was there.</p>
+            <ul>${answers.map(answer => `<li>${escapeHtml(formatDateTime(new Date(answer.answeredAt)))}:
+                <code>${escapeHtml(answer.romname)}</code>, ${escapeHtml(answer.score.toLocaleString('en-US'))}
+                ${answer.pseudo3 ? `by <code>${escapeHtml(answer.pseudo3)}</code>` : ''}:
+                ${answer.outcome === 'queued' ? 'found, sent' : `not found (${escapeHtml(RECOVERY_REASONS[answer.reason ?? 'not_in_table'])})`}</li>`).join('')}</ul>
+        </section>`;
 }
 
 /** Development only (HiscoreBackfill.ts): fills MAUI-API with this cabinet's hiscores. */
