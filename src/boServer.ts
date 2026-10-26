@@ -3531,7 +3531,11 @@ function renderPageTail(): string {
                     // unlike every in-place response above: a real navigation there also sidesteps
                     // the GET /login page's own gap (it doesn't redirect an already-authenticated
                     // visitor away by itself), and refreshing a real URL is always safe anyway.
-                    if (response.redirected) {
+                    // Back to this very page (the Advanced configuration toggle, POST /advanced):
+                    // shown in place like the rest instead, which keeps the subtab open - the
+                    // URL's hash, which the server never sees - and the scroll position.
+                    var target = new URL(response.url);
+                    if (response.redirected && target.pathname + target.search !== location.pathname + location.search) {
                         location.href = response.url;
                         return null;
                     }
