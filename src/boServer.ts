@@ -103,7 +103,8 @@ import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
 import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
-import {DEFAULT_UI_SOUNDS_VOLUME} from '@/class/UiSounds';
+import {DEFAULT_UI_SOUNDS_VOLUME, isUiSoundToggle} from '@/class/UiSounds';
+import {disabledFromForm, renderSoundsCard} from '@/class/SoundsBoCard';
 import {parseVolumePercent} from '@/class/Volume';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
@@ -6224,20 +6225,6 @@ function shownCategories(config: Config): string {
 }
 
 /** One checkbox of the MAUI card: a short label, and what it does in smaller text below. */
-// The BO's "Test on the cabinet" (POST /maui/ui-sounds/test): the volume typed in, saved or not.
-const UI_SOUNDS_TEST_SCRIPT = `<script>(function () {
-    var button = document.querySelector('[data-ui-sounds-test]');
-    var result = document.querySelector('[data-ui-sounds-test-result]');
-    button.addEventListener('click', function () {
-        var body = new URLSearchParams({volume: document.getElementById('uiSoundsVolume').value});
-        fetch('/maui/ui-sounds/test', {method: 'POST', body: body, credentials: 'same-origin'})
-            .then(function (response) {
-                result.textContent = response.ok ? 'Played on the cabinet.' : 'The cabinet\\'s screen is not open.';
-            })
-            .catch(function () { result.textContent = 'No answer from the cabinet.'; });
-    });
-})();</script>`;
-
 function renderSettingCheckbox(name: string, checked: boolean, label: string, detail?: string): string {
     return `
                 <label class="checkbox-row">
@@ -6287,20 +6274,6 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         'The games players have a score on, the one scored on last first.')}
                     ${renderSettingCheckbox('showHiscoresOnlyCategory', config.showHiscoresOnlyCategory, 'Show the "Hiscores Only" category',
                         'The games whose hiscores can be extracted.')}
-                </fieldset>
-                <fieldset class="settings-group">
-                    <legend>Sounds</legend>
-                    <label for="gamesVolume">Volume of the games, in % <span class="checkbox-row-detail">From the next game launched. 100 leaves MAME's own level.</span></label>
-                    <input type="number" id="gamesVolume" name="gamesVolume" min="0" max="100" step="5" value="${config.gamesVolume}">
-                    ${renderSettingCheckbox('uiSoundsEnabled', config.uiSoundsEnabled, 'MAUI\'s sounds',
-                        'Short bleeps on the list of games and when a game is launched. The games\' own sound is not affected.')}
-                    <label for="uiSoundsVolume">Volume of MAUI's sounds, in % <span class="checkbox-row-detail">Of the system's volume, which stays as it is.</span></label>
-                    <input type="number" id="uiSoundsVolume" name="uiSoundsVolume" min="0" max="100" step="5" value="${config.uiSoundsVolume}">
-                    <button type="button" data-ui-sounds-test>Test on the cabinet</button>
-                    <span class="checkbox-row-detail" data-ui-sounds-test-result role="status"></span>
-                    ${renderSettingCheckbox('uiSoundsNavigation', config.uiSoundsNavigation, 'Navigation sounds',
-                        'A tick on each game and category. Unticked, only the launch of a game and the way back sound.')}
-                    ${UI_SOUNDS_TEST_SCRIPT}
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>When nobody plays</legend>
@@ -6387,6 +6360,7 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
 
 interface MauiPageMessages {
     mauiInfo?: string;
+    soundsInfo?: string;
     importExportError?: string;
     importExportInfo?: string;
     dangerZoneInfo?: string;
@@ -6897,6 +6871,7 @@ function renderMauiPage(
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
         {id: 'controls', label: 'Controls', html: renderMauiControlsCard(readMauiBindings(), messages.controls)
             + renderHotkeysCard(readMauiBindings(), messages.hotkeys)},
+        {id: 'sounds', label: 'Sounds', html: renderSoundsCard(config, messages.soundsInfo)},
     ];
     if (network) {
         sections.push({
@@ -6947,7 +6922,8 @@ function renderMauiPage(
                         : (messages.bluetoothError ?? messages.bluetoothInfo ?? messages.bluetoothFound) !== undefined ? 'bluetooth'
                             : messages.mauiInfo !== undefined ? 'general'
                                 : messages.controls !== undefined ? 'controls'
-                                    : undefined;
+                                    : messages.soundsInfo !== undefined ? 'sounds'
+                                        : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -10799,10 +10775,6 @@ export function createBoApp(
         const previousOnlineBadge = `${config.onlineBadgeDotOnly}/${config.onlineBadgeHideIp}`;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         config.onlineBadgeHideIp = req.body.onlineBadgeHideIp === 'on';
-        config.uiSoundsEnabled = req.body.uiSoundsEnabled === 'on';
-        config.gamesVolume = parseVolumePercent(req.body.gamesVolume, config.gamesVolume);
-        config.uiSoundsVolume = parseVolumePercent(req.body.uiSoundsVolume, config.uiSoundsVolume);
-        config.uiSoundsNavigation = req.body.uiSoundsNavigation === 'on';
         // Read again by userRegistration.vue at each registration: no reload of the front.
         config.cabinetPlayersPublic = req.body.cabinetPlayersPublic === 'on';
         // Only offered on a dedicated cabinet (see renderMauiCard()): absent from the form elsewhere,
@@ -10839,19 +10811,33 @@ export function createBoApp(
             // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
-        // Read again by the front without a reload (UiSounds.ts).
-        uiSounds.changed();
         await sendMauiPage(req, res, config, {
             mauiInfo: audioError ? `Configuration saved, but not the sound output: ${audioError}` : 'Configuration saved.',
         });
     });
 
+    // The Sounds subtab (SoundsBoCard.ts).
+    app.post('/maui/sounds/save', async (req, res) => {
+        const config = new Config();
+        config.load();
+        config.gamesVolume = parseVolumePercent(req.body.gamesVolume, config.gamesVolume);
+        config.uiSoundsEnabled = req.body.uiSoundsEnabled === 'on';
+        config.uiSoundsVolume = parseVolumePercent(req.body.uiSoundsVolume, config.uiSoundsVolume);
+        config.uiSoundsDisabled = disabledFromForm(req.body.uiSoundsOn);
+        config.save();
+        // Read again by the front without a reload (UiSounds.ts).
+        uiSounds.changed();
+        await sendMauiPage(req, res, config, {soundsInfo: 'Sounds saved.'});
+    });
+
+    // A Play button of the Sounds subtab: that sound on the cabinet, at the volume typed in.
     app.post('/maui/ui-sounds/test', (req, res) => {
         if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
             res.status(403).end();
             return;
         }
-        res.status(uiSounds.test(parseVolumePercent(req.body.volume, DEFAULT_UI_SOUNDS_VOLUME)) ? 204 : 409).end();
+        const sound = isUiSoundToggle(req.body.sound) ? req.body.sound : 'launch';
+        res.status(uiSounds.test(parseVolumePercent(req.body.volume, DEFAULT_UI_SOUNDS_VOLUME), sound) ? 204 : 409).end();
     });
 
     app.post('/maui/online/save', async (req, res) => {

@@ -1,5 +1,9 @@
 import {describe, it, expect, beforeEach, vi, afterEach} from 'vitest';
-import {UI_SOUNDS, UiSoundPlayer, uiSoundMs, type UiSoundName} from '@/class/UiSounds';
+import {
+    parseDisabledUiSounds, UI_SOUND_TOGGLES, UI_SOUNDS, UiSoundPlayer, uiSoundMs, voteSound, type UiSoundName, type UiSoundToggle,
+} from '@/class/UiSounds';
+import {disabledFromForm} from '@/class/SoundsBoCard';
+import {VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
 
 // What the player does with a context: the notes started, their peak gain, and whether it closed.
 class FakeContext {
@@ -7,6 +11,7 @@ class FakeContext {
     public destination = {};
     public notes: {freq: number; gain: number}[] = [];
     public closed = false;
+    public stopped = 0;
 
     public createOscillator() {
         const note = {freq: 0, gain: 0};
@@ -20,7 +25,9 @@ class FakeContext {
                 return gain;
             },
             start: () => this.notes.push(note),
-            stop: () => undefined,
+            stop: () => {
+                this.stopped += 1;
+            },
         };
     }
 
@@ -45,7 +52,7 @@ class FakeContext {
     }
 }
 
-const ON = {enabled: true, volume: 100, navigation: true};
+const ON = {enabled: true, volume: 100, disabled: [] as UiSoundToggle[]};
 
 describe('UiSoundPlayer', () => {
     let now: number;
@@ -85,12 +92,28 @@ describe('UiSoundPlayer', () => {
         expect(contexts).toHaveLength(0);
     });
 
-    it('leaves out the navigation sounds alone when the BO says so', () => {
-        player.setSettings({...ON, navigation: false});
+    it('leaves out each sound switched off in the BO, and nothing else', async () => {
+        vi.useFakeTimers();
+        player.setSettings({...ON, disabled: ['move', 'champion', 'hotkeyCharge', 'launch']});
         player.play('move');
-        player.play('category');
+        player.startCharge(1000);
+        await player.playAndWait('champion');
+        await player.playThenSuspend('launch');
+        player.resume();
         player.play('back');
         expect(played()).toHaveLength(UI_SOUNDS.back.notes.length);
+    });
+
+    it('plays a sound the BO asks for, even switched off, and the charge for a second', async () => {
+        vi.useFakeTimers();
+        player.setSettings({...ON, enabled: false, disabled: ['star', 'hotkeyCharge']});
+        player.test(50, 'star');
+        expect(played()).toHaveLength(UI_SOUNDS.star.notes.length);
+        player.test(50, 'hotkeyCharge');
+        expect(played().at(-1)?.freq).toBe(220);
+        const stopped = contexts[0].stopped;
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(contexts[0].stopped).toBe(stopped + 1);
     });
 
     it('plays no navigation tick over another sound, nor two ticks too close', () => {
@@ -130,6 +153,31 @@ describe('UiSoundPlayer', () => {
         expect(contexts).toHaveLength(2);
     });
 
+    it('waits for a sound to be over, not for one that does not play', async () => {
+        vi.useFakeTimers();
+        let over = false;
+        void player.playAndWait('champion').then(() => {
+            over = true;
+        });
+        await vi.advanceTimersByTimeAsync(uiSoundMs('champion') - 1);
+        expect(over).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(over).toBe(true);
+        player.setSettings({...ON, enabled: false});
+        await player.playAndWait('champion');
+    });
+
+    it('rises a note while a hotkey is held, and stops it when let go', () => {
+        player.startCharge(2000);
+        expect(played().map(note => note.freq)).toEqual([220]);
+        player.stopCharge();
+        player.stopCharge();
+        expect(contexts[0].stopped).toBe(1);
+        player.setSettings({...ON, enabled: false});
+        player.startCharge(2000);
+        expect(played()).toHaveLength(1);
+    });
+
     it('plays the test sound even switched off', () => {
         player.setSettings({...ON, enabled: false});
         player.test(40);
@@ -140,7 +188,8 @@ describe('UiSoundPlayer', () => {
 describe('the sounds', () => {
     it('stay short and audible', () => {
         for (const name of Object.keys(UI_SOUNDS) as UiSoundName[]) {
-            expect(uiSoundMs(name)).toBeLessThanOrEqual(500);
+            // The champion's fanfare is the longest, about a second.
+            expect(uiSoundMs(name)).toBeLessThanOrEqual(1000);
             for (const note of UI_SOUNDS[name].notes) {
                 expect(note.freq).toBeGreaterThanOrEqual(100);
                 expect(note.freq).toBeLessThanOrEqual(5000);
@@ -148,5 +197,28 @@ describe('the sounds', () => {
                 expect(note.gain).toBeLessThanOrEqual(1);
             }
         }
+    });
+});
+
+describe('voteSound', () => {
+    it('plays the star over the thumbs up it goes with, nothing for a neutral vote', () => {
+        expect(voteSound(VOTE_UP, true)).toBe('star');
+        expect(voteSound(VOTE_UP, false)).toBe('voteUp');
+        expect(voteSound(VOTE_DOWN, false)).toBe('voteDown');
+        expect(voteSound(VOTE_NEUTRAL, false)).toBeNull();
+    });
+});
+
+describe('the sounds switched off', () => {
+    it('keeps the known names, once each, in the order of the list', () => {
+        expect(parseDisabledUiSounds(['star', 'move', 'star', 'nope', 3])).toEqual(['move', 'star']);
+        expect(parseDisabledUiSounds('move')).toEqual([]);
+        expect(parseDisabledUiSounds(undefined)).toEqual([]);
+    });
+
+    it('are the ones left unticked in the BO\'s form', () => {
+        expect(disabledFromForm(UI_SOUND_TOGGLES.filter(name => name !== 'wake'))).toEqual(['wake']);
+        expect(disabledFromForm('launch')).toEqual(UI_SOUND_TOGGLES.filter(name => name !== 'launch'));
+        expect(disabledFromForm(undefined)).toEqual(UI_SOUND_TOGGLES);
     });
 });
