@@ -351,6 +351,10 @@ le device par défaut) doit être audible sur l'écran.
 > sans elle prend la première carte, le jack. MAUI l'écrit donc avant chaque
 > partie, et `~/.asoundrc` fait passer `hw:` par `plug` : SDL ouvre la carte
 > par son nom `hw:`, que le HDMI du Pi refuse en direct (§6.2).
+> Tout ceci seulement sans serveur son : si PipeWire ou PulseAudio tourne
+> (Raspberry Pi OS desktop), c'est lui qui choisit la sortie. Le BO grise
+> alors « Sound output », MAUI supprime son `~/.asoundrc` et remet sur la
+> sortie par défaut (`node=""`) les `<sound_map>` que MAME a laissés muets.
 
 ### 6.3 Sink par défaut PulseAudio (MAME lui-même)
 
