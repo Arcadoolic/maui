@@ -75,6 +75,18 @@ describe('PlaySession', () => {
         expect(h.report).toHaveBeenCalledWith([row(1, 12000, '')]);
     });
 
+    it('reports the scores of two players of the same game together, when an nvram game ends', async () => {
+        // mslug: its table is only written when MAME quits, both players' rows at once.
+        const h = harness([row(1, 300000, 'APE'), row(2, 200000, 'TIO')], false);
+        await h.session.start();
+
+        h.set([row(1, 312000, 'NOB'), row(2, 300000, 'APE'), row(3, 200000, 'TIO'), row(4, 154000, 'SAJ')]);
+        await h.session.end();
+
+        expect(h.report).toHaveBeenCalledOnce();
+        expect(h.report).toHaveBeenCalledWith([row(1, 312000, 'NOB'), row(4, 154000, 'SAJ')]);
+    });
+
     it('reads a game without a watch (nvram) when it ends', async () => {
         const h = harness([row(1, 100, 'NOB')], false);
         await h.session.start();
