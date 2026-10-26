@@ -1,3 +1,4 @@
+import {isNameless} from '@/class/HiscoreSupport';
 import {isPublishable, queueDeclaredScore, type PublishablePlayer, type ScoreStore} from '@/class/ScoreOutbox';
 import type {GameIntegrityReport} from '@/class/GameIntegrity';
 import type {PendingAttribution} from '@/class/ScoreCaptureBridge';
@@ -42,7 +43,7 @@ export interface Settlement {
 /** The held scores the final table still has without a name, each row counting once. */
 function stillInTable(scores: HeldScore[], table: TableRow[]): HeldScore[] {
     const left = new Map<number, number>();
-    for (const row of table.filter(row => row.name === '')) {
+    for (const row of table.filter(row => isNameless(row.name))) {
         left.set(row.score, (left.get(row.score) ?? 0) + 1);
     }
     return scores.filter((held) => {
@@ -64,7 +65,7 @@ export class ScoreDeclarations {
 
     /** Keeps the nameless rows among those a game just added. */
     public hold(romname: string, rows: TableRow[], context: HoldContext): void {
-        const nameless = rows.filter(row => row.name === '' && row.score > 0);
+        const nameless = rows.filter(row => isNameless(row.name) && row.score > 0);
         if (nameless.length === 0) {
             return;
         }

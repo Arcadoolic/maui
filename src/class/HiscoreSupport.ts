@@ -17,6 +17,14 @@ export function hasHiscoreExtraction(romName: string): boolean {
  * Nickname a score row is attributed to: the first 3 characters of its name, upper-cased, matched
  * against the players' pseudo_3 (HiscoreService.saveHiscores(), and the BO's Hiscores page).
  */
+/**
+ * A row the game wrote without a name: empty, or only spaces (1942 pads its player rows with 8),
+ * whose player is asked on the cabinet (ScoreDeclaration.ts).
+ */
+export function isNameless(name: string): boolean {
+    return name.trim() === '';
+}
+
 export function scorePseudo3(name: string): string {
     return name.substring(0, 3).toUpperCase();
 }
