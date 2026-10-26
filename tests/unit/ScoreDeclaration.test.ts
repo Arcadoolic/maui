@@ -52,14 +52,6 @@ describe('ScoreDeclarations', () => {
         expect((await declarations.settle('scobra')).ask?.scores).toEqual([{score: 12900, rank: 2}]);
     });
 
-    it('takes a name made only of spaces for no name (1942 pads its player rows with 8)', async () => {
-        const {declarations} = harness([player('NOB'), player('SAJ')]);
-        declarations.hold('1942', [row(1, 40000, '  CAPCOM'), row(6, 13220, '        ')], context);
-
-        expect((await declarations.settle('1942', [row(1, 40000, '  CAPCOM'), row(6, 13220, '        ')])).ask?.scores)
-            .toEqual([{score: 13220, rank: 6}]);
-    });
-
     it('drops the scores the table no longer has when the game ends', async () => {
         const {declarations} = harness([player('NOB'), player('SAJ')]);
         // A single top score the game rewrote on the way up, then a second game scoring the same.

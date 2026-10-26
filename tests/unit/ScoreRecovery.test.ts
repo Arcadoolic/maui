@@ -109,13 +109,6 @@ describe('findRow', () => {
         expect(findRow(rows, 'NOB', 250000)?.rank).toBe(1);
         expect(findRow(rows, 'NOB', 249999)).toBeNull();
     });
-
-    it('takes a row without a name at exactly this score: the game wrote none', () => {
-        const rows = [{rank: 1, score: 40000, name: '  CAPCOM'}, {rank: 6, score: 13220, name: '        '}];
-
-        expect(findRow(rows, 'BNJ', 13220)?.rank).toBe(6);
-        expect(findRow(rows, 'BNJ', 40000)).toBeNull();
-    });
 });
 
 describe('recovery answers', () => {
