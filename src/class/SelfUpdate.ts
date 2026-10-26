@@ -1,12 +1,12 @@
 import {app as electronApp} from 'electron';
 import {spawn} from 'child_process';
 import {chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync} from 'fs';
-import {rm} from 'fs/promises';
 import {homedir, tmpdir} from 'os';
 import {dirname, join} from 'path';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
 import {countEntries, extractAppImage} from '@/class/AppImageExtract';
+import {plainFs} from '@/class/PlainFs';
 import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
 import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
@@ -163,9 +163,10 @@ export async function installAppImage(downloadUrl: string, progress: UpdateProgr
             throw error;
         }
     } finally {
-        // The previous backup (a whole version) goes with it: asynchronous too.
+        // The previous backup (a whole version) goes with it: asynchronous too, and without
+        // Electron's .asar support, which made rm() go into app.asar and fail (PlainFs.ts).
         progress({step: 'cleanup'});
-        await rm(workDir, {recursive: true, force: true});
+        await plainFs.promises.rm(workDir, {recursive: true, force: true});
     }
 }
 
