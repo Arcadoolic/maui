@@ -10014,6 +10014,7 @@ export function createBoApp(
         }
         const {game, report} = await inspectGameHiscores(romName);
         const config = new Config();
+        config.load();
         const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
         const comment = String(req.body.comment || '').slice(0, 1000);
         const withLogs = req.body.logs === 'on';
