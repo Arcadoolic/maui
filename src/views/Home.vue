@@ -119,7 +119,7 @@ import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
-import {uiSounds, uiSoundSettings, voteSound} from '@/class/UiSounds';
+import {uiSounds, uiSoundSettings, voteSound, type UiSoundToggle} from '@/class/UiSounds';
 import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
@@ -1023,7 +1023,7 @@ const onUiSoundsChanged = () => {
     config.load();
     uiSounds.setSettings(uiSoundSettings(config));
 };
-const onUiSoundsTest = (_event: unknown, volume: number) => uiSounds.test(volume);
+const onUiSoundsTest = (_event: unknown, volume: number, sound: UiSoundToggle) => uiSounds.test(volume, sound);
 onUnmounted(() => {
     stopLeaderboardsListener?.();
     stopHotkeysListener();

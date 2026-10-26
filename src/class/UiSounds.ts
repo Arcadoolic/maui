@@ -24,7 +24,7 @@ export interface UiNote {
 
 export interface UiSound {
     notes: UiNote[];
-    // A navigation sound: switched off on its own in the BO, and never over another sound.
+    // A navigation sound: never over another sound, and at most one every NAVIGATION_MIN_GAP_MS.
     navigation: boolean;
 }
 
@@ -93,12 +93,28 @@ export const UI_SOUNDS: Record<UiSoundName, UiSound> = {
 
 // A hotkey held: one note rising with the loader until the hotkey goes off or is let go.
 const CHARGE = {from: 220, to: 880, wave: 'triangle' as OscillatorType, gain: 0.5};
+// The charge's length when the BO plays it.
+const CHARGE_TEST_MS = 1000;
+
+/** Every sound the BO's Sounds subtab lists, each played and switched off on its own. */
+export type UiSoundToggle = UiSoundName | 'hotkeyCharge';
+export const UI_SOUND_TOGGLES: UiSoundToggle[] = [...Object.keys(UI_SOUNDS) as UiSoundName[], 'hotkeyCharge'];
+
+export function isUiSoundToggle(value: unknown): value is UiSoundToggle {
+    return UI_SOUND_TOGGLES.includes(value as UiSoundToggle);
+}
+
+/** The sounds switched off, from the config file or the BO's form: the known names, once each. */
+export function parseDisabledUiSounds(value: unknown): UiSoundToggle[] {
+    const values = Array.isArray(value) ? value : [];
+    return UI_SOUND_TOGGLES.filter(name => values.includes(name));
+}
 
 export interface UiSoundSettings {
     enabled: boolean;
     // 0 to 100.
     volume: number;
-    navigation: boolean;
+    disabled: UiSoundToggle[];
 }
 
 // Square waves are loud: 100% in the BO is this much of the output's full scale.
@@ -109,7 +125,7 @@ const NAVIGATION_MIN_GAP_MS = 60;
 export const DEFAULT_UI_SOUNDS_VOLUME = 60;
 
 export function uiSoundSettings(config: Config): UiSoundSettings {
-    return {enabled: config.uiSoundsEnabled, volume: config.uiSoundsVolume, navigation: config.uiSoundsNavigation};
+    return {enabled: config.uiSoundsEnabled, volume: config.uiSoundsVolume, disabled: config.uiSoundsDisabled};
 }
 
 /** The sound of a vote given on the cabinet: none for a neutral one, which saves nothing. */
@@ -128,7 +144,7 @@ export function uiSoundMs(name: UiSoundName): number {
 type ContextFactory = () => AudioContext;
 
 export class UiSoundPlayer {
-    private settings: UiSoundSettings = {enabled: false, volume: DEFAULT_UI_SOUNDS_VOLUME, navigation: false};
+    private settings: UiSoundSettings = {enabled: false, volume: DEFAULT_UI_SOUNDS_VOLUME, disabled: []};
     private context: AudioContext | undefined;
     // Until when another sound plays, and when the last navigation tick played.
     private busyUntil = 0;
@@ -147,22 +163,31 @@ export class UiSoundPlayer {
     }
 
     public play(name: UiSoundName): void {
-        if (!this.settings.enabled || this.suspended || !this.allowed(name)) {
+        if (!this.playable(name) || !this.allowed(name)) {
             return;
         }
         this.schedule(name, this.settings.volume);
     }
 
-    /** The BO's "Test on the cabinet": the launch sound at the form's volume, even switched off. */
-    public test(volume: number): void {
-        if (!this.suspended) {
-            this.schedule('launch', volume);
+    /**
+     * The BO's Sounds subtab: `name` at the form's volume, even switched off (all of them or this
+     * one), but never while MAME runs.
+     */
+    public test(volume: number, name: UiSoundToggle = 'launch'): void {
+        if (this.suspended) {
+            return;
         }
+        if (name !== 'hotkeyCharge') {
+            this.schedule(name, volume);
+            return;
+        }
+        this.beginCharge(CHARGE_TEST_MS, volume);
+        setTimeout(() => this.stopCharge(), CHARGE_TEST_MS);
     }
 
     /** Plays `name` and resolves once it is over, at once when it does not play. */
     public async playAndWait(name: UiSoundName): Promise<void> {
-        if (!this.settings.enabled || this.suspended) {
+        if (!this.playable(name)) {
             return;
         }
         this.play(name);
@@ -171,8 +196,14 @@ export class UiSoundPlayer {
 
     /** The hotkey charge, rising over `ms` until stopCharge(). */
     public startCharge(ms: number): void {
+        if (this.playable('hotkeyCharge')) {
+            this.beginCharge(ms, this.settings.volume);
+        }
+    }
+
+    private beginCharge(ms: number, volume: number): void {
         this.stopCharge();
-        if (!this.settings.enabled || this.suspended || this.settings.volume <= 0) {
+        if (volume <= 0) {
             return;
         }
         this.context ??= this.createContext();
@@ -183,7 +214,7 @@ export class UiSoundPlayer {
         oscillator.frequency.setValueAtTime(CHARGE.from, start);
         oscillator.frequency.linearRampToValueAtTime(CHARGE.to, start + ms / 1000);
         const gain = context.createGain();
-        gain.gain.setValueAtTime(FULL_SCALE * CHARGE.gain * this.settings.volume / 100, start);
+        gain.gain.setValueAtTime(FULL_SCALE * CHARGE.gain * volume / 100, start);
         oscillator.connect(gain).connect(context.destination);
         oscillator.start(start);
         this.charge = {oscillator, gain};
@@ -203,7 +234,7 @@ export class UiSoundPlayer {
 
     /** Plays `name`, then suspends the player once it is over: a game is about to start. */
     public async playThenSuspend(name: UiSoundName): Promise<void> {
-        if (this.settings.enabled && !this.suspended) {
+        if (this.playable(name)) {
             this.schedule(name, this.settings.volume);
             await new Promise(resolve => setTimeout(resolve, uiSoundMs(name)));
         }
@@ -229,12 +260,16 @@ export class UiSoundPlayer {
         context?.close().catch(() => undefined);
     }
 
+    private playable(name: UiSoundToggle): boolean {
+        return this.settings.enabled && !this.suspended && !this.settings.disabled.includes(name);
+    }
+
     private allowed(name: UiSoundName): boolean {
         if (!UI_SOUNDS[name].navigation) {
             return true;
         }
         const now = this.now();
-        if (!this.settings.navigation || now < this.busyUntil || now - this.lastNavigation < NAVIGATION_MIN_GAP_MS) {
+        if (now < this.busyUntil || now - this.lastNavigation < NAVIGATION_MIN_GAP_MS) {
             return false;
         }
         this.lastNavigation = now;

@@ -7,7 +7,7 @@ import {parseDisplayModeSetting, type DisplayModeSetting} from '@/class/DisplayM
 import {parseUpdateChannel, type UpdateChannel} from '@/class/ReleaseList';
 import {parseVideoOutputSetting} from '@/class/VideoOutput';
 import {FOLLOW_SCREEN, parseAudioOutputSetting} from '@/class/AudioOutput';
-import {DEFAULT_UI_SOUNDS_VOLUME} from '@/class/UiSounds';
+import {DEFAULT_UI_SOUNDS_VOLUME, parseDisabledUiSounds, type UiSoundToggle} from '@/class/UiSounds';
 import {parseVolumePercent} from '@/class/Volume';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
@@ -128,11 +128,11 @@ export default class Config {
 
     // The games' volume, 0 to 100 (Volume.ts gameVolumeArgs(), passed to MAME at each launch).
     public gamesVolume: number = 100;
-    // The front's own sounds (UiSounds.ts): all of them, their volume (0 to 100), and the navigation
-    // ones on their own, which tire first.
+    // The front's own sounds (UiSounds.ts): all of them, their volume (0 to 100), and the ones
+    // switched off one by one in the BO's Sounds subtab.
     public uiSoundsEnabled: boolean = true;
     public uiSoundsVolume: number = DEFAULT_UI_SOUNDS_VOLUME;
-    public uiSoundsNavigation: boolean = true;
+    public uiSoundsDisabled: UiSoundToggle[] = [];
 
     // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
     // dot, or the dot alone, more discreet.
@@ -209,7 +209,7 @@ export default class Config {
             this.uiSoundsEnabled = configFile.uiSoundsEnabled !== false;
             this.gamesVolume = parseVolumePercent(configFile.gamesVolume, 100);
             this.uiSoundsVolume = parseVolumePercent(configFile.uiSoundsVolume, DEFAULT_UI_SOUNDS_VOLUME);
-            this.uiSoundsNavigation = configFile.uiSoundsNavigation !== false;
+            this.uiSoundsDisabled = parseDisabledUiSounds(configFile.uiSoundsDisabled);
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
             this.onlineBadgeHideIp = configFile.onlineBadgeHideIp === true;
             this.cabinetPlayersPublic = configFile.cabinetPlayersPublic === true;
@@ -272,7 +272,7 @@ export default class Config {
                 gamesVolume: this.gamesVolume,
                 uiSoundsEnabled: this.uiSoundsEnabled,
                 uiSoundsVolume: this.uiSoundsVolume,
-                uiSoundsNavigation: this.uiSoundsNavigation,
+                uiSoundsDisabled: this.uiSoundsDisabled,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
                 onlineBadgeHideIp: this.onlineBadgeHideIp,
                 cabinetPlayersPublic: this.cabinetPlayersPublic,

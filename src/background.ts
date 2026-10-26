@@ -322,17 +322,17 @@ app.on('ready', async () => {
             win.webContents.send(FAVORITES_CHANGED_CHANNEL);
         }
     }, {
-        // The BO's MAUI tab saved the front's sounds, or tests them on the cabinet (UiSounds.ts).
+        // The BO's Sounds subtab saved the front's sounds, or plays one on the cabinet (UiSounds.ts).
         changed: () => {
             if (win && !win.isDestroyed()) {
                 win.webContents.send(UI_SOUNDS_CHANGED_CHANNEL);
             }
         },
-        test: (volume) => {
+        test: (volume, sound) => {
             if (!win || win.isDestroyed()) {
                 return false;
             }
-            win.webContents.send(UI_SOUNDS_TEST_CHANNEL, volume);
+            win.webContents.send(UI_SOUNDS_TEST_CHANNEL, volume, sound);
             return true;
         },
     });

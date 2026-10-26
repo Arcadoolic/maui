@@ -345,21 +345,21 @@ describe('Config front idle', () => {
 
     it('plays the front\'s sounds by default, and reads their settings back', () => {
         const defaults = new Config();
-        expect([defaults.uiSoundsEnabled, defaults.uiSoundsVolume, defaults.uiSoundsNavigation]).toEqual([true, 60, true]);
+        expect([defaults.uiSoundsEnabled, defaults.uiSoundsVolume, defaults.uiSoundsDisabled]).toEqual([true, 60, []]);
         expect(defaults.gamesVolume).toBe(100);
-        for (const [enabled, volume, navigation, expected] of [
-            [false, 0, false, [false, 0, false]],
-            [undefined, undefined, undefined, [true, 60, true]],
-            ['no', 250, 'no', [true, 60, true]],
+        for (const [enabled, volume, disabled, expected] of [
+            [false, 0, ['star', 'move', 'nope'], [false, 0, ['move', 'star']]],
+            [undefined, undefined, undefined, [true, 60, []]],
+            ['no', 250, 'move', [true, 60, []]],
         ] as const) {
             const seed = new Config();
             seed.save();
             const raw = JSON.parse(readFileSync(configPath, 'utf8'));
-            Object.assign(raw, {uiSoundsEnabled: enabled, uiSoundsVolume: volume, uiSoundsNavigation: navigation});
+            Object.assign(raw, {uiSoundsEnabled: enabled, uiSoundsVolume: volume, uiSoundsDisabled: disabled});
             writeFileSync(configPath, JSON.stringify(raw));
             const config = new Config();
             config.load();
-            expect([config.uiSoundsEnabled, config.uiSoundsVolume, config.uiSoundsNavigation]).toEqual(expected);
+            expect([config.uiSoundsEnabled, config.uiSoundsVolume, config.uiSoundsDisabled]).toEqual(expected);
         }
     });
 
@@ -440,8 +440,8 @@ describe('Config.save', () => {
             'ssUserPassword',
             'thumbsDownRemovesFavorite',
             'uiMode',
+            'uiSoundsDisabled',
             'uiSoundsEnabled',
-            'uiSoundsNavigation',
             'uiSoundsVolume',
             'updateChannel',
             'videoOutput',
