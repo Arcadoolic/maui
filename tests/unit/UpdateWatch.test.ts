@@ -30,6 +30,20 @@ describe('newestStableAbove', () => {
 });
 
 describe('UpdateWatch', () => {
+    it('only gives a version this machine can install', async () => {
+        const withFiles = (tag: string, assets: string[], publishedAt: string) => ({
+            tag_name: tag, prerelease: true, published_at: publishedAt,
+            assets: assets.map(name => ({name, browser_download_url: `https://example.org/${name}`})),
+        });
+        const watch = new UpdateWatch('2.18.0+dev.aaaaaaa', async () => [
+            withFiles('2.18.0+dev.aaaaaaa', ['app-setup.exe', 'app.AppImage'], '2026-10-26T08:00:00Z'),
+            withFiles('2.18.0+dev.bbbbbbb', ['app.exe-less.AppImage'], '2026-10-26T09:00:00Z'),
+        ], names => names.some(name => name.endsWith('.exe')));
+        await watch.check();
+
+        expect(watch.available('prereleases')).toBeNull();
+    });
+
     it('knows nothing before its first check', () => {
         expect(new UpdateWatch('2.14.0', async () => [release('2.15.0')]).available()).toBeNull();
     });

@@ -27,6 +27,7 @@ import {BoOnDemand, type BoApp} from '@/class/BoOnDemand';
 import {CABINET_BO_PORT, describeBoUrl} from '@/class/BoUrl';
 import {isKioskLayout} from '@/class/KioskRestart';
 import {UpdateWatch} from '@/class/UpdateWatch';
+import {findInstallAsset, isSelfUpdateCapable} from '@/class/SelfUpdate';
 // Same *TS import shape as Database.class.ts, which is not imported: it pulls in
 // GameService.class -> MameService.class -> Helpers.class.ts's @electron/remote import at module
 // scope, which would break the main process. The models themselves are electron-free.
@@ -299,7 +300,11 @@ export function startCore(
     // Neither keeps the process alive, nor outlives the port.
     idleCheck.unref();
     server.on('close', () => clearInterval(idleCheck));
-    const updates = new UpdateWatch(getRunningVersion());
+    // Only what this machine can install, when it installs updates itself: elsewhere (macOS, a
+    // development checkout) every version is worth announcing.
+    const updates = new UpdateWatch(getRunningVersion(), undefined, isSelfUpdateCapable()
+        ? names => findInstallAsset(names) !== null
+        : undefined);
     updates.start();
     server.on('close', () => updates.stop());
     return {

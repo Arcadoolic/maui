@@ -48,6 +48,14 @@ describe('newestAbove', () => {
         expect(newestAbove(releases, '2.16.0', 'prereleases')).toBe('2.17.0+dev.bbbbbbb');
     });
 
+    it('passes over a development build this machine cannot install, dating the running one all the same', () => {
+        const onlyAaa = (candidate: {tag_name: string}) => candidate.tag_name !== '2.17.0+dev.bbbbbbb';
+
+        expect(newestAbove(releases, '2.17.0', 'prereleases', onlyAaa)).toBe('2.17.0+dev.aaaaaaa');
+        expect(newestAbove(releases, '2.17.0+dev.aaaaaaa', 'prereleases', onlyAaa)).toBeNull();
+        expect(newestAbove(releases, '2.16.1', 'releases', candidate => candidate.tag_name !== '2.17.0')).toBeNull();
+    });
+
     it('never offers a draft', () => {
         expect(newestAbove([release('2.18.0', '2026-10-25T10:00:00Z', false, true)], '2.17.0', 'prereleases')).toBeNull();
     });
