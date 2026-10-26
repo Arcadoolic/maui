@@ -51,8 +51,9 @@ export interface OnlineSessionDeps {
     // report and every successful heartbeat. None: no report (tests).
     reportOpinions?: (client: MauiApiClient) => Promise<OpinionReportSummary>;
     // Refreshes the cache of the shared leaderboards (LeaderboardSync.ts): after the startup report,
-    // with the player sync, and after scores were accepted. None: no leaderboards (tests).
-    refreshLeaderboards?: (client: MauiApiClient) => Promise<unknown>;
+    // with the player sync, after scores were accepted, and when a game ends, the game just played
+    // first (`first`). None: no leaderboards (tests).
+    refreshLeaderboards?: (client: MauiApiClient, first?: string) => Promise<unknown>;
     // Answers the administrators' requests to recover a score (ScoreRecovery.ts, maui-api D93):
     // after the player sync, at startup and every PLAYER_SYNC_EVERY heartbeats. None: no requests.
     answerRecoveries?: (client: MauiApiClient) => Promise<RecoverySummary>;
@@ -82,6 +83,12 @@ export class OnlineSession {
     // is down at startup, the first heartbeat that gets through does it, without waiting for
     // the PLAYER_SYNC_EVERY cycle.
     private caughtUp = false;
+    // A game is being played (pause()): only the heartbeat goes on, the rest waits for resume().
+    private paused = false;
+    // The player sync came due during the game: done once it ends.
+    private syncDue = false;
+    // The game just played, whose leaderboard the next refresh asks first.
+    private played: string | null = null;
     // Bumped by every start/stop: a call still in flight from an older run must not reschedule.
     private generation = 0;
     private readonly settingsPath: string;
@@ -248,7 +255,35 @@ export class OnlineSession {
      * is not running (the scores wait for it). Never throws.
      */
     public flushScoresNow(): Promise<FlushSummary | null> {
-        return this.client && this.status.state === 'running' ? this.flushScores(this.client) : Promise.resolve(null);
+        return this.client && this.status.state === 'running' && !this.paused ? this.flushScores(this.client) : Promise.resolve(null);
+    }
+
+    /**
+     * A game starts: the network work waits (player sync, scores, votes, leaderboards), not to
+     * take the cabinet's processor nor bandwidth from the game. Only the heartbeat goes on, so
+     * that MAUI-API still sees the cabinet.
+     */
+    public pause(): void {
+        this.paused = true;
+    }
+
+    /**
+     * The game `romname` ended: its scores are sent at once, then the leaderboards refreshed, that
+     * game's first, and what came due during the game is done. Never throws.
+     */
+    public resume(romname?: string): void {
+        this.paused = false;
+        this.played = romname ?? null;
+        const client = this.client;
+        if (!client || this.status.state !== 'running') {
+            return;
+        }
+        void this.flushScores(client).then(() => this.refreshLeaderboards(client));
+        void this.reportOpinions(client);
+        if (this.syncDue) {
+            this.syncDue = false;
+            void this.syncPlayers(client).then(() => this.answerRecoveries(client));
+        }
     }
 
     /** One refresh at a time. Never throws: the cache keeps what it had. */
@@ -260,7 +295,9 @@ export class OnlineSession {
             return this.refreshing;
         }
         const refresh = this.deps.refreshLeaderboards;
-        this.refreshing = refresh(client)
+        const first = this.played ?? undefined;
+        this.played = null;
+        this.refreshing = refresh(client, first)
             .then(() => undefined)
             .catch((error: unknown) => {
                 this.log(`[online] Leaderboards not refreshed: ${error instanceof Error ? error.message : String(error)}`);
@@ -374,11 +411,15 @@ export class OnlineSession {
             const result = await client.heartbeat();
             if (generation === this.generation) {
                 if (result.kind === 'ok' && (++this.heartbeats % PLAYER_SYNC_EVERY === 0 || !this.caughtUp)) {
-                    this.caughtUp = true;
-                    void this.syncPlayers(client).then(() => this.answerRecoveries(client));
-                    void this.refreshLeaderboards(client);
+                    if (this.paused) {
+                        this.syncDue = true;
+                    } else {
+                        this.caughtUp = true;
+                        void this.syncPlayers(client).then(() => this.answerRecoveries(client));
+                        void this.refreshLeaderboards(client);
+                    }
                 }
-                if (result.kind === 'ok') {
+                if (result.kind === 'ok' && !this.paused) {
                     void this.flushScores(client);
                     void this.reportOpinions(client);
                 }

@@ -236,7 +236,7 @@ export function startCore(
         syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars, saveLocalAvatar, new AvatarLedgerFile()),
         flushScores: client => flushOutbox(scoreStore, client),
         reportOpinions: client => reportOpinions(opinionStore, client),
-        refreshLeaderboards: client => leaderboards.refresh(client),
+        refreshLeaderboards: (client, first) => leaderboards.refresh(client, first),
         answerRecoveries: client => answerScoreRecoveries(client, {
             players: () => User.findAll(),
             readTable: (romname, table) => readRecoveryTable(getMameHomePath(), romname, table),
