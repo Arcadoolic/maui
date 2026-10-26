@@ -69,6 +69,17 @@ describe('queueScores', () => {
         expect(store.entries.size).toBe(1);
     });
 
+    it('queues a score for each of two players of the same game, the best one of each', async () => {
+        const store = new MemoryStore();
+        const queued = await queueScores(store, [player('NOB'), player('SAJ')], [
+            row(1, 312000, 'NOB'), row(4, 154000, 'SAJ'), row(6, 90000, 'NOB'),
+        ], {...context, romname: 'mslug'});
+
+        expect(queued.map(score => [score.playerId, score.romname, score.score, score.rankOnCabinet]))
+            .toEqual([['id-NOB', 'mslug', 312000, 1], ['id-SAJ', 'mslug', 154000, 4]]);
+        expect(store.entries.size).toBe(2);
+    });
+
     it('skips what does not beat the cached best', async () => {
         const store = new MemoryStore();
         await store.setBest('id-NOB', 'dkong', 'default', 12900);
