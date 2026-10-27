@@ -125,6 +125,9 @@ export default class Config {
     // never. Counted from the last key when the idle curtain is switched off.
     public frontSleepMinutes: number = 30;
     public frontSleepScreenOff: boolean = true;
+    // How long the launch screen (Home.vue's startGame(), LaunchStage.vue) is shown before MAME is
+    // started, the launch sound included, 0 to 30 seconds.
+    public launchStageSeconds: number = 2;
 
     // The games' volume, 0 to 100 (Volume.ts gameVolumeArgs(), passed to MAME at each launch).
     public gamesVolume: number = 100;
@@ -206,6 +209,10 @@ export default class Config {
                 ? configFile.frontSleepMinutes
                 : 30;
             this.frontSleepScreenOff = configFile.frontSleepScreenOff !== false;
+            this.launchStageSeconds = Number.isInteger(configFile.launchStageSeconds)
+                && configFile.launchStageSeconds >= 0 && configFile.launchStageSeconds <= 30
+                ? configFile.launchStageSeconds
+                : 2;
             this.uiSoundsEnabled = configFile.uiSoundsEnabled !== false;
             this.gamesVolume = parseVolumePercent(configFile.gamesVolume, 100);
             this.uiSoundsVolume = parseVolumePercent(configFile.uiSoundsVolume, DEFAULT_UI_SOUNDS_VOLUME);
@@ -269,6 +276,7 @@ export default class Config {
                 frontIdleShowsGames: this.frontIdleShowsGames,
                 frontSleepMinutes: this.frontSleepMinutes,
                 frontSleepScreenOff: this.frontSleepScreenOff,
+                launchStageSeconds: this.launchStageSeconds,
                 gamesVolume: this.gamesVolume,
                 uiSoundsEnabled: this.uiSoundsEnabled,
                 uiSoundsVolume: this.uiSoundsVolume,

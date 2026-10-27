@@ -329,6 +329,20 @@ describe('Config front idle', () => {
         }
     });
 
+    it('shows the launch screen 2 seconds by default, a whole number of seconds from 0 to 30', () => {
+        expect(new Config().launchStageSeconds).toBe(2);
+        for (const [written, expected] of [[0, 0], [12, 12], [30, 30], [31, 2], [-1, 2], [1.5, 2], ['5', 2], [undefined, 2]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.launchStageSeconds = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.launchStageSeconds).toBe(expected);
+        }
+    });
+
     it('switches the screen off asleep unless told not to', () => {
         expect(new Config().frontSleepScreenOff).toBe(true);
         for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
@@ -424,6 +438,7 @@ describe('Config.save', () => {
             'frontUpdateEnabled',
             'fullscreen',
             'gamesVolume',
+            'launchStageSeconds',
             'mameBinaryName',
             'mamePath',
             'onlineBadgeDotOnly',

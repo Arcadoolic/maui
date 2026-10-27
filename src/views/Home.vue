@@ -1,5 +1,5 @@
 <template>
-    <div class="home" :class="{empty: noGames, asleep}">
+    <div class="home" :class="{empty: noGames, asleep, launching}">
         <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -47,7 +47,7 @@
 
         <transition name="games">
             <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"
-                   :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
+                   :launching="launching" :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
         </transition>
 
         <transition name="alpha-jump">
@@ -59,8 +59,14 @@
         <transition name="flyer">
             <div class="flyer-container" v-show="showFlyer">
                 <div class="flyer" :class="{landscape: flyerLandscape}" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+                <div class="launchLoading" v-if="launching">
+                    <div class="spinner"><i v-for="cell in 8" :key="cell"></i></div>
+                    <p>Loading<span>.</span><span>.</span><span>.</span></p>
+                </div>
             </div>
         </transition>
+
+        <LaunchStage v-if="launching && selectedGame" :game="selectedGame"></LaunchStage>
 
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
                     :mouse="mouseNav" @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
@@ -84,6 +90,7 @@ import Games from '@/components/Games.vue';
 import Gamepads from '@/class/Gamepads.class';
 import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
+import LaunchStage from '@/components/LaunchStage.vue';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
 import {useSetupProgress} from '@/composables/useSetupProgress';
@@ -155,6 +162,7 @@ const timeouts: {
     hideBackOffice?: number,
     hideNotice?: number,
     hold?: number,
+    endLaunchStage?: number,
     holdRepeat?: number,
     roll?: number,
     hideReveal?: number,
@@ -191,6 +199,13 @@ const showGames = ref(true);
 const showTitle = ref(true);
 const showFlyer = ref(true);
 const showLoader = ref(false);
+// The game picked is starting (startGame()): the other marquees leave, the picked one and its flyer
+// grow, and LaunchStage.vue tells the podium, until MAME takes the screen (endLaunchStageBehindMame()).
+const launching = ref(false);
+// Without a blur (no window manager to move the focus to MAME's window), the stage ends this long
+// after MAME was started.
+const LAUNCH_STAGE_MAX_MS = 10_000;
+let endLaunchStage: (() => void) | null = null;
 const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
@@ -673,6 +688,8 @@ function lockFront() {
 
 function unlockFront() {
     gameRunning = false;
+    endLaunchStage?.();
+    launching.value = false;
     syncIdleBlock();
     Gamepads.resume();
 }
@@ -695,14 +712,22 @@ function startGame() {
         return;
     }
     lockFront();
+    launching.value = true;
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     // The capture daemon's directory first: the game's report on itself goes with its scores.
     const capture = mameService.prepareCapture(game.romName);
     void watchScoreReveal(game);
-    // The launch sound, then the sound card let go for MAME (UiSounds.ts).
-    void uiSounds.playThenSuspend('launch').then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
+    // The launch sound, then the sound card let go for MAME (UiSounds.ts), and the stage shown as
+    // long as the BO's MAUI card says (Config.launchStageSeconds, which it may have changed since
+    // the front loaded): MAME does not take the processor from it, nor cover it.
+    const config = getConfiguration();
+    config.load();
+    const stageShown = new Promise<void>(resolve => setTimeout(resolve, config.launchStageSeconds * 1000));
+    void Promise.all([uiSounds.playThenSuspend('launch'), stageShown])
+        .then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
         .then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
+            endLaunchStageBehindMame();
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
@@ -751,6 +776,26 @@ function startGame() {
             Log.error(err);
         },
     );
+}
+
+/**
+ * Once MAME's window has taken the focus, the front goes back behind it as it was: nothing is
+ * seen moving back when the game is quit.
+ */
+function endLaunchStageBehindMame() {
+    const end = () => {
+        window.removeEventListener('blur', end);
+        clearTimeout(timeouts.endLaunchStage);
+        endLaunchStage = null;
+        launching.value = false;
+    };
+    if (!document.hasFocus()) {
+        end();
+        return;
+    }
+    endLaunchStage = end;
+    window.addEventListener('blur', end);
+    timeouts.endLaunchStage = window.setTimeout(end, LAUNCH_STAGE_MAX_MS);
 }
 
 /** The leaderboard of a game being launched, to tell its new scores once it is quit. Never throws. */
@@ -1496,6 +1541,134 @@ if (!getIsInit()) {
         width: 100cqh;
         height: 100cqw;
         transform: translate(-50%, -50%) rotateZ(-94deg);
+    }
+
+    /* A game starting (launching): the flyer grows a little, the category and the scores leave,
+       the game's title stays (Games.vue and LaunchStage.vue do the rest). */
+    .flyer-container {
+        transition: transform 0.5s ease-out 0.25s;
+    }
+
+    /* The title comes down just above the picked marquee (Games.vue's li.selected: its top at 33vh
+       once moved and grown), over its middle. */
+    .gameTitle {
+        top: 0;
+        left: 0;
+        transition: top 0.45s ease 0.25s, transform 0.45s ease 0.25s, left 0.45s ease 0.25s,
+            width 0.45s ease 0.25s;
+    }
+
+    .home.launching .gameTitle {
+        top: 33vh;
+        left: 5vw;
+        width: 58vw;
+        padding-bottom: 1vh;
+        transform: translateY(-100%);
+        background: none;
+    }
+
+    .home.launching .flyer-container {
+        transform: scale(1.08);
+    }
+
+    /* Over the flyer while the game starts: how long MAME takes to load is not known, so it turns
+       until MAME takes the screen. Tilted like a portrait flyer (a landscape one fills the same
+       place). */
+    .launchLoading {
+        position: absolute;
+        inset: 0;
+        transform: rotateZ(-4deg);
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4vh;
+        color: #fff513;
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 2vw;
+        text-shadow: 0 3px 0 rgb(255, 81, 0), 0 6px 0 #000000;
+        animation: loading-in 0.4s ease-out 0.3s both;
+    }
+
+    /* Pixel art: 8 square blocks around a 3x3 grid, the lit one going round clockwise with a
+       trail, in steps. In Lite mode (no endless animation, App.vue) they all stand lit. */
+    .launchLoading .spinner {
+        display: grid;
+        grid-template-columns: repeat(3, 2.4vh);
+        grid-template-rows: repeat(3, 2.4vh);
+        gap: 0.6vh;
+    }
+
+    .launchLoading .spinner i {
+        background: #fff513;
+        box-shadow: 0 0.6vh 0 rgb(255, 81, 0);
+        animation: loading-chase 0.8s steps(1) infinite;
+    }
+
+    .launchLoading .spinner i:nth-child(1) { grid-area: 1 / 1; animation-delay: -0.7s; }
+    .launchLoading .spinner i:nth-child(2) { grid-area: 1 / 2; animation-delay: -0.6s; }
+    .launchLoading .spinner i:nth-child(3) { grid-area: 1 / 3; animation-delay: -0.5s; }
+    .launchLoading .spinner i:nth-child(4) { grid-area: 2 / 3; animation-delay: -0.4s; }
+    .launchLoading .spinner i:nth-child(5) { grid-area: 3 / 3; animation-delay: -0.3s; }
+    .launchLoading .spinner i:nth-child(6) { grid-area: 3 / 2; animation-delay: -0.2s; }
+    .launchLoading .spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.1s; }
+    .launchLoading .spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: 0s; }
+
+    .launchLoading p span {
+        animation: loading-dot 1.2s steps(1) infinite;
+    }
+
+    .launchLoading p span:nth-child(2) {
+        animation-delay: 0.4s;
+    }
+
+    .launchLoading p span:nth-child(3) {
+        animation-delay: 0.8s;
+    }
+
+    html.lite .launchLoading .spinner i, html.lite .launchLoading p span {
+        animation: none;
+    }
+
+    @keyframes loading-in {
+        0% {
+            opacity: 0;
+        }
+        100% {
+            opacity: 1;
+        }
+    }
+
+    /* Lit, then dimmer at each step as the light moves on round the ring. */
+    @keyframes loading-chase {
+        0% {
+            opacity: 1;
+        }
+        12.5% {
+            opacity: 0.6;
+        }
+        25% {
+            opacity: 0.35;
+        }
+        37.5% {
+            opacity: 0.15;
+        }
+    }
+
+    @keyframes loading-dot {
+        0% {
+            opacity: 0;
+        }
+        50% {
+            opacity: 1;
+        }
+    }
+
+    .home.launching .categoryTitle, .home.launching .categories,
+    .home.launching .hiscores {
+        opacity: 0;
+        transition: opacity 0.3s ease-in;
     }
 
     .flyer-enter-from, .flyer-leave-to {
