@@ -6278,6 +6278,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         'The games players have a score on, the one scored on last first.')}
                     ${renderSettingCheckbox('showHiscoresOnlyCategory', config.showHiscoresOnlyCategory, 'Show the "Hiscores Only" category',
                         'The games whose hiscores can be extracted.')}
+                    <label for="launchStageSeconds">Seconds before a game starts <span class="checkbox-row-detail">The launch screen (the game's podium and the score to beat), the launch sound included, then MAME is started. 0 = at once.</span></label>
+                    <input type="number" id="launchStageSeconds" name="launchStageSeconds" min="0" max="30" step="1" value="${config.launchStageSeconds}">
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>When nobody plays</legend>
@@ -10776,6 +10778,11 @@ export function createBoApp(
             config.frontSleepMinutes = frontSleepMinutes;
         }
         config.frontSleepScreenOff = req.body.frontSleepScreenOff === 'on';
+        // Read again by the front at each launch: no reload.
+        const launchStageSeconds = Number(req.body.launchStageSeconds);
+        if (Number.isInteger(launchStageSeconds) && launchStageSeconds >= 0 && launchStageSeconds <= 30) {
+            config.launchStageSeconds = launchStageSeconds;
+        }
         const previousOnlineBadge = `${config.onlineBadgeDotOnly}/${config.onlineBadgeHideIp}`;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         config.onlineBadgeHideIp = req.body.onlineBadgeHideIp === 'on';

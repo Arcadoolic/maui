@@ -1,10 +1,11 @@
 <template>
-    <div class="gamesContainer" :class="{mouse}" data-mouse-nav>
+    <div class="gamesContainer" :class="{mouse, launching}" data-mouse-nav>
         <div class="selectedGameBackground"></div>
         <div class="games">
             <ul ref="gameList">
                 <li v-if="windowStart > 0" aria-hidden="true" :style="{height: (windowStart * 10) + '%'}"></li>
                 <li v-for="{game, index} in visibleGames" :key="game.id_game" :class="{selected: selectedGameIndex === index}"
+                    :style="{transitionDelay: launchDelay(index)}"
                     @click="mouse && emit('pick', index)">
                     <div class="marquee"
                          :style="{
@@ -41,7 +42,10 @@ const props = withDefaults(defineProps<{
     focused?: boolean;
     // Windowed mode: a click picks a game (Home.vue launches the one already selected).
     mouse?: boolean;
-}>(), {selectedGameIndex: 0, focused: true, mouse: false});
+    // The selected game is starting (Home.vue's startGame()): the others leave on the left, the
+    // nearest last, and the selected one moves towards the middle and grows.
+    launching?: boolean;
+}>(), {selectedGameIndex: 0, focused: true, mouse: false, launching: false});
 
 const emit = defineEmits<{pick: [index: number]}>();
 
@@ -74,6 +78,16 @@ watch(() => props.selectedGameIndex, (val) => {
         gameListRef.value.style.top = (-10 * val) + '%';
     }
 });
+
+// Between two marquees leaving: those 5 rows or more away from the selected one leave together.
+const LAUNCH_STAGGER_MS = 50;
+
+function launchDelay(index: number): string {
+    if (!props.launching) {
+        return '0ms';
+    }
+    return Math.max(0, 5 - Math.abs(props.selectedGameIndex - index)) * LAUNCH_STAGGER_MS + 'ms';
+}
 
 function findMediaPath(dirPath: string, filenames: string[], romName: string): string | null {
     const i = filenames.indexOf(romName + '.png');
@@ -170,6 +184,35 @@ function hasFlyerLogoFallback(romName: string): boolean {
         top: 0;
     }
 
+    /* A game starting (launching): over the flyer, which grows behind the marquee. */
+    .gamesContainer.launching {
+        z-index: 1;
+    }
+
+    .games ul li {
+        transition: transform 0.35s ease-in, opacity 0.35s ease-in;
+    }
+
+    .gamesContainer.launching li:not(.selected) {
+        transform: translateX(-120%);
+        opacity: 0;
+    }
+
+    .gamesContainer.launching li.selected {
+        transform: translate(8%, -10%) scale(1.15);
+        /* Once the others have started to leave, with a little overshoot. */
+        transition: transform 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) 0.25s;
+    }
+
+    .selectedGameBackground {
+        transition: opacity 0.3s ease-in;
+    }
+
+    .gamesContainer.launching .selectedGameBackground,
+    .gamesContainer.launching .champions {
+        opacity: 0;
+    }
+
     .games .marquee {
         /*margin-left: 10%;*/
         display: inline-block;
@@ -245,6 +288,7 @@ function hasFlyerLogoFallback(romName: string): boolean {
         right: -10%;
         height: 100%;
         width: 100%;
-        /*transition: all 0.3s;*/
+        /* Its avatars go to the stage under the marquee while a game starts (LaunchStage.vue). */
+        transition: opacity 0.2s ease-in;
     }
 </style>
