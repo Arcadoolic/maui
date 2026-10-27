@@ -2045,6 +2045,23 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             letter-spacing: 0.05em;
             text-transform: uppercase;
         }
+        /* The volume sliders of the Sounds subtab (SoundsBoCard.ts), their value on the right. */
+        .volume-slider {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+        }
+        .volume-slider input[type="range"] {
+            flex: 1;
+            padding: 8px 0;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .volume-slider output {
+            min-width: 4.5em;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
         .settings-group input[type="number"] {
             max-width: 10em;
         }
