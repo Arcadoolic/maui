@@ -93,6 +93,20 @@ function renderSaved(state: NetworkState, onlyLink: boolean): string {
             </div>`;
 }
 
+function renderSaveForm(): string {
+    return `
+            <h3>Add a network for later</h3>
+            <p class="info">For a cabinet about to move: the network is saved without joining it, and
+            the cabinet joins it on its own once there. Leave the password empty for an open network.</p>
+            <form method="post" action="/maui/network/save" class="inline-form">
+                <input type="text" name="ssid" placeholder="Network name" aria-label="Network name"
+                    maxlength="32" autocomplete="off" required>
+                <input type="password" name="password" placeholder="Password" aria-label="Password"
+                    minlength="8" maxlength="64" autocomplete="off">
+                <button type="submit">Save</button>
+            </form>`;
+}
+
 function renderWifi(state: NetworkState): string {
     if (state.wifi === 'missing') {
         return '<p class="info">This cabinet has no Wi-Fi adapter.</p>';
@@ -103,7 +117,8 @@ function renderWifi(state: NetworkState): string {
     const onlyLink = isWifiTheOnlyLink(state);
     return renderRadioForm(state.wifi === 'on', onlyLink)
         + (state.wifi === 'on' ? renderNetworks(state) : '')
-        + renderSaved(state, onlyLink);
+        + renderSaved(state, onlyLink)
+        + renderSaveForm();
 }
 
 export function renderNetworkCard(state: NetworkState, messages: NetworkCardMessages = {}): string {

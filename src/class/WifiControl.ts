@@ -274,6 +274,30 @@ export async function connectWifi(ssid: string, password: string, nmcli: Nmcli =
     }
 }
 
+/**
+ * Saves `ssid` without joining it, for a cabinet about to move: NetworkManager joins it on its own
+ * once in range. A network already saved gets the new password. WPA2 and WPA2/WPA3 networks only:
+ * out of range, nothing tells a WPA3-only one apart.
+ */
+export async function saveWifi(ssid: string, password: string, nmcli: Nmcli = runNmcli): Promise<void> {
+    const invalid = checkWifiCredentials(ssid, password);
+    if (invalid) {
+        throw new Error(invalid);
+    }
+    const security = password ? ['wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', password] : [];
+    const known = (await readSavedWifi(nmcli)).find(profile => profile.ssid === ssid);
+    if (known) {
+        if (security.length) {
+            await nmcli(['connection', 'modify', 'uuid', known.uuid, ...security], QUICK_MS);
+        }
+        return;
+    }
+    await nmcli(
+        ['connection', 'add', 'type', 'wifi', 'con-name', ssid, 'ssid', ssid, 'connection.autoconnect', 'yes', ...security],
+        QUICK_MS,
+    );
+}
+
 /** Removes a saved Wi-Fi network, and only that: any other profile's uuid is refused. */
 export async function forgetWifi(uuid: string, nmcli: Nmcli = runNmcli): Promise<void> {
     const saved = await readSavedWifi(nmcli);
