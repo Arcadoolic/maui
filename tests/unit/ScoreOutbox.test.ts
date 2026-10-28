@@ -7,7 +7,6 @@ import type {ApiResult, MauiApiClient, ScoreResult, ScoreSubmission} from '@/cla
 
 class MemoryStore implements ScoreStore {
     public entries = new Map<string, OutboxEntry & {nextAt: number}>();
-    public bests = new Map<string, number>();
 
     public async add(submissions: ScoreSubmission[]) {
         submissions.forEach(submission => this.entries.set(submission.id, {submission, attempts: 0, nextAt: 0}));
@@ -23,14 +22,6 @@ class MemoryStore implements ScoreStore {
 
     public async reschedule(ids: string[], attempts: number, nextAttemptAt: Date) {
         ids.forEach(id => Object.assign(this.entries.get(id)!, {attempts, nextAt: nextAttemptAt.getTime()}));
-    }
-
-    public async getBest(playerId: string, romname: string, table: string) {
-        return this.bests.get(`${playerId}/${romname}/${table}`) ?? null;
-    }
-
-    public async setBest(playerId: string, romname: string, table: string, best: number) {
-        this.bests.set(`${playerId}/${romname}/${table}`, best);
     }
 }
 
@@ -80,12 +71,17 @@ describe('queueScores', () => {
         expect(store.entries.size).toBe(2);
     });
 
-    it('skips what does not beat the cached best', async () => {
+    // BNJ on 1941 (2026-10-28): 7181628 accepted, then hidden by the moderation; 102601 had to
+    // reach MAUI-API, the only one to know the player's best.
+    it('queues a score lower than one MAUI-API accepted: that one may have been hidden since', async () => {
         const store = new MemoryStore();
-        await store.setBest('id-NOB', 'dkong', 'default', 12900);
+        await queueScores(store, [player('BNJ')], [row(1, 7181628, 'BNJ')], {...context, romname: '1941'});
+        await flushOutbox(store, clientAnswering(batch => ({kind: 'ok', value: batch.map(score => (
+            {id: score.id, status: 'accepted' as const, best: score.score}))})).client);
 
-        expect(await queueScores(store, [player('NOB')], [row(1, 12900, 'NOB')], context)).toEqual([]);
-        expect(await queueScores(store, [player('NOB')], [row(1, 13000, 'NOB')], context)).toHaveLength(1);
+        const queued = await queueScores(store, [player('BNJ')], [row(2, 102601, 'BNJ')], {...context, romname: '1941'});
+
+        expect(queued.map(score => [score.playerId, score.score])).toEqual([['id-BNJ', 102601]]);
     });
 });
 
@@ -98,14 +94,6 @@ describe('queueDeclaredScore', () => {
         expect([...store.entries.values()].map(entry => entry.submission)).toEqual([queued]);
     });
 
-    it('skips what does not beat the cached best', async () => {
-        const store = new MemoryStore();
-        await store.setBest('id-NOB', 'dkong', 'default', 12900);
-
-        expect(await queueDeclaredScore(store, 'id-NOB', row(1, 12900, ''), context)).toBeNull();
-        expect(store.entries.size).toBe(0);
-    });
-
     it('is the only way in for a row without a name', async () => {
         const store = new MemoryStore();
 
@@ -114,7 +102,7 @@ describe('queueDeclaredScore', () => {
 });
 
 describe('flushOutbox', () => {
-    it('sends by batches, empties the outbox and caches the bests', async () => {
+    it('sends by batches and empties the outbox', async () => {
         const store = new MemoryStore();
         await store.add(Array.from({length: SCORE_BATCH_SIZE + 1}, (_, i) => ({
             id: `s${i}`, playerId: `p${i}`, romname: 'dkong', score: i, achievedAt: context.achievedAt,
@@ -128,7 +116,6 @@ describe('flushOutbox', () => {
         expect(postScores).toHaveBeenCalledTimes(2);
         expect(summary).toEqual({sent: 101, accepted: 100, notImproved: 0, rejected: {player_disabled: 1}});
         expect(store.entries.size).toBe(0);
-        expect(await store.getBest('p7', 'dkong', 'default')).toBe(7);
     });
 
     it('keeps a failed batch for later, waiting longer after each failure', async () => {

@@ -10869,7 +10869,7 @@ export function createBoApp(
     });
 
     // Development only: renderScoresBackfillCard(). Same path as the scores of a game
-    // (ScoreOutbox.ts): queued, then sent, which also fills the best cache.
+    // (ScoreOutbox.ts): queued, then sent.
     app.post('/maui/online/backfill-scores', async (req, res) => {
         if (process.env.NODE_ENV !== 'development') {
             res.sendStatus(404);
@@ -10884,8 +10884,6 @@ export function createBoApp(
             await sendMauiPage(req, res, config, {backfillError: 'ONLINE is not running.'});
             return;
         }
-        // MAUI-API may have been emptied (dev:reset-scores): let it decide again.
-        await scoreStore.clearBests();
         const players = await User.findAll();
         let queued = 0;
         for (const table of await readCabinetTables(getMameHomePath())) {

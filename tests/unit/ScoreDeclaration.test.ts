@@ -5,7 +5,6 @@ import type {ScoreSubmission} from '@/class/MauiApiClient';
 
 class MemoryStore implements ScoreStore {
     public added: ScoreSubmission[] = [];
-    public bests = new Map<string, number>();
 
     public async add(submissions: ScoreSubmission[]) {
         this.added.push(...submissions);
@@ -18,14 +17,6 @@ class MemoryStore implements ScoreStore {
     public async remove() {}
 
     public async reschedule() {}
-
-    public async getBest(playerId: string, romname: string, table: string) {
-        return this.bests.get(`${playerId}/${romname}/${table}`) ?? null;
-    }
-
-    public async setBest(playerId: string, romname: string, table: string, best: number) {
-        this.bests.set(`${playerId}/${romname}/${table}`, best);
-    }
 }
 
 const player = (pseudo3: string, overrides: Partial<PublishablePlayer> = {}): PublishablePlayer => ({
@@ -138,16 +129,6 @@ describe('ScoreDeclarations', () => {
         expect(await declarations.attribute('scobra', 9000, 'id-SAJ')).toBe(true);
         expect(await declarations.attribute('scobra', 8000, 'id-NOB')).toBe(false);
         expect(sent(store).map(([playerId, score]) => [playerId, score])).toEqual([['id-NOB', 12900], ['id-SAJ', 9000]]);
-    });
-
-    it('does not send what does not beat the best MAUI-API knows', async () => {
-        const {declarations, store} = harness([player('NOB'), player('SAJ')]);
-        store.bests.set('id-NOB/scobra/default', 20000);
-        declarations.hold('scobra', [row(1, 12900)], context);
-        await declarations.settle('scobra');
-
-        expect(await declarations.attribute('scobra', 12900, 'id-NOB')).toBe(false);
-        expect(store.added).toEqual([]);
     });
 
     it('refuses a player who is not publishable anymore, or unknown', async () => {
