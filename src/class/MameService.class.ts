@@ -10,6 +10,7 @@ import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
 import {gameVolumeArgs} from '@/class/Volume';
 import {gameSoundDevice, listAudioDevices, soundServerRunning, waitForPlaybackClosed} from '@/class/AudioOutput';
 import {applyGameSoundOutput, resetBrokenGameSoundMaps, speakerTagsFromListXml} from '@/class/MameSoundMap';
+import {watchJoystickReturn} from '@/class/JoystickReturn';
 
 // How long a game's launch waits for its sound card (waitForSoundCard()).
 const SOUND_CARD_WAIT_MS = 10_000;
@@ -288,7 +289,14 @@ export default class MameService {
                     return reject(stderr);
                 }
             });
+            // A joystick lost during the game and back is out of MAME's reach, its quit button
+            // too: the game is quit for the player (JoystickReturn.ts).
+            const stopWatch = watchJoystickReturn(() => {
+                Log.warn('[MameService] A joystick lost during ' + romName + ' is back, out of MAME\'s reach: quitting the game.');
+                void this.stopGame();
+            });
             this.gameProcess.on('close', (e) => {
+                stopWatch();
                 this.gameProcess = null;
                 if (capture) {
                     rmSync(capture.dir, {recursive: true, force: true});

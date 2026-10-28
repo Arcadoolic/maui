@@ -44,7 +44,8 @@ describe('chromiumKey', () => {
 
 describe('findSharedJoysticks', () => {
     const node = (number: number, key: string, vendorId: string, productId: string): JoystickNode => ({
-        number, devicePath: `/dev/input/js${number}`, chromiumKey: key, name: 'pad', vendorId, productId,
+        number, devicePath: `/dev/input/js${number}`, chromiumKey: key, inputPath: `${key}input/input${number}`, name: 'pad',
+        vendorId, productId,
     });
 
     it('keeps the joysticks Chromium merges', () => {
@@ -105,6 +106,7 @@ describe('listJoysticks', () => {
             ['/dev/input/js1', 'Xin-Mo Xin-Mo Dual Arcade', '16c0', '05e1'],
         ]);
         expect(nodes[0].chromiumKey).toBe(nodes[1].chromiumKey);
+        expect(nodes.map((n) => n.inputPath.split('/').pop())).toEqual(['input8', 'input9']);
     });
 
     it('opens both joysticks and leaves the Gamepad API pad of their model out', () => {
@@ -168,7 +170,7 @@ describe('reading a joystick', () => {
         const file = join(dir, 'js0');
         writeFileSync(file, Buffer.concat([jsEvent(0x02, 0, 32767), jsEvent(0x01, 0, 1)]));
         const pad = new JoydevPad({
-            number: 0, devicePath: file, chromiumKey: '', name: 'Xin-Mo Xin-Mo Dual Arcade', vendorId: '16c0', productId: '05e1',
+            number: 0, devicePath: file, chromiumKey: '', inputPath: '', name: 'Xin-Mo Xin-Mo Dual Arcade', vendorId: '16c0', productId: '05e1',
         }, openSync(file, 'r'));
 
         expect(pad.drain()).toBe(true);
