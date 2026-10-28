@@ -1,7 +1,7 @@
 import {describe, it, expect} from 'vitest';
 import {
     checkWifiCredentials, connectWifi, describeNmcliFailure, forgetWifi, isWifiTheOnlyLink, parseLinks, parseRadio,
-    parseWifiList, readNetworkState, splitTerse, type NetworkState, type Nmcli,
+    parseWifiList, readNetworkState, saveWifi, splitTerse, type NetworkState, type Nmcli,
 } from '@/class/WifiControl';
 
 // The Raspberry Pi cabinet (2026-10-08, nmcli 1.52.1): on its cable, Wi-Fi radio off.
@@ -222,6 +222,44 @@ describe('connectWifi', () => {
         const {nmcli, calls} = fakeNmcli();
 
         await expect(connectWifi('Home', 'short', nmcli)).rejects.toThrow('8 to 63');
+        expect(calls).toEqual([]);
+    });
+});
+
+describe('saveWifi', () => {
+    it('saves a network out of range without joining it', async () => {
+        const {nmcli, calls} = fakeNmcli();
+
+        await saveWifi('Friends', 'correct horse', nmcli);
+
+        expect(calls[calls.length - 1]).toEqual([
+            'connection', 'add', 'type', 'wifi', 'con-name', 'Friends', 'ssid', 'Friends', 'connection.autoconnect', 'yes',
+            'wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', 'correct horse',
+        ]);
+        expect(calls.some(args => args.includes('up') || args.includes('connect'))).toBe(false);
+    });
+
+    it('saves an open network without security', async () => {
+        const {nmcli, calls} = fakeNmcli();
+
+        await saveWifi('Cafe', '', nmcli);
+
+        expect(calls[calls.length - 1]).not.toContain('wifi-sec.psk');
+    });
+
+    it('gives a saved network its new password instead of a second profile', async () => {
+        const {nmcli, calls} = fakeNmcli({profiles: {[HOME_UUID]: ['Home', 'Home', '']}});
+
+        await saveWifi('Home', 'new password', nmcli);
+
+        expect(calls[calls.length - 1]).toEqual(['connection', 'modify', 'uuid', HOME_UUID, 'wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk', 'new password']);
+        expect(calls.some(args => args.includes('add'))).toBe(false);
+    });
+
+    it('asks NetworkManager nothing for a password it would refuse', async () => {
+        const {nmcli, calls} = fakeNmcli();
+
+        await expect(saveWifi('Home', 'short', nmcli)).rejects.toThrow('8 to 63');
         expect(calls).toEqual([]);
     });
 });

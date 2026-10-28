@@ -144,7 +144,7 @@ import {
     pairBluetooth, readBluetoothState, removeBluetooth, scanBluetooth, setBluetoothPower,
     type BluetoothDevice, type BluetoothState,
 } from '@/class/BluetoothControl';
-import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, setWifiRadio, type NetworkState} from '@/class/WifiControl';
+import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, saveWifi, setWifiRadio, type NetworkState} from '@/class/WifiControl';
 import {getStaticPath} from '@/staticPath';
 import {
     getDatabasePath, getMameHomePath, getRunningVersion, type BoCore,
@@ -11234,6 +11234,24 @@ export function createBoApp(
             return;
         }
         await sendMauiPage(req, res, config, {networkInfo: `Connected to ${ssid}.`});
+    });
+
+    // A network out of range, saved for when the cabinet gets there (WifiControl.ts saveWifi()).
+    app.post('/maui/network/save', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const ssid = typeof req.body.ssid === 'string' ? req.body.ssid : '';
+        const password = typeof req.body.password === 'string' ? req.body.password : '';
+        try {
+            await saveWifi(ssid, password);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `${ssid || 'Network'} not saved: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: `${ssid} saved: the cabinet joins it once in range.`});
     });
 
     app.post('/maui/network/forget', async (req, res) => {
