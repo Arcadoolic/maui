@@ -22,6 +22,14 @@ const SOUNDS: Record<UiSoundToggle, {label: string; when: string}> = {
     updated: {label: 'Updated', when: 'A new version of MAUI is installed.'},
 };
 
+const SLIDER_SCRIPT = `<script>(function () {
+    document.querySelectorAll('.volume-slider').forEach(function (row) {
+        var slider = row.querySelector('input');
+        var output = row.querySelector('output');
+        slider.addEventListener('input', function () { output.textContent = slider.value + ' %'; });
+    });
+})();</script>`;
+
 // The Play buttons: the sound of the row at the volume typed in, saved or not.
 const PLAY_SCRIPT = `<script>(function () {
     var result = document.querySelector('[data-ui-sound-result]');
@@ -48,6 +56,14 @@ function renderCheckbox(name: string, checked: boolean, label: string, detail: s
                 </label>`;
 }
 
+// A volume slider and its value, kept up to date while it moves (SLIDER_SCRIPT).
+function renderSlider(id: string, value: number): string {
+    return `<div class="volume-slider">
+                    <input type="range" id="${id}" name="${id}" min="0" max="100" step="5" value="${value}">
+                    <output for="${id}">${value} %</output>
+                </div>`;
+}
+
 function renderSoundRows(disabled: UiSoundToggle[]): string {
     return UI_SOUND_TOGGLES.map(name => `
                         <tr>
@@ -66,11 +82,11 @@ export function renderSoundsCard(config: Config, info?: string): string {
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             <form method="post" action="/maui/sounds/save">
                 <label for="gamesVolume">Volume of the games, in % <span class="checkbox-row-detail">From the next game launched. 100 leaves MAME's own level.</span></label>
-                <input type="number" id="gamesVolume" name="gamesVolume" min="0" max="100" step="5" value="${config.gamesVolume}">
+                ${renderSlider('gamesVolume', config.gamesVolume)}
                 ${renderCheckbox('uiSoundsEnabled', config.uiSoundsEnabled, 'MAUI\'s sounds',
                     'Short bleeps on the list of games and around a game. The games\' own sound is not affected.')}
                 <label for="uiSoundsVolume">Volume of MAUI's sounds, in % <span class="checkbox-row-detail">Of the system's volume, which stays as it is.</span></label>
-                <input type="number" id="uiSoundsVolume" name="uiSoundsVolume" min="0" max="100" step="5" value="${config.uiSoundsVolume}">
+                ${renderSlider('uiSoundsVolume', config.uiSoundsVolume)}
                 <p>Each sound, played on the cabinet at the volume above, even unticked. Unticked, the cabinet does not play it.</p>
                 <p class="checkbox-row-detail" data-ui-sound-result role="status"></p>
                 <div class="table-wrap">
@@ -81,6 +97,7 @@ export function renderSoundsCard(config: Config, info?: string): string {
                 </div>
                 <button type="submit">Save</button>
             </form>
+            ${SLIDER_SCRIPT}
             ${PLAY_SCRIPT}
         </section>`;
 }
