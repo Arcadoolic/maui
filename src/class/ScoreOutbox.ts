@@ -7,11 +7,11 @@ import type {GameIntegrityReport} from '@/class/GameIntegrity';
 // Scores waiting for MAUI-API (maui-api D50, Lot 2.3). A score is queued once found (PlaySession),
 // with its own UUID, and leaves the outbox once MAUI-API answered for it, whatever the answer:
 // accepted, not_improved or rejected. A failed batch waits, longer after each failure, and is sent
-// again with the same UUIDs: MAUI-API stores it only once. The best of each player, as MAUI-API
-// answers it, is cached so that only what beats it is queued.
+// again with the same UUIDs: MAUI-API stores it only once. Only MAUI-API knows a player's best,
+// hidden scores aside: every score is sent, and MAUI-API answers not_improved to what does not
+// beat it. A best cached here would stay above a score hidden since (BNJ on 1941, 2026-10-28).
 
 export const SCORE_BATCH_SIZE = 100;
-export const DEFAULT_TABLE = 'default';
 
 const BACKOFF_BASE_MS = 60_000;
 const BACKOFF_MAX_MS = 3_600_000;
@@ -21,15 +21,13 @@ export interface OutboxEntry {
     attempts: number;
 }
 
-/** Where the outbox and the best cache live: SQLite in the app (SqliteScoreStore.ts). */
+/** Where the outbox lives: SQLite in the app (SqliteScoreStore.ts). */
 export interface ScoreStore {
     add(submissions: ScoreSubmission[]): Promise<void>;
     // Due at `now`, oldest first.
     due(now: Date, limit: number): Promise<OutboxEntry[]>;
     remove(ids: string[]): Promise<void>;
     reschedule(ids: string[], attempts: number, nextAttemptAt: Date): Promise<void>;
-    getBest(playerId: string, romname: string, table: string): Promise<number | null>;
-    setBest(playerId: string, romname: string, table: string, best: number): Promise<void>;
 }
 
 export interface PublishablePlayer {
@@ -60,8 +58,8 @@ export interface QueueContext {
 }
 
 /**
- * Queues the rows of publishable players that beat their cached best, one per player (the best
- * of the rows). Returns what was queued.
+ * Queues the rows of publishable players, one per player (the best of the rows). Returns what was
+ * queued.
  */
 export async function queueScores(
     store: ScoreStore, players: PublishablePlayer[], rows: TableRow[], context: QueueContext,
@@ -76,10 +74,6 @@ export async function queueScores(
     }
     const queued: ScoreSubmission[] = [];
     for (const [playerId, row] of best) {
-        const cached = await store.getBest(playerId, context.romname, DEFAULT_TABLE);
-        if (cached !== null && row.score <= cached) {
-            continue;
-        }
         queued.push({
             id: (context.newId ?? randomUUID)(), playerId, romname: context.romname, score: row.score,
             rankOnCabinet: row.rank, achievedAt: context.achievedAt, startupId: context.startupId,
@@ -92,17 +86,10 @@ export async function queueScores(
     return queued;
 }
 
-/**
- * Queues a score whose player was declared on the cabinet (ScoreDeclaration.ts), when it beats
- * that player's cached best. Returns what was queued, null otherwise.
- */
+/** Queues a score whose player was declared on the cabinet (ScoreDeclaration.ts). Returns it. */
 export async function queueDeclaredScore(
     store: ScoreStore, playerId: string, row: TableRow, context: QueueContext,
-): Promise<ScoreSubmission | null> {
-    const cached = await store.getBest(playerId, context.romname, DEFAULT_TABLE);
-    if (cached !== null && row.score <= cached) {
-        return null;
-    }
+): Promise<ScoreSubmission> {
     const submission: ScoreSubmission = {
         id: (context.newId ?? randomUUID)(), playerId, romname: context.romname, score: row.score,
         rankOnCabinet: row.rank, achievedAt: context.achievedAt, startupId: context.startupId,
@@ -148,9 +135,7 @@ export async function flushOutbox(store: ScoreStore, client: MauiApiClient, now:
 }
 
 async function record(store: ScoreStore, batch: OutboxEntry[], results: ScoreResult[], summary: FlushSummary): Promise<void> {
-    const sent = new Map(batch.map(entry => [entry.submission.id, entry.submission]));
     for (const result of results) {
-        const submission = sent.get(result.id);
         summary.sent++;
         if (result.status === 'accepted') {
             summary.accepted++;
@@ -160,12 +145,9 @@ async function record(store: ScoreStore, batch: OutboxEntry[], results: ScoreRes
             const code = result.code ?? 'unknown';
             summary.rejected[code] = (summary.rejected[code] ?? 0) + 1;
         }
-        if (submission && typeof result.best === 'number') {
-            await store.setBest(submission.playerId, submission.romname, submission.table ?? DEFAULT_TABLE, result.best);
-        }
     }
     // Answered: out of the outbox, even an id the answer left out (it would never get one).
-    await store.remove([...sent.keys()]);
+    await store.remove(batch.map(entry => entry.submission.id));
 }
 
 /** One line for the BO: what MAUI-API did with the scores. */
