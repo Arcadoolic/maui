@@ -1,7 +1,8 @@
 import {describe, it, expect} from 'vitest';
 import {
     addSeqAlternative, browserKeyToken, browserKeyTokens, browserMouseToken, describeInputCode, describeSeqAlternative, inputCodeKind, parseInputDefaults, parseUiSeqs,
-    removeSeqAlternative, removeTokenFromSeq, seqAlternativeKind, seqAlternatives, seqFromAlternatives,
+    mirrorSeqToOtherPlayer, otherPlayerPortType, removeSeqAlternative, removeTokenFromSeq, seqAlternativeKind,
+    seqAlternatives, seqFromAlternatives,
 } from '@/class/MameInputSeq';
 
 describe('removeTokenFromSeq', () => {
@@ -181,5 +182,34 @@ describe('browserMouseToken', () => {
         expect(browserMouseToken(1)).toBe('MOUSECODE_1_BUTTON2');
         expect(browserMouseToken(2)).toBe('MOUSECODE_1_BUTTON3');
         expect(browserMouseToken(5)).toBeUndefined();
+    });
+});
+
+describe('otherPlayerPortType', () => {
+    it('swaps players 1 and 2', () => {
+        expect(otherPlayerPortType('P1_BUTTON3')).toBe('P2_BUTTON3');
+        expect(otherPlayerPortType('P2_JOYSTICK_UP')).toBe('P1_JOYSTICK_UP');
+        expect(otherPlayerPortType('COIN1')).toBe('COIN2');
+        expect(otherPlayerPortType('START2')).toBe('START1');
+    });
+
+    it('has nothing for the other ports', () => {
+        expect(otherPlayerPortType('UI_CANCEL')).toBeUndefined();
+        expect(otherPlayerPortType('P3_BUTTON1')).toBeUndefined();
+        expect(otherPlayerPortType('COIN3')).toBeUndefined();
+    });
+});
+
+describe('mirrorSeqToOtherPlayer', () => {
+    it('swaps joysticks 1 and 2 and keeps the target\'s own keys', () => {
+        expect(mirrorSeqToOtherPlayer(
+            'KEYCODE_LCONTROL OR JOYCODE_1_BUTTON1 OR JOYCODE_2_BUTTON5',
+            'KEYCODE_A OR JOYCODE_2_BUTTON9',
+        )).toBe('KEYCODE_A OR JOYCODE_2_BUTTON1 OR JOYCODE_1_BUTTON5');
+    });
+
+    it('leaves joysticks 3 and up as they are, and gives NONE when nothing is left', () => {
+        expect(mirrorSeqToOtherPlayer('JOYCODE_3_HAT1UP', 'NONE')).toBe('JOYCODE_3_HAT1UP');
+        expect(mirrorSeqToOtherPlayer('KEYCODE_5', 'JOYCODE_2_BUTTON7')).toBe('NONE');
     });
 });

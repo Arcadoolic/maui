@@ -25,16 +25,18 @@ import {buildMameBackup, listMameBackupPaths, MAME_BACKUP_PARTS, parseMameBackup
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {
     addSeqAlternative, browserKeyTokens, browserMouseToken, describeSeqAlternative, parseInputDefaults, parseUiSeqs, removeSeqAlternative, removeTokenFromSeq,
-    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults,
+    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults, mirrorSeqToOtherPlayer, otherPlayerPortType,
 } from '@/class/MameInputSeq';
 import {parseListFull} from '@/class/MameListFull';
 import {
     compareGameFields,
     gameFieldId,
     inputIconKey,
+    listGameCfgOverrides,
     parseGameFields,
     portTypePlayer,
     readGameCfgInputSeqs,
+    removeAllGameCfgInputSeqs,
     removeGameCfgInputSeq,
     GAME_SEQ_TYPES,
     setGameCfgInputSeq,
@@ -99,7 +101,10 @@ import {
 import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
-import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
+import {
+    GAMEPAD_ICON_PATHS, ICON_SVG_ATTRS, KEY_MOUSE_ICON_PATHS, RESET_ICON_PATHS, renderControlIconButton,
+    renderIconButton,
+} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
 import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
@@ -138,6 +143,8 @@ import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} f
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import {buildStarredFile, MAX_STARRED_FILE_BYTES, parseStarredFile} from '@/class/StarredGamesFile';
+import {buildMameControlsFile, MAX_MAME_CONTROLS_FILE_BYTES, parseMameControlsFile} from '@/class/MameControlsFile';
+import {buildGameControlsFile, MAX_GAME_CONTROLS_FILE_BYTES, parseGameControlsFile} from '@/class/GameControlsFile';
 import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
 import {renderBluetoothCard} from '@/class/BluetoothBoCard';
 import {
@@ -467,68 +474,132 @@ const INPUT_CFG_ICON = '\u{1F3AE}';
 const INPUT_CFG_LEGEND = `${INPUT_CFG_ICON} = this game already has its own key configuration (<code>cfg/&lt;rom&gt;.cfg</code>).`;
 
 /**
- * Searchable rom picker: a text field filtering a plain <select> (works without the script, just
- * unfiltered) of game names sorted alphabetically, each flagged with an icon when it has its own
- * input cfg. The script is self-contained (finds its picker through document.currentScript) since
- * several pickers can share the page. Typing turns the select into a short list box so the
- * matches are visible without opening it; every term must appear, accents and case ignored, in
- * the game name or its rom name.
+ * Searchable rom picker: a search field with a list of the matching games under it (a combobox),
+ * every term having to appear, accents and case ignored, in the game name or its rom name. Picking
+ * one (click, or arrows then Enter) closes the list and opens `pickUrl` + the rom name, so the
+ * page shows that game; the field then holds its name. Games with their own input cfg are flagged
+ * with an icon. The games are handed to the script as JSON, at most MAX_ROM_RESULTS listed at once.
+ * `romName` (a hidden field) is what the surrounding form posts.
  */
+const MAX_ROM_RESULTS = 50;
+
 function renderRomPicker(
-    selectId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom?: string,
+    inputId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom: string,
+    pickUrl: string,
 ): string {
-    const options = romNames
-        .map(romName => ({romName, label: romLabels.get(romName) ?? romName}))
-        .sort((a, b) => a.label.localeCompare(b.label))
-        .map(({romName, label}) => `
-            <option value="${escapeHtml(romName)}" data-search="${escapeHtml(`${label} ${romName}`)}"
-                ${selectedRom === romName ? 'selected' : ''}>${withCfg.has(romName) ? `${INPUT_CFG_ICON} ` : ''}${escapeHtml(label)}</option>
-        `).join('');
+    const games = romNames
+        .map(romName => ({romName, label: romLabels.get(romName) ?? romName, cfg: withCfg.has(romName)}))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    const selectedLabel = romLabels.get(selectedRom) ?? selectedRom;
+    const listId = `${inputId}-results`;
 
     return `
-        <div class="rom-picker">
-            <label for="${escapeHtml(selectId)}">Game</label>
-            <input type="search" class="rom-search" placeholder="Search a game…" autocomplete="off"
-                aria-label="Search a game">
-            <select id="${escapeHtml(selectId)}" name="romName">${options}</select>
-            <p class="info table-search-count rom-search-count" hidden></p>
+        <div class="rom-picker" data-pick-url="${escapeHtml(pickUrl)}">
+            <label for="${escapeHtml(inputId)}">Game</label>
+            <div class="rom-combobox">
+                <input type="search" id="${escapeHtml(inputId)}" class="rom-search" value="${escapeHtml(selectedLabel)}"
+                    placeholder="Search a game by name or rom name…" autocomplete="off" role="combobox"
+                    aria-autocomplete="list" aria-expanded="false" aria-controls="${escapeHtml(listId)}">
+                <ul id="${escapeHtml(listId)}" class="rom-results" role="listbox" hidden></ul>
+            </div>
+            <input type="hidden" name="romName" value="${escapeHtml(selectedRom)}">
             <p class="info">${INPUT_CFG_LEGEND}</p>
+            <script type="application/json" class="rom-games">${JSON.stringify(games).replace(/</g, '\\u003c')}</script>
             <script>(function () {
                 var root = document.currentScript.parentNode;
                 var search = root.querySelector('.rom-search');
-                var select = root.querySelector('select');
-                var count = root.querySelector('.rom-search-count');
-                // Last game really picked: kept across searches with no result, which empty the select.
-                var chosen = select.value;
-                var all = Array.prototype.map.call(select.options, function (option) {
-                    return {option: option, haystack: fold(option.dataset.search || '')};
-                });
+                var list = root.querySelector('.rom-results');
+                var games = JSON.parse(root.querySelector('.rom-games').textContent);
+                var selectedLabel = search.value;
+                var shown = [];
+                var active = -1;
                 function fold(text) {
                     return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
                 }
-                function applySearch() {
-                    var terms = fold(search.value).split(/\\s+/).filter(Boolean);
-                    var matches = all.filter(function (entry) {
-                        return terms.every(function (term) { return entry.haystack.indexOf(term) >= 0; });
-                    });
-                    while (select.firstChild) { select.removeChild(select.firstChild); }
-                    matches.forEach(function (entry) { select.appendChild(entry.option); });
-                    if (matches.some(function (entry) { return entry.option.value === chosen; })) {
-                        select.value = chosen;
-                    } else if (matches.length) {
-                        select.selectedIndex = 0;
-                        chosen = select.value;
-                    }
-                    select.size = terms.length && matches.length > 1 ? Math.min(matches.length, 8) : 1;
-                    count.hidden = terms.length === 0;
-                    count.textContent = matches.length
-                        ? matches.length + ' game(s) found out of ' + all.length + '.'
-                        : 'No game matches this search.';
+                games.forEach(function (game) { game.haystack = fold(game.label + ' ' + game.romName); });
+                function close() {
+                    list.hidden = true;
+                    search.setAttribute('aria-expanded', 'false');
+                    search.removeAttribute('aria-activedescendant');
                 }
-                select.addEventListener('change', function () { chosen = select.value; });
-                search.addEventListener('input', applySearch);
+                function highlight(index) {
+                    active = index;
+                    Array.prototype.forEach.call(list.children, function (item, i) {
+                        item.classList.toggle('active', i === index);
+                        item.setAttribute('aria-selected', i === index ? 'true' : 'false');
+                    });
+                    var item = list.children[index];
+                    if (item && item.id) {
+                        search.setAttribute('aria-activedescendant', item.id);
+                        item.scrollIntoView({block: 'nearest'});
+                    }
+                }
+                function open() {
+                    // The selected game's own name lists them all, as an empty field does.
+                    var text = search.value === selectedLabel ? '' : search.value;
+                    var terms = fold(text).split(/\\s+/).filter(Boolean);
+                    var matches = games.filter(function (game) {
+                        return terms.every(function (term) { return game.haystack.indexOf(term) >= 0; });
+                    });
+                    shown = matches.slice(0, ${MAX_ROM_RESULTS});
+                    list.innerHTML = '';
+                    shown.forEach(function (game, index) {
+                        var item = document.createElement('li');
+                        item.id = list.id + '-' + index;
+                        item.setAttribute('role', 'option');
+                        var name = document.createElement('span');
+                        name.textContent = (game.cfg ? '${INPUT_CFG_ICON} ' : '') + game.label;
+                        var rom = document.createElement('span');
+                        rom.className = 'rom-results-rom';
+                        rom.textContent = game.romName;
+                        item.appendChild(name);
+                        item.appendChild(rom);
+                        // mousedown, not click: the field keeps the focus, so blur does not close first.
+                        item.addEventListener('mousedown', function (event) {
+                            event.preventDefault();
+                            pick(game);
+                        });
+                        list.appendChild(item);
+                    });
+                    var more = matches.length - shown.length;
+                    if (!matches.length || more > 0) {
+                        var note = document.createElement('li');
+                        note.className = 'rom-results-note';
+                        note.textContent = matches.length
+                            ? more + ' more game(s): type more of the name.'
+                            : 'No game matches this search.';
+                        list.appendChild(note);
+                    }
+                    list.hidden = false;
+                    search.setAttribute('aria-expanded', 'true');
+                    highlight(shown.length ? 0 : -1);
+                }
+                function pick(game) {
+                    close();
+                    search.value = game.label;
+                    root.querySelector('input[name="romName"]').value = game.romName;
+                    location.href = root.dataset.pickUrl + encodeURIComponent(game.romName);
+                }
+                search.addEventListener('focus', function () { search.select(); open(); });
+                search.addEventListener('input', open);
+                search.addEventListener('blur', function () {
+                    close();
+                    if (!search.value.trim()) { search.value = selectedLabel; }
+                });
                 search.addEventListener('keydown', function (event) {
-                    if (event.key === 'Enter') { event.preventDefault(); }
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        if (list.hidden) { open(); return; }
+                        var step = event.key === 'ArrowDown' ? 1 : -1;
+                        highlight(Math.max(0, Math.min(shown.length - 1, active + step)));
+                    } else if (event.key === 'Enter') {
+                        // Never submits the form: Enter picks the highlighted game.
+                        event.preventDefault();
+                        if (!list.hidden && shown[active]) { pick(shown[active]); }
+                    } else if (event.key === 'Escape') {
+                        close();
+                        search.value = selectedLabel;
+                    }
                 });
             })();</script>
         </div>
@@ -1858,21 +1929,75 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             outline: 2px solid var(--accent);
             outline-offset: -1px;
         }
+        /* Buttons share the capsule shape of the BO's menus (tabs, subtabs, player tabs): white
+           for the main action, the accent on hover. .button-secondary is the outlined one, for
+           the actions around it; .button-danger and .button-attention below only change the
+           colors. Icon buttons keep their own square shape. */
         button {
-            padding: 8px 16px;
+            padding: 8px 18px;
             color: #000000;
             background-color: #ffffff;
-            border: none;
-            border-radius: var(--radius-sm);
+            border: 1px solid transparent;
+            border-radius: 999px;
+            font-weight: 500;
             cursor: pointer;
-            transition: background-color 0.15s ease, opacity 0.15s ease;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
         }
         button:hover:not(:disabled) {
-            background-color: #dddddd;
+            background-color: var(--accent);
+        }
+        button:active:not(:disabled) {
+            transform: translateY(1px);
         }
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+        button.button-secondary {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        button.button-secondary:hover:not(:disabled) {
+            color: var(--accent);
+            background-color: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent);
+        }
+        /* A file field: the browser's own button, in the colors of .button-secondary. */
+        input[type="file"] {
+            width: auto;
+            max-width: 100%;
+            padding: 0;
+            color: var(--text-muted);
+        }
+        input[type="file"]::file-selector-button {
+            margin-right: 12px;
+            padding: 8px 18px;
+            font: inherit;
+            font-weight: 500;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        input[type="file"]::file-selector-button:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        /* A file to import and its button on one row, the label above. */
+        .file-import {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+        }
+        .file-import > label {
+            flex-basis: 100%;
+        }
+        .file-import > button[type="submit"]:last-child {
+            margin-top: 0;
         }
         /* Every interactive element gets a visible keyboard focus ring, not just input/select
            above: buttons and links used to have none at all, so tabbing through a page (or
@@ -2094,15 +2219,17 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .button-link {
             display: inline-block;
-            padding: 8px 16px;
+            padding: 8px 18px;
             background-color: #ffffff;
             color: #000000;
+            font-weight: 500;
             text-decoration: none;
-            border-radius: 4px;
+            border: 1px solid transparent;
+            border-radius: 999px;
             transition: background-color 0.15s ease;
         }
         .button-link:hover {
-            background-color: #dddddd;
+            background-color: var(--accent);
         }
         .browse-list {
             list-style: none;
@@ -2335,6 +2462,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
            instead of the plain white button. The extra selector parts beat the generic
            "form > button[type=submit]:last-child" 24px top margin above, which would otherwise
            push it out of its table row's alignment. */
+        button.icon-button {
+            border-radius: var(--radius-md);
+        }
         form > button.icon-button[type="submit"]:last-child {
             display: inline-flex;
             align-items: center;
@@ -2718,8 +2848,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             border: none;
             cursor: pointer;
         }
-        button.sort-header:hover {
+        button.sort-header:hover, button.sort-header:hover:not(:disabled) {
             text-decoration: underline;
+            background: none;
         }
         th[aria-sort="ascending"] > button.sort-header::after {
             content: " ▲";
@@ -2804,8 +2935,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             line-height: inherit;
             cursor: pointer;
         }
-        button.pack-game-unlock:hover {
+        button.pack-game-unlock:hover, button.pack-game-unlock:hover:not(:disabled) {
             color: var(--text);
+            background: none;
         }
         .pack-swatch {
             display: inline-block;
@@ -3122,6 +3254,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .hotkey-choices button {
             margin-top: 0;
             text-align: left;
+            border-radius: var(--radius-md);
         }
         .hotkey-choices button .checkbox-row-detail {
             display: block;
@@ -3238,6 +3371,107 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .control-form button.listening {
             color: var(--bg);
             background-color: var(--warn);
+        }
+        /* The controls cards' icon buttons (add, back to the default, remove all): small, their
+           text in their tooltip. */
+        button.control-icon-button {
+            border-radius: var(--radius-md);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            min-height: 32px;
+            margin-top: 0;
+            padding: 7px;
+            color: var(--accent);
+            background-color: transparent;
+            border: 1px solid currentColor;
+        }
+        button.control-icon-button.control-icon-warn {
+            color: var(--warn);
+        }
+        button.control-icon-button.control-icon-danger {
+            color: var(--danger);
+        }
+        button.control-icon-button:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        button.control-icon-button.listening {
+            color: var(--bg);
+            background-color: var(--warn);
+            border-color: var(--warn);
+        }
+        /* The per-game card's game picker (renderRomPicker()): the matches drop under the field. */
+        .rom-combobox {
+            position: relative;
+        }
+        .rom-results {
+            position: absolute;
+            z-index: 20;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            margin: 4px 0 0;
+            padding: 4px;
+            list-style: none;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+        }
+        .rom-results li {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 6px 10px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+        .rom-results li.active, .rom-results li:hover {
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .rom-results .rom-results-rom {
+            font-size: 0.85em;
+            opacity: 0.7;
+        }
+        .rom-results li.rom-results-note {
+            color: var(--text-muted);
+            font-style: italic;
+            background: none;
+            cursor: default;
+        }
+        .game-file {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+        }
+        .game-file-status {
+            margin: 0;
+        }
+        .game-file .button-row {
+            margin-top: 12px;
+        }
+        .game-file .button-row:empty {
+            display: none;
+        }
+        .game-file .button-row + .game-file-status {
+            margin-top: 20px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .game-file .button-row form > button[type="submit"]:last-child, .game-file .file-import {
+            margin-top: 12px;
+        }
+        .game-file .button-row form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .control-copy-player {
+            margin-bottom: 12px;
         }
         .control-reread {
             margin-top: 16px;
@@ -3683,7 +3917,7 @@ function renderPageTail(): string {
                 }
                 clearTimeout(listening.timer);
                 listening.button.classList.remove('listening');
-                listening.button.textContent = listening.label;
+                listening.button.title = listening.label;
                 document.removeEventListener('keydown', onKey, true);
                 document.removeEventListener('mousedown', onMouse, true);
                 // The menu a right click opens comes after its mousedown: still blocked a moment.
@@ -3697,7 +3931,7 @@ function renderPageTail(): string {
                 event.stopPropagation();
                 var form = listening.button.form;
                 if (!token) {
-                    listening.button.textContent = 'Not known to MAME - try another';
+                    listening.button.title = 'Not known to MAME - try another';
                     return;
                 }
                 var slot = listening.button.dataset.slot;
@@ -3728,12 +3962,13 @@ function renderPageTail(): string {
                     if (again) {
                         return;
                     }
+                    // An icon button: its tooltip says what is awaited, its color that it waits.
                     listening = {
-                        button: button, label: button.textContent, raw: button.dataset.controlListen === 'raw',
-                        timer: setTimeout(stop, 15000),
+                        button: button, label: button.title,
+                        raw: button.dataset.controlListen === 'raw', timer: setTimeout(stop, 15000),
                     };
                     button.classList.add('listening');
-                    button.textContent = 'Press a key or click…';
+                    button.title = 'Press a key or click…';
                     document.addEventListener('keydown', onKey, true);
                     document.addEventListener('mousedown', onMouse, true);
                     // A right click opens no menu while listening.
@@ -4504,6 +4739,10 @@ interface RemapState {
     // MAME's defaults).
     portType: string;
     error?: string;
+    // The card as a whole went well (an import), shown with an empty portType only.
+    notice?: string;
+    // The tab to show (REMAP_GROUPS index) when no portType says it.
+    tab?: string;
     // The other actions the control just added also triggers.
     sharedWith?: string[];
     // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
@@ -5134,18 +5373,40 @@ function renderControlChips(seq: string, names: Map<string, string>): string {
  * the token in `code`) - only offered once MAME's keys are known (`canListen`). `rawCodes`: the
  * page posts the browser's own codes ("key|KeyA", "mouse|2") instead of MAME tokens (MAUI's tab),
  * and also listens to the gamepads itself while the front catches the press (data-pad-listen).
+ * `captureDisabled`: no MAME runs to catch a gamepad press, its tooltip then says how to launch it.
  */
-function renderControlAddButtons(captureDisabled: string, canListen: boolean, rawCodes = false): string {
+function renderControlAddButtons(
+    captureDisabled: boolean, canListen: boolean, rawCodes = false,
+    // In the same row: the action's way back to its default (its tooltip), and a button removing
+    // all its controls (when it has any).
+    extras: {reset?: string; removeAll?: boolean} = {},
+): string {
     return `
         <div class="binding-actions">
-            <button type="submit" name="action" value="capture"${captureDisabled}${rawCodes ? ' data-pad-listen' : ''}>Add a gamepad button</button>
+            ${renderControlIconButton(
+                captureDisabled
+                    ? 'Launch MAME with the grey button at the top right of your screen to add a gamepad button'
+                    : 'Add a gamepad button',
+                GAMEPAD_ICON_PATHS,
+                `type="submit" name="action" value="capture"${captureDisabled ? ' disabled' : ''}${rawCodes ? ' data-pad-listen' : ''}`,
+            )}
             ${canListen ? `
-                <button type="button" data-control-listen${rawCodes ? '="raw"' : ''}>Add a key or mouse button</button>
+                ${renderControlIconButton('Add a key or mouse button', KEY_MOUSE_ICON_PATHS,
+                    `type="button" data-control-listen${rawCodes ? '="raw"' : ''}`)}
                 <input type="hidden" name="code" value="">
                 <button type="submit" name="action" value="add" hidden data-control-add></button>
             ` : ''}
+            ${renderControlRowExtras(extras)}
         </div>
     `;
+}
+
+/** The reset and remove-all buttons of an action's row, see renderControlAddButtons(). */
+function renderControlRowExtras(extras: {reset?: string; removeAll?: boolean}): string {
+    return (extras.reset ? renderControlIconButton(extras.reset, RESET_ICON_PATHS,
+        'type="submit" name="action" value="reset"', 'warn') : '')
+        + (extras.removeAll ? renderControlIconButton('Remove every control of this action',
+            TRASH_ICON_PATHS, 'type="submit" name="action" value="remove-all"', 'danger') : '');
 }
 
 /**
@@ -5164,8 +5425,9 @@ function renderControlsCard(
     if (!romNames.length) {
         return '';
     }
-    const cardError = state && !state.portType && state.error
-        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '';
+    const cardError = (state && !state.portType && state.error
+        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '')
+        + (state && !state.portType && state.notice ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : '');
     if (!defaults) {
         return `
             <section class="card">
@@ -5184,7 +5446,7 @@ function renderControlsCard(
     const sessionRunning = !!getCaptureTarget();
     // A gamepad press is only seen by a running MAME; a key or a mouse button is taken by the page
     // itself, and removing needs nothing.
-    const captureDisabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
+    const captureDisabled = !sessionRunning;
     // What the page may send for a key or a mouse button: only tokens MAME itself listed.
     const listenKeys = Object.fromEntries(Object.entries(browserKeyTokens()).filter(([, token]) => defaults.codes.has(token)));
     const listenMouse = [0, 1, 2, 3, 4].map(button => browserMouseToken(button))
@@ -5200,12 +5462,10 @@ function renderControlsCard(
                     <form method="post" action="/input-probe/remap" class="control-form">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
                         ${renderControlChips(getControlSeq(action.portType, persisted, defaults), defaults.codes)}
-                        ${renderControlAddButtons(captureDisabled, true)}
-                        ${persisted.has(action.portType) ? `
-                            <div class="binding-actions">
-                                <button type="submit" name="action" value="reset">Back to MAME's default</button>
-                            </div>
-                        ` : ''}
+                        ${renderControlAddButtons(captureDisabled, true, false, {
+                            reset: persisted.has(action.portType) ? 'Back to MAME\'s default' : undefined,
+                            removeAll: seqAlternatives(getControlSeq(action.portType, persisted, defaults)).length > 0,
+                        })}
                     </form>
                     ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
                     ${actionState?.sharedWith?.length ? `
@@ -5225,17 +5485,19 @@ function renderControlsCard(
         <section class="card">
             <h2>Global controls</h2>
             <p class="info">What triggers each MAME action, in every game (unless a game has its own
-            controls, below). Each one is a key, a mouse button or a gamepad button: its
+            controls, in the Per-game controls tab). Each one is a key, a mouse button or a gamepad button: its
             <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Add a gamepad button</strong>: launch MAME with the button at the top of
+                <li><strong>Gamepad icon</strong>: launch MAME with the button at the top of
                 the page first, then click and press the gamepad button (or push the direction)
                 within 30 seconds - MAME picks it up even when its window is not the one in front.</li>
-                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                <li><strong>Keyboard and mouse icon</strong>: click, then press the key or click
                 the mouse button (anywhere in the page) on the keyboard and mouse of this computer.
                 No need to launch MAME. Keys are named after their place on a US keyboard, the way
                 MAME does: on an AZERTY keyboard, the A key shows as Q.</li>
-                <li><strong>Back to MAME's default</strong> gives the action MAME's own controls again.</li>
+                <li><strong>↺</strong> gives the action MAME's own controls again.</li>
+                <li>The <strong>bin</strong> takes every control away from the action: nothing
+                triggers it until one is added.</li>
             </ul>
             <p class="info">Saved at once in <code>default.cfg</code>; a running MAME uses the change
             from its next start.</p>
@@ -5244,15 +5506,48 @@ function renderControlsCard(
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
-                html: `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
-            })), state?.portType ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
+                html: renderCopyPlayerForm(group.title) + `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
+            })), state?.portType
+                ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType)))
+                : state?.tab)}
             <script type="application/json" id="control-listen-codes">${
                 JSON.stringify({keys: listenKeys, mouse: listenMouse}).replace(/</g, '\\u003c')
             }</script>
             <form method="post" action="/input-probe/controls/defaults" class="control-reread">
-                <button type="submit">Read MAME's controls again</button>
+                <button type="submit" class="button-secondary">Read MAME's controls again</button>
+            </form>
+            <h3>Share these controls</h3>
+            <p class="info">Export the global controls, with the gamepads pinned to a JOY number
+            (Gamepads tab), to a file another player with the same controllers can import.
+            An import replaces this cabinet's global controls with the file's; a game's own controls
+            are left as they are. A pinned gamepad only applies to a controller of the same model.</p>
+            <form method="get" action="/input-probe/controls/export">
+                <button type="submit" class="button-secondary">Export the controls</button>
+            </form>
+            <form method="post" action="/input-probe/controls/import" enctype="multipart/form-data" class="file-import">
+                <label for="controlsImportFile">File to import (a .json exported here)</label>
+                <input type="file" id="controlsImportFile" name="file" accept=".json" required>
+                <button type="submit">Import</button>
             </form>
         </section>
+    `;
+}
+
+// The players whose controls one button copies to the other (mirrorSeqToOtherPlayer()).
+const COPY_PLAYERS: Record<string, string> = {'Player 1': 'Player 2', 'Player 2': 'Player 1'};
+
+/** "Copy these keys to Player 2" on Player 1's tab, and the other way round; nothing elsewhere. */
+function renderCopyPlayerForm(groupTitle: string): string {
+    const to = COPY_PLAYERS[groupTitle];
+    if (!to) {
+        return '';
+    }
+    return `
+        <form method="post" action="/input-probe/controls/copy-player" class="control-copy-player"
+            onsubmit="return confirm('Replace the gamepad controls of ${to} with those of ${groupTitle}, JOY 1 and JOY 2 swapped? ${to} keeps its keyboard keys.')">
+            <input type="hidden" name="from" value="${escapeHtml(groupTitle)}">
+            <button type="submit" class="button-secondary">Copy these keys to ${escapeHtml(to)}</button>
+        </form>
     `;
 }
 
@@ -5352,9 +5647,71 @@ interface GameRemapState {
     romName: string;
     fieldId?: string;
     error?: string;
+    // The game's file as a whole went well (an import, back to the global controls).
+    notice?: string;
     // The game's other commands the control just added also triggers.
     sharedWith?: string[];
     releasedFrom?: string[];
+}
+
+/**
+ * Under the picker, what can be done for the picked game without launching MAME: its cfg file
+ * itself (download it, delete it), and its controls of its own - export them, import a file of them
+ * (once MAME's controls were read, to check its keys: `canImport`), or go back to the global ones.
+ */
+function renderGameControlsFileActions(romName: string, label: string, iniPath: string, canImport: boolean): string {
+    const cfgPath = getGameCfgPath(iniPath, romName);
+    const hasCfg = existsSync(cfgPath);
+    const overrides = hasCfg ? listGameCfgOverrides(readFileSync(cfgPath, 'utf8')) : [];
+    const commands = new Set(overrides.map(override => `${override.portType}|${override.tag}|${override.mask}`)).size;
+    const romField = `<input type="hidden" name="romName" value="${escapeHtml(romName)}">`;
+    const cfgName = `cfg/${romName}.cfg`;
+    const status = commands
+        ? `<strong>${escapeHtml(label)}</strong> has its own controls for ${commands} command${commands > 1 ? 's' : ''}.`
+        : `<strong>${escapeHtml(label)}</strong> follows the global controls.`;
+    const cfgStatus = hasCfg
+        ? `File <code>${escapeHtml(cfgName)}</code>: its controls, DIP switches, sound output and counters.`
+        : `No <code>${escapeHtml(cfgName)}</code> file yet: MAME writes it the first time the game is quit.`;
+    return `
+        <div class="game-file">
+            <p class="game-file-status">${cfgStatus}</p>
+            ${hasCfg ? `
+                <div class="button-row">
+                    <form method="get" action="/input-probe/game/cfg">
+                        ${romField}
+                        <button type="submit" class="button-secondary">Download the cfg file</button>
+                    </form>
+                    <form method="post" action="/input-probe/game/delete-cfg"
+                        onsubmit="return confirm('Delete ${escapeHtml(cfgName)}? Its controls, DIP switches and counters go with it: the game starts with MAME\\'s defaults and the global controls.')">
+                        ${romField}
+                        <button type="submit" class="button-danger">Delete the cfg file</button>
+                    </form>
+                </div>
+            ` : ''}
+            <p class="game-file-status">${status}</p>
+            <div class="button-row">
+                ${commands ? `
+                    <form method="get" action="/input-probe/game/export">
+                        ${romField}
+                        <button type="submit" class="button-secondary">Export its controls</button>
+                    </form>
+                    <form method="post" action="/input-probe/game/reset-all"
+                        onsubmit="return confirm('Drop every control of its own ${escapeHtml(label.replace(/['\\]/g, ''))} has? It follows the global controls again.')">
+                        ${romField}
+                        <button type="submit" class="button-danger">Back to the global controls</button>
+                    </form>
+                ` : ''}
+            </div>
+            ${canImport ? `
+                <form method="post" action="/input-probe/game/import" enctype="multipart/form-data" class="file-import">
+                    ${romField}
+                    <label for="gameControlsImportFile">Controls of this game to import (a .json exported here, for the same game)</label>
+                    <input type="file" id="gameControlsImportFile" name="file" accept=".json" required>
+                    <button type="submit">Import</button>
+                </form>
+            ` : '<p class="info">Read MAME\'s controls in the Global controls tab to import a file of controls.</p>'}
+        </div>
+    `;
 }
 
 function getGameCfgPath(iniPath: string, romName: string): string {
@@ -5460,7 +5817,7 @@ function renderGameRemapCard(
     const fromMaui = !!targetRom && !isMameConfigSessionAlive();
     const selectedRom = state?.romName ?? targetRom ?? otherRom
         ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
-    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
+    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom, '/mame?game=');
     // Once a change is saved for the running game, relaunching it is what puts the change in effect
     // (see hasPendingCfgEdits()): the button says so and stands out, like the global "Apply controls".
     const applyPending = targetRom === selectedRom && hasPendingCfgEdits();
@@ -5487,6 +5844,11 @@ function renderGameRemapCard(
             const axis = !!field.analog && seqType === 'standard';
             const title = !field.analog ? '' : axis ? 'Movement (spinner, mouse, stick)'
                 : `Keys: ${analogKeyDirection(field.portType, seqType)}`;
+            const seq = override ?? getInheritedGameSeq(field, seqType);
+            const extras = {
+                reset: override !== undefined ? 'Back to the global controls' : undefined,
+                removeAll: seqAlternatives(seq).length > 0,
+            };
             return `
                 <form method="post" action="/input-probe/game/remap" class="control-form">
                     <input type="hidden" name="romName" value="${escapeHtml(romName)}">
@@ -5494,17 +5856,13 @@ function renderGameRemapCard(
                     <input type="hidden" name="seqType" value="${seqType}">
                     ${title ? `<p class="control-seq-title">${title}</p>` : ''}
                     <p class="control-origin">${override !== undefined ? 'This game only' : 'From the global controls'}</p>
-                    ${renderControlChips(override ?? getInheritedGameSeq(field, seqType), defaults?.codes ?? new Map<string, string>())}
+                    ${renderControlChips(seq, defaults?.codes ?? new Map<string, string>())}
                     ${axis ? `
                         <div class="binding-actions">
                             <button type="submit" name="action" value="capture-axis">Add a movement</button>
+                            ${renderControlRowExtras(extras)}
                         </div>
-                    ` : renderControlAddButtons('', !!defaults)}
-                    ${override !== undefined ? `
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="reset">Back to the global controls</button>
-                        </div>
-                    ` : ''}
+                    ` : renderControlAddButtons(false, !!defaults, false, extras)}
                 </form>
             `;
         };
@@ -5539,27 +5897,28 @@ function renderGameRemapCard(
     };
 
     return `
-        <section class="card">
+        <section class="card" id="game-controls">
             <h2>Per-game controls</h2>
             <p class="info">Changes what triggers a command in <strong>one game only</strong>
             (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
-            controls above.</p>
+            controls (Global controls tab).</p>
             ${targetRom && targetRom === selectedRom ? `
                 <ol class="info">
                     <li>Below, each card is a command of this game, with what triggers it: <em>From the
                     global controls</em> as long as you haven't changed it for this game. Its
                     <strong>✕</strong> removes one, and the others keep working.</li>
-                    <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                    <li><strong>Gamepad icon</strong>: click, then press the button (or push the
                     direction) on the gamepad within 30 seconds - MAME picks it up even when its window
-                    is not the one in front. <strong>Add a key or mouse button</strong>: click, then
+                    is not the one in front. <strong>Keyboard and mouse icon</strong>: click, then
                     press the key or click the mouse button in this page.</li>
                     <li>A spinner, trackball or paddle (Arkanoid's <em>Dial</em>...) has a
                     <strong>Movement</strong>: <strong>Add a movement</strong>, then wait a second
                     and turn the spinner, move the mouse or push the stick. Its keys move it each
                     way. MAME only reads the mouse or a USB spinner when the
-                    <strong>Spinner, trackball, paddle</strong> card above says so.</li>
-                    <li>Each change is saved and works in the running game at once.</li>
-                    <li><strong>Back to the global controls</strong> drops what this game had of its
+                    <strong>Spinner, trackball</strong> tab says so.</li>
+                    <li>Each change is saved and works in the running game at once.
+                    The <strong>bin</strong> leaves a command with no control in this game.</li>
+                    <li><strong>↺</strong> drops what this game had of its
                     own for a command. ${fromMaui
                         ? 'Keep playing when you are done: the changes are kept.'
                         : `When you are done, close MAME with the button at the top of the page or
@@ -5581,6 +5940,8 @@ function renderGameRemapCard(
                 ${picker}
                 <button type="submit"${applyPending ? ' class="button-attention"' : ''}>${gameLaunchLabel}</button>
             </form>
+            ${renderGameControlsFileActions(selectedRom, romLabels.get(selectedRom) ?? selectedRom, iniPath, !!defaults)}
+            ${state?.notice && !state.fieldId ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : ''}
             ${targetRom === selectedRom ? renderPendingRelaunchNotice() : ''}
             ${targetRom ? `
                 <p><strong>MAME:</strong> running ${escapeHtml(romLabels.get(targetRom) ?? targetRom)}${fromMaui ? ', launched from MAUI' : ''}</p>
@@ -5701,19 +6062,32 @@ function renderForm(
         const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
         refreshAdoptedMame(config, romNames);
         const inputDefaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
+        // One subtab per card: together they made one very long page.
         sections.push({
             id: 'controls',
-            label: 'Controls',
+            label: 'Global controls',
             html: renderControlsCard(
                 romNames,
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
                 inputDefaults,
                 remapState,
-            )
-                + renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState)
-                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
-                    findOtherMameRom(config, romNames), inputDefaults)
-                + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+            ),
+        });
+        sections.push({
+            id: 'game-controls',
+            label: 'Per-game controls',
+            html: renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
+                findOtherMameRom(config, romNames), inputDefaults),
+        });
+        sections.push({
+            id: 'devices',
+            label: 'Gamepads',
+            html: renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+        });
+        sections.push({
+            id: 'analog',
+            label: 'Spinner, trackball',
+            html: renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState),
         });
         sections.push({
             id: 'import',
@@ -5739,11 +6113,13 @@ function renderForm(
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : importError !== undefined || exportError !== undefined ? 'import'
-            : (deviceProbeState !== undefined || remapState !== undefined
-                || gameRemapState !== undefined || analogDevicesState !== undefined) ? 'controls'
-                : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
-                    // Controls otherwise, even when Config holds a standing warning (missing plugins...).
-                    : sections.some(section => section.id === 'controls') ? 'controls' : undefined;
+            : deviceProbeState !== undefined ? 'devices'
+                : gameRemapState !== undefined ? 'game-controls'
+                    : analogDevicesState !== undefined ? 'analog'
+                        : remapState !== undefined ? 'controls'
+                            : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
+                                // Global controls otherwise, even when Config holds a standing warning (missing plugins...).
+                                : sections.some(section => section.id === 'controls') ? 'controls' : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
     // launches/closes the shared MAME config session the Controls cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Controls tab itself.
@@ -6371,7 +6747,7 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
                 </label>
                 <button type="submit">Export</button>
             </form>
-            <form method="post" action="/maui/import" enctype="multipart/form-data"
+            <form method="post" action="/maui/import" enctype="multipart/form-data" class="file-import"
                 onsubmit="return confirm('Overwrite the files this export holds? This cannot be undone.')">
                 <label for="mauiImportFile">File to import (a .zip exported here, or a lone .json configuration or .sqlite/.db database)</label>
                 <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
@@ -6477,12 +6853,10 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
                     <ul class="control-chips">
                         ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
                     </ul>
-                    ${renderControlAddButtons('', true, true)}
-                    ${isDefaultKey(bindings, action.key) ? '' : `
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="reset">Back to MAUI's default</button>
-                        </div>
-                    `}
+                    ${renderControlAddButtons(false, true, true, {
+                        reset: isDefaultKey(bindings, action.key) ? undefined : 'Back to MAUI\'s default',
+                        removeAll: inputsOfKey(bindings, action.key).length > 0,
+                    })}
                 </form>
                 ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
                 ${actionState?.info ? `<p class="warn flash">${escapeHtml(actionState.info)}</p>` : ''}
@@ -6502,18 +6876,19 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
             what the keys do in the games. Each action is triggered by a key, a mouse button or a
             gamepad button: its <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                <li><strong>Gamepad icon</strong>: click, then press the button (or push the
                 stick) on the cabinet within 30 seconds - MAUI's window catches it, and the press
                 does nothing else meanwhile. When this page is open on the computer the gamepad is
                 plugged in, the page catches it too. A pad with a layout of its own (named on its
                 pills) gets the button for itself, any other pad for every pad without one.</li>
-                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                <li><strong>Keyboard and mouse icon</strong>: click, then press the key or click
                 the mouse button in this page. Keys are named after their place on a US keyboard:
                 on an AZERTY keyboard, the A key shows as Q.</li>
                 <li>A key or a button does one thing in MAUI: added to an action, it leaves the one
                 it had.</li>
-                <li><strong>Back to MAUI's default</strong> gives the action its controls of origin
-                again. Every change is used by the cabinet at once.</li>
+                <li><strong>↺</strong> gives the action its controls of origin
+                again. The <strong>bin</strong> takes every control away from it. Every change is
+                used by the cabinet at once.</li>
             </ul>
             <div class="binding-grid">${cards}</div>
         </section>
@@ -6665,8 +7040,10 @@ function renderHotkeyStepBody(bindings: MauiBindings, draft: HotkeyDraft, step: 
                 <p>${slot === 1 ? (draft.type === 'combo' ? 'First key' : 'The key') : `Second key, pressed with ${escapeHtml(describeHotkeyKey(draft.keys[0]))}`}:
                 press it on the cabinet (or here for a key or a mouse button)…</p>
                 <div class="binding-actions">
-                    <button type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}">Catch a gamepad button</button>
-                    <button type="button" data-control-listen="raw" data-slot="${slot}">Catch a key or mouse button</button>
+                    ${renderControlIconButton('Catch a gamepad button', GAMEPAD_ICON_PATHS,
+                        `type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}"`)}
+                    ${renderControlIconButton('Catch a key or mouse button', KEY_MOUSE_ICON_PATHS,
+                        `type="button" data-control-listen="raw" data-slot="${slot}"`)}
                 </div>
                 <p>…or pick a MAUI action, whatever control triggers it:</p>
                 <div class="hotkey-choices">
@@ -7795,7 +8172,7 @@ function renderStarredCard(favoritesInfo: FavoritesInfo): string {
             <form method="get" action="/favorites/starred/export">
                 <button type="submit">Export</button>
             </form>` : ''}
-            <form method="post" action="/favorites/starred/import" enctype="multipart/form-data">
+            <form method="post" action="/favorites/starred/import" enctype="multipart/form-data" class="file-import">
                 <label for="starredImportFile">File to import (a .json exported here)</label>
                 <input type="file" id="starredImportFile" name="file" accept=".json" required>
                 <button type="submit">Import</button>
@@ -9379,6 +9756,8 @@ export function createBoApp(
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     const starredUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_STARRED_FILE_BYTES, files: 1}});
+    const controlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_MAME_CONTROLS_FILE_BYTES, files: 1}});
+    const gameControlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_GAME_CONTROLS_FILE_BYTES, files: 1}});
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -9551,8 +9930,13 @@ export function createBoApp(
         if (typeof req.query.pluginsPath === 'string') {
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
+        // The game picked in the per-game controls card (renderRomPicker()): one of the roms present.
+        const game = typeof req.query.game === 'string' ? req.query.game : '';
+        const gameRemapState = game && mameInfo.romPath && listRomNames(mameInfo.romPath).includes(game)
+            ? {romName: game} : undefined;
         res.send(renderForm(
             {mamePath}, mameInfo, req.session.boAdvanced === true,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, gameRemapState,
         ));
     });
 
@@ -11678,7 +12062,7 @@ export function createBoApp(
         const removed: string = typeof req.body.remove === 'string' ? req.body.remove : '';
         const action: string = removed ? 'remove' : (req.body.action || '').trim();
         const send = (controls: MauiControlsState) => sendMauiPage(req, res, config, {controls});
-        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'reset'].includes(action)) {
+        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'remove-all', 'reset'].includes(action)) {
             res.status(422);
             await send({key, error: 'Unknown action.'});
             return;
@@ -11689,6 +12073,10 @@ export function createBoApp(
         let caughtByPage = false;
         if (action === 'reset') {
             bindings = resetKey(bindings, key);
+        } else if (action === 'remove-all') {
+            for (const input of inputsOfKey(bindings, key)) {
+                bindings = removeInput(bindings, input);
+            }
         } else if (action === 'remove') {
             const input = parseMauiInputId(removed);
             // Only an input the card showed for this key.
@@ -11934,6 +12322,150 @@ export function createBoApp(
         }
     });
 
+    // The Controls card's export (MameControlsFile.ts): default.cfg's global controls and the
+    // pinned gamepads, for another cabinet with the same controllers.
+    app.get('/input-probe/controls/export', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, req.session.boAdvanced === true));
+            return;
+        }
+        const controls = readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath));
+        const pinnedDevices = readPinnedDevices(mameInfo);
+        if (!controls.size && !pinnedDevices.size) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath}, mameInfo, req.session.boAdvanced === true,
+                undefined, undefined, undefined, undefined, undefined, undefined,
+                {portType: '', error: 'Nothing to export: the controls are still MAME\'s own and no gamepad is pinned.'},
+            ));
+            return;
+        }
+        const now = new Date();
+        const mameVersion = await getMameVersion(join(config.mamePath, config.mameBinaryName));
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="mame-controls-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildMameControlsFile({controls, pinnedDevices}, mameVersion, now));
+    });
+
+    // The Controls card's import: replaces default.cfg's global controls with the file's, and pins
+    // its gamepads. Checked against this MAME's own controls first (see isImportableSeq()).
+    app.post('/input-probe/controls/import', controlsUpload.single('file'), (req, res) => {
+        // It rewrites MAME's controls: same-origin only, the BO having no CSRF token.
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined,
+            remapState,
+        ));
+        const defaults = readInputDefaults(join(config.mamePath, config.mameBinaryName));
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read first.'}, 409);
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            renderWith({portType: '', error: 'Pick a .json file exported from the Controls tab.'}, 422);
+            return;
+        }
+        let imported: ReturnType<typeof parseMameControlsFile>;
+        try {
+            imported = parseMameControlsFile(req.file.buffer.toString('utf8'), defaults);
+        } catch (error) {
+            renderWith({portType: '', error: `Import failed: ${(error as Error).message}`}, 422);
+            return;
+        }
+
+        try {
+            const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+            applyCfgEdit(() => writeDefaultCfgUiInputs(cfgPath, imported.controls));
+            for (const [joycode, deviceId] of imported.pinnedDevices) {
+                pinDevice(mameInfo, deviceId, joycode);
+            }
+        } catch (error) {
+            console.error('[boServer] Controls import failed:', error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            renderWith({portType: '', error: `Import failed: ${message}`}, 500);
+            return;
+        }
+        const plural = (count: number, word: string) => `${count} ${word}${count > 1 ? 's' : ''}`;
+        renderWith({
+            portType: '',
+            notice: `Import done: ${plural(imported.controls.size, 'control')} changed from MAME's own, `
+                + `${plural(imported.pinnedDevices.size, 'gamepad')} pinned.`,
+        });
+    });
+
+    // The Controls card's "Copy these keys to Player 2" (or to Player 1): every action's gamepad
+    // controls go to the same action of the other player, JOY 1 and JOY 2 swapped; that player
+    // keeps its own keys (mirrorSeqToOtherPlayer()).
+    app.post('/input-probe/controls/copy-player', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const from = typeof req.body.from === 'string' ? req.body.from : '';
+        const to = COPY_PLAYERS[from];
+        if (!to) {
+            res.status(422).send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
+            return;
+        }
+        const targetTab = String(REMAP_GROUPS.findIndex(group => group.title === to));
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined,
+            {tab: targetTab, ...remapState},
+        ));
+        const defaults = readInputDefaults(join(config.mamePath, config.mameBinaryName));
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read again first.'}, 409);
+            return;
+        }
+        const sourceActions = REMAP_GROUPS.find(group => group.title === from)?.actions ?? [];
+        const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+        try {
+            const persisted = readDefaultCfgUiInputs(cfgPath);
+            let copied = 0;
+            for (const action of sourceActions) {
+                const target = otherPlayerPortType(action.portType);
+                if (!target || !defaults.seqs.has(target)) {
+                    continue;
+                }
+                const current = getControlSeq(target, persisted, defaults);
+                const mirrored = mirrorSeqToOtherPlayer(getControlSeq(action.portType, persisted, defaults), current);
+                if (mirrored !== seqFromAlternatives(seqAlternatives(current))) {
+                    saveControlSeq(cfgPath, target, mirrored, defaults);
+                    copied++;
+                }
+            }
+            renderWith({
+                portType: '',
+                notice: copied
+                    ? `${from}'s gamepad controls copied to ${to} (JOY 1 and JOY 2 swapped): ${copied} action${copied > 1 ? 's' : ''} changed.`
+                    : `${to} already had these controls: nothing changed.`,
+            });
+        } catch (error) {
+            console.error(`[boServer] Copying ${from}'s controls failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            renderWith({portType: '', error: `Copy failed: ${message}`}, 500);
+        }
+    });
+
     // One action of the Controls card: add a control (pressed, or picked from MAME's keys and mouse
     // buttons), remove one (its cross posts `remove`), or go back to MAME's default.
     app.post('/input-probe/remap', (req, res) => {
@@ -11948,7 +12480,7 @@ export function createBoApp(
         const formAction: string = removed ? 'remove' : (req.body.action || '').trim();
         const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
 
-        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'reset'].includes(formAction)) {
+        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'remove-all', 'reset'].includes(formAction)) {
             // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe/devices
             // above - the form only renders once mameInfo.error is unset. !action: portType isn't in
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
@@ -11977,6 +12509,11 @@ export function createBoApp(
 
             if (formAction === 'reset') {
                 applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
+                renderWith({portType});
+                return;
+            }
+            if (formAction === 'remove-all') {
+                saveControlSeq(cfgPath, portType, seqFromAlternatives([]), defaults);
                 renderWith({portType});
                 return;
             }
@@ -12044,6 +12581,157 @@ export function createBoApp(
             gameRemapState,
         );
 
+    // The per-game card's file actions (renderGameControlsFileActions()), on the picked game without
+    // MAME: its romName is one of the roms present, never a path fragment from the client.
+    const pickedGame = (req: Request) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const raw = typeof req.body?.romName === 'string' ? req.body.romName : req.query.romName;
+        const romName = typeof raw === 'string' ? raw.trim() : '';
+        const valid = !mameInfo.error && !!mameInfo.romPath && listRomNames(mameInfo.romPath).includes(romName);
+        return {config, mameInfo, romName: valid ? romName : '', cfgPath: getGameCfgPath(mameInfo.iniPath, romName)};
+    };
+
+    app.get('/input-probe/game/export', async (req, res) => {
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const overrides = existsSync(cfgPath) ? listGameCfgOverrides(readFileSync(cfgPath, 'utf8')) : [];
+        if (!overrides.length) {
+            res.status(422).send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+                romName, error: 'Nothing to export: this game follows the global controls.',
+            }));
+            return;
+        }
+        const now = new Date();
+        const mameVersion = await getMameVersion(join(config.mamePath, config.mameBinaryName));
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="mame-controls-${romName}-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildGameControlsFile(romName, overrides, mameVersion, now));
+    });
+
+    // The game's cfg file as it is, to keep or to look at.
+    app.get('/input-probe/game/cfg', (req, res) => {
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        if (!existsSync(cfgPath)) {
+            res.status(404).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: 'This game has no cfg file.'}));
+            return;
+        }
+        res.set('Content-Type', 'application/xml');
+        res.set('Content-Disposition', `attachment; filename="${romName}.cfg"`);
+        res.send(readFileSync(cfgPath));
+    });
+
+    // Deletes the game's cfg file: controls, DIP switches and counters back to MAME's defaults.
+    // Through applyCfgEdit(): a MAME running the game would write the file again on exit.
+    app.post('/input-probe/game/delete-cfg', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            applyCfgEdit(() => rmSync(cfgPath, {force: true}));
+        } catch (error) {
+            console.error(`[boServer] Deleting cfg/${romName}.cfg failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: `Deleting failed: ${message}`}));
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, notice: `cfg/${romName}.cfg deleted.`}));
+    });
+
+    // Back to the global controls: every override of the game goes, its DIP switches, sound output
+    // and counters stay (removeAllGameCfgInputSeqs()). Through applyCfgEdit(): a MAME running it
+    // would write them back on exit.
+    app.post('/input-probe/game/reset-all', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            if (existsSync(cfgPath)) {
+                applyCfgEdit(() => writeFileSync(cfgPath, removeAllGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')), 'utf8'));
+            }
+        } catch (error) {
+            console.error(`[boServer] Dropping the controls of "${romName}" failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: `Saving failed: ${message}`}));
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, notice: 'This game follows the global controls again.'}));
+    });
+
+    // Replaces the game's own controls with a file's (GameControlsFile.ts), for the same game.
+    app.post('/input-probe/game/import', gameControlsUpload.single('file'), (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const fail = (error: string, status = 422) =>
+            res.status(status).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error}));
+        const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
+        if (!defaults) {
+            fail('MAME\'s controls must be read first (Global controls tab).', 409);
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            fail('Pick a .json file exported from this card.');
+            return;
+        }
+        let overrides: ReturnType<typeof parseGameControlsFile>;
+        try {
+            overrides = parseGameControlsFile(req.file.buffer.toString('utf8'), romName, defaults.codes);
+        } catch (error) {
+            fail(`Import failed: ${(error as Error).message}`);
+            return;
+        }
+        try {
+            applyCfgEdit(() => {
+                const existing = existsSync(cfgPath) ? removeAllGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')) : undefined;
+                const updated = overrides.reduce<string | undefined>(
+                    (xml, override) => setGameCfgInputSeq(xml, romName, {...override, defaultSeq: '', name: ''}, override.seq, override.seqType),
+                    existing,
+                );
+                mkdirSync(dirname(cfgPath), {recursive: true});
+                writeFileSync(cfgPath, updated ?? '', 'utf8');
+            });
+        } catch (error) {
+            console.error(`[boServer] Importing the controls of "${romName}" failed:`, error);
+            fail(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`, 500);
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+            romName, notice: `Import done: ${overrides.length} control${overrides.length > 1 ? 's' : ''} of its own for this game.`,
+        }));
+    });
+
     app.post('/input-probe/game/start', async (req, res) => {
         const config = new Config();
         config.load();
@@ -12085,7 +12773,7 @@ export function createBoApp(
         // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
         // roms actually present - never a client-supplied path fragment.
         if (mameInfo.error || !romNames.includes(romName) || !seqType
-            || !['capture', 'capture-axis', 'add', 'remove', 'reset'].includes(action)) {
+            || !['capture', 'capture-axis', 'add', 'remove', 'remove-all', 'reset'].includes(action)) {
             res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
@@ -12144,6 +12832,11 @@ export function createBoApp(
                 if (seqAlternatives(current).includes(seqAlternatives(removed).join(' '))) {
                     save(removeSeqAlternative(current, removed));
                 }
+                res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
+                return;
+            }
+            if (action === 'remove-all') {
+                save(seqFromAlternatives([]));
                 res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }

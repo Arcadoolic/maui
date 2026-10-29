@@ -117,9 +117,11 @@ end
 -- between MAME versions.
 local UI_SEQS_PATH = CAPTURE_DIR .. '/ui-seqs.txt'
 
+-- ioport.types is walked with ipairs, never pairs: on MAME 0.289 (Homebrew, macOS arm64) pairs()
+-- runs past the end of the list and crashes MAME (see input-defaults.lua).
 local function dump_ui_seqs()
     local lines = {}
-    for _, port_type in pairs(manager.machine.ioport.types) do
+    for _, port_type in ipairs(manager.machine.ioport.types) do
         local token = tostring(port_type.token or port_type.type)
         if token:find('^UI_') then
             local ok, seq = pcall(function()
@@ -175,7 +177,7 @@ local GAME_ANALOG_PATH = CAPTURE_DIR .. '/game-analog.txt'
 
 local function dump_game_fields()
     local tokens = {}
-    for _, port_type in pairs(manager.machine.ioport.types) do
+    for _, port_type in ipairs(manager.machine.ioport.types) do
         tokens[port_type.type .. '/' .. (port_type.player or 0)] = tostring(port_type.token)
     end
     local lines = {}

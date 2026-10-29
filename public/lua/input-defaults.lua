@@ -12,7 +12,9 @@
 local input = manager.machine.input
 local ioport = manager.machine.ioport
 
-for _, port_type in pairs(ioport.types) do
+-- ipairs, not pairs: on MAME 0.289 (Homebrew, macOS arm64) pairs() runs past the end of this list
+-- into garbage (nil tokens) and MAME crashes (SIGSEGV/SIGBUS) before the codes below are printed.
+for _, port_type in ipairs(ioport.types) do
     local token = tostring(port_type.token)
     local ok, seq = pcall(function()
         return input:seq_to_tokens(ioport:type_seq(port_type.type, port_type.player or 0, 'standard'))
