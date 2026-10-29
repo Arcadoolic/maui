@@ -1862,21 +1862,75 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             outline: 2px solid var(--accent);
             outline-offset: -1px;
         }
+        /* Buttons share the capsule shape of the BO's menus (tabs, subtabs, player tabs): white
+           for the main action, the accent on hover. .button-secondary is the outlined one, for
+           the actions around it; .button-danger and .button-attention below only change the
+           colors. Icon buttons keep their own square shape. */
         button {
-            padding: 8px 16px;
+            padding: 8px 18px;
             color: #000000;
             background-color: #ffffff;
-            border: none;
-            border-radius: var(--radius-sm);
+            border: 1px solid transparent;
+            border-radius: 999px;
+            font-weight: 500;
             cursor: pointer;
-            transition: background-color 0.15s ease, opacity 0.15s ease;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
         }
         button:hover:not(:disabled) {
-            background-color: #dddddd;
+            background-color: var(--accent);
+        }
+        button:active:not(:disabled) {
+            transform: translateY(1px);
         }
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+        button.button-secondary {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        button.button-secondary:hover:not(:disabled) {
+            color: var(--accent);
+            background-color: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent);
+        }
+        /* A file field: the browser's own button, in the colors of .button-secondary. */
+        input[type="file"] {
+            width: auto;
+            max-width: 100%;
+            padding: 0;
+            color: var(--text-muted);
+        }
+        input[type="file"]::file-selector-button {
+            margin-right: 12px;
+            padding: 8px 18px;
+            font: inherit;
+            font-weight: 500;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        input[type="file"]::file-selector-button:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        /* A file to import and its button on one row, the label above. */
+        .file-import {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+        }
+        .file-import > label {
+            flex-basis: 100%;
+        }
+        .file-import > button[type="submit"]:last-child {
+            margin-top: 0;
         }
         /* Every interactive element gets a visible keyboard focus ring, not just input/select
            above: buttons and links used to have none at all, so tabbing through a page (or
@@ -2098,15 +2152,17 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .button-link {
             display: inline-block;
-            padding: 8px 16px;
+            padding: 8px 18px;
             background-color: #ffffff;
             color: #000000;
+            font-weight: 500;
             text-decoration: none;
-            border-radius: 4px;
+            border: 1px solid transparent;
+            border-radius: 999px;
             transition: background-color 0.15s ease;
         }
         .button-link:hover {
-            background-color: #dddddd;
+            background-color: var(--accent);
         }
         .browse-list {
             list-style: none;
@@ -2339,6 +2395,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
            instead of the plain white button. The extra selector parts beat the generic
            "form > button[type=submit]:last-child" 24px top margin above, which would otherwise
            push it out of its table row's alignment. */
+        button.icon-button {
+            border-radius: var(--radius-md);
+        }
         form > button.icon-button[type="submit"]:last-child {
             display: inline-flex;
             align-items: center;
@@ -2722,8 +2781,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             border: none;
             cursor: pointer;
         }
-        button.sort-header:hover {
+        button.sort-header:hover, button.sort-header:hover:not(:disabled) {
             text-decoration: underline;
+            background: none;
         }
         th[aria-sort="ascending"] > button.sort-header::after {
             content: " ▲";
@@ -2808,8 +2868,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             line-height: inherit;
             cursor: pointer;
         }
-        button.pack-game-unlock:hover {
+        button.pack-game-unlock:hover, button.pack-game-unlock:hover:not(:disabled) {
             color: var(--text);
+            background: none;
         }
         .pack-swatch {
             display: inline-block;
@@ -3126,6 +3187,7 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .hotkey-choices button {
             margin-top: 0;
             text-align: left;
+            border-radius: var(--radius-md);
         }
         .hotkey-choices button .checkbox-row-detail {
             display: block;
@@ -5316,7 +5378,7 @@ function renderControlsCard(
                 JSON.stringify({keys: listenKeys, mouse: listenMouse}).replace(/</g, '\\u003c')
             }</script>
             <form method="post" action="/input-probe/controls/defaults" class="control-reread">
-                <button type="submit">Read MAME's controls again</button>
+                <button type="submit" class="button-secondary">Read MAME's controls again</button>
             </form>
             <h3>Share these controls</h3>
             <p class="info">Export the global controls, with the gamepads pinned to a JOY number
@@ -5324,9 +5386,9 @@ function renderControlsCard(
             An import replaces this cabinet's global controls with the file's; a game's own controls
             are left as they are. A pinned gamepad only applies to a controller of the same model.</p>
             <form method="get" action="/input-probe/controls/export">
-                <button type="submit">Export the controls</button>
+                <button type="submit" class="button-secondary">Export the controls</button>
             </form>
-            <form method="post" action="/input-probe/controls/import" enctype="multipart/form-data">
+            <form method="post" action="/input-probe/controls/import" enctype="multipart/form-data" class="file-import">
                 <label for="controlsImportFile">File to import (a .json exported here)</label>
                 <input type="file" id="controlsImportFile" name="file" accept=".json" required>
                 <button type="submit">Import</button>
@@ -6470,7 +6532,7 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
                 </label>
                 <button type="submit">Export</button>
             </form>
-            <form method="post" action="/maui/import" enctype="multipart/form-data"
+            <form method="post" action="/maui/import" enctype="multipart/form-data" class="file-import"
                 onsubmit="return confirm('Overwrite the files this export holds? This cannot be undone.')">
                 <label for="mauiImportFile">File to import (a .zip exported here, or a lone .json configuration or .sqlite/.db database)</label>
                 <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
@@ -7895,7 +7957,7 @@ function renderStarredCard(favoritesInfo: FavoritesInfo): string {
             <form method="get" action="/favorites/starred/export">
                 <button type="submit">Export</button>
             </form>` : ''}
-            <form method="post" action="/favorites/starred/import" enctype="multipart/form-data">
+            <form method="post" action="/favorites/starred/import" enctype="multipart/form-data" class="file-import">
                 <label for="starredImportFile">File to import (a .json exported here)</label>
                 <input type="file" id="starredImportFile" name="file" accept=".json" required>
                 <button type="submit">Import</button>
