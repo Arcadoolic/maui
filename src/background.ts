@@ -17,7 +17,7 @@ import {readSetupFacts} from '@/class/SetupFacts';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {SETUP_PROGRESS_GLOBAL, type SetupProgressReader} from '@/class/SetupStepsBridge';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
-import {FRONT_UPDATE_GLOBAL, UPDATE_PROGRESS_CHANNEL} from '@/class/FrontUpdateBridge';
+import {FRONT_UPDATE_GLOBAL, UPDATE_AVAILABLE_CHANNEL, UPDATE_PROGRESS_CHANNEL} from '@/class/FrontUpdateBridge';
 import {FrontUpdate, simulateInstall} from '@/class/FrontUpdate';
 import {findInstallAsset, installAndRestart, isSelfUpdateCapable} from '@/class/SelfUpdate';
 import {
@@ -26,8 +26,10 @@ import {
 } from '@/class/ScoreCaptureBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
 import {
-    CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type FrontControls,
+    CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, MAME_SESSION_CHANNEL, PAD_CAPTURED_CHANNEL,
+    type FrontControls,
     type PadCaptureReply,
 } from '@/class/FrontControlsBridge';
 import Config from '@/class/Config.class';
@@ -35,11 +37,16 @@ import {integrateDesktop} from '@/class/DesktopIntegration';
 import {exitWhenParentGone} from '@/devParentWatch';
 import {getAppIconPath} from '@/staticPath';
 import {totalmem} from 'os';
-import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
+import {canRestartKiosk, isKioskLayout, powerOff, restartKiosk} from '@/class/KioskRestart';
+import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
+import {applyVideoOutput, currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
+import {applyAudioOutput, listAudioDevices, removeAudioOutput, resolveAudioOutput, soundServerRunning} from '@/class/AudioOutput';
 import {resolveUiMode} from '@/class/UiMode';
+import {setUpMainLog} from '@/class/MainLog';
 
+setUpMainLog();
 remoteMain.initialize();
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
@@ -95,6 +102,13 @@ function readSettings(): Config {
     config.load();
     return config;
 }
+
+// The front's "shut the cabinet down" hotkey (Home.vue): a dedicated cabinet only, never a
+// desktop nor a development checkout.
+const requestShutdown: ShutdownRequest = async () => (isKioskLayout(app.isPackaged)
+    ? powerOff()
+    : 'Shutting down is for a dedicated cabinet only: nothing was done.');
+(global as Record<string, unknown>)[SHUTDOWN_GLOBAL] = requestShutdown;
 
 // Read by the idle band (Home.vue) through @electron/remote: the newer version on the BO's channel.
 const readAvailableUpdate: UpdateNoticeReader = () => fakeUpdate ?? core?.updates.available(readSettings().updateChannel) ?? null;
@@ -152,15 +166,43 @@ function integrateAppImage(): void {
     }
 }
 
-// The screen mode of a dedicated cabinet (DisplayMode.ts), before any window opens. Only there, on
-// its bare X session: a desktop's own screen settings are never touched.
+// The screen output and mode of a dedicated cabinet (VideoOutput.ts, DisplayMode.ts), and its sound
+// output (AudioOutput.ts), before any window opens. Only there, on its bare X session: a desktop's
+// own screen and sound settings are never touched.
 function setCabinetDisplayMode(): void {
     if (!isKioskLayout(app.isPackaged) || !process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
         return;
     }
+    const config = new Config();
+    config.load();
     try {
-        const config = new Config();
-        config.load();
+        // First: the mode below is set on the primary output, the one picked here.
+        const output = applyVideoOutput(config.videoOutput);
+        if (output) {
+            console.log(`[background] Screen output set to ${output}`);
+        }
+    } catch (error) {
+        console.error('[background] Screen output not set:', error);
+    }
+    try {
+        // After the screen output, which the sound follows by default. The BO writes it when it
+        // changes; written again here in case ~/.asoundrc was lost or the screen moved. A sound
+        // server picks the output itself: the ~/.asoundrc of an earlier start would go round it.
+        if (soundServerRunning()) {
+            removeAudioOutput();
+            return;
+        }
+        let screen = '';
+        try {
+            screen = currentScreenOutput(config.videoOutput, listScreenOutputs());
+        } catch {
+            // No xrandr answer: no screen output to follow.
+        }
+        applyAudioOutput(resolveAudioOutput(config.audioOutput, screen, listAudioDevices()));
+    } catch (error) {
+        console.error('[background] Sound output not set:', error);
+    }
+    try {
         // The GPU's status is not known this early: the memory alone tells Lite here (UiMode.ts).
         const lite = resolveUiMode(config.uiMode, {totalMemBytes: totalmem()}) === 'lite';
         const mode = applyDisplayMode(config.displayMode, lite);
@@ -231,6 +273,11 @@ app.on('ready', async () => {
                 win.webContents.send(CANCEL_CAPTURE_CHANNEL);
             }
         },
+        mameSessionChanged: (running) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(MAME_SESSION_CHANNEL, running);
+            }
+        },
     };
     // What always runs, and the BO's port: the BO itself is loaded by its first request (boCore.ts).
     const bo = startCore(BO_SERVER_PORT, () => {
@@ -274,6 +321,20 @@ app.on('ready', async () => {
         if (win && !win.isDestroyed()) {
             win.webContents.send(FAVORITES_CHANGED_CHANNEL);
         }
+    }, {
+        // The BO's Sounds subtab saved the front's sounds, or plays one on the cabinet (UiSounds.ts).
+        changed: () => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send(UI_SOUNDS_CHANGED_CHANNEL);
+            }
+        },
+        test: (volume, sound) => {
+            if (!win || win.isDestroyed()) {
+                return false;
+            }
+            win.webContents.send(UI_SOUNDS_TEST_CHANNEL, volume, sound);
+            return true;
+        },
     });
     core = bo;
     // The front's update of MAUI (FrontUpdate.ts): offered when it wakes up from idle (Home.vue),
@@ -305,15 +366,34 @@ app.on('ready', async () => {
         },
     });
     (global as Record<string, unknown>)[FRONT_UPDATE_GLOBAL] = frontUpdate;
+    // A version to offer found by a check (the first one is 30 s after the start): the front offers
+    // it at once (Home.vue), each version once in a run, rather than at its next wake from idle.
+    let toldOffer: string | null = null;
+    bo.updates.onCheck(() => {
+        const version = frontUpdate.offer();
+        if (version && version !== toldOffer && win && !win.isDestroyed()) {
+            toldOffer = version;
+            win.webContents.send(UPDATE_AVAILABLE_CHANNEL);
+        }
+    });
     // The database is created/migrated first (see boCore.ts's bootstrapDatabase()): the
     // renderer's Init.vue then finds it ready instead of racing the BO's first sign-in for it.
     await bo.databaseReady;
     onlineSession = bo.online;
     // Games started and ended by the front (Home.vue): their new scores go to MAUI-API.
-    const playStarted: PlayNotifier = (romName, reportDir) => bo.scores.started(romName, reportDir ?? null);
+    // While a game is played, ONLINE only sends its heartbeat (OnlineSession.pause()); once it
+    // ends, the game's scores are read, then sent, and the leaderboards refreshed, its own first.
+    const playStarted: PlayNotifier = (romName, reportDir) => {
+        bo.online.pause();
+        return bo.scores.started(romName, reportDir ?? null);
+    };
     const playEnded: PlayEndNotifier = async (romName) => {
-        const ask = await bo.scores.ended(romName);
-        return ask ? JSON.stringify(ask) : null;
+        try {
+            const ask = await bo.scores.ended(romName);
+            return ask ? JSON.stringify(ask) : null;
+        } finally {
+            bo.online.resume(romName);
+        }
     };
     // The player picked on the cabinet for a score the game wrote without a name (WhoPlayedModal.vue).
     const attributeScore: ScoreAttributor = (romName, score, playerId) => bo.scores.attribute(romName, score, playerId);
@@ -379,9 +459,15 @@ function createSplashWin() {
             nodeIntegration: true,
             contextIsolation: false,
             sandbox: false,
+            // The front's sounds (UiSounds.ts) play before any click or key: a gamepad does not
+            // count as one for Chromium.
+            autoplayPolicy: 'no-user-gesture-required',
         },
         backgroundColor: '#000000',
         frame: false,
+        // A dedicated cabinet's window fills the screen from the start (its window manager would
+        // stretch it anyway): the splash is shown once, at that size (Init.vue).
+        ...(isKioskLayout(app.isPackaged) ? {fullscreen: true} : {}),
         // Linux only: see getAppIconPath().
         ...(process.platform === 'linux' ? {icon: getAppIconPath()} : {}),
     }, 'init');

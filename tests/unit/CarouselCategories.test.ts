@@ -2,7 +2,7 @@ import {describe, it, expect} from 'vitest';
 import type Category from '@/model/Category.model';
 import {buildCarousel, getCategoryIconKey, mergeTtlCategories, type CarouselOptions} from '@/class/CarouselCategories';
 import {
-    ALL_GAMES_CATEGORY, HISCORES_ONLY_CATEGORY, BEAT_THIS_CATEGORY, isMergedCategory,
+    ALL_GAMES_CATEGORY, HISCORES_ONLY_CATEGORY, BEAT_THIS_CATEGORY, STARRED_CATEGORY, isMergedCategory,
 } from '@/types/CarouselCategory';
 
 const category = (id: number, name: string) => ({id_category: id, name}) as unknown as Category;
@@ -59,41 +59,49 @@ describe('buildCarousel', () => {
         showAllGames: true,
         showBeatThis: true,
         showHiscoresOnly: true,
+        hasStarredGames: true,
         hasBeatThisGames: true,
         hasHiscoreGames: true,
     };
     const maze = category(9, 'Maze');
 
-    it('puts "All Games", "Beat This!" and "Hiscores Only" before the genres', () => {
+    it('puts "All Games", "My favourites", "Beat This!" and "Hiscores Only" before the genres', () => {
         expect(buildCarousel([maze], everything)).toEqual([
-            ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY, maze,
+            ALL_GAMES_CATEGORY, STARRED_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY, maze,
         ]);
     });
 
     it('leaves out the categories hidden from the BO', () => {
         expect(buildCarousel([maze], {...everything, showAllGames: false})).toEqual([
-            BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY, maze,
+            STARRED_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY, maze,
         ]);
         expect(buildCarousel([maze], {...everything, showBeatThis: false, showHiscoresOnly: false})).toEqual([
-            ALL_GAMES_CATEGORY, maze,
+            ALL_GAMES_CATEGORY, STARRED_CATEGORY, maze,
         ]);
     });
 
     it('leaves out a category that would be empty', () => {
-        expect(buildCarousel([maze], {...everything, hasBeatThisGames: false, hasHiscoreGames: false})).toEqual([
+        expect(buildCarousel([maze], {
+            ...everything, hasStarredGames: false, hasBeatThisGames: false, hasHiscoreGames: false,
+        })).toEqual([
             ALL_GAMES_CATEGORY, maze,
         ]);
     });
 
     it('falls back on "All Games" rather than an empty carousel', () => {
         expect(buildCarousel([], {
-            ...everything, showAllGames: false, hasBeatThisGames: false, hasHiscoreGames: false,
+            ...everything, showAllGames: false, hasStarredGames: false, hasBeatThisGames: false, hasHiscoreGames: false,
         })).toEqual([ALL_GAMES_CATEGORY]);
     });
 
-    it('gives its three own entries ids that clash with nothing', () => {
-        const ids = [ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY].map(entry => entry.id_category);
-        expect(new Set(ids).size).toBe(3);
+    it('gives "My favourites" its own icon', () => {
+        expect(getCategoryIconKey(STARRED_CATEGORY.name)).toBe('my_favourites');
+    });
+
+    it('gives its own entries ids that clash with nothing', () => {
+        const ids = [ALL_GAMES_CATEGORY, STARRED_CATEGORY, BEAT_THIS_CATEGORY, HISCORES_ONLY_CATEGORY]
+            .map(entry => entry.id_category);
+        expect(new Set(ids).size).toBe(4);
         expect(ids.every(id => id < 0)).toBe(true);
     });
 });

@@ -41,40 +41,66 @@ export class LeaderboardSync {
         this.listeners.push(listener);
     }
 
-    /** Never throws; stops at the first failed batch, the cache keeps what it had. */
-    public async refresh(client: MauiApiClient): Promise<LeaderboardRefresh> {
+    /**
+     * Never throws; stops at the first failed batch, the cache keeps what it had. `first`, the
+     * game just played, is asked on its own before the others, and the front told at once when it
+     * changed: its new scores show without waiting for the rest of the cabinet's games.
+     */
+    public async refresh(client: MauiApiClient, first?: string): Promise<LeaderboardRefresh> {
         const result: LeaderboardRefresh = {updated: 0, avatars: 0};
         const romnames = [...new Set(await this.deps.romnames())].sort();
+        const batches: string[][] = first && romnames.includes(first) ? [[first]] : [];
+        for (let start = 0; start < romnames.length; start += LEADERBOARD_BATCH_SIZE) {
+            batches.push(romnames.slice(start, start + LEADERBOARD_BATCH_SIZE));
+        }
+        let untold = false;
         try {
-            for (let start = 0; start < romnames.length; start += LEADERBOARD_BATCH_SIZE) {
-                const batch = romnames.slice(start, start + LEADERBOARD_BATCH_SIZE);
-                const key = batch.join(',');
-                const answer = await client.getLeaderboards(batch, this.etags.get(key) ?? null);
-                if (answer.kind !== 'ok') {
-                    result.failure = answer;
+            for (const batch of batches) {
+                const changed = await this.refreshBatch(client, batch, result);
+                if (typeof changed !== 'boolean') {
+                    result.failure = changed;
                     break;
                 }
-                if (answer.value.notModified) {
-                    continue;
-                }
-                await this.deps.store.save(answer.value.value);
-                result.updated += answer.value.value.length;
-                const avatars = await this.fetchAvatars(client, answer.value.value);
-                result.avatars += avatars.fetched;
-                // An avatar that could not be downloaded: the batch is asked again in full next
-                // time, instead of a 304 that would leave its players on their previous picture.
-                if (answer.value.etag && avatars.missing === 0) {
-                    this.etags.set(key, answer.value.etag);
-                } else {
-                    this.etags.delete(key);
+                untold ||= changed;
+                if (untold && batch.length === 1 && batch[0] === first) {
+                    this.tell();
+                    untold = false;
                 }
             }
         } finally {
-            if (result.updated > 0 || result.avatars > 0) {
-                this.listeners.forEach(listener => listener());
+            if (untold) {
+                this.tell();
             }
         }
         return result;
+    }
+
+    private tell(): void {
+        this.listeners.forEach(listener => listener());
+    }
+
+    /** One batch into the cache: whether something changed, or the API's failure. */
+    private async refreshBatch(client: MauiApiClient, batch: string[], result: LeaderboardRefresh): Promise<boolean | ApiFailure> {
+        const key = batch.join(',');
+        const answer = await client.getLeaderboards(batch, this.etags.get(key) ?? null);
+        if (answer.kind !== 'ok') {
+            return answer;
+        }
+        if (answer.value.notModified) {
+            return false;
+        }
+        await this.deps.store.save(answer.value.value);
+        result.updated += answer.value.value.length;
+        const avatars = await this.fetchAvatars(client, answer.value.value);
+        result.avatars += avatars.fetched;
+        // An avatar that could not be downloaded: the batch is asked again in full next
+        // time, instead of a 304 that would leave its players on their previous picture.
+        if (answer.value.etag && avatars.missing === 0) {
+            this.etags.set(key, answer.value.etag);
+        } else {
+            this.etags.delete(key);
+        }
+        return answer.value.value.length > 0 || avatars.fetched > 0;
     }
 
     /** The avatars of these leaderboards not in the cache yet: those downloaded, those still missing. */

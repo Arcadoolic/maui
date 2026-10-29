@@ -5,6 +5,10 @@ import {decryptSecret, encryptSecret, isEncryptedSecret} from '@/class/SecretBox
 import {parseUiModeSetting, type UiModeSetting} from '@/class/UiMode';
 import {parseDisplayModeSetting, type DisplayModeSetting} from '@/class/DisplayMode';
 import {parseUpdateChannel, type UpdateChannel} from '@/class/ReleaseList';
+import {parseVideoOutputSetting} from '@/class/VideoOutput';
+import {FOLLOW_SCREEN, parseAudioOutputSetting} from '@/class/AudioOutput';
+import {DEFAULT_UI_SOUNDS_VOLUME, parseDisabledUiSounds, type UiSoundToggle} from '@/class/UiSounds';
+import {parseVolumePercent} from '@/class/Volume';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
 // the clear: they are shown back in the BO forms, the passwords are not.
@@ -100,6 +104,11 @@ export default class Config {
     // The screen mode of a dedicated cabinet, set when the application starts (DisplayMode.ts):
     // "auto" keeps it at 1080 lines at most, 720 in Lite mode.
     public displayMode: DisplayModeSetting = 'auto';
+    // The screen output (an xrandr name, VideoOutput.ts) and the sound output ("card,device",
+    // AudioOutput.ts) of a dedicated cabinet; '' leaves them as the system set them.
+    public videoOutput: string = '';
+    // FOLLOW_SCREEN by default: the HDMI card of the screen output.
+    public audioOutput: string = FOLLOW_SCREEN;
 
     // Minutes without a request before the BO is unloaded from memory (BoOnDemand.ts); its next
     // request loads it again. 0 keeps it loaded once it has been opened.
@@ -116,6 +125,17 @@ export default class Config {
     // never. Counted from the last key when the idle curtain is switched off.
     public frontSleepMinutes: number = 30;
     public frontSleepScreenOff: boolean = true;
+    // How long the launch screen (Home.vue's startGame(), LaunchStage.vue) is shown before MAME is
+    // started, the launch sound included, 0 to 30 seconds.
+    public launchStageSeconds: number = 2;
+
+    // The games' volume, 0 to 100 (Volume.ts gameVolumeArgs(), passed to MAME at each launch).
+    public gamesVolume: number = 100;
+    // The front's own sounds (UiSounds.ts): all of them, their volume (0 to 100), and the ones
+    // switched off one by one in the BO's Sounds subtab.
+    public uiSoundsEnabled: boolean = true;
+    public uiSoundsVolume: number = DEFAULT_UI_SOUNDS_VOLUME;
+    public uiSoundsDisabled: UiSoundToggle[] = [];
 
     // The front's ONLINE badge in the top right corner (OnlineBadge.vue): ONLINE / OFFLINE with its
     // dot, or the dot alone, more discreet.
@@ -175,6 +195,8 @@ export default class Config {
             this.showHiscoresOnlyCategory = configFile.showHiscoresOnlyCategory !== false;
             this.uiMode = parseUiModeSetting(configFile.uiMode);
             this.displayMode = parseDisplayModeSetting(configFile.displayMode);
+            this.videoOutput = parseVideoOutputSetting(configFile.videoOutput);
+            this.audioOutput = parseAudioOutputSetting(configFile.audioOutput);
             this.boIdleMinutes = Number.isInteger(configFile.boIdleMinutes) && configFile.boIdleMinutes >= 0
                 ? configFile.boIdleMinutes
                 : 15;
@@ -187,6 +209,14 @@ export default class Config {
                 ? configFile.frontSleepMinutes
                 : 30;
             this.frontSleepScreenOff = configFile.frontSleepScreenOff !== false;
+            this.launchStageSeconds = Number.isInteger(configFile.launchStageSeconds)
+                && configFile.launchStageSeconds >= 0 && configFile.launchStageSeconds <= 30
+                ? configFile.launchStageSeconds
+                : 2;
+            this.uiSoundsEnabled = configFile.uiSoundsEnabled !== false;
+            this.gamesVolume = parseVolumePercent(configFile.gamesVolume, 100);
+            this.uiSoundsVolume = parseVolumePercent(configFile.uiSoundsVolume, DEFAULT_UI_SOUNDS_VOLUME);
+            this.uiSoundsDisabled = parseDisabledUiSounds(configFile.uiSoundsDisabled);
             this.onlineBadgeDotOnly = configFile.onlineBadgeDotOnly === true;
             this.onlineBadgeHideIp = configFile.onlineBadgeHideIp === true;
             this.cabinetPlayersPublic = configFile.cabinetPlayersPublic === true;
@@ -238,12 +268,19 @@ export default class Config {
                 showHiscoresOnlyCategory: this.showHiscoresOnlyCategory,
                 uiMode: this.uiMode,
                 displayMode: this.displayMode,
+                videoOutput: this.videoOutput,
+                audioOutput: this.audioOutput,
                 boIdleMinutes: this.boIdleMinutes,
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
                 frontIdleShowsGames: this.frontIdleShowsGames,
                 frontSleepMinutes: this.frontSleepMinutes,
                 frontSleepScreenOff: this.frontSleepScreenOff,
+                launchStageSeconds: this.launchStageSeconds,
+                gamesVolume: this.gamesVolume,
+                uiSoundsEnabled: this.uiSoundsEnabled,
+                uiSoundsVolume: this.uiSoundsVolume,
+                uiSoundsDisabled: this.uiSoundsDisabled,
                 onlineBadgeDotOnly: this.onlineBadgeDotOnly,
                 onlineBadgeHideIp: this.onlineBadgeHideIp,
                 cabinetPlayersPublic: this.cabinetPlayersPublic,

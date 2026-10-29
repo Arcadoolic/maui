@@ -7,7 +7,8 @@ import {
 import {join, dirname, sep, basename} from 'path';
 import * as os from 'os';
 import {randomBytes} from 'crypto';
-import {ChildProcess, execFileSync, spawn} from 'child_process';
+import {ChildProcess, execFile, execFileSync, spawn} from 'child_process';
+import {promisify} from 'util';
 import {app as electronApp} from 'electron';
 import multer from 'multer';
 import bcrypt from 'bcryptjs';
@@ -24,16 +25,18 @@ import {buildMameBackup, listMameBackupPaths, MAME_BACKUP_PARTS, parseMameBackup
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {
     addSeqAlternative, browserKeyTokens, browserMouseToken, describeSeqAlternative, parseInputDefaults, parseUiSeqs, removeSeqAlternative, removeTokenFromSeq,
-    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults,
+    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults, mirrorSeqToOtherPlayer, otherPlayerPortType,
 } from '@/class/MameInputSeq';
 import {parseListFull} from '@/class/MameListFull';
 import {
     compareGameFields,
     gameFieldId,
     inputIconKey,
+    listGameCfgOverrides,
     parseGameFields,
     portTypePlayer,
     readGameCfgInputSeqs,
+    removeAllGameCfgInputSeqs,
     removeGameCfgInputSeq,
     GAME_SEQ_TYPES,
     setGameCfgInputSeq,
@@ -43,25 +46,31 @@ import {
 import {addFavorite} from '@/class/MameIniParser';
 import {
     FavoritesCacheEntry, FavoritesCache, getFavoritesCachePath, readFavoritesCache,
-    writeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
+    mergeFavoritesCache, readRemovedFavorites, writeRemovedFavorites, removeFavoriteFromDisk,
     readRomsInfosCache, saveRomInfos, getRomsInfosCachePath,
 } from '@/class/FavoritesStore';
 import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
-import {importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
+import {humanSize, importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
 import {verifyRoms} from '@/class/MameVerifyRoms';
+import {currentScreenOutput, listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
+import {
+    applyAudioOutput, FOLLOW_SCREEN, listAudioDevices, parseAudioOutputSetting, resolveAudioOutput, soundServerRunning,
+} from '@/class/AudioOutput';
 import {
     downloadWindowsInstaller, findInstallAsset, installAppImage, isKioskInstall, isSelfUpdateCapable, isWindowsInstall,
     restartOnInstalledVersion, runWindowsInstaller, type UpdateProgress,
 } from '@/class/SelfUpdate';
+import {describeUpdateStep} from '@/class/UpdateScreen';
 import {findIncompatibleGames, listMachines} from '@/class/RomsetCompatibility';
 import {findTooSlowGames, isWeakHardware, parseForcedGames} from '@/class/GameSpeed';
 import {decodeXmlEntities} from '@/class/XmlEntities';
 import {canRestartKiosk, restartKiosk} from '@/class/KioskRestart';
 import {chooseRelaunch, type RelaunchMode} from '@/class/AppRelaunch';
 import {hasHiscoreExtraction} from '@/class/HiscoreSupport';
+import {readMameVersion, UNKNOWN_MAME_VERSION} from '@/class/MameVersion';
 import {
     describeSources, hexDump, type HiscoreReport, type HiscoreRowStatus, inspectHiscores, readHiscoreDatSizes,
     type StoredScore,
@@ -74,7 +83,7 @@ import {
 } from '@/class/UserReservation';
 import {newPseudo3Error} from '@/class/Pseudo3';
 import {findAvatarFile, avatarCacheBust} from '@/class/AvatarFiles';
-import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote} from '@/class/GameVote';
+import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP, parseVote, voteFields} from '@/class/GameVote';
 import {
     sortByPublishedDesc, formatPublishedAt, isOlderVersion, limitOlderReleases, MAUI_RELEASES_URL, parseUpdateChannel,
 } from '@/class/ReleaseList';
@@ -82,15 +91,26 @@ import {parseGamepadIds} from '@/class/GamepadId';
 import {readCtrlrMapDevices, setCtrlrMapDevice} from '@/class/MameCtrlr';
 import {MAUI_KEYS, MAUI_CONTROL_CONTEXTS} from '@/class/MauiControls';
 import {
-    addInput, describeMauiInput, inputsOfKey, isDefaultKey, mauiInputId, parseMauiBindings, parseMauiInputId,
-    removeInput, resetKey, serializeMauiBindings, type MauiBindings, type MauiInput,
+    addInput, describeMauiInput, inputsOfKey, isDefaultKey, isHotkeyKey, keyOfInput, mauiInputId, parseMauiBindings,
+    parseMauiInputId, removeInput, resetKey, serializeMauiBindings, type MauiBindings, type MauiInput,
 } from '@/class/MauiControlBindings';
+import {
+    defaultHotkeys, HOTKEY_ACTION_LABELS, HOTKEY_ACTIONS, MAUI_KEY_REF, MAX_HOLD_MS, parseHotkey, sameHotkey, type Hotkey,
+    type HotkeyAction,
+} from '@/class/Hotkeys';
 import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
-import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
+import {
+    GAMEPAD_ICON_PATHS, ICON_SVG_ATTRS, KEY_MOUSE_ICON_PATHS, RESET_ICON_PATHS, renderControlIconButton,
+    renderIconButton,
+} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
+import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
+import {DEFAULT_UI_SOUNDS_VOLUME, isUiSoundToggle} from '@/class/UiSounds';
+import {disabledFromForm, renderSoundsCard} from '@/class/SoundsBoCard';
+import {parseVolumePercent} from '@/class/Volume';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {badgeLabel, describeIdentity} from '@/class/OnlineIndicatorBridge';
 import {
@@ -101,12 +121,18 @@ import {OnlineSession} from '@/class/OnlineSession';
 import {readCabinetTables} from '@/class/HiscoreBackfill';
 import {describeFlush, queueScores} from '@/class/ScoreOutbox';
 import {createOnlineClient} from '@/class/OnlineClient';
+import {buildDiagnosticBundle} from '@/class/DiagnosticBundle';
+import {diagnosticZip} from '@/class/DiagnosticZip';
+import {readSentDiagnostics, recordSentDiagnostic} from '@/class/DiagnosticHistory';
+import {getLogDirectory} from '@/class/MainLog';
+import {archiveStamp} from '@/class/LogArchive';
 import {linkWithPin, registerOnline, type RegistrationOutcome} from '@/class/OnlineRegistration';
 import {
     describeOutcomeForBo, renderCreateOnlineFields, renderOnlinePlayerActions, renderOnlinePlayerStatus,
     renderPinReveal, type OnlineBoMessage,
 } from '@/class/OnlinePlayersBo';
-import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
+import type {ApiFailure, MauiApiClient, OnlinePlayer, RecoveryNotFoundReason} from '@/class/MauiApiClient';
+import {readRecoveryAnswers} from '@/class/ScoreRecovery';
 import {canActivateLocally, isDisabledUpstream, playersBlockingOnline} from '@/class/OnlineReconciliation';
 import {
     describeRepositoryFailure, describeRepositoryResponse, isOnlineActive, resolveRepository,
@@ -116,13 +142,16 @@ import {renderOnlineCard} from '@/class/OnlineBoCard';
 import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} from '@/class/MameProcesses';
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
+import {buildStarredFile, MAX_STARRED_FILE_BYTES, parseStarredFile} from '@/class/StarredGamesFile';
+import {buildMameControlsFile, MAX_MAME_CONTROLS_FILE_BYTES, parseMameControlsFile} from '@/class/MameControlsFile';
+import {buildGameControlsFile, MAX_GAME_CONTROLS_FILE_BYTES, parseGameControlsFile} from '@/class/GameControlsFile';
 import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
 import {renderBluetoothCard} from '@/class/BluetoothBoCard';
 import {
     pairBluetooth, readBluetoothState, removeBluetooth, scanBluetooth, setBluetoothPower,
     type BluetoothDevice, type BluetoothState,
 } from '@/class/BluetoothControl';
-import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, setWifiRadio, type NetworkState} from '@/class/WifiControl';
+import {connectWifi, forgetWifi, isWifiTheOnlyLink, readNetworkState, saveWifi, setWifiRadio, type NetworkState} from '@/class/WifiControl';
 import {getStaticPath} from '@/staticPath';
 import {
     getDatabasePath, getMameHomePath, getRunningVersion, type BoCore,
@@ -131,7 +160,7 @@ import type {BoApp} from '@/class/BoOnDemand';
 // The models registered on boCore.ts's connection (see its comment on why Database.class.ts is
 // not imported in the main process).
 import Category from '@/model/Category.model';
-import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
+import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, confPackVersion, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
@@ -445,68 +474,132 @@ const INPUT_CFG_ICON = '\u{1F3AE}';
 const INPUT_CFG_LEGEND = `${INPUT_CFG_ICON} = this game already has its own key configuration (<code>cfg/&lt;rom&gt;.cfg</code>).`;
 
 /**
- * Searchable rom picker: a text field filtering a plain <select> (works without the script, just
- * unfiltered) of game names sorted alphabetically, each flagged with an icon when it has its own
- * input cfg. The script is self-contained (finds its picker through document.currentScript) since
- * several pickers can share the page. Typing turns the select into a short list box so the
- * matches are visible without opening it; every term must appear, accents and case ignored, in
- * the game name or its rom name.
+ * Searchable rom picker: a search field with a list of the matching games under it (a combobox),
+ * every term having to appear, accents and case ignored, in the game name or its rom name. Picking
+ * one (click, or arrows then Enter) closes the list and opens `pickUrl` + the rom name, so the
+ * page shows that game; the field then holds its name. Games with their own input cfg are flagged
+ * with an icon. The games are handed to the script as JSON, at most MAX_ROM_RESULTS listed at once.
+ * `romName` (a hidden field) is what the surrounding form posts.
  */
+const MAX_ROM_RESULTS = 50;
+
 function renderRomPicker(
-    selectId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom?: string,
+    inputId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom: string,
+    pickUrl: string,
 ): string {
-    const options = romNames
-        .map(romName => ({romName, label: romLabels.get(romName) ?? romName}))
-        .sort((a, b) => a.label.localeCompare(b.label))
-        .map(({romName, label}) => `
-            <option value="${escapeHtml(romName)}" data-search="${escapeHtml(`${label} ${romName}`)}"
-                ${selectedRom === romName ? 'selected' : ''}>${withCfg.has(romName) ? `${INPUT_CFG_ICON} ` : ''}${escapeHtml(label)}</option>
-        `).join('');
+    const games = romNames
+        .map(romName => ({romName, label: romLabels.get(romName) ?? romName, cfg: withCfg.has(romName)}))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    const selectedLabel = romLabels.get(selectedRom) ?? selectedRom;
+    const listId = `${inputId}-results`;
 
     return `
-        <div class="rom-picker">
-            <label for="${escapeHtml(selectId)}">Game</label>
-            <input type="search" class="rom-search" placeholder="Search a game…" autocomplete="off"
-                aria-label="Search a game">
-            <select id="${escapeHtml(selectId)}" name="romName">${options}</select>
-            <p class="info table-search-count rom-search-count" hidden></p>
+        <div class="rom-picker" data-pick-url="${escapeHtml(pickUrl)}">
+            <label for="${escapeHtml(inputId)}">Game</label>
+            <div class="rom-combobox">
+                <input type="search" id="${escapeHtml(inputId)}" class="rom-search" value="${escapeHtml(selectedLabel)}"
+                    placeholder="Search a game by name or rom name…" autocomplete="off" role="combobox"
+                    aria-autocomplete="list" aria-expanded="false" aria-controls="${escapeHtml(listId)}">
+                <ul id="${escapeHtml(listId)}" class="rom-results" role="listbox" hidden></ul>
+            </div>
+            <input type="hidden" name="romName" value="${escapeHtml(selectedRom)}">
             <p class="info">${INPUT_CFG_LEGEND}</p>
+            <script type="application/json" class="rom-games">${JSON.stringify(games).replace(/</g, '\\u003c')}</script>
             <script>(function () {
                 var root = document.currentScript.parentNode;
                 var search = root.querySelector('.rom-search');
-                var select = root.querySelector('select');
-                var count = root.querySelector('.rom-search-count');
-                // Last game really picked: kept across searches with no result, which empty the select.
-                var chosen = select.value;
-                var all = Array.prototype.map.call(select.options, function (option) {
-                    return {option: option, haystack: fold(option.dataset.search || '')};
-                });
+                var list = root.querySelector('.rom-results');
+                var games = JSON.parse(root.querySelector('.rom-games').textContent);
+                var selectedLabel = search.value;
+                var shown = [];
+                var active = -1;
                 function fold(text) {
                     return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
                 }
-                function applySearch() {
-                    var terms = fold(search.value).split(/\\s+/).filter(Boolean);
-                    var matches = all.filter(function (entry) {
-                        return terms.every(function (term) { return entry.haystack.indexOf(term) >= 0; });
-                    });
-                    while (select.firstChild) { select.removeChild(select.firstChild); }
-                    matches.forEach(function (entry) { select.appendChild(entry.option); });
-                    if (matches.some(function (entry) { return entry.option.value === chosen; })) {
-                        select.value = chosen;
-                    } else if (matches.length) {
-                        select.selectedIndex = 0;
-                        chosen = select.value;
-                    }
-                    select.size = terms.length && matches.length > 1 ? Math.min(matches.length, 8) : 1;
-                    count.hidden = terms.length === 0;
-                    count.textContent = matches.length
-                        ? matches.length + ' game(s) found out of ' + all.length + '.'
-                        : 'No game matches this search.';
+                games.forEach(function (game) { game.haystack = fold(game.label + ' ' + game.romName); });
+                function close() {
+                    list.hidden = true;
+                    search.setAttribute('aria-expanded', 'false');
+                    search.removeAttribute('aria-activedescendant');
                 }
-                select.addEventListener('change', function () { chosen = select.value; });
-                search.addEventListener('input', applySearch);
+                function highlight(index) {
+                    active = index;
+                    Array.prototype.forEach.call(list.children, function (item, i) {
+                        item.classList.toggle('active', i === index);
+                        item.setAttribute('aria-selected', i === index ? 'true' : 'false');
+                    });
+                    var item = list.children[index];
+                    if (item && item.id) {
+                        search.setAttribute('aria-activedescendant', item.id);
+                        item.scrollIntoView({block: 'nearest'});
+                    }
+                }
+                function open() {
+                    // The selected game's own name lists them all, as an empty field does.
+                    var text = search.value === selectedLabel ? '' : search.value;
+                    var terms = fold(text).split(/\\s+/).filter(Boolean);
+                    var matches = games.filter(function (game) {
+                        return terms.every(function (term) { return game.haystack.indexOf(term) >= 0; });
+                    });
+                    shown = matches.slice(0, ${MAX_ROM_RESULTS});
+                    list.innerHTML = '';
+                    shown.forEach(function (game, index) {
+                        var item = document.createElement('li');
+                        item.id = list.id + '-' + index;
+                        item.setAttribute('role', 'option');
+                        var name = document.createElement('span');
+                        name.textContent = (game.cfg ? '${INPUT_CFG_ICON} ' : '') + game.label;
+                        var rom = document.createElement('span');
+                        rom.className = 'rom-results-rom';
+                        rom.textContent = game.romName;
+                        item.appendChild(name);
+                        item.appendChild(rom);
+                        // mousedown, not click: the field keeps the focus, so blur does not close first.
+                        item.addEventListener('mousedown', function (event) {
+                            event.preventDefault();
+                            pick(game);
+                        });
+                        list.appendChild(item);
+                    });
+                    var more = matches.length - shown.length;
+                    if (!matches.length || more > 0) {
+                        var note = document.createElement('li');
+                        note.className = 'rom-results-note';
+                        note.textContent = matches.length
+                            ? more + ' more game(s): type more of the name.'
+                            : 'No game matches this search.';
+                        list.appendChild(note);
+                    }
+                    list.hidden = false;
+                    search.setAttribute('aria-expanded', 'true');
+                    highlight(shown.length ? 0 : -1);
+                }
+                function pick(game) {
+                    close();
+                    search.value = game.label;
+                    root.querySelector('input[name="romName"]').value = game.romName;
+                    location.href = root.dataset.pickUrl + encodeURIComponent(game.romName);
+                }
+                search.addEventListener('focus', function () { search.select(); open(); });
+                search.addEventListener('input', open);
+                search.addEventListener('blur', function () {
+                    close();
+                    if (!search.value.trim()) { search.value = selectedLabel; }
+                });
                 search.addEventListener('keydown', function (event) {
-                    if (event.key === 'Enter') { event.preventDefault(); }
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        if (list.hidden) { open(); return; }
+                        var step = event.key === 'ArrowDown' ? 1 : -1;
+                        highlight(Math.max(0, Math.min(shown.length - 1, active + step)));
+                    } else if (event.key === 'Enter') {
+                        // Never submits the form: Enter picks the highlighted game.
+                        event.preventDefault();
+                        if (!list.hidden && shown[active]) { pick(shown[active]); }
+                    } else if (event.key === 'Escape') {
+                        close();
+                        search.value = selectedLabel;
+                    }
                 });
             })();</script>
         </div>
@@ -551,26 +644,33 @@ function getDeviceRomNames(xmlContent: string): string[] {
     return refNames.filter(name => hasRomsByName.get(name));
 }
 
+const execFileAsync = promisify(execFile);
+
 /**
  * Same per-rom lookup as MameService.getGameInformation(), but with regex tag/attribute
  * extraction instead of DOMParser: DOMParser is a browser global available in the renderer,
- * not in this main-process server.
+ * not in this main-process server. Asynchronous, not to block the main process meanwhile (the
+ * front's IPC goes through it).
  */
-function getGameXmlInfo(mameBinary: string, iniPath: string, romName: string): GameXmlInfo {
+async function readGameXmlInfo(mameBinary: string, iniPath: string, romName: string): Promise<GameXmlInfo> {
     try {
-        const xmlContent = execFileSync(
+        const {stdout} = await execFileAsync(
             mameBinary,
             ['-lx', romName, '-inipath', iniPath, '-homepath', iniPath],
-            {encoding: 'utf8', cwd: iniPath, stdio: ['ignore', 'pipe', 'pipe']},
+            {encoding: 'utf8', cwd: iniPath, maxBuffer: 64 * 1024 * 1024, windowsHide: true},
         );
-        return {
-            description: extractXmlTagContent(xmlContent, 'description'),
-            biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
-            deviceRoms: getDeviceRomNames(xmlContent),
-        };
+        return parseGameXml(stdout);
     } catch {
         return {description: null, biosName: null, deviceRoms: []};
     }
+}
+
+function parseGameXml(xmlContent: string): GameXmlInfo {
+    return {
+        description: extractXmlTagContent(xmlContent, 'description'),
+        biosName: extractXmlAttribute(xmlContent, 'machine', 'romof'),
+        deviceRoms: getDeviceRomNames(xmlContent),
+    };
 }
 
 interface FavoriteMediaStatus {
@@ -584,19 +684,17 @@ interface FavoriteRow extends FavoriteMediaStatus {
     fullname: string;
     biosName: string | null;
     deviceRoms: string[];
-    // False when this rom has no entry in the favorites cache yet (added since the last "Update
-    // favorites") - fullname then just falls back to romName and biosName/deviceRoms to
-    // empty, rather than paying for a `mame -lx` call on every page load (see resolveFavoriteRow()).
+    // False when this rom has no entry in the favorites cache yet (being resolved, see
+    // updateFavoritesCache()) - fullname then just falls back to romName and biosName/deviceRoms
+    // to empty.
     cached: boolean;
 }
 
 interface FavoritesInfo {
     rows: FavoriteRow[];
     error?: string;
-    // ISO timestamp of the favorites cache this list's names/BIOS came from - null when the
-    // cache doesn't exist yet (never refreshed). Media badges (hasMarquee/hasFlyer/hasLogo) are
-    // always live, regardless of cache age - see getFavoriteMediaStatus().
-    cacheUpdatedAt?: string | null;
+    // Favorites whose names are being resolved in the background (see updateFavoritesCache()).
+    resolving?: {done: number; total: number} | null;
     // Launch count per rom (see loadGameStats()); a rom absent from it, or no map at all (database
     // not migrated yet), shows no count.
     stats?: Map<string, GameStats>;
@@ -615,6 +713,10 @@ interface GameStats {
     fullname: string;
     playCount: number;
     vote: Vote;
+    // Starred: in the cabinet's "My favourites", and voted thumbs up.
+    starred: boolean;
+    // Scores of the cabinet's players saved for it (hiscore table).
+    hasPlayerScores: boolean;
     // The game's carousel category (TTL twin merged, as displayed on the cabinet), null when
     // genre.ini doesn't know it.
     category: GameCategory | null;
@@ -633,9 +735,11 @@ interface GameCategory {
 async function loadGameStats(): Promise<Map<string, GameStats> | null> {
     try {
         const games = await Game.findAll({
-            attributes: ['romName', 'fullname', 'play_count', 'vote', 'id_category'],
+            attributes: ['id_game', 'romName', 'fullname', 'play_count', 'vote', 'starred', 'id_category'],
             paranoid: false,
         });
+        const scoredGames = new Set((await Hiscore.findAll({attributes: ['id_game'], group: ['id_game'], raw: true}))
+            .map(hiscore => hiscore.id_game));
         const categories = new Map((await Category.findAll()).map(category => [category.id_category, {
             name: getCategoryDisplayName(category.name),
             iconKey: getCategoryIconKey(category.name),
@@ -645,6 +749,8 @@ async function loadGameStats(): Promise<Map<string, GameStats> | null> {
             fullname: game.fullname || game.romName,
             playCount: game.play_count || 0,
             vote: parseVote(game.vote) ?? VOTE_NEUTRAL,
+            starred: !!game.starred,
+            hasPlayerScores: scoredGames.has(game.id_game),
             category: categories.get(game.id_category) ?? null,
         }]));
     } catch {
@@ -659,19 +765,36 @@ interface FavoritesContext {
     marqueePath: string | null;
     flyerPath: string | null;
     logoPath: string | null;
+    // The .png files of each of the three folders, listed once: a check per favorite and per
+    // folder costs too much on a cabinet's SD card.
+    marqueeFiles: Set<string>;
+    flyerFiles: Set<string>;
+    logoFiles: Set<string>;
+}
+
+/** The names of a folder's files, lower-cased; none when there is no folder (or it is unreadable). */
+function listFileNames(path: string | null): Set<string> {
+    if (!path) {
+        return new Set();
+    }
+    try {
+        return new Set(readdirSync(path).map(name => name.toLowerCase()));
+    } catch {
+        return new Set();
+    }
 }
 
 /**
  * Every cheap (fs/config) check getFavoritesInfo used to do up front, split out on its own so a
  * caller can start streaming a response immediately after this resolves, instead of only after
- * every favorite's slow, blocking `mame -lx` lookup (see resolveFavoriteRow()) has also run.
+ * every favorite's slow `mame -lx` lookup (see resolveFavorites()) has also run.
  */
 function getFavoritesContext(config: Config): FavoritesContext | {error: string} {
     const iniPath = getMameHomePath();
     const {marqueePath, flyerPath, logoPath, favoritesPath} = getMameLocations(iniPath);
 
     if (!favoritesPath) {
-        return {error: 'No favorites yet - add some from the MAME menu (Tab in game).'};
+        return {error: 'No game in the list yet - add some from the MAME menu (Tab in game: Add to favorites).'};
     }
 
     const romNames = getFavoriteRomNames(favoritesPath);
@@ -680,54 +803,37 @@ function getFavoritesContext(config: Config): FavoritesContext | {error: string}
     }
 
     if (!config.mamePath || !config.mameBinaryName) {
-        return {error: 'Configure the mame binary in the MAME tab to display the favorites\' names.'};
+        return {error: 'Configure the mame binary in the MAME tab to display the games\' names.'};
     }
     const mameBinary = join(config.mamePath, config.mameBinaryName);
     if (!existsSync(mameBinary)) {
         return {error: `The binary "${mameBinary}" was not found.`};
     }
 
-    return {romNames, mameBinary, iniPath, marqueePath, flyerPath, logoPath};
+    return {
+        romNames, mameBinary, iniPath, marqueePath, flyerPath, logoPath,
+        marqueeFiles: listFileNames(marqueePath),
+        flyerFiles: listFileNames(flyerPath),
+        logoFiles: listFileNames(logoPath),
+    };
 }
 
 /**
- * Cheap (fs-only, no `mame -lx`) marquee/flyer/logo presence check for one favorite - shared by
- * both the cached favorites list and resolveFavoriteRow() below, so badges are always live even
- * when the name/BIOS cache is stale.
+ * Cheap (no `mame -lx`, folders listed once by getFavoritesContext()) marquee/flyer/logo presence
+ * check for one favorite, so badges are always live even when the name/BIOS cache is stale.
  */
 function getFavoriteMediaStatus(context: FavoritesContext, romName: string): FavoriteMediaStatus {
-    const {marqueePath, flyerPath, logoPath} = context;
+    const file = romName.toLowerCase() + '.png';
     return {
-        hasMarquee: !!marqueePath && existsSync(join(marqueePath, romName + '.png')),
-        hasFlyer: !!flyerPath && existsSync(join(flyerPath, romName + '.png')),
-        hasLogo: !!logoPath && existsSync(join(logoPath, romName + '.png')),
+        hasMarquee: context.marqueeFiles.has(file),
+        hasFlyer: context.flyerFiles.has(file),
+        hasLogo: context.logoFiles.has(file),
     };
 }
 
 /**
- * Resolves a single favorite's row - the slow part (a blocking `mame -lx` process spawn per
- * call, see getGameXmlInfo()) callers should interleave with res.write() progress so a long
- * favorites list streams in instead of blocking the whole response. Only used by "Update
- * favorites" (POST /favorites/refresh) now - the normal favorites tab reads the cache this
- * populates instead (see favoriteRowFromCache()).
- */
-function resolveFavoriteRow(context: FavoritesContext, romName: string): FavoriteRow {
-    const {mameBinary, iniPath} = context;
-    const {description, biosName, deviceRoms} = getGameXmlInfo(mameBinary, iniPath, romName);
-    return {
-        romName,
-        fullname: description || romName,
-        biosName,
-        deviceRoms,
-        cached: true,
-        ...getFavoriteMediaStatus(context, romName),
-    };
-}
-
-/**
- * Same shape as resolveFavoriteRow(), but reads fullname/biosName/deviceRoms from the favorites
- * cache (no `mame -lx` call) - falls back to the bare romName/null/empty when this rom isn't in
- * the cache yet (cached: false), same as before any refresh has ever run.
+ * A favorite's row, its fullname/biosName/deviceRoms from the favorites cache (no `mame -lx` call) -
+ * falls back to the bare romName/null/empty when this rom isn't in the cache yet (cached: false).
  */
 function favoriteRowFromCache(context: FavoritesContext, romName: string, cache: FavoritesCache | null): FavoriteRow {
     const entry = cache?.entries[romName];
@@ -741,74 +847,170 @@ function favoriteRowFromCache(context: FavoritesContext, romName: string, cache:
     };
 }
 
-/**
- * Re-resolves every favorite's name/BIOS (a blocking `mame -lx` per rom, see resolveFavoriteRow())
- * and rewrites the favorites cache, streaming one progress line per favorite to `res` as they
- * resolve. Shared by "Update favorites" (POST /favorites/refresh) and both starting pack imports
- * (see streamFavoritesRefreshAfterImport()). The caller has already sent the response head;
- * this writes the open "Updating favorites" card and closes it again.
- */
-function streamFavoritesRefresh(
-    res: Response, context: FavoritesContext,
-): {rows: FavoriteRow[]; cache: FavoritesCache} {
-    // Stream the page as favorites are resolved instead of blocking on the whole list: each
-    // one is a blocking `mame -lx` process spawn, so with enough favorites the unstreamed
-    // version could take a long time to send anything at all - same fix already applied to
-    // /favorites/download-media.
-    res.write(`
-        <section class="card">
-            <h2>Updating favorites (${context.romNames.length})…</h2>
-            ${PROGRESS_LOG_OPEN}
-    `);
+// `mame -version` of the binary, kept by its path and modification time: asked again once replaced.
+let knownMameVersion: {binary: string; version: string} | null = null;
 
-    const result = resolveFavorites(context, row => {
-        res.write(`<li>${escapeHtml(row.romName)} : ${escapeHtml(row.fullname)}</li>`);
+async function getMameVersion(mameBinary: string): Promise<string> {
+    let binary: string;
+    try {
+        binary = `${mameBinary}:${statSync(mameBinary).mtimeMs}`;
+    } catch {
+        return UNKNOWN_MAME_VERSION;
+    }
+    if (knownMameVersion?.binary !== binary) {
+        knownMameVersion = {binary, version: await readMameVersion(mameBinary)};
+    }
+    return knownMameVersion.version;
+}
+
+/**
+ * Resolves these favorites' name/BIOS/devices (a `mame -lx` each, one after the other) and adds
+ * them to the favorites cache, calling `onEntry` after each one so the caller can report progress.
+ * `mameVersion`: given when these are all the favorites, resolved with that MAME.
+ */
+async function resolveFavorites(
+    context: FavoritesContext, romNames: string[], mameVersion?: string,
+    onEntry?: (romName: string, entry: FavoritesCacheEntry, index: number) => void,
+): Promise<FavoritesCache> {
+    const entries: { [romName: string]: FavoritesCacheEntry } = {};
+    for (const [index, romName] of romNames.entries()) {
+        const {description, biosName, deviceRoms} = await readGameXmlInfo(context.mameBinary, context.iniPath, romName);
+        entries[romName] = {fullname: description || romName, biosName, deviceRoms};
+        onEntry?.(romName, entries[romName], index);
+    }
+    return mergeFavoritesCache(entries, mameVersion);
+}
+
+// The favorites being resolved in the background (see updateFavoritesCache()), null when none are.
+let favoritesResolution: {done: number; total: number} | null = null;
+
+// At most this many favorites are resolved before the Games tab is shown; more go to the background.
+const FAVORITES_RESOLVED_INLINE = 5;
+
+/**
+ * Brings the favorites cache up to date for the Games tab: the favorites it doesn't know yet
+ * (added from MAME's own menu: a pack import resolves its own games) and, when the MAME version
+ * changed, all of them again. A few are resolved before the page is shown; more in the background,
+ * the page saying so and showing the names it has meanwhile.
+ */
+async function updateFavoritesCache(context: FavoritesContext): Promise<FavoritesCache | null> {
+    const cache = readFavoritesCache();
+    if (favoritesResolution) {
+        return cache;
+    }
+    const mameVersion = await getMameVersion(context.mameBinary);
+    const knownVersion = mameVersion === UNKNOWN_MAME_VERSION ? undefined : mameVersion;
+    const outdated = !cache || (!!knownVersion && cache.mameVersion !== knownVersion);
+    const romNames = outdated ? context.romNames : context.romNames.filter(romName => !cache.entries[romName]);
+    const version = outdated ? knownVersion : undefined;
+    if (!romNames.length) {
+        return cache;
+    }
+    if (romNames.length <= FAVORITES_RESOLVED_INLINE) {
+        return resolveFavorites(context, romNames, version);
+    }
+    const progress = {done: 0, total: romNames.length};
+    favoritesResolution = progress;
+    resolveFavorites(context, romNames, version, (_romName, _entry, index) => {
+        progress.done = index + 1;
+    }).catch(() => undefined).finally(() => {
+        favoritesResolution = null;
     });
-    res.write('</ul></section>');
-    return result;
+    return cache;
 }
 
 /**
  * After a starting pack import (ZIP upload or repository), which just rewrote favorites.ini:
- * resolves the new games' names/BIOS now instead of leaving the favorites tab on "not resolved
- * yet" until "Update favorites" is clicked.
+ * resolves the new games' names/BIOS now, a progress bar on one line moving with each game (a
+ * `mame -lx` each, seconds on a Raspberry Pi: without it the page seemed stuck). It stays on the
+ * page, `finishImportProgress()` saying what comes next. The caller has already sent the response
+ * head.
  */
-function streamFavoritesRefreshAfterImport(res: Response, config: Config): void {
+async function streamFavoritesRefreshAfterImport(res: Response, config: Config): Promise<void> {
     const context = getFavoritesContext(config);
     if ('error' in context) {
-        res.write(`<section class="card"><h2>Updating favorites</h2>
+        res.write(`<section class="card"><h2>Updating MAME Favorites…</h2>
             <p class="info">Favorites not updated: ${escapeHtml(context.error)}</p></section>`);
-    } else {
-        streamFavoritesRefresh(res, context);
+        return;
     }
+    const cache = readFavoritesCache();
+    const romNames = context.romNames.filter(romName => !cache?.entries[romName]);
+    res.write(`
+        <section class="card">
+            <h2>Updating MAME Favorites…</h2>
+            <div class="import-progress" id="favoritesUpdate">
+                <div class="progress-label"><span data-label>Resolving the names of ${romNames.length} new game(s)…</span>
+                    <span data-percent></span></div>
+                <div class="progress-track"><div class="progress-fill${romNames.length ? '' : ' progress-done'}" data-fill
+                    style="width: ${romNames.length ? 0 : 100}%"></div></div>
+            </div>
+            <script>
+            window.mauiFavoritesUpdate = function (done, total, label, waiting) {
+                var root = document.getElementById('favoritesUpdate');
+                var fill = root.querySelector('[data-fill]');
+                fill.style.width = (total ? 100 * done / total : 100) + '%';
+                fill.classList.toggle('progress-indeterminate', !!waiting);
+                fill.classList.toggle('progress-done', done >= total && !waiting);
+                root.querySelector('[data-label]').textContent = label;
+                root.querySelector('[data-percent]').textContent = total && !waiting ? done + ' / ' + total : '';
+            };
+            </script>
+        </section>
+    `);
+    // Asked now, while the page waits anyway: the games list asks for it (updateFavoritesCache()).
+    const mameVersion = await getMameVersion(context.mameBinary);
+    if (!romNames.length) {
+        return;
+    }
+    const update = (done: number, label: string): void => {
+        res.write(`<script>mauiFavoritesUpdate(${done},${romNames.length},${JSON.stringify(label).replace(/</g, '\\u003c')})</script>`);
+    };
+    // A first cache holds every favorite: it is from this MAME.
+    await resolveFavorites(context, romNames, cache || mameVersion === UNKNOWN_MAME_VERSION ? undefined : mameVersion,
+        (romName, entry, index) => update(index + 1, entry.fullname));
+    update(romNames.length, `${romNames.length} name(s) resolved`);
 }
 
-/**
- * Resolves every favorite (see resolveFavoriteRow()) and rewrites the favorites cache with them,
- * calling `onRow` after each one so the caller can report progress as it goes.
- */
-function resolveFavorites(
-    context: FavoritesContext, onRow: (row: FavoriteRow, index: number) => void,
-): {rows: FavoriteRow[]; cache: FavoritesCache} {
-    const cacheEntries: { [romName: string]: FavoritesCacheEntry } = {};
-    const rows: FavoriteRow[] = context.romNames.map((romName, index) => {
-        const row = resolveFavoriteRow(context, romName);
-        cacheEntries[romName] = {fullname: row.fullname, biosName: row.biosName, deviceRoms: row.deviceRoms};
-        onRow(row, index);
-        return row;
-    });
-    return {rows, cache: writeFavoritesCache(cacheEntries)};
+/** The favorites step's bar (streamFavoritesRefreshAfterImport()) saying what the page does next. */
+function finishImportProgress(res: Response, label: string): void {
+    res.write(`<script>window.mauiFavoritesUpdate && mauiFavoritesUpdate(1, 1, ${JSON.stringify(label)}, true)</script>`);
 }
 
 // The BO account's seeded password (see migrations/20260917061122-create-bo-user.js), public by
 // definition: never accepted as a new password, and forced to be changed at sign-in.
 const DEFAULT_BO_PASSWORD = 'puckman';
+// The BO's only account (BoUser.model.ts): signing in asks for its password alone.
+const BO_USERNAME = 'puckman';
 // The wrapped data key (SecretBox.ts) can be brute-forced offline from a copy of the database,
 // only the password's length and scrypt's cost stand in the way.
 const MIN_BO_PASSWORD_LENGTH = 8;
 // bcrypt cost of the BO password hash. A hash made with a lower one (older MAUI: 10) is redone at
 // the next sign-in, while the password is at hand.
 const BO_PASSWORD_BCRYPT_ROUNDS = 12;
+
+// Development only: `MAIN_VITE_BO_NO_PASSWORD=1` in maui's .env (read by electron-vite) signs the BO
+// in without its password, from this machine only. Never in a packaged build: import.meta.env.DEV
+// is false there, and signInWithoutPassword() checks isPackaged again.
+const DEV_NO_PASSWORD = import.meta.env.DEV && import.meta.env.MAIN_VITE_BO_NO_PASSWORD === '1';
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * Signs this request's session in as the BO account, without a password, when DEV_NO_PASSWORD
+ * allows it. The credentials stay locked (no password to unwrap them with, see unlockSecrets()).
+ */
+async function signInWithoutPassword(req: Request): Promise<boolean> {
+    if (!DEV_NO_PASSWORD || electronApp.isPackaged || !LOOPBACK_ADDRESSES.has(req.socket.remoteAddress ?? '')) {
+        return false;
+    }
+    const boUser = await BoUser.findOne({where: {username: BO_USERNAME}}).catch(() => null);
+    if (!boUser) {
+        return false;
+    }
+    req.session.boUserId = boUser.id;
+    req.session.boUsername = boUser.username;
+    req.session.boAdvanced = false;
+    return true;
+}
 
 function getSecretsKey(req: Request): Buffer | null {
     return req.session.secretsKey ? Buffer.from(req.session.secretsKey, 'hex') : null;
@@ -1086,12 +1288,40 @@ function getPackImportTargets(config: Config): PackImportTargets {
  * Imports the repository's configuration pack (a plain `folders/` ZIP, so the whole file) into
  * an already-headed streamed response.
  */
-function runConfPackImport(
-    res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>,
+// The configuration pack version installed last (confPackVersion()), beside the favorites cache.
+function getInstalledConfPackPath(): string {
+    return join(dirname(getFavoritesCachePath()), 'conf-pack.json');
+}
+
+function readInstalledConfPackVersion(): string | null {
+    try {
+        const {version} = JSON.parse(readFileSync(getInstalledConfPackPath(), 'utf8')) as {version?: unknown};
+        return typeof version === 'string' ? version : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Installs the repository's configuration pack. `onlyWhenChanged` (before a game pack import):
+ * not when the version installed last is the repository's and its files are in place - nothing
+ * shows then. Resolves with whether its files are in place afterwards.
+ */
+async function runConfPackImport(
+    res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, onlyWhenChanged = false,
 ): Promise<boolean> {
-    return runRepositoryImport(
-        res, config, repository, `Configuration pack import in progress… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
+    const version = confPackVersion(await fetchRepoManifest(repository.url, CONF_PACK_FILENAME, repository.headers));
+    const installed = (): boolean => !getMissingConfPackFiles(getMameInfo(config)).length;
+    if (onlyWhenChanged && version && version === readInstalledConfPackVersion() && installed()) {
+        return true;
+    }
+    const ok = await runRepositoryImport(
+        res, config, repository, `Updating the configuration pack… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
     );
+    if (ok && version) {
+        writeFileSync(getInstalledConfPackPath(), JSON.stringify({version}));
+    }
+    return installed();
 }
 
 /**
@@ -1161,6 +1391,12 @@ function renderImportTabsOpen(packFilenames: string[]): string {
             var picked = false;
             function tab(i) { return document.querySelector('[data-import-tab="' + i + '"]'); }
             function select(i) {
+                // The panel shown next is shorter (a pack that just started): the page would shrink
+                // under the reader and the browser scroll it up. The panels keep the tallest height.
+                var panels = document.querySelector('.import-panels');
+                if (panels) {
+                    panels.style.minHeight = Math.max(panels.offsetHeight, parseFloat(panels.style.minHeight) || 0) + 'px';
+                }
                 Array.prototype.forEach.call(document.querySelectorAll('[data-import-tab]'), function (t) {
                     t.classList.toggle('active', t.dataset.importTab === String(i));
                 });
@@ -1667,25 +1903,101 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             margin-top: 4px;
             transition: outline-color 0.15s ease;
         }
+        /* Safari draws a search field its own way (small, rounded) and ignores the padding above. */
+        input[type="search"], select {
+            -webkit-appearance: none;
+            appearance: none;
+            border: 1px solid #767676;
+            border-radius: 4px;
+            background-color: #ffffff;
+            color: #000000;
+        }
+        /* Without its native look a select needs its own arrow. */
+        select {
+            padding-right: 32px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23333' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            background-size: 14px;
+            cursor: pointer;
+        }
+        select:disabled {
+            cursor: default;
+            opacity: 0.6;
+        }
         input:focus, select:focus {
             outline: 2px solid var(--accent);
             outline-offset: -1px;
         }
+        /* Buttons share the capsule shape of the BO's menus (tabs, subtabs, player tabs): white
+           for the main action, the accent on hover. .button-secondary is the outlined one, for
+           the actions around it; .button-danger and .button-attention below only change the
+           colors. Icon buttons keep their own square shape. */
         button {
-            padding: 8px 16px;
+            padding: 8px 18px;
             color: #000000;
             background-color: #ffffff;
-            border: none;
-            border-radius: var(--radius-sm);
+            border: 1px solid transparent;
+            border-radius: 999px;
+            font-weight: 500;
             cursor: pointer;
-            transition: background-color 0.15s ease, opacity 0.15s ease;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
         }
         button:hover:not(:disabled) {
-            background-color: #dddddd;
+            background-color: var(--accent);
+        }
+        button:active:not(:disabled) {
+            transform: translateY(1px);
         }
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+        button.button-secondary {
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        button.button-secondary:hover:not(:disabled) {
+            color: var(--accent);
+            background-color: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent);
+        }
+        /* A file field: the browser's own button, in the colors of .button-secondary. */
+        input[type="file"] {
+            width: auto;
+            max-width: 100%;
+            padding: 0;
+            color: var(--text-muted);
+        }
+        input[type="file"]::file-selector-button {
+            margin-right: 12px;
+            padding: 8px 18px;
+            font: inherit;
+            font-weight: 500;
+            color: var(--text);
+            background-color: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        input[type="file"]::file-selector-button:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        /* A file to import and its button on one row, the label above. */
+        .file-import {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px 12px;
+        }
+        .file-import > label {
+            flex-basis: 100%;
+        }
+        .file-import > button[type="submit"]:last-child {
+            margin-top: 0;
         }
         /* Every interactive element gets a visible keyboard focus ring, not just input/select
            above: buttons and links used to have none at all, so tabbing through a page (or
@@ -1733,21 +2045,6 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         ol.info li + li {
             margin-top: 6px;
-        }
-        /* Info line with an action at its far end (favorites: cache date + "Update favorites").
-           The button selector out-ranks the generic "form > button:last-child" 24px top margin. */
-        .status-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px 16px;
-        }
-        .status-row form {
-            margin: 0;
-        }
-        .status-row form > button[type="submit"]:last-child {
-            margin-top: 0;
         }
         .path-row {
             display: flex;
@@ -1873,6 +2170,23 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             letter-spacing: 0.05em;
             text-transform: uppercase;
         }
+        /* The volume sliders of the Sounds subtab (SoundsBoCard.ts), their value on the right. */
+        .volume-slider {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+        }
+        .volume-slider input[type="range"] {
+            flex: 1;
+            padding: 8px 0;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .volume-slider output {
+            min-width: 4.5em;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
         .settings-group input[type="number"] {
             max-width: 10em;
         }
@@ -1905,15 +2219,17 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         .button-link {
             display: inline-block;
-            padding: 8px 16px;
+            padding: 8px 18px;
             background-color: #ffffff;
             color: #000000;
+            font-weight: 500;
             text-decoration: none;
-            border-radius: 4px;
+            border: 1px solid transparent;
+            border-radius: 999px;
             transition: background-color 0.15s ease;
         }
         .button-link:hover {
-            background-color: #dddddd;
+            background-color: var(--accent);
         }
         .browse-list {
             list-style: none;
@@ -1976,7 +2292,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             min-width: 340px;
         }
         .col-plays { width: 64px; }
-        .col-vote { width: 140px; }
+        /* The vote buttons, then the row's own actions (see .row-actions). */
+        .col-actions { width: 236px; }
+        .col-actions-restore { width: 196px; }
         .col-action { width: 56px; }
         table.favorites-table th.center,
         table.favorites-table td.center {
@@ -2069,6 +2387,26 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             gap: 8px;
         }
+        /* An empty list's call to action (no player yet): stands out from the info notes. */
+        .empty-callout {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px 24px;
+            margin: 16px 0;
+            padding: 16px 20px;
+            border: 1px solid var(--warn);
+            border-left-width: 4px;
+            border-radius: 6px;
+            background-color: rgba(255, 196, 0, 0.08);
+        }
+        .empty-callout p {
+            margin: 0;
+        }
+        .button-link.button-link-attention {
+            background-color: var(--warn);
+        }
         .card-heading {
             display: flex;
             align-items: center;
@@ -2124,6 +2462,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
            instead of the plain white button. The extra selector parts beat the generic
            "form > button[type=submit]:last-child" 24px top margin above, which would otherwise
            push it out of its table row's alignment. */
+        button.icon-button {
+            border-radius: var(--radius-md);
+        }
         form > button.icon-button[type="submit"]:last-child {
             display: inline-flex;
             align-items: center;
@@ -2254,6 +2595,28 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             display: inline-flex;
             gap: 6px;
         }
+        /* A games list row's buttons in one cell: its vote, a divider, then show / remove / restore. */
+        .row-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .row-actions form {
+            margin: 0;
+        }
+        .row-actions .vote-buttons {
+            gap: 4px;
+            padding-right: 8px;
+            border-right: 1px solid #444444;
+        }
+        /* Compact with a mouse; touch screens keep their finger-sized ones (pointer: coarse below). */
+        @media (pointer: fine) {
+            table.favorites-table .row-actions form > button.icon-button[type="submit"] {
+                min-width: 28px;
+                min-height: 28px;
+                padding: 5px;
+            }
+        }
         /* The three vote icons of a row: unlike the single Remove/Restore button above (styled as a
            form's :last-child), each needs the icon-button look. The selected one is lit up in its
            own color, the others stay grey. */
@@ -2281,6 +2644,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         }
         form.vote-buttons > button.down[aria-pressed="true"] {
             color: var(--danger);
+        }
+        form.vote-buttons > button.star[aria-pressed="true"] {
+            color: #ffc400;
         }
 
         .game-name-cell {
@@ -2421,6 +2787,79 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             width: auto;
             flex: 0 1 auto;
         }
+        .table-search-filters {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin: 10px 0 8px;
+        }
+        /* A filter: a checkbox drawn as a pill, lit up while ticked. */
+        .filter-chip {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border: 1px solid #555555;
+            border-radius: 999px;
+            font-size: 0.9em;
+            color: #cccccc;
+            cursor: pointer;
+            user-select: none;
+        }
+        .filter-chip input {
+            position: absolute;
+            opacity: 0;
+            width: 1px;
+            height: 1px;
+            margin: 0;
+        }
+        .filter-chip:has(input:checked) {
+            border-color: var(--accent);
+            background-color: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+        }
+        .filter-chip:has(input:focus-visible) {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+        /* Between two kinds of filters (players: status, then visibility). */
+        .filter-chip-divider {
+            width: 1px;
+            height: 20px;
+            background-color: #444444;
+        }
+        .filter-chip-count {
+            margin-left: 4px;
+            color: #888888;
+        }
+        .table-search-summary {
+            margin-left: auto;
+            font-size: 0.9em;
+            color: #cccccc;
+        }
+        /* A sortable column's header: the header's own text, its arrow once sorted by it. */
+        button.sort-header {
+            padding: 0;
+            margin: 0;
+            color: inherit;
+            font-weight: inherit;
+            background: none;
+            border: none;
+            cursor: pointer;
+        }
+        button.sort-header:hover, button.sort-header:hover:not(:disabled) {
+            text-decoration: underline;
+            background: none;
+        }
+        th[aria-sort="ascending"] > button.sort-header::after {
+            content: " ▲";
+            font-size: 0.75em;
+        }
+        th[aria-sort="descending"] > button.sort-header::after {
+            content: " ▼";
+            font-size: 0.75em;
+        }
         .table-pager {
             display: flex;
             flex-wrap: wrap;
@@ -2496,8 +2935,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             line-height: inherit;
             cursor: pointer;
         }
-        button.pack-game-unlock:hover {
+        button.pack-game-unlock:hover, button.pack-game-unlock:hover:not(:disabled) {
             color: var(--text);
+            background: none;
         }
         .pack-swatch {
             display: inline-block;
@@ -2801,6 +3241,27 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .binding-actions > button[type="submit"]:last-child {
             margin-top: 0;
         }
+        /* Hotkeys card: the step by step "Add a hotkey", one question per screen. */
+        .hotkey-step {
+            margin: 1em 0 0;
+        }
+        .hotkey-choices {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0.5em 0 1em;
+        }
+        .hotkey-choices button {
+            margin-top: 0;
+            text-align: left;
+            border-radius: var(--radius-md);
+        }
+        .hotkey-choices button .checkbox-row-detail {
+            display: block;
+        }
+        .hotkey-summary {
+            font-size: 1.1em;
+        }
         .binding .flash {
             grid-column: 1 / -1;
             margin: 0;
@@ -2910,6 +3371,107 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         .control-form button.listening {
             color: var(--bg);
             background-color: var(--warn);
+        }
+        /* The controls cards' icon buttons (add, back to the default, remove all): small, their
+           text in their tooltip. */
+        button.control-icon-button {
+            border-radius: var(--radius-md);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            min-height: 32px;
+            margin-top: 0;
+            padding: 7px;
+            color: var(--accent);
+            background-color: transparent;
+            border: 1px solid currentColor;
+        }
+        button.control-icon-button.control-icon-warn {
+            color: var(--warn);
+        }
+        button.control-icon-button.control-icon-danger {
+            color: var(--danger);
+        }
+        button.control-icon-button:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        button.control-icon-button.listening {
+            color: var(--bg);
+            background-color: var(--warn);
+            border-color: var(--warn);
+        }
+        /* The per-game card's game picker (renderRomPicker()): the matches drop under the field. */
+        .rom-combobox {
+            position: relative;
+        }
+        .rom-results {
+            position: absolute;
+            z-index: 20;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            margin: 4px 0 0;
+            padding: 4px;
+            list-style: none;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+        }
+        .rom-results li {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 6px 10px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+        .rom-results li.active, .rom-results li:hover {
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .rom-results .rom-results-rom {
+            font-size: 0.85em;
+            opacity: 0.7;
+        }
+        .rom-results li.rom-results-note {
+            color: var(--text-muted);
+            font-style: italic;
+            background: none;
+            cursor: default;
+        }
+        .game-file {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+        }
+        .game-file-status {
+            margin: 0;
+        }
+        .game-file .button-row {
+            margin-top: 12px;
+        }
+        .game-file .button-row:empty {
+            display: none;
+        }
+        .game-file .button-row + .game-file-status {
+            margin-top: 20px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .game-file .button-row form > button[type="submit"]:last-child, .game-file .file-import {
+            margin-top: 12px;
+        }
+        .game-file .button-row form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
+        .control-copy-player {
+            margin-bottom: 12px;
         }
         .control-reread {
             margin-top: 16px;
@@ -3093,8 +3655,8 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
         <h1><a class="header-home" href="/" title="Home"><img class="header-logo" src="/maui-logo.png" alt="mame-awesome-ui"></a></h1>
         ${viewer ? `<nav class="tabs${hasSubtabs ? ' compact' : ''}" aria-label="Primary">
             ${renderSetupNavTab(active === 'setup')}
-            ${renderNavTabLink('/', 'MAME', active === 'mame')}
             ${renderNavTabLink('/favorites', 'Games', active === 'favorites')}
+            ${renderNavTabLink('/mame', 'MAME', active === 'mame')}
             ${renderNavTabLink('/users', 'Players', active === 'users')}
             ${viewer === 'advanced' ? renderNavTabLink('/hiscores', 'Hiscores', active === 'hiscores') : ''}
             ${viewer === 'advanced' ? renderNavTabLink('/screenscraper', 'ScreenScraper', active === 'screenscraper') : ''}
@@ -3220,7 +3782,11 @@ function renderPageTail(): string {
                     // unlike every in-place response above: a real navigation there also sidesteps
                     // the GET /login page's own gap (it doesn't redirect an already-authenticated
                     // visitor away by itself), and refreshing a real URL is always safe anyway.
-                    if (response.redirected) {
+                    // Back to this very page (the Advanced configuration toggle, POST /advanced):
+                    // shown in place like the rest instead, which keeps the subtab open - the
+                    // URL's hash, which the server never sees - and the scroll position.
+                    var target = new URL(response.url);
+                    if (response.redirected && target.pathname + target.search !== location.pathname + location.search) {
                         location.href = response.url;
                         return null;
                     }
@@ -3351,7 +3917,7 @@ function renderPageTail(): string {
                 }
                 clearTimeout(listening.timer);
                 listening.button.classList.remove('listening');
-                listening.button.textContent = listening.label;
+                listening.button.title = listening.label;
                 document.removeEventListener('keydown', onKey, true);
                 document.removeEventListener('mousedown', onMouse, true);
                 // The menu a right click opens comes after its mousedown: still blocked a moment.
@@ -3365,11 +3931,16 @@ function renderPageTail(): string {
                 event.stopPropagation();
                 var form = listening.button.form;
                 if (!token) {
-                    listening.button.textContent = 'Not known to MAME - try another';
+                    listening.button.title = 'Not known to MAME - try another';
                     return;
                 }
+                var slot = listening.button.dataset.slot;
                 stop();
                 form.elements.code.value = token;
+                // The Hotkeys card: which of its two keys was caught.
+                if (slot && form.elements.slot) {
+                    form.elements.slot.value = slot;
+                }
                 form.requestSubmit(form.querySelector('[data-control-add]'));
             }
             function onKey(event) {
@@ -3391,12 +3962,13 @@ function renderPageTail(): string {
                     if (again) {
                         return;
                     }
+                    // An icon button: its tooltip says what is awaited, its color that it waits.
                     listening = {
-                        button: button, label: button.textContent, raw: button.dataset.controlListen === 'raw',
-                        timer: setTimeout(stop, 15000),
+                        button: button, label: button.title,
+                        raw: button.dataset.controlListen === 'raw', timer: setTimeout(stop, 15000),
                     };
                     button.classList.add('listening');
-                    button.textContent = 'Press a key or click…';
+                    button.title = 'Press a key or click…';
                     document.addEventListener('keydown', onKey, true);
                     document.addEventListener('mousedown', onMouse, true);
                     // A right click opens no menu while listening.
@@ -3467,6 +4039,9 @@ function renderPageTail(): string {
                             clearInterval(timer);
                             // The layout the front would pick: "standard", else the pad's own.
                             form.elements.code.value = fresh + '|' + (pad.mapping === 'standard' ? 'standard' : pad.id);
+                            if (button.dataset.slot && form.elements.slot) {
+                                form.elements.slot.value = button.dataset.slot;
+                            }
                             form.requestSubmit(form.querySelector('[data-control-add]'));
                             return true;
                         });
@@ -3561,18 +4136,13 @@ function renderLoginPage(error?: string): string {
         <section class="card">
             <h2>Sign in</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
-            <!-- Deliberately no "required" here: with two fields, pressing Enter in one while
-                 the other is still empty triggers the browser's native validation instead of
-                 submitting - easy to miss (the message lands on the other, unfocused field),
-                 and looks like "Enter does nothing". /login already handles a blank/wrong
-                 username or password gracefully (401 + "Incorrect username or password
-                 incorrect."), so letting the browser send an incomplete submission and having
-                 the server reject it is simpler than fighting native validation here. -->
+            <!-- The password alone: the BO has one account (BO_USERNAME), nothing to pick. No
+                 "required": /login answers a blank password with its own message (401). The
+                 hidden username only helps password managers file the password under it. -->
             <form method="post" action="/login" id="loginForm">
-                <label for="username">Username</label>
-                <input type="text" id="username" name="username" autofocus>
+                <input type="text" name="username" value="${BO_USERNAME}" autocomplete="username" hidden>
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password">
+                <input type="password" id="password" name="password" autocomplete="current-password" autofocus>
                 <button type="submit">Sign in</button>
             </form>
             <!-- A password manager's menu in a field (an extension, Chrome's own suggestions) can
@@ -3601,13 +4171,10 @@ function renderLoginPage(error?: string): string {
     `, 'mame', null);
 }
 
-function renderAccountPage(
-    username: string, viewer: Viewer, mustChangePassword: boolean, error?: string, info?: string,
-): string {
+function renderAccountPage(viewer: Viewer, mustChangePassword: boolean, error?: string, info?: string): string {
     return renderPage(`
         <section class="card">
             <h2>My account</h2>
-            <p>Signed in as <strong>${escapeHtml(username)}</strong>.</p>
             ${mustChangePassword ? `<p class="error flash">You are using the default password.
             Choose a new one to continue: it also encrypts the saved credentials.</p>` : ''}
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
@@ -4172,6 +4739,10 @@ interface RemapState {
     // MAME's defaults).
     portType: string;
     error?: string;
+    // The card as a whole went well (an import), shown with an empty portType only.
+    notice?: string;
+    // The tab to show (REMAP_GROUPS index) when no portType says it.
+    tab?: string;
     // The other actions the control just added also triggers.
     sharedWith?: string[];
     // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
@@ -4215,6 +4786,8 @@ interface AdoptedMame extends CaptureTarget {
 // there's only one cabinet (one MAME window) to configure, so users signed in at the same time
 // share it rather than each getting their own.
 let mameConfigSession: MameConfigSession | undefined;
+// Tells the front the session started or stopped (createBoApp() sets it): no sleep under a game.
+let mameSessionChanged: (running: boolean) => void = () => undefined;
 
 function isMameConfigSessionAlive(): boolean {
     return !!mameConfigSession && mameConfigSession.child.exitCode === null && !mameConfigSession.child.killed;
@@ -4358,7 +4931,7 @@ function startMameConfigSession(
         stopMameConfigSession();
     }
 
-    const {dir, scriptPath} = prepareCaptureDir(getStaticPath());
+    const {dir, scriptPath} = prepareCaptureDir(getStaticPath(), romName);
 
     const child = spawn(
         mameBinary,
@@ -4381,12 +4954,14 @@ function startMameConfigSession(
     child.on('exit', () => {
         if (mameConfigSession === session) {
             mameConfigSession = undefined;
+            mameSessionChanged(false);
         }
         replayCfgEdits(session);
         rmSync(dir, {recursive: true, force: true});
     });
 
     mameConfigSession = session;
+    mameSessionChanged(true);
 }
 
 /**
@@ -4443,7 +5018,8 @@ function renderPendingRelaunchNotice(): string {
             controls it started with. Click <strong>Apply controls</strong> at the top of the page to
             try the new ones.</p>`
         : `<p class="warn flash"><strong>Saved, not active yet:</strong> the game being played keeps
-            the controls it started with - the change applies the next time it's launched.</p>`;
+            the controls it started with. <strong>Apply controls</strong> relaunches it with the new
+            ones (ending the game in progress), else they apply the next time it's launched.</p>`;
 }
 
 /**
@@ -4458,6 +5034,14 @@ async function stopEveryMame(config: Config): Promise<void> {
         : Promise.resolve();
     stopMameConfigSession();
     await Promise.all([sessionExited, stopMameProcesses(findOtherMameProcesses(config))]);
+    // MAUI's game is gone too: its edits are replayed now rather than by its watch (up to a second
+    // later), so a MAME started right after reads them ("Apply controls" on the per-game card).
+    if (adoptedMame && !isProcessAlive(adoptedMame.pid)) {
+        const adopted = adoptedMame;
+        adoptedMame = undefined;
+        replayCfgEdits(adopted);
+        adopted.cfgEdits = [];
+    }
 }
 
 function stopMameConfigSession(): void {
@@ -4789,18 +5373,40 @@ function renderControlChips(seq: string, names: Map<string, string>): string {
  * the token in `code`) - only offered once MAME's keys are known (`canListen`). `rawCodes`: the
  * page posts the browser's own codes ("key|KeyA", "mouse|2") instead of MAME tokens (MAUI's tab),
  * and also listens to the gamepads itself while the front catches the press (data-pad-listen).
+ * `captureDisabled`: no MAME runs to catch a gamepad press, its tooltip then says how to launch it.
  */
-function renderControlAddButtons(captureDisabled: string, canListen: boolean, rawCodes = false): string {
+function renderControlAddButtons(
+    captureDisabled: boolean, canListen: boolean, rawCodes = false,
+    // In the same row: the action's way back to its default (its tooltip), and a button removing
+    // all its controls (when it has any).
+    extras: {reset?: string; removeAll?: boolean} = {},
+): string {
     return `
         <div class="binding-actions">
-            <button type="submit" name="action" value="capture"${captureDisabled}${rawCodes ? ' data-pad-listen' : ''}>Add a gamepad button</button>
+            ${renderControlIconButton(
+                captureDisabled
+                    ? 'Launch MAME with the grey button at the top right of your screen to add a gamepad button'
+                    : 'Add a gamepad button',
+                GAMEPAD_ICON_PATHS,
+                `type="submit" name="action" value="capture"${captureDisabled ? ' disabled' : ''}${rawCodes ? ' data-pad-listen' : ''}`,
+            )}
             ${canListen ? `
-                <button type="button" data-control-listen${rawCodes ? '="raw"' : ''}>Add a key or mouse button</button>
+                ${renderControlIconButton('Add a key or mouse button', KEY_MOUSE_ICON_PATHS,
+                    `type="button" data-control-listen${rawCodes ? '="raw"' : ''}`)}
                 <input type="hidden" name="code" value="">
                 <button type="submit" name="action" value="add" hidden data-control-add></button>
             ` : ''}
+            ${renderControlRowExtras(extras)}
         </div>
     `;
+}
+
+/** The reset and remove-all buttons of an action's row, see renderControlAddButtons(). */
+function renderControlRowExtras(extras: {reset?: string; removeAll?: boolean}): string {
+    return (extras.reset ? renderControlIconButton(extras.reset, RESET_ICON_PATHS,
+        'type="submit" name="action" value="reset"', 'warn') : '')
+        + (extras.removeAll ? renderControlIconButton('Remove every control of this action',
+            TRASH_ICON_PATHS, 'type="submit" name="action" value="remove-all"', 'danger') : '');
 }
 
 /**
@@ -4819,8 +5425,9 @@ function renderControlsCard(
     if (!romNames.length) {
         return '';
     }
-    const cardError = state && !state.portType && state.error
-        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '';
+    const cardError = (state && !state.portType && state.error
+        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '')
+        + (state && !state.portType && state.notice ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : '');
     if (!defaults) {
         return `
             <section class="card">
@@ -4839,7 +5446,7 @@ function renderControlsCard(
     const sessionRunning = !!getCaptureTarget();
     // A gamepad press is only seen by a running MAME; a key or a mouse button is taken by the page
     // itself, and removing needs nothing.
-    const captureDisabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
+    const captureDisabled = !sessionRunning;
     // What the page may send for a key or a mouse button: only tokens MAME itself listed.
     const listenKeys = Object.fromEntries(Object.entries(browserKeyTokens()).filter(([, token]) => defaults.codes.has(token)));
     const listenMouse = [0, 1, 2, 3, 4].map(button => browserMouseToken(button))
@@ -4855,12 +5462,10 @@ function renderControlsCard(
                     <form method="post" action="/input-probe/remap" class="control-form">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
                         ${renderControlChips(getControlSeq(action.portType, persisted, defaults), defaults.codes)}
-                        ${renderControlAddButtons(captureDisabled, true)}
-                        ${persisted.has(action.portType) ? `
-                            <div class="binding-actions">
-                                <button type="submit" name="action" value="reset">Back to MAME's default</button>
-                            </div>
-                        ` : ''}
+                        ${renderControlAddButtons(captureDisabled, true, false, {
+                            reset: persisted.has(action.portType) ? 'Back to MAME\'s default' : undefined,
+                            removeAll: seqAlternatives(getControlSeq(action.portType, persisted, defaults)).length > 0,
+                        })}
                     </form>
                     ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
                     ${actionState?.sharedWith?.length ? `
@@ -4880,17 +5485,19 @@ function renderControlsCard(
         <section class="card">
             <h2>Global controls</h2>
             <p class="info">What triggers each MAME action, in every game (unless a game has its own
-            controls, below). Each one is a key, a mouse button or a gamepad button: its
+            controls, in the Per-game controls tab). Each one is a key, a mouse button or a gamepad button: its
             <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Add a gamepad button</strong>: launch MAME with the button at the top of
+                <li><strong>Gamepad icon</strong>: launch MAME with the button at the top of
                 the page first, then click and press the gamepad button (or push the direction)
                 within 30 seconds - MAME picks it up even when its window is not the one in front.</li>
-                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                <li><strong>Keyboard and mouse icon</strong>: click, then press the key or click
                 the mouse button (anywhere in the page) on the keyboard and mouse of this computer.
                 No need to launch MAME. Keys are named after their place on a US keyboard, the way
                 MAME does: on an AZERTY keyboard, the A key shows as Q.</li>
-                <li><strong>Back to MAME's default</strong> gives the action MAME's own controls again.</li>
+                <li><strong>↺</strong> gives the action MAME's own controls again.</li>
+                <li>The <strong>bin</strong> takes every control away from the action: nothing
+                triggers it until one is added.</li>
             </ul>
             <p class="info">Saved at once in <code>default.cfg</code>; a running MAME uses the change
             from its next start.</p>
@@ -4899,15 +5506,48 @@ function renderControlsCard(
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
-                html: `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
-            })), state?.portType ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
+                html: renderCopyPlayerForm(group.title) + `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
+            })), state?.portType
+                ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType)))
+                : state?.tab)}
             <script type="application/json" id="control-listen-codes">${
                 JSON.stringify({keys: listenKeys, mouse: listenMouse}).replace(/</g, '\\u003c')
             }</script>
             <form method="post" action="/input-probe/controls/defaults" class="control-reread">
-                <button type="submit">Read MAME's controls again</button>
+                <button type="submit" class="button-secondary">Read MAME's controls again</button>
+            </form>
+            <h3>Share these controls</h3>
+            <p class="info">Export the global controls, with the gamepads pinned to a JOY number
+            (Gamepads tab), to a file another player with the same controllers can import.
+            An import replaces this cabinet's global controls with the file's; a game's own controls
+            are left as they are. A pinned gamepad only applies to a controller of the same model.</p>
+            <form method="get" action="/input-probe/controls/export">
+                <button type="submit" class="button-secondary">Export the controls</button>
+            </form>
+            <form method="post" action="/input-probe/controls/import" enctype="multipart/form-data" class="file-import">
+                <label for="controlsImportFile">File to import (a .json exported here)</label>
+                <input type="file" id="controlsImportFile" name="file" accept=".json" required>
+                <button type="submit">Import</button>
             </form>
         </section>
+    `;
+}
+
+// The players whose controls one button copies to the other (mirrorSeqToOtherPlayer()).
+const COPY_PLAYERS: Record<string, string> = {'Player 1': 'Player 2', 'Player 2': 'Player 1'};
+
+/** "Copy these keys to Player 2" on Player 1's tab, and the other way round; nothing elsewhere. */
+function renderCopyPlayerForm(groupTitle: string): string {
+    const to = COPY_PLAYERS[groupTitle];
+    if (!to) {
+        return '';
+    }
+    return `
+        <form method="post" action="/input-probe/controls/copy-player" class="control-copy-player"
+            onsubmit="return confirm('Replace the gamepad controls of ${to} with those of ${groupTitle}, JOY 1 and JOY 2 swapped? ${to} keeps its keyboard keys.')">
+            <input type="hidden" name="from" value="${escapeHtml(groupTitle)}">
+            <button type="submit" class="button-secondary">Copy these keys to ${escapeHtml(to)}</button>
+        </form>
     `;
 }
 
@@ -5007,9 +5647,71 @@ interface GameRemapState {
     romName: string;
     fieldId?: string;
     error?: string;
+    // The game's file as a whole went well (an import, back to the global controls).
+    notice?: string;
     // The game's other commands the control just added also triggers.
     sharedWith?: string[];
     releasedFrom?: string[];
+}
+
+/**
+ * Under the picker, what can be done for the picked game without launching MAME: its cfg file
+ * itself (download it, delete it), and its controls of its own - export them, import a file of them
+ * (once MAME's controls were read, to check its keys: `canImport`), or go back to the global ones.
+ */
+function renderGameControlsFileActions(romName: string, label: string, iniPath: string, canImport: boolean): string {
+    const cfgPath = getGameCfgPath(iniPath, romName);
+    const hasCfg = existsSync(cfgPath);
+    const overrides = hasCfg ? listGameCfgOverrides(readFileSync(cfgPath, 'utf8')) : [];
+    const commands = new Set(overrides.map(override => `${override.portType}|${override.tag}|${override.mask}`)).size;
+    const romField = `<input type="hidden" name="romName" value="${escapeHtml(romName)}">`;
+    const cfgName = `cfg/${romName}.cfg`;
+    const status = commands
+        ? `<strong>${escapeHtml(label)}</strong> has its own controls for ${commands} command${commands > 1 ? 's' : ''}.`
+        : `<strong>${escapeHtml(label)}</strong> follows the global controls.`;
+    const cfgStatus = hasCfg
+        ? `File <code>${escapeHtml(cfgName)}</code>: its controls, DIP switches, sound output and counters.`
+        : `No <code>${escapeHtml(cfgName)}</code> file yet: MAME writes it the first time the game is quit.`;
+    return `
+        <div class="game-file">
+            <p class="game-file-status">${cfgStatus}</p>
+            ${hasCfg ? `
+                <div class="button-row">
+                    <form method="get" action="/input-probe/game/cfg">
+                        ${romField}
+                        <button type="submit" class="button-secondary">Download the cfg file</button>
+                    </form>
+                    <form method="post" action="/input-probe/game/delete-cfg"
+                        onsubmit="return confirm('Delete ${escapeHtml(cfgName)}? Its controls, DIP switches and counters go with it: the game starts with MAME\\'s defaults and the global controls.')">
+                        ${romField}
+                        <button type="submit" class="button-danger">Delete the cfg file</button>
+                    </form>
+                </div>
+            ` : ''}
+            <p class="game-file-status">${status}</p>
+            <div class="button-row">
+                ${commands ? `
+                    <form method="get" action="/input-probe/game/export">
+                        ${romField}
+                        <button type="submit" class="button-secondary">Export its controls</button>
+                    </form>
+                    <form method="post" action="/input-probe/game/reset-all"
+                        onsubmit="return confirm('Drop every control of its own ${escapeHtml(label.replace(/['\\]/g, ''))} has? It follows the global controls again.')">
+                        ${romField}
+                        <button type="submit" class="button-danger">Back to the global controls</button>
+                    </form>
+                ` : ''}
+            </div>
+            ${canImport ? `
+                <form method="post" action="/input-probe/game/import" enctype="multipart/form-data" class="file-import">
+                    ${romField}
+                    <label for="gameControlsImportFile">Controls of this game to import (a .json exported here, for the same game)</label>
+                    <input type="file" id="gameControlsImportFile" name="file" accept=".json" required>
+                    <button type="submit">Import</button>
+                </form>
+            ` : '<p class="info">Read MAME\'s controls in the Global controls tab to import a file of controls.</p>'}
+        </div>
+    `;
 }
 
 function getGameCfgPath(iniPath: string, romName: string): string {
@@ -5115,7 +5817,12 @@ function renderGameRemapCard(
     const fromMaui = !!targetRom && !isMameConfigSessionAlive();
     const selectedRom = state?.romName ?? targetRom ?? otherRom
         ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
-    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
+    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom, '/mame?game=');
+    // Once a change is saved for the running game, relaunching it is what puts the change in effect
+    // (see hasPendingCfgEdits()): the button says so and stands out, like the global "Apply controls".
+    const applyPending = targetRom === selectedRom && hasPendingCfgEdits();
+    const gameLaunchLabel = applyPending ? 'Apply controls'
+        : selectedRom === targetRom || selectedRom === otherRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game';
 
     const renderTable = (romName: string): string => {
         const fields = readSessionGameFields();
@@ -5137,6 +5844,11 @@ function renderGameRemapCard(
             const axis = !!field.analog && seqType === 'standard';
             const title = !field.analog ? '' : axis ? 'Movement (spinner, mouse, stick)'
                 : `Keys: ${analogKeyDirection(field.portType, seqType)}`;
+            const seq = override ?? getInheritedGameSeq(field, seqType);
+            const extras = {
+                reset: override !== undefined ? 'Back to the global controls' : undefined,
+                removeAll: seqAlternatives(seq).length > 0,
+            };
             return `
                 <form method="post" action="/input-probe/game/remap" class="control-form">
                     <input type="hidden" name="romName" value="${escapeHtml(romName)}">
@@ -5144,17 +5856,13 @@ function renderGameRemapCard(
                     <input type="hidden" name="seqType" value="${seqType}">
                     ${title ? `<p class="control-seq-title">${title}</p>` : ''}
                     <p class="control-origin">${override !== undefined ? 'This game only' : 'From the global controls'}</p>
-                    ${renderControlChips(override ?? getInheritedGameSeq(field, seqType), defaults?.codes ?? new Map<string, string>())}
+                    ${renderControlChips(seq, defaults?.codes ?? new Map<string, string>())}
                     ${axis ? `
                         <div class="binding-actions">
                             <button type="submit" name="action" value="capture-axis">Add a movement</button>
+                            ${renderControlRowExtras(extras)}
                         </div>
-                    ` : renderControlAddButtons('', !!defaults)}
-                    ${override !== undefined ? `
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="reset">Back to the global controls</button>
-                        </div>
-                    ` : ''}
+                    ` : renderControlAddButtons(false, !!defaults, false, extras)}
                 </form>
             `;
         };
@@ -5189,27 +5897,28 @@ function renderGameRemapCard(
     };
 
     return `
-        <section class="card">
+        <section class="card" id="game-controls">
             <h2>Per-game controls</h2>
             <p class="info">Changes what triggers a command in <strong>one game only</strong>
             (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
-            controls above.</p>
+            controls (Global controls tab).</p>
             ${targetRom && targetRom === selectedRom ? `
                 <ol class="info">
                     <li>Below, each card is a command of this game, with what triggers it: <em>From the
                     global controls</em> as long as you haven't changed it for this game. Its
                     <strong>✕</strong> removes one, and the others keep working.</li>
-                    <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                    <li><strong>Gamepad icon</strong>: click, then press the button (or push the
                     direction) on the gamepad within 30 seconds - MAME picks it up even when its window
-                    is not the one in front. <strong>Add a key or mouse button</strong>: click, then
+                    is not the one in front. <strong>Keyboard and mouse icon</strong>: click, then
                     press the key or click the mouse button in this page.</li>
                     <li>A spinner, trackball or paddle (Arkanoid's <em>Dial</em>...) has a
                     <strong>Movement</strong>: <strong>Add a movement</strong>, then wait a second
                     and turn the spinner, move the mouse or push the stick. Its keys move it each
                     way. MAME only reads the mouse or a USB spinner when the
-                    <strong>Spinner, trackball, paddle</strong> card above says so.</li>
-                    <li>Each change is saved and works in the running game at once.</li>
-                    <li><strong>Back to the global controls</strong> drops what this game had of its
+                    <strong>Spinner, trackball</strong> tab says so.</li>
+                    <li>Each change is saved and works in the running game at once.
+                    The <strong>bin</strong> leaves a command with no control in this game.</li>
+                    <li><strong>↺</strong> drops what this game had of its
                     own for a command. ${fromMaui
                         ? 'Keep playing when you are done: the changes are kept.'
                         : `When you are done, close MAME with the button at the top of the page or
@@ -5229,8 +5938,10 @@ function renderGameRemapCard(
             `}
             <form method="post" action="/input-probe/game/start">
                 ${picker}
-                <button type="submit">${selectedRom === targetRom || selectedRom === otherRom ? 'Relaunch MAME with this game' : 'Launch MAME with this game'}</button>
+                <button type="submit"${applyPending ? ' class="button-attention"' : ''}>${gameLaunchLabel}</button>
             </form>
+            ${renderGameControlsFileActions(selectedRom, romLabels.get(selectedRom) ?? selectedRom, iniPath, !!defaults)}
+            ${state?.notice && !state.fieldId ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : ''}
             ${targetRom === selectedRom ? renderPendingRelaunchNotice() : ''}
             ${targetRom ? `
                 <p><strong>MAME:</strong> running ${escapeHtml(romLabels.get(targetRom) ?? targetRom)}${fromMaui ? ', launched from MAUI' : ''}</p>
@@ -5331,11 +6042,8 @@ function renderForm(
     const config = new Config();
     config.load();
 
-    const sections: Subsection[] = [
-        // The MAME information (paths resolved from the binary) right under the form that sets it.
-        {id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)
-            + renderMameInfoCard(mameInfo, mameInfoMessage)},
-    ];
+    // Controls first, the tab shown by default (everyday cabinet tuning); Config, set once, last.
+    const sections: Subsection[] = [];
     // Import and the danger zone both act on paths resolved from the binary's own -showconfig/
     // ui.ini output (rompath, marquees/flyers/logos directories, categorypath...) - until it's
     // configured and validated (mameInfo.error unset), those paths don't exist, so none of these
@@ -5354,19 +6062,32 @@ function renderForm(
         const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
         refreshAdoptedMame(config, romNames);
         const inputDefaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
+        // One subtab per card: together they made one very long page.
         sections.push({
             id: 'controls',
-            label: 'Controls',
+            label: 'Global controls',
             html: renderControlsCard(
                 romNames,
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
                 inputDefaults,
                 remapState,
-            )
-                + renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState)
-                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
-                    findOtherMameRom(config, romNames), inputDefaults)
-                + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+            ),
+        });
+        sections.push({
+            id: 'game-controls',
+            label: 'Per-game controls',
+            html: renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
+                findOtherMameRom(config, romNames), inputDefaults),
+        });
+        sections.push({
+            id: 'devices',
+            label: 'Gamepads',
+            html: renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+        });
+        sections.push({
+            id: 'analog',
+            label: 'Spinner, trackball',
+            html: renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState),
         });
         sections.push({
             id: 'import',
@@ -5382,6 +6103,9 @@ function renderForm(
             });
         }
     }
+    // The MAME information (paths resolved from the binary) right under the form that sets it.
+    sections.push({id: 'config', label: 'Config', html: renderConfigCard(values, mameInfo, error, info)
+        + renderMameInfoCard(mameInfo, mameInfoMessage)});
     // Which of the params above is actually filled in tells us which section this specific
     // response is about - e.g. a POST to /reset only ever sets dangerZoneInfo, nothing
     // else, regardless of what other sections might separately have a standing .flash warning
@@ -5389,10 +6113,13 @@ function renderForm(
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : importError !== undefined || exportError !== undefined ? 'import'
-            : (deviceProbeState !== undefined || remapState !== undefined
-                || gameRemapState !== undefined || analogDevicesState !== undefined) ? 'controls'
-                : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
-                    : undefined;
+            : deviceProbeState !== undefined ? 'devices'
+                : gameRemapState !== undefined ? 'game-controls'
+                    : analogDevicesState !== undefined ? 'analog'
+                        : remapState !== undefined ? 'controls'
+                            : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
+                                // Global controls otherwise, even when Config holds a standing warning (missing plugins...).
+                                : sections.some(section => section.id === 'controls') ? 'controls' : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
     // launches/closes the shared MAME config session the Controls cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Controls tab itself.
@@ -5542,24 +6269,91 @@ async function getUpdateInfo(): Promise<UpdateInfo> {
     return info;
 }
 
-/** A line of the BO's progress log for each step of an installation (SelfUpdate.ts). */
-function updateStepLogger(writeLine: (line: string) => void): UpdateProgress {
-    let lastLoggedMb = -1;
-    return (step) => {
-        if (step.step === 'download') {
-            const mb = Math.floor(step.doneBytes / (1024 * 1024));
-            if (mb === 0 && lastLoggedMb < 0) {
-                writeLine('Downloading…');
-            } else if (mb > lastLoggedMb) {
-                const totalMb = step.totalBytes ? Math.round(step.totalBytes / (1024 * 1024)) : undefined;
-                writeLine(totalMb ? `Downloaded: ${mb} MB / ${totalMb} MB` : `Downloaded: ${mb} MB`);
-            }
-            lastLoggedMb = Math.max(lastLoggedMb, mb);
-        } else if (step.step === 'extract') {
-            writeLine('Extracting the AppImage…');
-        } else if (step.step === 'switch') {
-            writeLine('Switching to the new version…');
+/**
+ * The BO's block for an installation (SelfUpdate.ts): a progress bar over every step, the same
+ * figures as the front's update screen (describeUpdateStep()), and a log line as each step starts
+ * and ends, with its duration - the extraction alone takes a minute or more on a Raspberry Pi.
+ * Writes the open card; `close()` ends it.
+ */
+function openUpdateBlock(res: Response, title: string): {
+    progress: UpdateProgress; line: (text: string) => void; endStep: () => void; close: (ok: boolean) => void;
+} {
+    res.write(`
+        <section class="card">
+            <h2>${escapeHtml(title)}</h2>
+            <div class="import-progress" id="updateProgress">
+                <div class="progress-label"><span data-label>Starting…</span><span data-percent></span></div>
+                <div class="progress-track"><div class="progress-fill progress-indeterminate" data-fill></div></div>
+            </div>
+            <script>
+            window.mauiUpdateBar = function (percent, label, state) {
+                var root = document.getElementById('updateProgress');
+                var fill = root.querySelector('[data-fill]');
+                fill.classList.toggle('progress-indeterminate', percent === null && !state);
+                fill.classList.toggle('progress-done', state === 'done');
+                fill.classList.toggle('progress-failed', state === 'failed');
+                fill.style.width = (state ? 100 : percent === null ? 100 : percent) + '%';
+                root.querySelector('[data-label]').textContent = label;
+                root.querySelector('[data-percent]').textContent = percent === null || state ? '' : percent + '%';
+            };
+            </script>
+            ${PROGRESS_LOG_OPEN}
+    `);
+    const line = (text: string): void => {
+        console.log(`[boServer] Update: ${text}`);
+        res.write(`<li>${escapeHtml(text)}</li>`);
+    };
+    const bar = (percent: number | null, label: string, state = ''): void => {
+        res.write(`<script>mauiUpdateBar(${percent === null ? 'null' : percent},${JSON.stringify(label).replace(/</g, '\\u003c')},${JSON.stringify(state)})</script>`);
+    };
+    const megabytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    const startedAt = Date.now();
+    let current: {step: string; at: number; summary: string} | null = null;
+    const seconds = (since: number): string => `${Math.max(1, Math.round((Date.now() - since) / 1000))} s`;
+    // The step under way's summary line, once (the next step, the end).
+    const endStep = (): void => {
+        if (current?.summary) {
+            line(`${current.summary} in ${seconds(current.at)}.`);
+            current.summary = '';
         }
+    };
+    const progress: UpdateProgress = (step) => {
+        if (current?.step !== step.step) {
+            endStep();
+            current = {step: step.step, at: Date.now(), summary: ''};
+            if (step.step === 'download') {
+                line(step.totalBytes ? `Downloading ${megabytes(step.totalBytes)}…` : 'Downloading…');
+            } else if (step.step === 'extract') {
+                line(step.totalEntries
+                    ? `Extracting the new version (about ${step.totalEntries} files, as many as the installed one)…`
+                    : 'Extracting the new version…');
+            } else if (step.step === 'switch') {
+                line('Switching versions: the running one is kept as ~/squashfs-root.old, for a manual rollback.');
+            } else if (step.step === 'cleanup') {
+                line('Removing the temporary files and the older backup…');
+            }
+        }
+        if (step.step === 'download') {
+            current.summary = `Downloaded ${megabytes(step.doneBytes)}`;
+        } else if (step.step === 'extract') {
+            current.summary = `Extracted ${step.entries} files`;
+        } else if (step.step === 'cleanup') {
+            current.summary = 'Removed';
+        }
+        const screen = describeUpdateStep(step);
+        const label = screen.label.charAt(0) + screen.label.slice(1).toLowerCase();
+        bar(screen.percent, `${label} — ${screen.detail}`);
+    };
+    return {
+        progress,
+        line,
+        endStep,
+        close: (ok) => {
+            endStep();
+            line(ok ? `Done in ${seconds(startedAt)}.` : `Stopped after ${seconds(startedAt)}.`);
+            bar(100, ok ? 'Installed' : 'Failed — see the log below', ok ? 'done' : 'failed');
+            res.write('</ul></section>');
+        },
     };
 }
 
@@ -5569,18 +6363,16 @@ function updateStepLogger(writeLine: (line: string) => void): UpdateProgress {
  * this very process.
  */
 async function downloadWindowsInstallerLogged(res: Response, title: string, downloadUrl: string): Promise<string | null> {
-    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
-    const writeLine = (line: string): void => {
-        res.write(`<li>${escapeHtml(line)}</li>`);
-    };
+    const block = openUpdateBlock(res, title);
     let installerPath: string | null = null;
     try {
-        installerPath = await downloadWindowsInstaller(downloadUrl, updateStepLogger(writeLine));
-        writeLine('Starting the installer: the application closes, updates and reopens on the new version.');
+        installerPath = await downloadWindowsInstaller(downloadUrl, block.progress);
+        block.endStep();
+        block.line('Starting the installer: the application closes, updates and reopens on the new version.');
     } catch (error) {
-        writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
+        block.line(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
-    res.write('</ul></section>');
+    block.close(installerPath !== null);
     return installerPath;
 }
 
@@ -5590,20 +6382,18 @@ async function downloadWindowsInstallerLogged(res: Response, title: string, down
  * already have its page head written. Whether it was installed.
  */
 async function runUpdateInstall(res: Response, title: string, downloadUrl: string): Promise<boolean> {
-    res.write(`<section class="card"><h2>${escapeHtml(title)}</h2>${PROGRESS_LOG_OPEN}`);
-    const writeLine = (line: string): void => {
-        res.write(`<li>${escapeHtml(line)}</li>`);
-    };
+    const block = openUpdateBlock(res, title);
     let installed = false;
     try {
-        await installAppImage(downloadUrl, updateStepLogger(writeLine));
-        writeLine('Update installed. The previous version stays available in ~/squashfs-root.old '
+        await installAppImage(downloadUrl, block.progress);
+        block.endStep();
+        block.line('Update installed. The previous version stays available in ~/squashfs-root.old '
             + 'while the new one is being validated.');
         installed = true;
     } catch (error) {
-        writeLine(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
+        block.line(`Failed: ${error instanceof Error ? error.message : 'unexpected error'}`);
     }
-    res.write('</ul></section>');
+    block.close(installed);
     return installed;
 }
 
@@ -5645,10 +6435,19 @@ function renderRestartWaitScript(backHref: string): string {
     return `<script>${
         'var backHref = ' + JSON.stringify(backHref) + ';'
         + 'var sawDown = false;'
+        // Where it stands and for how long, after the page's own message: a restart takes a while
+        // on a Raspberry Pi, and a still page looked stuck.
+        + 'var message = document.getElementById("restart-wait-message");'
+        + 'var base = message ? message.textContent : "";'
+        + 'var started = Date.now();'
+        + 'var show = function (state) {'
+        + 'if (message) { message.textContent = base + " " + state + " (" + Math.round((Date.now() - started) / 1000) + " s)"; }'
+        + '};'
         + 'var poll = function () {'
         + 'fetch(backHref, {cache: "no-store", method: "HEAD"}).then(function () {'
-        + 'if (sawDown) { window.location.href = backHref; } else { setTimeout(poll, 1000); }'
-        + '}).catch(function () { sawDown = true; setTimeout(poll, 1000); });'
+        + 'if (sawDown) { show("Back up, opening the page."); window.location.href = backHref; }'
+        + 'else { show("The running version is closing…"); setTimeout(poll, 1000); }'
+        + '}).catch(function () { sawDown = true; show("Restarting…"); setTimeout(poll, 1000); });'
         + '};'
         + 'setTimeout(poll, 1000);'
     }</script>`;
@@ -5773,6 +6572,50 @@ function getAutoUiMode(): UiMode {
     return resolveUiMode('auto', {totalMemBytes: os.totalmem(), gpuCompositing});
 }
 
+/**
+ * The screen and sound outputs of a dedicated cabinet (VideoOutput.ts, AudioOutput.ts), as this
+ * machine has them now. A saved output not found now (a screen unplugged) stays offered.
+ */
+function renderCabinetOutputSelects(config: Config): string {
+    let outputs: ScreenOutputInfo[] = [];
+    try {
+        outputs = listScreenOutputs();
+    } catch {
+        // No X server reachable: Automatic only.
+    }
+    const devices = listAudioDevices();
+    const option = (value: string, label: string, selected: boolean) =>
+        `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    const videoOptions = [
+        option('', 'Automatic (as the system starts it)', config.videoOutput === ''),
+        ...outputs.map(output => option(output.name,
+            `${output.name} - ${output.connected ? 'screen connected' : 'nothing connected'}`, config.videoOutput === output.name)),
+        ...(config.videoOutput && !outputs.some(output => output.name === config.videoOutput)
+            ? [option(config.videoOutput, `${config.videoOutput} - not found now`, true)] : []),
+    ].join('');
+    // What "Same as the screen output" comes down to now, named like the other choices.
+    const followed = resolveAudioOutput(FOLLOW_SCREEN, currentScreenOutput(config.videoOutput, outputs), devices);
+    const followedLabel = devices.find(device => device.id === followed)?.label ?? 'the system default';
+    const audioOptions = [
+        option(FOLLOW_SCREEN, `Same as the screen output (now: ${followedLabel})`, config.audioOutput === FOLLOW_SCREEN),
+        option('', 'System default (/etc/asound.conf)', config.audioOutput === ''),
+        ...devices.map(device => option(device.id, `${device.label} (${device.id})`, config.audioOutput === device.id)),
+        ...(config.audioOutput && config.audioOutput !== FOLLOW_SCREEN && !devices.some(device => device.id === config.audioOutput)
+            ? [option(config.audioOutput, `${config.audioOutput} - not found now`, true)] : []),
+    ].join('');
+    // A sound server picks the output itself (AudioOutput.ts soundServerRunning()): no choice here.
+    const audioSelect = soundServerRunning()
+        ? `<label for="audioOutput">Sound output <span class="checkbox-row-detail">A sound server (PipeWire or PulseAudio) runs on this machine: it picks the output, MAME and MAUI play on its default one.</span></label>
+        <select id="audioOutput" disabled><option>Set by the sound server</option></select>`
+        : `<label for="audioOutput">Sound output <span class="checkbox-row-detail">HDMI sound comes out of the screen (its speakers or its headphone socket). The next game uses it at once, MAUI's own sounds at its next start.</span></label>
+        <select id="audioOutput" name="audioOutput">${audioOptions}</select>`;
+    return `
+        <label for="videoOutput">Screen output <span class="checkbox-row-detail">The port the screen is plugged in. Applied the next time the cabinet starts; MAME follows it.</span></label>
+        <select id="videoOutput" name="videoOutput">${videoOptions}</select>
+        ${audioSelect}
+    `;
+}
+
 /** The carousel categories switched on in the MAUI tab, to tell whether a save changed them. */
 function shownCategories(config: Config): string {
     return [config.showAllGamesCategory, config.showBeatThisCategory, config.showHiscoresOnlyCategory].join();
@@ -5813,6 +6656,7 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                             <option value="720p" ${config.displayMode === '720p' ? 'selected' : ''}>720p</option>
                             <option value="native" ${config.displayMode === 'native' ? 'selected' : ''}>Leave the screen as it is</option>
                         </select>
+                        ${renderCabinetOutputSelects(config)}
                     ` : ''}
                     ${renderSettingCheckbox('onlineBadgeDotOnly', config.onlineBadgeDotOnly, 'ONLINE badge: the dot alone',
                         'In the top right corner of the cabinet, without ONLINE / OFFLINE.')}
@@ -5827,6 +6671,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         'The games players have a score on, the one scored on last first.')}
                     ${renderSettingCheckbox('showHiscoresOnlyCategory', config.showHiscoresOnlyCategory, 'Show the "Hiscores Only" category',
                         'The games whose hiscores can be extracted.')}
+                    <label for="launchStageSeconds">Seconds before a game starts <span class="checkbox-row-detail">The launch screen (the game's podium and the score to beat), the launch sound included, then MAME is started. 0 = at once.</span></label>
+                    <input type="number" id="launchStageSeconds" name="launchStageSeconds" min="0" max="30" step="1" value="${config.launchStageSeconds}">
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>When nobody plays</legend>
@@ -5847,8 +6693,8 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                         'Their scores go to the shared leaderboards. Unticked, they start private and the Players tab makes them public.')}
                     ${renderSettingCheckbox('voteEnabled', config.voteEnabled, 'Ask for a vote when a game is quit',
                         'Thumbs up / neutral / thumbs down. A neutral vote is asked again next time.')}
-                    ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the favorites',
-                        'Restorable from the Games tab\'s removed favorites.')}
+                    ${renderSettingCheckbox('thumbsDownRemovesFavorite', config.thumbsDownRemovesFavorite, 'A thumbs down removes the game from the list',
+                        'Restorable from the Games tab\'s "Removed from the list".')}
                 </fieldset>
                 <fieldset class="settings-group">
                     <legend>Updates</legend>
@@ -5901,7 +6747,7 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
                 </label>
                 <button type="submit">Export</button>
             </form>
-            <form method="post" action="/maui/import" enctype="multipart/form-data"
+            <form method="post" action="/maui/import" enctype="multipart/form-data" class="file-import"
                 onsubmit="return confirm('Overwrite the files this export holds? This cannot be undone.')">
                 <label for="mauiImportFile">File to import (a .zip exported here, or a lone .json configuration or .sqlite/.db database)</label>
                 <input type="file" id="mauiImportFile" name="file" accept=".json,.sqlite,.db,.zip" required>
@@ -5913,6 +6759,7 @@ function renderMauiImportExportCard(error?: string, info?: string): string {
 
 interface MauiPageMessages {
     mauiInfo?: string;
+    soundsInfo?: string;
     importExportError?: string;
     importExportInfo?: string;
     dangerZoneInfo?: string;
@@ -5931,6 +6778,7 @@ interface MauiPageMessages {
     // What a search for Bluetooth devices just found.
     bluetoothFound?: BluetoothDevice[];
     controls?: MauiControlsState;
+    hotkeys?: HotkeysState;
 }
 
 /** MAUI's keys as the MAUI > Controls tab shows them, one card each. */
@@ -6005,12 +6853,10 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
                     <ul class="control-chips">
                         ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
                     </ul>
-                    ${renderControlAddButtons('', true, true)}
-                    ${isDefaultKey(bindings, action.key) ? '' : `
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="reset">Back to MAUI's default</button>
-                        </div>
-                    `}
+                    ${renderControlAddButtons(false, true, true, {
+                        reset: isDefaultKey(bindings, action.key) ? undefined : 'Back to MAUI\'s default',
+                        removeAll: inputsOfKey(bindings, action.key).length > 0,
+                    })}
                 </form>
                 ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
                 ${actionState?.info ? `<p class="warn flash">${escapeHtml(actionState.info)}</p>` : ''}
@@ -6030,20 +6876,273 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
             what the keys do in the games. Each action is triggered by a key, a mouse button or a
             gamepad button: its <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                <li><strong>Gamepad icon</strong>: click, then press the button (or push the
                 stick) on the cabinet within 30 seconds - MAUI's window catches it, and the press
                 does nothing else meanwhile. When this page is open on the computer the gamepad is
                 plugged in, the page catches it too. A pad with a layout of its own (named on its
                 pills) gets the button for itself, any other pad for every pad without one.</li>
-                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                <li><strong>Keyboard and mouse icon</strong>: click, then press the key or click
                 the mouse button in this page. Keys are named after their place on a US keyboard:
                 on an AZERTY keyboard, the A key shows as Q.</li>
                 <li>A key or a button does one thing in MAUI: added to an action, it leaves the one
                 it had.</li>
-                <li><strong>Back to MAUI's default</strong> gives the action its controls of origin
-                again. Every change is used by the cabinet at once.</li>
+                <li><strong>↺</strong> gives the action its controls of origin
+                again. The <strong>bin</strong> takes every control away from it. Every change is
+                used by the cabinet at once.</li>
             </ul>
             <div class="binding-grid">${cards}</div>
+        </section>
+    `;
+}
+
+type HotkeyType = 'press' | 'hold' | 'combo';
+type HotkeyStep = 'action' | 'type' | 'key1' | 'key2' | 'hold' | 'review';
+
+/**
+ * The hotkey being put together step by step in the Hotkeys card: each step's form carries what the
+ * steps before chose, and the next step is whatever is still missing (nextHotkeyStep()).
+ */
+interface HotkeyDraft {
+    action: string;
+    type: string;
+    keys: [string, string];
+    holdSeconds: string;
+}
+
+interface HotkeysState {
+    error?: string;
+    info?: string;
+    draft?: HotkeyDraft;
+}
+
+const EMPTY_HOTKEY_DRAFT: HotkeyDraft = {action: '', type: '', keys: ['', ''], holdSeconds: ''};
+
+const HOTKEY_TYPES: readonly {value: HotkeyType; label: string; detail: string}[] = [
+    {value: 'press', label: 'One key, pressed', detail: 'A button of its own on the cabinet, for instance.'},
+    {value: 'hold', label: 'One key, held', detail: 'After 1 s held, a loader counts down the time below. Released early, the key does its own job.'},
+    {value: 'combo', label: 'Two keys together', detail: 'At once or held, like Start + Select.'},
+];
+
+const HOTKEY_HOLD_CHOICES = ['1', '2', '3', '5'];
+
+function nextHotkeyStep(draft: HotkeyDraft): HotkeyStep {
+    if (!HOTKEY_ACTIONS.includes(draft.action as HotkeyAction)) {
+        return 'action';
+    }
+    if (!HOTKEY_TYPES.some(type => type.value === draft.type)) {
+        return 'type';
+    }
+    if (!draft.keys[0]) {
+        return 'key1';
+    }
+    if (draft.type === 'combo' && !draft.keys[1]) {
+        return 'key2';
+    }
+    if (draft.type !== 'press' && draft.holdSeconds === '') {
+        return 'hold';
+    }
+    return 'review';
+}
+
+/** The draft one step back: what the last step chose is asked again. */
+function previousHotkeyDraft(draft: HotkeyDraft): HotkeyDraft {
+    const previous: HotkeyDraft = {...draft, keys: [...draft.keys]};
+    if (draft.type !== 'press' && draft.holdSeconds !== '') {
+        previous.holdSeconds = '';
+    } else if (draft.keys[1]) {
+        previous.keys[1] = '';
+    } else if (draft.keys[0]) {
+        previous.keys[0] = '';
+    } else if (draft.type) {
+        previous.type = '';
+        previous.holdSeconds = '';
+    } else {
+        previous.action = '';
+    }
+    return previous;
+}
+
+/** The finished draft as a hotkey, null when something is missing or wrong. */
+function draftHotkey(draft: HotkeyDraft): Hotkey | null {
+    const seconds = draft.type === 'press' ? 0 : Number(draft.holdSeconds);
+    return parseHotkey({
+        action: draft.action,
+        keys: draft.keys.filter(key => key !== ''),
+        holdMs: Number.isFinite(seconds) ? Math.round(seconds * 1000) : -1,
+    }, isHotkeyKey);
+}
+
+/** What a hotkey's key shows: a MAUI action ("Scores / back"), or an input and its device. */
+function describeHotkeyKey(key: string): string {
+    if (key.startsWith(MAUI_KEY_REF)) {
+        return mauiActionLabel(key.slice(MAUI_KEY_REF.length));
+    }
+    const input = parseMauiInputId(key);
+    if (!input) {
+        return key;
+    }
+    const kind = input.device === 'pad' ? 'joystick' : input.device;
+    const layout = input.device === 'pad' && input.layout !== 'standard' ? ` (${shortLayoutName(input.layout)})` : '';
+    return `${CONTROL_KIND_LABELS[kind]} ${describeMauiInput(input)}${layout}`;
+}
+
+function describeHotkeyTrigger(hotkey: Hotkey): string {
+    const two = hotkey.keys.length > 1;
+    return hotkey.holdMs > 0 ? `${two ? 'held together' : 'held'} ${hotkey.holdMs / 1000} s` : (two ? 'together' : 'pressed');
+}
+
+/**
+ * What saving this hotkey changes besides it: a single input pressed (not held) leaves the MAUI
+ * action it had, a MAUI action pressed no longer does its own job on the list of games.
+ */
+function describeHotkeyTakeover(bindings: MauiBindings, hotkey: Hotkey): string | undefined {
+    const [key] = hotkey.keys;
+    if (hotkey.keys.length !== 1 || hotkey.holdMs !== 0) {
+        return undefined;
+    }
+    if (key.startsWith(MAUI_KEY_REF)) {
+        return `${describeHotkeyKey(key)} will trigger this hotkey instead of its own job on the list of games.`;
+    }
+    const input = parseMauiInputId(key);
+    const taken = input ? keyOfInput(bindings, input) : '';
+    return taken ? `${describeHotkeyKey(key)} does ${mauiActionLabel(taken)} today: it will only trigger this hotkey.` : undefined;
+}
+
+/** The choices of the steps before, carried along; `except` is the one this step asks. */
+function renderHotkeyDraftFields(draft: HotkeyDraft, except: string[] = []): string {
+    const fields: [string, string][] = [
+        ['hotkeyAction', draft.action], ['type', draft.type], ['key1', draft.keys[0]], ['key2', draft.keys[1]],
+        ['holdSeconds', draft.holdSeconds],
+    ];
+    return fields.filter(([name]) => !except.includes(name))
+        .map(([name, value]) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`).join('');
+}
+
+function renderHotkeyStepBody(bindings: MauiBindings, draft: HotkeyDraft, step: HotkeyStep): string {
+    switch (step) {
+        case 'action':
+            return `
+                <p>What should the hotkey do?</p>
+                <div class="hotkey-choices">
+                    ${HOTKEY_ACTIONS.map(action => `<button type="submit" name="hotkeyAction" value="${action}">${escapeHtml(HOTKEY_ACTION_LABELS[action])}</button>`).join('')}
+                </div>`;
+        case 'type':
+            return `
+                <p>How is it triggered?</p>
+                <div class="hotkey-choices">
+                    ${HOTKEY_TYPES.map(type => `<button type="submit" name="type" value="${type.value}">${escapeHtml(type.label)}<span class="checkbox-row-detail">${escapeHtml(type.detail)}</span></button>`).join('')}
+                </div>`;
+        case 'key1':
+        case 'key2': {
+            const slot = step === 'key1' ? 1 : 2;
+            const name = `key${slot}`;
+            return `
+                <p>${slot === 1 ? (draft.type === 'combo' ? 'First key' : 'The key') : `Second key, pressed with ${escapeHtml(describeHotkeyKey(draft.keys[0]))}`}:
+                press it on the cabinet (or here for a key or a mouse button)…</p>
+                <div class="binding-actions">
+                    ${renderControlIconButton('Catch a gamepad button', GAMEPAD_ICON_PATHS,
+                        `type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}"`)}
+                    ${renderControlIconButton('Catch a key or mouse button', KEY_MOUSE_ICON_PATHS,
+                        `type="button" data-control-listen="raw" data-slot="${slot}"`)}
+                </div>
+                <p>…or pick a MAUI action, whatever control triggers it:</p>
+                <div class="hotkey-choices">
+                    ${MAUI_ACTIONS.filter(action => MAUI_KEY_REF + action.key !== draft.keys[0])
+                        .map(action => `<button type="submit" name="${name}" value="${escapeHtml(MAUI_KEY_REF + action.key)}">${escapeHtml(action.label)}</button>`).join('')}
+                </div>
+                <input type="hidden" name="code" value="">
+                <input type="hidden" name="slot" value="">
+                <button type="submit" name="action" value="catch" hidden data-control-add></button>`;
+        }
+        case 'hold':
+            return `
+                <p>${draft.type === 'combo' ? 'Held together how long?' : 'Held how long, once held 1 s (a plain press stays a plain press)?'}</p>
+                <div class="hotkey-choices">
+                    ${draft.type === 'combo' ? '<button type="submit" name="holdSeconds" value="0">At once</button>' : ''}
+                    ${HOTKEY_HOLD_CHOICES.map(seconds => `<button type="submit" name="holdSeconds" value="${seconds}">${seconds} s</button>`).join('')}
+                </div>`;
+        case 'review': {
+            const hotkey = draftHotkey(draft);
+            if (!hotkey) {
+                return '<p class="error">Something is missing: go back a step.</p>';
+            }
+            const takeover = describeHotkeyTakeover(bindings, hotkey);
+            return `
+                <p class="hotkey-summary"><strong>${escapeHtml(HOTKEY_ACTION_LABELS[hotkey.action])}</strong>:
+                ${hotkey.keys.map(key => escapeHtml(describeHotkeyKey(key))).join(' + ')}, ${escapeHtml(describeHotkeyTrigger(hotkey))}.</p>
+                ${takeover ? `<p class="warn">${escapeHtml(takeover)}</p>` : ''}
+                <div class="hotkey-choices">
+                    <button type="submit" name="action" value="add">Save the hotkey</button>
+                </div>`;
+        }
+    }
+}
+
+/** "Add a hotkey", one question per screen: action, kind, key(s), how long, then a summary. */
+function renderHotkeyWizard(bindings: MauiBindings, draft: HotkeyDraft): string {
+    const step = nextHotkeyStep(draft);
+    const steps: HotkeyStep[] = ['action', 'type', 'key1',
+        ...(draft.type === 'combo' ? ['key2' as const] : []),
+        ...(draft.type && draft.type !== 'press' ? ['hold' as const] : []), 'review'];
+    const asked: Record<HotkeyStep, string[]> = {
+        action: ['hotkeyAction'], type: ['type', 'holdSeconds'], key1: ['key1'], key2: ['key2'], hold: ['holdSeconds'], review: [],
+    };
+    return `
+        <form method="post" action="/maui/hotkeys" class="hotkey-step">
+            <h3>Add a hotkey <span class="checkbox-row-detail">Step ${steps.indexOf(step) + 1} of ${draft.type ? steps.length : '4 to 6'}</span></h3>
+            ${renderHotkeyDraftFields(draft, asked[step])}
+            ${renderHotkeyStepBody(bindings, draft, step)}
+            <div class="binding-actions">
+                ${step === 'action' ? '' : '<button type="submit" name="action" value="back">Back</button>'}
+                <button type="submit" name="action" value="cancel">Cancel</button>
+            </div>
+        </form>
+    `;
+}
+
+/**
+ * The front's hotkeys (Hotkeys.ts): each action of the list of games triggered by a key pressed,
+ * a key held, or two keys together. A key is a MAUI action (whatever input produces it) or an input
+ * caught here, a MAUI key or not.
+ */
+function renderHotkeysCard(bindings: MauiBindings, state?: HotkeysState): string {
+    const rows = bindings.hotkeys.map((hotkey, index) => `
+        <tr>
+            <td>${escapeHtml(HOTKEY_ACTION_LABELS[hotkey.action])}</td>
+            <td>${hotkey.keys.map(key => escapeHtml(describeHotkeyKey(key))).join(' + ')}</td>
+            <td>${escapeHtml(describeHotkeyTrigger(hotkey))}</td>
+            <td class="center">
+                <form method="post" action="/maui/hotkeys">
+                    <input type="hidden" name="index" value="${index}">
+                    <button type="submit" name="action" value="remove" class="control-remove"
+                        aria-label="Remove this hotkey">✕</button>
+                </form>
+            </td>
+        </tr>
+    `).join('');
+    const isDefault = JSON.stringify(bindings.hotkeys) === JSON.stringify(defaultHotkeys());
+    return `
+        <section class="card">
+            <h2>MAUI hotkeys</h2>
+            <p class="info">Actions of the list of games triggered by one key pressed, one key held,
+            or two keys together. A key is a MAUI action above (any of its controls) or a button
+            caught on the cabinet, even one that does nothing else in MAUI, like Start or Select.
+            A key a held or two-key hotkey uses still does its own job, once released or when no
+            other key came - never when its hotkey went off.</p>
+            ${state?.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state?.info ? `<p class="warn flash">${escapeHtml(state.info)}</p>` : ''}
+            <div class="table-wrap">
+                <table class="favorites-table">
+                    <thead><tr><th>Action</th><th>Keys</th><th>Trigger</th><th class="center"></th></tr></thead>
+                    <tbody>${rows || '<tr><td colspan="4"><em>No hotkey: these actions can\'t be used on the cabinet.</em></td></tr>'}</tbody>
+                </table>
+            </div>
+            ${state?.draft ? renderHotkeyWizard(bindings, state.draft) : `
+                <form method="post" action="/maui/hotkeys" class="hotkey-choices">
+                    <button type="submit" name="action" value="start">Add a hotkey</button>
+                    ${isDefault ? '' : '<button type="submit" name="action" value="reset">Back to MAUI\'s default hotkeys</button>'}
+                </form>
+            `}
         </section>
     `;
 }
@@ -6114,7 +7213,37 @@ function renderOnlineSection(messages: MauiPageMessages): string {
         ? {stopped: status.state === 'stopped', status: describeOnlineStatus(status, view.url)}
         : undefined;
     return renderOnlineCard(view, {error: messages.onlineError, info: messages.onlineInfo}, session)
+        + renderScoreRecoveriesCard()
         + (process.env.NODE_ENV === 'development' && onlineSession?.currentClient() ? renderScoresBackfillCard(messages) : '');
+}
+
+const RECOVERY_REASONS: Record<RecoveryNotFoundReason, string> = {
+    not_in_table: 'not in the table',
+    player_not_on_cabinet: 'player not on this cabinet',
+    unsupported: 'no extractor for this game',
+    no_file: 'no hiscore file yet',
+    unreadable: 'file or table unreadable',
+};
+
+/**
+ * The administrators' requests to recover a score this cabinet answered (maui-api D93,
+ * ScoreRecovery.ts): its owner knows what MAUI-API asked for. Nothing before the first one.
+ */
+function renderScoreRecoveriesCard(): string {
+    const answers = readRecoveryAnswers();
+    if (answers.length === 0) {
+        return '';
+    }
+    return `
+        <section class="card">
+            <h2>Scores recovered on request</h2>
+            <p>MAUI-API asked this cabinet for scores its files hold but MAUI-API never got: MAUI looked for each one
+            in the game's table and sent it when it was there.</p>
+            <ul>${answers.map(answer => `<li>${escapeHtml(formatDateTime(new Date(answer.answeredAt)))}:
+                <code>${escapeHtml(answer.romname)}</code>, ${escapeHtml(answer.score.toLocaleString('en-US'))}
+                ${answer.pseudo3 ? `by <code>${escapeHtml(answer.pseudo3)}</code>` : ''}:
+                ${answer.outcome === 'queued' ? 'found, sent' : `not found (${escapeHtml(RECOVERY_REASONS[answer.reason ?? 'not_in_table'])})`}</li>`).join('')}</ul>
+        </section>`;
 }
 
 /** Development only (HiscoreBackfill.ts): fills MAUI-API with this cabinet's hiscores. */
@@ -6140,7 +7269,9 @@ function renderMauiPage(
 ): string {
     const sections: Subsection[] = [
         {id: 'general', label: 'General', html: renderMauiCard(config, isAdvanced, messages.mauiInfo)},
-        {id: 'controls', label: 'Controls', html: renderMauiControlsCard(readMauiBindings(), messages.controls)},
+        {id: 'controls', label: 'Controls', html: renderMauiControlsCard(readMauiBindings(), messages.controls)
+            + renderHotkeysCard(readMauiBindings(), messages.hotkeys)},
+        {id: 'sounds', label: 'Sounds', html: renderSoundsCard(config, messages.soundsInfo)},
     ];
     if (network) {
         sections.push({
@@ -6191,7 +7322,8 @@ function renderMauiPage(
                         : (messages.bluetoothError ?? messages.bluetoothInfo ?? messages.bluetoothFound) !== undefined ? 'bluetooth'
                             : messages.mauiInfo !== undefined ? 'general'
                                 : messages.controls !== undefined ? 'controls'
-                                    : undefined;
+                                    : messages.soundsInfo !== undefined ? 'sounds'
+                                        : undefined;
     return renderSubtabbedPage('maui', sections, isAdvanced ? 'advanced' : 'basic', defaultSubtab);
 }
 
@@ -6266,7 +7398,7 @@ function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summ
             ${summary ? renderDownloadSummary(summary) : ''}
             <form method="post" action="/favorites/download-media" data-stream>
                 <p class="info">Downloads the missing marquees/flyers/logos from ScreenScraper for all
-                the favorites. Synchronous processing, may take several minutes depending on the number of favorites
+                the games of the list. Synchronous processing, may take several minutes depending on the number of games
                 (a delay is enforced between calls) - do not close this page during the download.</p>
                 <button type="submit">Download the missing artwork</button>
             </form>
@@ -6303,7 +7435,8 @@ function renderScreenScraperPage(
 const ASSET_ICON_PATHS: { [kind: string]: string } = {
     Marquee: '<rect x="1.5" y="3" width="13" height="6" rx="1"/><path d="M8 9v3.5M5 13h6"/>',
     Flyer: '<path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 8.5h5M6 11h5"/>',
-    Logo: '<path d="M8 1.8l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.1l-3.7 2 .8-4.1L2 6.1l4.2-.5z"/>',
+    // A title's letter on its baseline: a star would read as the vote's star (My favourites).
+    Logo: '<path d="M4 12L8 2.5l4 9.5M5.5 8.5h5"/><path d="M2 14.5h12"/>',
 };
 
 
@@ -6322,11 +7455,6 @@ function renderAssetIcon(kind: 'Marquee' | 'Flyer' | 'Logo', found: boolean, rom
     return `<span class="asset-icon ${found ? 'badge-yes' : 'badge-no'}" ${hover} role="img" aria-label="${label}">
         <svg ${ICON_SVG_ATTRS}>${ASSET_ICON_PATHS[kind]}${found ? '' : '<path d="M2 14L14 2"/>'}</svg>
     </span>`;
-}
-
-function renderAssetIcons(row: FavoriteMediaStatus & {romName: string}): string {
-    return `<span class="asset-icons">${renderAssetIcon('Marquee', row.hasMarquee, row.romName)}${
-        renderAssetIcon('Flyer', row.hasFlyer, row.romName)}${renderAssetIcon('Logo', row.hasLogo, row.romName)}</span>`;
 }
 
 /**
@@ -6383,6 +7511,7 @@ const THUMB_UP_ICON_PATHS = '<path d="M5 7v6.5H2.5V7H5z"/>'
     + '<path d="M5 7l2.6-4.5c1.2 0 1.9 1 1.6 2.1L8.8 6.5h3.4c1 0 1.7.9 1.5 1.9l-.9 4c-.2.7-.8 1.1-1.5 1.1H5"/>';
 const THUMB_DOWN_ICON_PATHS = `<g transform="rotate(180 8 8)">${THUMB_UP_ICON_PATHS}</g>`;
 // Eyes are zero-length round-capped lines: dots that keep the stroke-only look of the other icons.
+const STAR_ICON_PATHS = '<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>';
 const NEUTRAL_ICON_PATHS = '<circle cx="8" cy="8" r="6"/><path d="M5.5 10h5"/><path d="M6 6.5v.01M10 6.5v.01"/>';
 const RESTORE_ICON_PATHS = '<path d="M3.5 8A4.5 4.5 0 1 1 5 11.3"/><path d="M3 4.5V8h3.5"/>';
 const PLAY_ICON_PATHS = '<path d="M5 3l8 5-8 5z"/>';
@@ -6452,12 +7581,16 @@ function renderGameCategoryIcon(category: GameCategory | null | undefined): stri
  */
 function renderGameName(fullname: string, romName?: string, category?: GameCategory | null): string {
     const {name, extra} = splitGameName(fullname);
+    return renderGameNameCell(name, extra, !!romName && hasHiscoreExtraction(romName), renderGameCategoryIcon(category));
+}
+
+/** renderGameName()'s markup, from its parts (also the favorites list's template, see renderFavoritesCard()). */
+function renderGameNameCell(name: string, extra: string | null, hiscoreCup: boolean, categoryIcon: string): string {
     // The name is cut with an ellipsis by CSS (see .game-name-cell) when too long for the column;
     // its title carries the full text. The search matches data-search, not this markup.
     const nameHtml = `<span class="game-name-text" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
     const infoIcon = extra ? renderInfoIcon(extra) : '';
-    const hiscoreIcon = romName && hasHiscoreExtraction(romName) ? HISCORE_CUP_ICON : '';
-    return `<span class="game-name-cell">${renderGameCategoryIcon(category)}${nameHtml}${infoIcon}${hiscoreIcon}</span>`;
+    return `<span class="game-name-cell">${categoryIcon}${nameHtml}${infoIcon}${hiscoreCup ? HISCORE_CUP_ICON : ''}</span>`;
 }
 
 function renderDownloadSummary(summary: DownloadSummary): string {
@@ -6488,11 +7621,19 @@ function renderDownloadSummary(summary: DownloadSummary): string {
  * listed, each on its own line.
  */
 function renderRomNameCell(row: FavoriteRow): string {
-    const lines = [
+    return renderRomNameCellParts(row.romName, getRomDependencies(row));
+}
+
+/** The tooltip of a rom name's (i): its dependencies, one kind per line ('' for none). */
+function getRomDependencies(row: FavoriteRow): string {
+    return [
         ...(row.cached && row.biosName ? [`Bios: ${row.biosName}`] : []),
         ...(row.cached && row.deviceRoms.length ? [`Devices: ${row.deviceRoms.join(', ')}`] : []),
-    ];
-    return `<span class="romname-cell"><span class="game-name-text" title="${escapeHtml(row.romName)}">${escapeHtml(row.romName)}</span>${lines.length ? renderInfoIcon(lines.join('\n')) : ''}</span>`;
+    ].join('\n');
+}
+
+function renderRomNameCellParts(romName: string, dependencies: string): string {
+    return `<span class="romname-cell"><span class="game-name-text" title="${escapeHtml(romName)}">${escapeHtml(romName)}</span>${dependencies ? renderInfoIcon(dependencies) : ''}</span>`;
 }
 
 /**
@@ -6508,104 +7649,119 @@ function getFavoriteSearchText(row: FavoriteRow): string {
     return [row.romName, row.fullname, ...(row.biosName ? [row.biosName] : []), ...row.deviceRoms].join(' ');
 }
 
-/**
- * "Update favorites" modal: takes over the form's submit (preventDefault, so neither the page
- * tail's AJAX handler nor a navigation runs), POSTs with Accept: application/x-ndjson and reads
- * the response as a stream (see POST /favorites/refresh), logging each favorite as it is
- * resolved. Closable only once finished, with an explicit end message; closing reloads the page
- * so the list shows the updated names.
- */
-const FAVORITES_REFRESH_MODAL = `
-            <dialog class="modal" id="favoritesRefreshModal" aria-labelledby="favoritesRefreshTitle">
-                <div class="modal-header">
-                    <h3 id="favoritesRefreshTitle">Updating favorites</h3>
-                    <button type="button" class="modal-close" id="favoritesRefreshClose" aria-label="Close" disabled>×</button>
-                </div>
-                <progress id="favoritesRefreshProgress" max="1" value="0"></progress>
-                <p class="info" id="favoritesRefreshStatus" aria-live="polite">Starting…</p>
-                <ul class="progress-log" id="favoritesRefreshLog"></ul>
-            </dialog>
-            <script>(function () {
-                var form = document.getElementById('favoritesRefreshForm');
-                var modal = document.getElementById('favoritesRefreshModal');
-                var close = document.getElementById('favoritesRefreshClose');
-                var progress = document.getElementById('favoritesRefreshProgress');
-                var status = document.getElementById('favoritesRefreshStatus');
-                var log = document.getElementById('favoritesRefreshLog');
-                var running = false;
-                var total = 0;
-
-                function finish(message, failed) {
-                    running = false;
-                    status.textContent = message;
-                    status.className = failed ? 'error' : 'info modal-done';
-                    close.disabled = false;
-                    close.focus();
-                }
-                function handle(event) {
-                    if (event.type === 'start') {
-                        total = event.total;
-                        progress.max = Math.max(1, total);
-                        status.textContent = '0 / ' + total;
-                    } else if (event.type === 'row') {
-                        var item = document.createElement('li');
-                        item.textContent = event.romName + ' : ' + event.fullname;
-                        log.appendChild(item);
-                        log.scrollTop = log.scrollHeight;
-                        progress.value = event.index;
-                        status.textContent = event.index + ' / ' + total;
-                    } else if (event.type === 'done') {
-                        progress.value = progress.max;
-                        finish('✓ Update complete: ' + event.total + ' favorite(s) updated. You can close this window.', false);
-                    } else if (event.type === 'error') {
-                        finish(event.message, true);
-                    }
-                }
-
-                form.addEventListener('submit', function (event) {
-                    event.preventDefault();
-                    if (running) { return; }
-                    running = true;
-                    log.textContent = '';
-                    progress.value = 0;
-                    status.className = 'info';
-                    status.textContent = 'Starting…';
-                    close.disabled = true;
-                    modal.showModal();
-                    fetch(form.action, {method: 'POST', headers: {'Accept': 'application/x-ndjson'}})
-                        .then(function (response) {
-                            var reader = response.body.getReader();
-                            var decoder = new TextDecoder();
-                            var buffer = '';
-                            function read() {
-                                return reader.read().then(function (chunk) {
-                                    buffer += decoder.decode(chunk.value || new Uint8Array(), {stream: !chunk.done});
-                                    var lines = buffer.split('\\n');
-                                    buffer = lines.pop();
-                                    lines.filter(Boolean).forEach(function (line) { handle(JSON.parse(line)); });
-                                    if (chunk.done) {
-                                        if (running) { finish('The update ended without confirmation - check the list.', true); }
-                                        return;
-                                    }
-                                    return read();
-                                });
-                            }
-                            return read();
-                        })
-                        .catch(function () {
-                            finish('Connection lost during the update - it may still have completed, reload to check.', true);
-                        });
-                });
-                // Esc would close the dialog mid-update: only allowed once it is finished.
-                modal.addEventListener('cancel', function (event) {
-                    if (running) { event.preventDefault(); }
-                });
-                modal.addEventListener('close', function () { location.reload(); });
-                close.addEventListener('click', function () { modal.close(); });
-            })();</script>`;
+/** The background resolution of the favorites' names (updateFavoritesCache()), followed by the list's script. */
+function renderResolutionProgress(progress: {done: number; total: number}): string {
+    return `
+        <div class="import-progress" id="favoritesResolution">
+            <div class="progress-label">
+                <span>Updating the games' names from MAME: the list reloads once they are all in.</span>
+                <span data-count>${progress.done} / ${progress.total}</span>
+            </div>
+            <div class="progress-track progress-track-thin">
+                <div class="progress-fill" data-fill style="width: ${100 * progress.done / progress.total}%"></div>
+            </div>
+        </div>
+    `;
+}
 
 const FAVORITES_PAGE_SIZES = [10, 30, 50, 100];
 const FAVORITES_DEFAULT_PAGE_SIZE = 30;
+
+// The placeholders of the favorites list's templates, replaced by each game's values in the browser
+// (renderFavoritesCard()'s script). Letters and underscores only: escapeHtml() and
+// encodeURIComponent() leave them as they are.
+const FAVORITE_TOKENS = {
+    rom: '__rom__', name: '__name__', extra: '__extra__', dependencies: '__dependencies__', category: '__category__',
+};
+
+/** One game of the favorites list, as its script gets it. */
+interface FavoriteListGame {
+    romName: string;
+    // splitGameName()'s parts of the full name.
+    name: string;
+    extra: string | null;
+    dependencies: string;
+    cached: boolean;
+    // getFavoriteSearchText(), accents and case folded.
+    search: string;
+    // Marquee, flyer, logo.
+    assets: [boolean, boolean, boolean];
+    playCount: number;
+    // renderVoteForm()'s template key, null when the database doesn't know the game.
+    vote: string | null;
+    starred: boolean;
+    // Its category's name, '' when genre.ini doesn't know it, undefined without a database.
+    category: string | undefined;
+    hiscores: boolean;
+    playerScores: boolean;
+}
+
+function foldSearchText(text: string): string {
+    return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/**
+ * The favorites list's games and the templates its script builds their rows from: the markup of
+ * renderGameName(), renderRomNameCell() and co. themselves, placeholders in place of a game's values.
+ */
+function buildFavoritesListData(rows: FavoriteRow[], stats: Map<string, GameStats> | undefined) {
+    const {rom, name, extra, dependencies, category} = FAVORITE_TOKENS;
+    const categoryIcons: Record<string, string> = {};
+    const games: FavoriteListGame[] = rows.map(row => {
+        const gameStats = stats?.get(row.romName);
+        const gameCategory = stats ? gameStats?.category ?? null : undefined;
+        if (gameCategory !== undefined) {
+            categoryIcons[gameCategory?.name ?? ''] ??= renderGameCategoryIcon(gameCategory);
+        }
+        const parts = splitGameName(row.fullname);
+        return {
+            romName: row.romName,
+            name: parts.name,
+            extra: parts.extra,
+            dependencies: getRomDependencies(row),
+            cached: row.cached,
+            search: foldSearchText(getFavoriteSearchText(row)),
+            assets: [row.hasMarquee, row.hasFlyer, row.hasLogo],
+            playCount: gameStats?.playCount ?? 0,
+            vote: gameStats ? (gameStats.starred ? 'star' : String(gameStats.vote)) : null,
+            starred: !!gameStats?.starred,
+            category: gameCategory === undefined ? undefined : gameCategory?.name ?? '',
+            hiscores: hasHiscoreExtraction(row.romName),
+            playerScores: !!gameStats?.hasPlayerScores,
+        };
+    });
+    const nameTemplate = (withExtra: boolean, hiscoreCup: boolean): string =>
+        renderGameNameCell(name, withExtra ? extra : null, hiscoreCup, category);
+    return {
+        tokens: FAVORITE_TOKENS,
+        games,
+        templates: {
+            // Keyed by "<has extra><has hiscores>".
+            name: {
+                '00': nameTemplate(false, false), '01': nameTemplate(false, true),
+                '10': nameTemplate(true, false), '11': nameTemplate(true, true),
+            },
+            unresolvedName: `<em>${rom}</em>`,
+            romName: [renderRomNameCellParts(rom, ''), renderRomNameCellParts(rom, dependencies)],
+            assets: (['Marquee', 'Flyer', 'Logo'] as const).map(kind =>
+                [renderAssetIcon(kind, false, rom), renderAssetIcon(kind, true, rom)]),
+            votes: {
+                star: renderVoteForm(rom, VOTE_UP, true),
+                ...Object.fromEntries(([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const)
+                    .map(vote => [String(vote), renderVoteForm(rom, vote, false)])),
+            },
+            show: `<form method="post" action="/favorites/show">
+                    <input type="hidden" name="romName" value="${rom}">
+                    ${renderIconButton('Show on the cabinet', SHOW_ON_FRONT_ICON_PATHS, 'accent')}
+                </form>`,
+            remove: `<form method="post" action="/favorites/delete">
+                    <input type="hidden" name="romName" value="${rom}">
+                    ${renderIconButton('Remove from the list', TRASH_ICON_PATHS)}
+                </form>`,
+            categoryIcons,
+        },
+    };
+}
 
 /**
  * The favorites list (searchable, filterable by category, paginated client-side), followed by the
@@ -6620,7 +7776,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
     if (favoritesInfo.error) {
         return `
             <section class="card">
-                <h2>Favorites</h2>
+                <h2>List</h2>
                 ${flash}
                 <p class="info">${escapeHtml(favoritesInfo.error)}</p>
             </section>
@@ -6628,36 +7784,14 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
     }
 
     // favorites.ini keeps mame's own order (new favorites are appended at the end), so the list is
-    // sorted here, by name, for both the tab and the "Update favorites" result. A favorite not
-    // resolved yet has no name, its romName stands in until the next update.
+    // sorted here, by name. A favorite not resolved yet has no name, its romName stands in
+    // until it is (see updateFavoritesCache()).
     const sortedRows = [...favoritesInfo.rows].sort((a, b) => a.fullname.localeCompare(b.fullname));
     // undefined: no category known at all (database unreadable) - no icons, no category filter.
     const categoryOf = (row: FavoriteRow): GameCategory | null | undefined => favoritesInfo.stats
         ? favoritesInfo.stats.get(row.romName)?.category ?? null
         : undefined;
-    const rows = sortedRows.map(row => `
-        <tr data-search="${escapeHtml(getFavoriteSearchText(row))}" data-category="${escapeHtml(categoryOf(row)?.name ?? '')}">
-            <td>${row.cached
-                ? renderGameName(row.fullname, row.romName, categoryOf(row))
-                : `<em>${escapeHtml(row.romName)}</em>`}</td>
-            <td>${renderRomNameCell(row)}</td>
-            <td class="center">${renderAssetIcons(row)}</td>
-            <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
-            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
-            <td class="center">
-                <form method="post" action="/favorites/show">
-                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${renderIconButton('Show on the cabinet', SHOW_ON_FRONT_ICON_PATHS, 'accent')}
-                </form>
-            </td>
-            <td class="center">
-                <form method="post" action="/favorites/delete">
-                    <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${renderIconButton('Remove from favorites', TRASH_ICON_PATHS)}
-                </form>
-            </td>
-        </tr>
-    `).join('');
+    const listData = buildFavoritesListData(sortedRows, favoritesInfo.stats);
 
     // Favorites removed from this list (removed-favorites.json), in their own table right after
     // it, newest first. A rom put back by another route (or by mame's own menu) since it was
@@ -6681,20 +7815,20 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
             <td>${renderRomNameCell(row)}</td>
             <td>${escapeHtml(removedOn)}</td>
             <td class="center">${favoritesInfo.stats?.get(row.romName)?.playCount || '<em>-</em>'}</td>
-            <td class="center">${renderVoteCell(favoritesInfo.stats?.get(row.romName))}</td>
-            <td class="center">
+            <td class="center"><div class="row-actions">
+                ${renderVoteCell(favoritesInfo.stats?.get(row.romName))}
                 <form method="post" action="/favorites/restore">
                     <input type="hidden" name="romName" value="${escapeHtml(row.romName)}">
-                    ${renderIconButton('Restore to favorites', RESTORE_ICON_PATHS, 'ok')}
+                    ${renderIconButton('Restore to the list', RESTORE_ICON_PATHS, 'ok')}
                 </form>
-            </td>
+            </div></td>
         </tr>`;
     }).join('');
     const removedCard = `
         <section class="card">
-            <h2>Removed favorites (${removed.length})</h2>
+            <h2>Removed from the list (${removed.length})</h2>
             ${removed.length ? `
-            <p class="info">"Restore" puts a removed favorite back into <code>favorites.ini</code> in
+            <p class="info">"Restore" puts a removed game back into MAME's <code>favorites.ini</code> in
             alphabetical order, exactly as MAME had written it. Same precaution as for removal: not
             while a MAME game is open.</p>
             <div class="table-wrap">
@@ -6704,8 +7838,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         <col class="col-romname">
                         <col class="col-date">
                         <col class="col-plays">
-                        <col class="col-vote">
-                        <col class="col-action">
+                        <col class="col-actions-restore">
                     </colgroup>
                     <thead>
                         <tr>
@@ -6713,13 +7846,12 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                             <th>RomName</th>
                             <th>Removed on</th>
                             <th class="center" title="Times the game was launched">Plays</th>
-                            <th class="center">Vote</th>
-                            <th class="center"></th>
+                            <th class="center">Vote / restore</th>
                         </tr>
                     </thead>
                     <tbody>${removedRows}</tbody>
                 </table>
-            </div>` : '<p class="info">No removed favorites.</p>'}
+            </div>` : '<p class="info">No game removed from the list.</p>'}
         </section>
     `;
 
@@ -6736,7 +7868,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
         }
     }
     const categoryFilter = favoritesInfo.stats ? `
-        <select id="favoritesCategory" aria-label="Filter the favorites by category">
+        <select id="favoritesCategory" aria-label="Filter the list by category">
             <option value="*">All categories (${sortedRows.length})</option>
             ${[...categoryCounts].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) =>
                 `<option value="${escapeHtml(name)}">${escapeHtml(name)} (${count})</option>`).join('')}
@@ -6744,33 +7876,33 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
         </select>
     ` : '';
 
-    const unresolvedCount = favoritesInfo.rows.filter(row => !row.cached).length;
-    const cacheStatus = favoritesInfo.cacheUpdatedAt
-        ? `Names up to date as of ${escapeHtml(new Date(favoritesInfo.cacheUpdatedAt).toLocaleString('en-GB', {
-            dateStyle: 'short', timeStyle: 'short',
-        }))}.`
-        : 'Names never updated.';
+    // Filters a game must pass them all to be listed, each with the number of games it keeps.
+    const countOf = (keep: (game: FavoriteListGame) => boolean): number => listData.games.filter(keep).length;
+    const filters = [
+        ...(favoritesInfo.stats ? [{id: 'favoritesStarred', label: 'Starred (My favourites)', count: countOf(game => game.starred)}] : []),
+        {id: 'favoritesHiscores', label: 'Hiscores extractable', count: countOf(game => game.hiscores)},
+        ...(favoritesInfo.stats ? [{id: 'favoritesPlayerScores', label: 'Players\' hiscores', count: countOf(game => game.playerScores)}] : []),
+    ];
 
     return `
         <section class="card">
-            <h2>Favorites (${favoritesInfo.rows.length})</h2>
+            <h2>List (${favoritesInfo.rows.length})</h2>
             ${flash}
-            <div class="info status-row">
-                <span>${cacheStatus}${unresolvedCount
-                    ? ` ${unresolvedCount} favorite(s) added since - not resolved yet.`
-                    : ''}</span>
-                <form method="post" action="/favorites/refresh" data-stream id="favoritesRefreshForm">
-                    <button type="submit">Update favorites</button>
-                </form>
-            </div>
-            ${FAVORITES_REFRESH_MODAL}
+            ${favoritesInfo.resolving ? renderResolutionProgress(favoritesInfo.resolving) : ''}
             <div class="table-search">
                 <div class="table-search-controls">
                     <input type="search" id="favoritesSearch" placeholder="Search a name, rom name, bios or device…"
-                        autocomplete="off" aria-label="Search the favorites">
+                        autocomplete="off" aria-label="Search the list">
                     ${categoryFilter}
                 </div>
-                <p class="info table-search-count" id="favoritesSearchCount" hidden></p>
+                <div class="table-search-filters">
+                    ${filters.map(filter => `
+                    <label class="filter-chip">
+                        <input type="checkbox" id="${filter.id}">
+                        <span>${escapeHtml(filter.label)} <span class="filter-chip-count">${filter.count}</span></span>
+                    </label>`).join('')}
+                    <span class="table-search-summary" id="favoritesSearchCount" aria-live="polite"></span>
+                </div>
             </div>
             <div class="table-wrap">
                 <table class="favorites-table fixed-columns" id="favoritesTable">
@@ -6779,24 +7911,22 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         <col class="col-romname">
                         <col class="col-assets">
                         <col class="col-plays">
-                        <col class="col-vote">
-                        <col class="col-action">
-                        <col class="col-action">
+                        <col class="col-actions">
                     </colgroup>
                     <thead>
                         <tr>
-                            <th>Name</th>
-                            <th>RomName</th>
+                            <th aria-sort="ascending"><button type="button" class="sort-header" data-sort="name">Name</button></th>
+                            <th><button type="button" class="sort-header" data-sort="romName">RomName</button></th>
                             <th class="center" title="Marquee, flyer, logo">Assets</th>
-                            <th class="center" title="Times the game was launched">Plays</th>
-                            <th class="center">Vote</th>
-                            <th class="center"></th>
-                            <th class="center"></th>
+                            <th class="center" title="Times the game was launched"><button type="button" class="sort-header" data-sort="playCount">Plays</button></th>
+                            <th class="center">Vote / actions</th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody></tbody>
                 </table>
+                <noscript><p class="info">The list needs JavaScript.</p></noscript>
             </div>
+            <script type="application/json" id="favoritesData">${JSON.stringify(listData).replace(/</g, '\\u003c')}</script>
             <div class="table-pager" id="favoritesPager">
                 <label for="favoritesPageSize">Per page</label>
                 <select id="favoritesPageSize">
@@ -6807,13 +7937,24 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 <button type="button" id="favoritesNextPage" aria-label="Next page">›</button>
             </div>
             <script>(function () {
-                // Search: every term must appear (accents and case ignored) in a row's rom name,
-                // name or bios / devices (its data-search, see getFavoriteSearchText()), and the row
-                // must be in the chosen category (its data-category; '*' for all). The matches are
-                // then paginated. Rows are only hidden, so the remove buttons keep working on what
-                // is shown.
+                // The games come as data (buildFavoritesListData()) and only the page shown is
+                // turned into rows, from the server's own templates: hundreds of rows of forms and
+                // icons are too much for a small machine to lay out, or to hide at each key typed.
+                // Search: every term must appear (accents and case ignored) in a game's rom name,
+                // name or bios / devices (its search, see getFavoriteSearchText()), and the game
+                // must be in the chosen category ('*' for all) and pass every filter ticked. The
+                // matches are then paginated.
+                var data = JSON.parse(document.getElementById('favoritesData').textContent);
+                var games = data.games;
+                var templates = data.templates;
+                var body = document.querySelector('#favoritesTable tbody');
                 var search = document.getElementById('favoritesSearch');
                 var category = document.getElementById('favoritesCategory');
+                var filters = [
+                    {box: document.getElementById('favoritesStarred'), keep: function (game) { return game.starred; }},
+                    {box: document.getElementById('favoritesHiscores'), keep: function (game) { return game.hiscores; }},
+                    {box: document.getElementById('favoritesPlayerScores'), keep: function (game) { return game.playerScores; }},
+                ].filter(function (filter) { return filter.box; });
                 var count = document.getElementById('favoritesSearchCount');
                 var pageSize = document.getElementById('favoritesPageSize');
                 var prev = document.getElementById('favoritesPrevPage');
@@ -6823,13 +7964,36 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 // A form posted from the list (vote, remove) re-renders the whole page: its search,
                 // category and page are stashed on submit and put back once, on that re-render only.
                 var VIEW_KEY = 'bo.favorites.view';
-                document.getElementById('favoritesTable').addEventListener('submit', function () {
+                function keepView() {
                     try {
                         sessionStorage.setItem(VIEW_KEY, JSON.stringify({
-                            search: search.value, category: category ? category.value : '*', page: page,
+                            search: search.value, category: category ? category.value : '*', page: page, sort: sort,
+                            filters: filters.map(function (filter) { return filter.box.id; })
+                                .filter(function (id) { return document.getElementById(id).checked; }),
                         }));
                     } catch (error) { /* storage blocked: the list just starts over */ }
-                });
+                }
+                document.getElementById('favoritesTable').addEventListener('submit', keepView);
+                // While the names are resolved in the background (renderResolutionProgress()): its
+                // progress every second, then the list again, with them, in the same view.
+                var resolution = document.getElementById('favoritesResolution');
+                if (resolution) {
+                    var resolutionTimer = setInterval(function () {
+                        fetch('/favorites/resolution', {headers: {'Accept': 'application/json'}})
+                            .then(function (response) { return response.json(); })
+                            .then(function (progress) {
+                                if (!progress.total) {
+                                    clearInterval(resolutionTimer);
+                                    keepView();
+                                    location.reload();
+                                    return;
+                                }
+                                resolution.querySelector('[data-count]').textContent = progress.done + ' / ' + progress.total;
+                                resolution.querySelector('[data-fill]').style.width = (100 * progress.done / progress.total) + '%';
+                            })
+                            .catch(function () { /* the next tick tries again */ });
+                    }, 1000);
+                }
                 // The chosen page size is kept for this browser only (a convenience, not state).
                 try {
                     var storedSize = localStorage.getItem('bo.favorites.pageSize');
@@ -6837,30 +8001,104 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         pageSize.value = storedSize;
                     }
                 } catch (error) { /* storage blocked: default page size */ }
-                var rows = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable tbody tr'));
                 function fold(text) {
                     return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
+                }
+                function escapeHtml(text) {
+                    return String(text).replace(/[&<>"']/g, function (char) {
+                        return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char];
+                    });
+                }
+                // Puts a game's values (already escaped) in a template, in place of its tokens.
+                function fill(template, values) {
+                    return Object.keys(values).reduce(function (html, token) {
+                        return html.split(token).join(values[token]);
+                    }, template);
+                }
+                function renderRow(game) {
+                    var tokens = data.tokens;
+                    var rom = {};
+                    rom[tokens.rom] = escapeHtml(game.romName);
+                    var name = {};
+                    name[tokens.category] = templates.categoryIcons[game.category] || '';
+                    name[tokens.extra] = escapeHtml(game.extra || '');
+                    name[tokens.name] = escapeHtml(game.name);
+                    var romCell = {};
+                    romCell[tokens.rom] = rom[tokens.rom];
+                    romCell[tokens.dependencies] = escapeHtml(game.dependencies);
+                    var cells = [
+                        game.cached
+                            ? fill(templates.name[(game.extra ? '1' : '0') + (game.hiscores ? '1' : '0')], name)
+                            : fill(templates.unresolvedName, rom),
+                        fill(templates.romName[game.dependencies ? 1 : 0], romCell),
+                        '<span class="asset-icons">' + game.assets.map(function (found, kind) {
+                            return fill(templates.assets[kind][found ? 1 : 0], rom);
+                        }).join('') + '</span>',
+                        game.playCount ? String(game.playCount) : '<em>-</em>',
+                        '<div class="row-actions">'
+                            + (game.vote === null ? '<em>-</em>' : fill(templates.votes[game.vote], rom))
+                            + fill(templates.show, rom) + fill(templates.remove, rom) + '</div>',
+                    ];
+                    return '<tr>' + cells.map(function (cell, index) {
+                        return (index < 2 ? '<td>' : '<td class="center">') + cell + '</td>';
+                    }).join('') + '</tr>';
+                }
+                // Sorted by a column header: the name (the server's order) and the rom name A to Z
+                // first, the plays most first; a second click reverses it.
+                var sort = {key: 'name', reversed: false};
+                var headers = Array.prototype.slice.call(document.querySelectorAll('#favoritesTable .sort-header'));
+                games.forEach(function (game, index) { game.order = index; });
+                var SORTS = {
+                    name: function (a, b) { return a.order - b.order; },
+                    romName: function (a, b) { return a.romName.localeCompare(b.romName); },
+                    playCount: function (a, b) { return b.playCount - a.playCount || a.order - b.order; },
+                };
+                function sorted(list) {
+                    return list.slice().sort(function (a, b) {
+                        return (sort.reversed ? -1 : 1) * SORTS[sort.key](a, b);
+                    });
+                }
+                function showSort() {
+                    headers.forEach(function (header) {
+                        var on = header.dataset.sort === sort.key;
+                        var ascending = (sort.key === 'playCount') === sort.reversed;
+                        if (on) {
+                            header.parentNode.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
+                        } else {
+                            header.parentNode.removeAttribute('aria-sort');
+                        }
+                    });
+                }
+                headers.forEach(function (header) {
+                    header.addEventListener('click', function () {
+                        sort = {key: header.dataset.sort, reversed: sort.key === header.dataset.sort && !sort.reversed};
+                        applySearch();
+                    });
+                });
+                function filtering() {
+                    return search.value.trim() !== '' || (category && category.value !== '*')
+                        || filters.some(function (filter) { return filter.box.checked; });
                 }
                 function render() {
                     var terms = fold(search.value).split(/\\s+/).filter(Boolean);
                     var chosen = category ? category.value : '*';
-                    var matches = rows.filter(function (row) {
-                        var haystack = fold(row.dataset.search || '');
-                        return terms.every(function (term) { return haystack.indexOf(term) >= 0; })
-                            && (chosen === '*' || row.dataset.category === chosen);
-                    });
+                    var ticked = filters.filter(function (filter) { return filter.box.checked; });
+                    var matches = sorted(games.filter(function (game) {
+                        return terms.every(function (term) { return game.search.indexOf(term) >= 0; })
+                            && (chosen === '*' || game.category === chosen)
+                            && ticked.every(function (filter) { return filter.keep(game); });
+                    }));
+                    showSort();
                     var size = Number(pageSize.value);
                     var pages = Math.max(1, Math.ceil(matches.length / size));
                     page = Math.min(page, pages - 1);
-                    rows.forEach(function (row) { row.hidden = true; });
-                    matches.slice(page * size, (page + 1) * size).forEach(function (row) { row.hidden = false; });
+                    body.innerHTML = matches.slice(page * size, (page + 1) * size).map(renderRow).join('');
                     pageInfo.textContent = 'Page ' + (page + 1) + ' / ' + pages;
                     prev.disabled = page === 0;
                     next.disabled = page >= pages - 1;
-                    count.hidden = terms.length === 0 && chosen === '*';
-                    count.textContent = matches.length
-                        ? matches.length + ' favorite(s) found out of ' + rows.length + '.'
-                        : 'No favorite matches this search.';
+                    count.textContent = !filtering() ? ''
+                        : matches.length ? matches.length + ' of ' + games.length + ' games'
+                        : 'No game matches this search';
                 }
                 // A new search, category or page size starts over from the first page.
                 function applySearch() {
@@ -6869,6 +8107,7 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 }
                 search.addEventListener('input', applySearch);
                 if (category) { category.addEventListener('change', applySearch); }
+                filters.forEach(function (filter) { filter.box.addEventListener('change', applySearch); });
                 pageSize.addEventListener('change', function () {
                     try { localStorage.setItem('bo.favorites.pageSize', pageSize.value); } catch (error) { /* blocked */ }
                     applySearch();
@@ -6883,7 +8122,13 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                         if (category && category.querySelector('option[value="' + CSS.escape(view.category) + '"]')) {
                             category.value = view.category;
                         }
+                        filters.forEach(function (filter) {
+                            filter.box.checked = Array.isArray(view.filters) && view.filters.indexOf(filter.box.id) >= 0;
+                        });
                         page = Number(view.page) || 0;
+                        if (view.sort && SORTS[view.sort.key]) {
+                            sort = {key: view.sort.key, reversed: !!view.sort.reversed};
+                        }
                     }
                 } catch (error) { /* storage blocked or unreadable: the list just starts over */ }
                 render();
@@ -6891,8 +8136,8 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                     if (event.key === 'Enter') { event.preventDefault(); }
                 });
             })();</script>
-            <p class="info">Removing a favorite deletes its entry from <code>favorites.ini</code> (the
-            roms and artwork stay on disk); it moves to the removed favorites below, from which it
+            <p class="info">Removing a game deletes its entry from MAME's <code>favorites.ini</code> (the
+            roms and artwork stay on disk); it moves to "Removed from the list" below, from which it
             can be restored. The game leaves the cabinet's list at once, or as soon as the game
             being played on it is quit, and its vote is no longer asked.</p>
             ${ASSET_PREVIEW_SCRIPT}
@@ -6901,11 +8146,38 @@ function renderFavoritesCard(favoritesInfo: FavoritesInfo, viewer: Viewer): stri
                 ? ' To download the missing artwork from ScreenScraper, use the button in the '
                     + '<a href="/screenscraper">ScreenScraper</a> tab.'
                 : ''}</p>
-            <p class="info">Vote: the one the players give on the cabinet once a game is quit (thumbs
-            up, neutral or thumbs down), changeable here. Whether a thumbs down also removes the
-            game from the favorites is set in the <a href="/maui">MAUI</a> tab.</p>
+            <p class="info">Vote: the one the players give on the cabinet once a game is quit (star,
+            thumbs up, neutral or thumbs down), changeable here. A star is a thumbs up that also puts
+            the game in the cabinet's "My favourites" category. Whether a thumbs down also removes the
+            game from the list is set in the <a href="/maui">MAUI</a> tab.</p>
         </section>
+        ${renderStarredCard(favoritesInfo)}
         ${removedCard}
+    `;
+}
+
+/**
+ * The cabinet's "My favourites" (the starred games, see GameVote.ts) to a file and back: for
+ * another cabinet, or this one after a reinstall. An import adds stars, it never takes one away.
+ */
+function renderStarredCard(favoritesInfo: FavoritesInfo): string {
+    const starred = favoritesInfo.rows.filter(row => favoritesInfo.stats?.get(row.romName)?.starred).length;
+    return `
+        <section class="card">
+            <h2>My favourites (${starred})</h2>
+            <p class="info">The games starred on the cabinet or above. Export them to a file, and import
+            such a file here or on another cabinet: its games get a star (and a thumbs up) where the
+            cabinet has them, the other games keep theirs. A game the cabinet doesn't have is left out.</p>
+            ${starred ? `
+            <form method="get" action="/favorites/starred/export">
+                <button type="submit">Export</button>
+            </form>` : ''}
+            <form method="post" action="/favorites/starred/import" enctype="multipart/form-data" class="file-import">
+                <label for="starredImportFile">File to import (a .json exported here)</label>
+                <input type="file" id="starredImportFile" name="file" accept=".json" required>
+                <button type="submit">Import</button>
+            </form>
+        </section>
     `;
 }
 
@@ -6913,6 +8185,9 @@ interface FavoritesFlash {
     notice?: string;
     warning?: string;
 }
+
+// The star: a thumbs up that also puts the game in "My favourites" (GameVote.ts voteFields()).
+const STAR_LABEL = 'Star (My favourites)';
 
 const VOTE_LABELS: Record<Vote, string> = {
     [VOTE_UP]: 'Thumbs up',
@@ -6927,13 +8202,19 @@ const VOTE_ICONS: Record<Vote, {cssClass: string, paths: string}> = {
 };
 
 /**
- * A game's three vote buttons (thumbs up, neutral, thumbs down), the current one lit up, posting
- * to /votes/set.
+ * A game's four vote buttons (star, thumbs up, neutral, thumbs down), the current one lit up,
+ * posting to /votes/set.
  */
-function renderVoteForm(romName: string, current: Vote): string {
-    const buttons = ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
+function renderVoteForm(romName: string, current: Vote, starred: boolean): string {
+    const star = `
+        <button type="submit" name="vote" value="star" class="icon-button star"
+            aria-pressed="${starred}" title="${STAR_LABEL}" aria-label="${STAR_LABEL}">
+            <svg ${ICON_SVG_ATTRS}>${STAR_ICON_PATHS}</svg>
+        </button>
+    `;
+    const buttons = star + ([VOTE_UP, VOTE_NEUTRAL, VOTE_DOWN] as const).map(vote => `
         <button type="submit" name="vote" value="${vote}" class="icon-button ${VOTE_ICONS[vote].cssClass}"
-            aria-pressed="${current === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
+            aria-pressed="${!starred && current === vote}" title="${VOTE_LABELS[vote]}" aria-label="${VOTE_LABELS[vote]}">
             <svg ${ICON_SVG_ATTRS}>${VOTE_ICONS[vote].paths}</svg>
         </button>
     `).join('');
@@ -6950,7 +8231,7 @@ function renderVoteForm(romName: string, current: Vote): string {
  * database doesn't know (or no database at all) - /votes/set would have nothing to update.
  */
 function renderVoteCell(stats: GameStats | undefined): string {
-    return stats ? renderVoteForm(stats.romName, stats.vote) : '<em>-</em>';
+    return stats ? renderVoteForm(stats.romName, stats.vote, stats.starred) : '<em>-</em>';
 }
 
 // The Home carousel's category icons, embedded as text in this bundle (the BO has no access to
@@ -6982,7 +8263,7 @@ function renderIconLabel(iconKey: string | undefined, label: string): string {
 }
 
 /** Games tab: the favorites, then the removed ones (see renderFavoritesCard()). */
-/** What the Games tab's Repository subtab shows (Advanced configuration only, see renderFavoritesPage()). */
+/** What the Games tab's Repository subtab shows (ONLINE mode only, see renderFavoritesPage()). */
 interface RepoSection {
     mameInfo: MameInfo;
     packs?: RepoPack[];
@@ -6993,7 +8274,7 @@ interface RepoSection {
 }
 
 /**
- * The Games tab: the favorites and, in Advanced configuration, the pack repository the games come
+ * The Games tab: the favorites and, in ONLINE mode, the pack repository the games come
  * from (`repository`), as a second subtab - opened by default when a repository action set its
  * packs or a message.
  */
@@ -7010,7 +8291,7 @@ function renderFavoritesPage(favoritesInfo: FavoritesInfo, viewer: Viewer, repos
             <p class="error">${escapeHtml(mameInfo.error)}</p></section>`
         : renderRepoImportCard(mameInfo, packs, error, info, url);
     return renderSubtabbedPage('favorites', [
-        {id: 'favorites', label: 'Favorites', html: favoritesHtml},
+        {id: 'favorites', label: 'List', html: favoritesHtml},
         {id: 'repository', label: 'Repository', html: repositoryHtml},
     ], viewer, packs !== undefined || error !== undefined || info !== undefined ? 'repository' : undefined);
 }
@@ -7059,7 +8340,7 @@ function renderStarterPackCard(): string {
         <section class="card">
             <h2>Starter pack</h2>
             <p class="info">A selection of games to start with, downloaded from the repository with the
-            configuration pack. Adds them to the favorites; other games are left untouched.</p>
+            configuration pack. Adds them to the list; other games are left untouched.</p>
             ${action}
         </section>
     `;
@@ -7765,7 +9046,7 @@ function renderUserStatusBadge(active: boolean): string {
 
 function renderCreateUserCard(error?: string, online: boolean = false): string {
     return `
-        <section class="card">
+        <section class="card" id="add-player">
             <h2>Add a player</h2>
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             <form method="post" action="/users/create">
@@ -7836,7 +9117,7 @@ function renderUsersListCard(
         const highlighted = extras.highlight?.id_user === user.id_user;
         const pin = highlighted ? extras.highlight?.pin : undefined;
         return `
-        <tr id="player-${user.id_user}" data-status="${status}"${highlighted ? ' class="row-highlight"' : ''}>
+        <tr id="player-${user.id_user}" data-status="${status}" data-visibility="${user.is_public ? 'public' : 'private'}"${highlighted ? ' class="row-highlight"' : ''}>
             <td class="center">
                 ${avatarFromOrigin ? `<span title="Changed from the cabinet this player was created on">${hasAvatar
                     ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename as string)}${avatarCacheBust(avatarsPath, avatarFilename as string)}" alt="">`
@@ -7885,7 +9166,7 @@ function renderUsersListCard(
                 </div>
             </td>
         </tr>
-        ${pin ? `<tr class="row-pin" data-status="${status}">
+        ${pin ? `<tr class="row-pin" data-status="${status}" data-visibility="${user.is_public ? 'public' : 'private'}">
             <td colspan="${extras.onlineColumn ? 6 : 5}">${renderPinReveal(user.pseudo_3, pin)}</td>
         </tr>` : ''}
     `;
@@ -7894,13 +9175,26 @@ function renderUsersListCard(
     const deleted = extras.isAdvanced ? extras.deleted : [];
     const activeCount = users.filter(user => user.active
         && !isDisabledUpstream({online_status: user.online_status ?? null}, !!extras.online)).length;
+    // Filters: a player's status (active, inactive, deleted) and, ONLINE, its visibility in the
+    // shared leaderboards. Within a kind any ticked value matches; every kind ticked must match.
+    const allPlayers = [...users, ...deleted.map(item => item.user)];
+    const publicCount = allPlayers.filter(user => user.is_public).length;
+    const playerFilters = [
+        {key: 'status', value: 'active', label: 'Active', count: activeCount},
+        {key: 'status', value: 'inactive', label: 'Inactive', count: users.length - activeCount},
+        ...(deleted.length ? [{key: 'status', value: 'deleted', label: 'Deleted', count: deleted.length}] : []),
+        ...(extras.onlineColumn ? [
+            {key: 'visibility', value: 'public', label: 'Public', count: publicCount},
+            {key: 'visibility', value: 'private', label: 'Private', count: allPlayers.length - publicCount},
+        ] : []),
+    ];
     const deletedRows = deleted.map(({user, scoreCount}) => {
         const avatarFilename = findAvatarFile(avatarFilenames, user.pseudo_3);
         const deletedOn = new Date(user.deletionDate).toLocaleString('en-GB', {
             dateStyle: 'short', timeStyle: 'short',
         });
         return `
-        <tr class="row-deleted" data-status="deleted">
+        <tr class="row-deleted" data-status="deleted" data-visibility="${user.is_public ? 'public' : 'private'}">
             <td class="center">${avatarFilename !== undefined
                 ? `<img class="avatar-thumb" src="/avatars/${encodeURIComponent(avatarFilename)}${avatarCacheBust(avatarsPath, avatarFilename)}" alt="">`
                 : '<span class="avatar-thumb avatar-placeholder">-</span>'}</td>
@@ -7927,10 +9221,18 @@ function renderUsersListCard(
         <section class="card">
             <div class="card-heading">
                 <h2>Players (${users.length}${deleted.length ? ` + ${deleted.length} deleted` : ''})</h2>
-                ${extras.online ? `<form method="post" action="/users/online/sync">
-                    ${renderIconButton('Sync with MAUI-API now', SYNC_ICON_PATHS, 'accent')}
-                </form>` : ''}
+                <div class="row-actions">
+                    ${extras.online ? `<form method="post" action="/users/online/sync">
+                        ${renderIconButton('Sync with MAUI-API now', SYNC_ICON_PATHS, 'accent')}
+                    </form>` : ''}
+                    ${users.length ? '<a class="button-link" href="#add-player" data-add-player>Add player</a>' : ''}
+                </div>
             </div>
+            ${users.length ? '' : `<div class="empty-callout">
+                <p><strong>No player yet.</strong> Add at least one: the cabinet only keeps the scores
+                of its players, matched by their 3-letter nickname.</p>
+                <a class="button-link button-link-attention" href="#add-player" data-add-player>Add player</a>
+            </div>`}
             ${error ? `<p class="error flash">${escapeHtml(error)}</p>` : ''}
             ${info ? `<p class="info flash">${escapeHtml(info)}</p>` : ''}
             ${deleted.length ? `<p class="info">A deleted player's nickname stays reserved: nobody can
@@ -7939,17 +9241,17 @@ function renderUsersListCard(
             permanently removes the player, their scores and their avatar from the database for good,
             and frees the nickname.</p>` : ''}
             ${users.length + deleted.length ? `<div class="table-search">
-                <div class="table-search-controls">
-                    <select id="playersStatus" aria-label="Filter the players by status">
-                        <option value="*">All players (${users.length + deleted.length})</option>
-                        <option value="active">Active (${activeCount})</option>
-                        <option value="inactive">Inactive (${users.length - activeCount})</option>
-                        ${deleted.length ? `<option value="deleted">Deleted (${deleted.length})</option>` : ''}
-                    </select>
+                <div class="table-search-filters" id="playersFilters">
+                    ${playerFilters.map((filter, index) => `
+                    ${index && filter.key !== playerFilters[index - 1].key ? '<span class="filter-chip-divider"></span>' : ''}
+                    <label class="filter-chip">
+                        <input type="checkbox" data-filter="${filter.key}" value="${filter.value}">
+                        <span>${filter.label} <span class="filter-chip-count">${filter.count}</span></span>
+                    </label>`).join('')}
+                    <span class="table-search-summary" id="playersFilterCount" aria-live="polite"></span>
                 </div>
-                <p class="info table-search-count" id="playersStatusCount" hidden>No player has this status.</p>
             </div>` : ''}
-            <div class="table-wrap">
+            ${users.length + deleted.length ? `<div class="table-wrap">
                 <table class="favorites-table" id="playersTable">
                     <thead>
                         <tr>
@@ -7961,41 +9263,66 @@ function renderUsersListCard(
                             <th class="center"></th>
                         </tr>
                     </thead>
-                    <tbody>${rows + deletedRows || `<tr><td colspan="${extras.onlineColumn ? 6 : 5}"><em>No players</em></td></tr>`}</tbody>
+                    <tbody>${rows + deletedRows}</tbody>
                 </table>
-            </div>
+            </div>` : ''}
             <script>(function () {
-                // Status filter: rows are only hidden (their data-status), so their buttons keep
-                // working. Every action re-renders the whole page: the choice is kept for the
-                // browser session, or deactivating a player would drop back to "All players".
-                var status = document.getElementById('playersStatus');
-                if (!status) { return; }
-                var count = document.getElementById('playersStatusCount');
+                // "Add player": down to the form at the end of the page, its nickname ready to type.
+                document.querySelectorAll('[data-add-player]').forEach(function (link) {
+                    link.addEventListener('click', function () {
+                        setTimeout(function () { document.getElementById('pseudo_3').focus({preventScroll: true}); }, 0);
+                    });
+                });
+            })();</script>
+            <script>(function () {
+                // Filters: rows are only hidden (their data-status, data-visibility), so their
+                // buttons keep working. Every action re-renders the whole page: the choice is kept
+                // for the browser session, or deactivating a player would drop back to them all.
+                var filters = document.getElementById('playersFilters');
+                if (!filters) { return; }
+                var boxes = Array.prototype.slice.call(filters.querySelectorAll('input[data-filter]'));
+                var count = document.getElementById('playersFilterCount');
                 var rows = Array.prototype.slice.call(document.querySelectorAll('#playersTable tbody tr'));
-                var STATUS_KEY = 'bo.players.status';
+                var FILTERS_KEY = 'bo.players.filters';
+                function key(box) { return box.dataset.filter + ':' + box.value; }
                 try {
-                    var stored = sessionStorage.getItem(STATUS_KEY);
-                    if (stored && status.querySelector('option[value="' + CSS.escape(stored) + '"]')) {
-                        status.value = stored;
-                    }
+                    var stored = JSON.parse(sessionStorage.getItem(FILTERS_KEY) || '[]');
+                    boxes.forEach(function (box) { box.checked = stored.indexOf(key(box)) >= 0; });
                 } catch (error) { /* storage blocked: all the players are shown */ }
-                // The player just created or given a PIN is always shown: a filter that hides them
-                // goes back to all the players.
+                function shows(row) {
+                    var ticked = {};
+                    boxes.forEach(function (box) {
+                        if (box.checked) { (ticked[box.dataset.filter] = ticked[box.dataset.filter] || []).push(box.value); }
+                    });
+                    return Object.keys(ticked).every(function (kind) {
+                        return ticked[kind].indexOf(row.dataset[kind]) >= 0;
+                    });
+                }
+                // The player just created or given a PIN is always shown: filters that hide them
+                // are cleared.
                 var highlighted = document.querySelector('#playersTable tr.row-highlight');
-                if (highlighted && status.value !== '*' && highlighted.dataset.status !== status.value) {
-                    status.value = '*';
+                if (highlighted && !shows(highlighted)) {
+                    boxes.forEach(function (box) { box.checked = false; });
                 }
                 function render() {
                     var shown = 0;
                     rows.forEach(function (row) {
-                        row.hidden = status.value !== '*' && row.dataset.status !== status.value;
-                        if (!row.hidden) { shown++; }
+                        row.hidden = !shows(row);
+                        if (!row.hidden && !row.classList.contains('row-pin')) { shown++; }
                     });
-                    count.hidden = shown > 0;
+                    var players = rows.filter(function (row) { return !row.classList.contains('row-pin'); }).length;
+                    var filtering = boxes.some(function (box) { return box.checked; });
+                    count.textContent = !filtering ? '' : shown ? shown + ' of ' + players + ' players' : 'No player matches';
                 }
-                status.addEventListener('change', function () {
-                    try { sessionStorage.setItem(STATUS_KEY, status.value); } catch (error) { /* blocked */ }
-                    render();
+                boxes.forEach(function (box) {
+                    box.addEventListener('change', function () {
+                        try {
+                            sessionStorage.setItem(FILTERS_KEY, JSON.stringify(boxes.filter(function (other) {
+                                return other.checked;
+                            }).map(key)));
+                        } catch (error) { /* blocked */ }
+                        render();
+                    });
                 });
                 render();
             })();
@@ -8131,7 +9458,76 @@ function renderHiscoresListPage(entries: HiscoreListEntry[], viewer: Viewer, mam
 }
 
 /** One game: its files (with a hex dump), then every table mhiex decodes, row by row. */
-function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewer: Viewer): string {
+/** The game, if the database knows it, and what its hiscore files hold (HiscoreInspector.ts). */
+async function inspectGameHiscores(romName: string): Promise<{game: Game | null; report: HiscoreReport}> {
+    const mameHome = getMameHomePath();
+    let game: Game | null = null;
+    let players = new Set<string>();
+    let stored: StoredScore[] = [];
+    try {
+        game = await Game.findOne({where: {romName}});
+        players = new Set((await User.findAll()).map(user => user.pseudo_3));
+        if (game) {
+            stored = (await getStoredScores(game.id_game)).get(game.id_game) || [];
+        }
+    } catch {
+        // No database yet: the files and mhiex's decoding are still worth showing
+    }
+    const report = await inspectHiscores(mameHome, romName, players, stored, readHiscoreDatSizes(getHiscoreDatPath(mameHome)));
+    return {game, report};
+}
+
+function describeDiagnosticFailure(result: ApiFailure): string {
+    if (result.kind === 'rejected' && result.code === 'insufficient_ability') {
+        return 'MAUI-API does not take diagnostics from this cabinet yet (too old, or a token without diagnostics:write). Download the zip instead.';
+    }
+    if (result.kind === 'rejected' && result.errors) {
+        return `MAUI-API refused the diagnostic: ${Object.values(result.errors).flat().join(' ')}`;
+    }
+    return `Not sent: ${describeFailure(result, 'MAUI-API')}`;
+}
+
+interface HiscoreDetailState {
+    notice?: string;
+    error?: string;
+    comment?: string;
+    withLogs?: boolean;
+}
+
+/**
+ * The form sending a diagnostic of the game (maui-api D92), and the ones this cabinet already sent
+ * for it.
+ */
+function renderDiagnosticCard(romName: string, state: HiscoreDetailState): string {
+    const sent = readSentDiagnostics().filter(diagnostic => diagnostic.romName === romName);
+    const history = sent.length === 0 ? '' : `
+        <h3>Sent from this cabinet</h3>
+        <ul>${sent.map(diagnostic => `<li>${escapeHtml(formatDateTime(new Date(diagnostic.sentAt)))}: ${diagnostic.files} file(s), ${humanSize(diagnostic.size)}${diagnostic.logs ? ', logs attached' : ''} <code>${escapeHtml(diagnostic.id)}</code></li>`).join('')}</ul>`;
+    return `
+        <section class="card" id="diagnostic">
+            <h2>Report a missing score</h2>
+            <p>Sends the files MAME wrote for this game, its latest session reports and what MAUI reads in them,
+                for an administrator to find out why a score did not reach the leaderboards.</p>
+            ${state.error ? `<p class="error flash">${escapeHtml(state.error)}</p>` : ''}
+            ${state.notice ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : ''}
+            <form method="post" action="/hiscores/${escapeHtml(romName)}/diagnostic">
+                <label for="diagnostic-comment">What is missing</label>
+                <textarea id="diagnostic-comment" name="comment" maxlength="1000" rows="3"
+                    placeholder="e.g. 300 000 points by NOB on 25/10 around 17:00">${escapeHtml(state.comment ?? '')}</textarea>
+                <label class="checkbox-row">
+                    <input type="checkbox" name="logs"${state.withLogs === false ? '' : ' checked'}>
+                    <span>Attach MAUI's logs of the last 7 days (database queries left out, passwords and tokens masked)</span>
+                </label>
+                <p>
+                    <button type="submit" name="action" value="send">Send to MAUI-API</button>
+                    <button type="submit" name="action" value="zip">Download the zip</button>
+                </p>
+            </form>
+            ${history}
+        </section>`;
+}
+
+function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewer: Viewer, state: HiscoreDetailState = {}): string {
     const title = game ? (game.fullname || game.romName) : report.romName;
     const files = report.files.map(file => {
         const {lines, truncated} = hexDump(readFileSync(file.path));
@@ -8180,6 +9576,7 @@ function renderHiscoreDetailPage(game: Game | null, report: HiscoreReport, viewe
             ].filter(Boolean).join(' + ')}</p>` : ''}
             ${decoded}
         </section>
+        ${renderDiagnosticCard(report.romName, state)}
         <section class="card">
             <h2>Files</h2>
             ${files || '<p><em>No file</em></p>'}
@@ -8191,10 +9588,10 @@ function renderUsersPage(
     users: User[], avatarFilenames: string[], error?: string, info?: string, createError?: string,
     extras: UsersListExtras = {isAdvanced: false, deleted: []},
 ): string {
-    // One page, no subtabs: the add form, then every player (deleted ones included, see
-    // renderUsersListCard()) in a single list.
+    // One page, no subtabs: every player (deleted ones included, see renderUsersListCard()) in a
+    // single list, then the add form (#add-player, the list's "Add player" button).
     return renderPage(
-        renderCreateUserCard(createError, extras.online) + renderUsersListCard(users, avatarFilenames, error, info, extras),
+        renderUsersListCard(users, avatarFilenames, error, info, extras) + renderCreateUserCard(createError, extras.online),
         'users',
         extras.isAdvanced ? 'advanced' : 'basic',
     );
@@ -8228,7 +9625,7 @@ function describeUserError(error: unknown): string {
 function renderBrowsePage(
     target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
     // Where the chosen folder is brought back: the MAME tab, or the setup guide.
-    returnTo: '/' | '/setup' = '/',
+    returnTo: '/mame' | '/setup' = '/mame',
 ): string {
     let entries: string[] = [];
     let error: string|undefined;
@@ -8319,9 +9716,11 @@ export function createBoApp(
     showGameOnFront: FrontGameShower,
     frontControls: FrontControls,
     favoritesChanged: FrontFavoritesNotifier,
+    uiSounds: FrontUiSounds,
 ): BoApp {
     const {online, scoreStore} = core;
     onlineSession = online;
+    mameSessionChanged = running => frontControls.mameSessionChanged(running);
     const app = express();
     app.use(express.urlencoded({extended: false}));
     // A fresh secret per server start (rather than a persisted one) invalidates every session on
@@ -8337,8 +9736,8 @@ export function createBoApp(
     // below this guard requires a logged-in session except the login page itself and the static
     // assets it needs (background/logo) to render.
     const PUBLIC_PATHS = new Set(['/login', '/background.jpg', '/mame-logo.svg', '/maui-logo.png']);
-    app.use((req, res, next) => {
-        if (PUBLIC_PATHS.has(req.path) || req.session.boUserId) {
+    app.use(async (req, res, next) => {
+        if (PUBLIC_PATHS.has(req.path) || req.session.boUserId || await signInWithoutPassword(req)) {
             next();
             return;
         }
@@ -8356,6 +9755,9 @@ export function createBoApp(
     // storage has no buffer). An export is the config file and the SQLite database, a few MiB.
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
+    const starredUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_STARRED_FILE_BYTES, files: 1}});
+    const controlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_MAME_CONTROLS_FILE_BYTES, files: 1}});
+    const gameControlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_GAME_CONTROLS_FILE_BYTES, files: 1}});
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -8397,11 +9799,10 @@ export function createBoApp(
     });
 
     app.post('/login', async (req, res) => {
-        const username: string = (req.body.username || '').trim();
         const password: string = req.body.password || '';
         let boUser: BoUser | null;
         try {
-            boUser = await BoUser.findOne({where: {username}});
+            boUser = await BoUser.findOne({where: {username: BO_USERNAME}});
         } catch {
             // The database bootstrap failed (see bootstrapDatabase(), logged at startup).
             res.status(503).send(renderLoginPage(
@@ -8410,7 +9811,7 @@ export function createBoApp(
             return;
         }
         if (!boUser || !bcrypt.compareSync(password, boUser.passwordHash)) {
-            res.status(401).send(renderLoginPage('Incorrect username or password.'));
+            res.status(401).send(renderLoginPage('Incorrect password.'));
             return;
         }
         if (bcrypt.getRounds(boUser.passwordHash) < BO_PASSWORD_BCRYPT_ROUNDS) {
@@ -8457,7 +9858,7 @@ export function createBoApp(
             req.session.destroy(() => res.redirect('/login'));
             return;
         }
-        res.send(renderAccountPage(boUser.username, getViewer(req), req.session.mustChangePassword === true));
+        res.send(renderAccountPage(getViewer(req), req.session.mustChangePassword === true));
     });
 
     app.post('/account/password', async (req, res) => {
@@ -8471,7 +9872,7 @@ export function createBoApp(
         const confirmPassword: string = req.body.confirmPassword || '';
         const mustChange = req.session.mustChangePassword === true;
         const sendError = (status: number, error: string) => {
-            res.status(status).send(renderAccountPage(boUser.username, getViewer(req), mustChange, error));
+            res.status(status).send(renderAccountPage(getViewer(req), mustChange, error));
         };
 
         if (!bcrypt.compareSync(currentPassword, boUser.passwordHash)) {
@@ -8506,16 +9907,20 @@ export function createBoApp(
             res.redirect(303, '/setup');
             return;
         }
-        res.send(renderAccountPage(boUser.username, getViewer(req), false, undefined, 'Password updated.'));
+        res.send(renderAccountPage(getViewer(req), false, undefined, 'Password updated.'));
     });
 
+    // The BO's home: a new cabinet's setup guide until it is done, then the Games tab. A query is
+    // a folder /browse brought back before the MAME tab moved to /mame: shown there.
     app.get('/', (req, res) => {
-        // A new cabinet lands on its setup guide until it is done. Not when /browse brings a folder
-        // back to the MAME tab (a query).
-        if (!Object.keys(req.query).length && !readSetup().progress.finished) {
-            res.redirect('/setup');
+        if (Object.keys(req.query).length) {
+            res.redirect(`/mame?${new URLSearchParams(req.query as Record<string, string>).toString()}`);
             return;
         }
+        res.redirect(readSetup().progress.finished ? '/favorites' : '/setup');
+    });
+
+    app.get('/mame', (req, res) => {
         const config = new Config();
         config.load();
         const mamePath = typeof req.query.mamePath === 'string' ? req.query.mamePath : (config.mamePath || '');
@@ -8525,8 +9930,13 @@ export function createBoApp(
         if (typeof req.query.pluginsPath === 'string') {
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
+        // The game picked in the per-game controls card (renderRomPicker()): one of the roms present.
+        const game = typeof req.query.game === 'string' ? req.query.game : '';
+        const gameRemapState = game && mameInfo.romPath && listRomNames(mameInfo.romPath).includes(game)
+            ? {romName: game} : undefined;
         res.send(renderForm(
             {mamePath}, mameInfo, req.session.boAdvanced === true,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, gameRemapState,
         ));
     });
 
@@ -8663,11 +10073,9 @@ export function createBoApp(
         res.redirect(303, '/setup');
     });
 
-    // The end of the guide: the repository's packs, in Games > Repository, which only Advanced
-    // configuration shows. A link, not a form: the BO's form script follows a redirect without
-    // its #repository, which picks the subtab. It only flips the session's display setting.
+    // The end of the guide: the repository's packs, in Games > Repository. A link, not a form:
+    // the BO's form script follows a redirect without its #repository, which picks the subtab.
     app.get('/setup/more-games', (req, res) => {
-        req.session.boAdvanced = true;
         res.redirect('/favorites#repository');
     });
 
@@ -8709,9 +10117,10 @@ export function createBoApp(
         const config = new Config();
         config.load();
         const context = getFavoritesContext(config);
-        // Repository subtab: Advanced configuration and ONLINE mode only, like the routes below it.
-        // With ONLINE off there is no subtab at all, the Games tab is the favorites alone.
-        const repositorySection = req.session.boAdvanced && isOnlineActive()
+        // Repository subtab: ONLINE mode only, like the routes below it (the repository's address
+        // and credentials come from MAUI-API). With ONLINE off there is no subtab at all, the
+        // Games tab is the favorites alone.
+        const repositorySection = isOnlineActive()
             ? {mameInfo: getMameInfo(config), ...repository}
             : undefined;
 
@@ -8720,18 +10129,21 @@ export function createBoApp(
         }
 
         // Reads names/BIOS from the favorites cache instead of resolving them live (each favorite
-        // otherwise costs a blocking `mame -lx` process spawn - see resolveFavoriteRow()), so this
-        // tab loads instantly regardless of favorites count. Media badges stay live either way
-        // (getFavoriteMediaStatus() is a cheap fs check). See POST /favorites/refresh below for
-        // the button that re-resolves everything and rewrites the cache.
-        const cache = readFavoritesCache();
+        // otherwise costs a `mame -lx` process spawn), so this tab loads at once whatever the
+        // number of favorites; updateFavoritesCache() resolves those it lacks.
+        const cache = await updateFavoritesCache(context);
         const rows = context.romNames.map(romName => favoriteRowFromCache(context, romName, cache));
         return renderFavoritesPage(
-            {rows, cacheUpdatedAt: cache?.updatedAt ?? null, stats: await loadGameStats() ?? undefined, ...flash},
+            {rows, resolving: favoritesResolution, stats: await loadGameStats() ?? undefined, ...flash},
             getViewer(req),
             repositorySection,
         );
     };
+
+    // The favorites' names being resolved in the background, polled by the Games tab: {} once done.
+    app.get('/favorites/resolution', (req, res) => {
+        res.set('Cache-Control', 'no-store').json(favoritesResolution ?? {});
+    });
 
     app.get('/favorites', async (req, res) => {
         // Where a repository import sends the page once it is through (POST /import/from-url).
@@ -8788,7 +10200,7 @@ export function createBoApp(
 
         favoritesChanged();
         res.send(await renderFavoritesTab(req, {
-            notice: `"${romName}" removed from the favorites and from the cabinet (it can be restored from the removed favorites below).`,
+            notice: `"${romName}" removed from the list and from the cabinet (it can be restored from "Removed from the list" below).`,
         }));
     });
 
@@ -8797,7 +10209,7 @@ export function createBoApp(
         const removed = readRemovedFavorites();
         const item = removed.find(candidate => candidate.romName === romName);
         if (!item) {
-            res.status(404).send(await renderFavoritesTab(req, {warning: `"${romName}" is not in the removed favorites.`}));
+            res.status(404).send(await renderFavoritesTab(req, {warning: `"${romName}" is not in "Removed from the list".`}));
             return;
         }
         if (isMameConfigSessionAlive()) {
@@ -8841,23 +10253,26 @@ export function createBoApp(
         favoritesChanged();
         res.send(await renderFavoritesTab(req, {
             notice: updated === null
-                ? `"${romName}" was already in the favorites.`
-                : `"${romName}" restored to the favorites.`,
+                ? `"${romName}" was already in the list.`
+                : `"${romName}" restored to the list.`,
         }));
     });
 
     app.post('/votes/set', async (req, res) => {
         const romName: string = (req.body.romName || '').trim();
-        const vote = parseVote(req.body.vote);
+        const starred = req.body.vote === 'star';
+        const vote = starred ? VOTE_UP : parseVote(req.body.vote);
         if (!/^[a-z0-9]+$/.test(romName) || vote === null) {
             res.status(422).send(await renderFavoritesTab(req, {warning: 'Invalid vote.'}));
             return;
         }
 
         let updated: number;
+        let wasStarred: boolean;
         try {
             // paranoid: false - a game already out of the favorites keeps its vote editable.
-            [updated] = await Game.update({vote}, {where: {romName}, paranoid: false});
+            wasStarred = !!(await Game.findOne({attributes: ['starred'], where: {romName}, paranoid: false}))?.starred;
+            [updated] = await Game.update(voteFields(vote, starred), {where: {romName}, paranoid: false});
         } catch {
             res.status(503).send(await renderFavoritesTab(req, {
                 warning: 'Database not ready yet - launch the application once, then retry.',
@@ -8869,70 +10284,93 @@ export function createBoApp(
             return;
         }
 
-        const flash: FavoritesFlash = {notice: `Vote saved for "${romName}": ${VOTE_LABELS[vote].toLowerCase()}.`};
+        const label = starred ? STAR_LABEL : VOTE_LABELS[vote];
+        const flash: FavoritesFlash = {notice: `Vote saved for "${romName}": ${label.toLowerCase()}.`};
         const config = new Config();
         config.load();
         const {favoritesPath} = getMameLocations(getMameHomePath());
+        let frontTold = false;
         if (vote === VOTE_DOWN && config.thumbsDownRemovesFavorite && favoritesPath
             && getFavoriteRomNames(favoritesPath).includes(romName)) {
             if (isMameConfigSessionAlive()) {
                 flash.warning = 'MAME is open (Controls tab): close it first, it would rewrite favorites.ini. '
-                    + 'The game stays in the favorites for now.';
+                    + 'The game stays in the list for now.';
             } else if (removeFavoriteFromDisk(favoritesPath, romName)) {
                 favoritesChanged();
-                flash.notice += ' Removed from the favorites and from the cabinet (restorable from the removed favorites,'
-                    + ' below the favorites list).';
+                frontTold = true;
+                flash.notice += ' Removed from the list and from the cabinet (restorable from "Removed from the list",'
+                    + ' below the list).';
             } else {
                 flash.warning = 'Unable to remove the game from favorites.ini: entry not found or unexpected format.';
             }
         }
+        // Starred or not any more: the cabinet's "My favourites" follows (Home.vue rebuilds its carousel).
+        if (wasStarred !== starred && !frontTold) {
+            favoritesChanged();
+        }
         res.send(await renderFavoritesTab(req, flash));
     });
 
-    app.post('/favorites/refresh', async (req, res) => {
-        const config = new Config();
-        config.load();
-        const context = getFavoritesContext(config);
+    app.get('/favorites/starred/export', async (req, res) => {
+        let games: Game[];
+        try {
+            games = await Game.findAll({attributes: ['romName', 'fullname'], where: {starred: true}, order: [['romName', 'ASC']]});
+        } catch {
+            res.status(503).send(await renderFavoritesTab(req, {
+                warning: 'Database not ready yet - launch the application once, then retry.',
+            }));
+            return;
+        }
+        if (!games.length) {
+            res.send(await renderFavoritesTab(req, {warning: 'No starred game to export.'}));
+            return;
+        }
+        const now = new Date();
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="maui-my-favourites-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildStarredFile(games.map(game => ({romName: game.romName, name: game.fullname || game.romName})), now));
+    });
 
-        // The favorites list's update modal (see FAVORITES_REFRESH_MODAL) asks for its progress as
-        // newline-delimited JSON events instead of a page: start (total), row (each favorite as it
-        // is resolved), then done or error. The HTML stream below is the no-JS fallback.
-        if (req.get('Accept') === 'application/x-ndjson') {
-            res.writeHead(200, {'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache'});
-            res.socket?.setNoDelay(true);
-            const send = (event: object) => res.write(JSON.stringify(event) + '\n');
-            if ('error' in context) {
-                send({type: 'error', message: context.error});
-                res.end();
-                return;
-            }
-            send({type: 'start', total: context.romNames.length});
-            try {
-                const {rows} = resolveFavorites(context, (row, index) => {
-                    send({type: 'row', index: index + 1, romName: row.romName, fullname: row.fullname});
-                });
-                send({type: 'done', total: rows.length});
-            } catch (error) {
-                send({type: 'error', message: `Update interrupted: ${error instanceof Error ? error.message : String(error)}`});
-            }
-            res.end();
+    app.post('/favorites/starred/import', starredUpload.single('file'), async (req, res) => {
+        // It changes the cabinet's votes: same-origin only, the BO having no CSRF token (see
+        // refuseOnlineRequest()).
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            res.status(422).send(await renderFavoritesTab(req, {warning: 'Pick a .json file exported from "My favourites".'}));
+            return;
+        }
+        let romNames: string[];
+        try {
+            romNames = parseStarredFile(req.file.buffer.toString('utf8'));
+        } catch (error) {
+            res.status(422).send(await renderFavoritesTab(req, {warning: `Import failed: ${(error as Error).message}`}));
             return;
         }
 
-        if ('error' in context) {
-            res.send(renderFavoritesPage({rows: [], error: context.error}, getViewer(req)));
-            return;
+        let present: Game[];
+        try {
+            // The cabinet's games only (not those out of the favorites): a star is for its carousel.
+            present = await Game.findAll({attributes: ['romName', 'starred'], where: {romName: romNames}});
+            const added = present.filter(game => !game.starred).map(game => game.romName);
+            if (added.length) {
+                await Game.update(voteFields(VOTE_UP, true), {where: {romName: added}});
+                favoritesChanged();
+            }
+            const missing = romNames.length - present.length;
+            const plural = (count: number, word: string) => `${count} ${word}${count > 1 ? 's' : ''}`;
+            res.send(await renderFavoritesTab(req, {
+                notice: `Import done: ${plural(added.length, 'game')} starred, `
+                    + `${plural(present.length - added.length, 'game')} already starred`
+                    + (missing ? `, ${plural(missing, 'game')} of the file not on this cabinet.` : '.'),
+            }));
+        } catch {
+            res.status(503).send(await renderFavoritesTab(req, {
+                warning: 'Database not ready yet - launch the application once, then retry.',
+            }));
         }
-
-        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
-        res.socket?.setNoDelay(true);
-        res.write(renderPageHead('favorites', getViewer(req)));
-        const {rows, cache} = streamFavoritesRefresh(res, context);
-        res.write(renderFavoritesCard({
-            rows, cacheUpdatedAt: cache.updatedAt, stats: await loadGameStats() ?? undefined,
-        }, getViewer(req)));
-        res.write(renderPageTail());
-        res.end();
     });
 
     /**
@@ -8996,27 +10434,73 @@ export function createBoApp(
             res.redirect('/');
             return;
         }
-        const mameHome = getMameHomePath();
         const romName = String(req.params.romName);
         // Only a plain rom name: it becomes a path under the mame home directory
         if (!/^[a-z0-9_]+$/i.test(romName)) {
             res.status(404).send(renderPage('<section class="card"><p class="error">Unknown rom.</p></section>', 'hiscores', getViewer(req)));
             return;
         }
-        let game: Game | null = null;
-        let players = new Set<string>();
-        let stored: StoredScore[] = [];
-        try {
-            game = await Game.findOne({where: {romName}});
-            players = new Set((await User.findAll()).map(user => user.pseudo_3));
-            if (game) {
-                stored = (await getStoredScores(game.id_game)).get(game.id_game) || [];
-            }
-        } catch {
-            // No database yet: the files and mhiex's decoding are still worth showing
+        const {game, report} = await inspectGameHiscores(romName);
+        const sent = typeof req.query.sent === 'string' ? req.query.sent : '';
+        res.send(renderHiscoreDetailPage(game, report, getViewer(req), {
+            notice: sent ? `Diagnostic sent to MAUI-API (${sent}).` : undefined,
+        }));
+    });
+
+    // A diagnostic of the game, when a player says a score is missing (maui-api D92): sent to
+    // MAUI-API, or saved as a zip for a cabinet that is not ONLINE.
+    app.post('/hiscores/:romName/diagnostic', async (req, res) => {
+        if (!req.session.boAdvanced) {
+            res.status(403).send('Available in Advanced configuration only.');
+            return;
         }
-        const report = await inspectHiscores(mameHome, romName, players, stored, readHiscoreDatSizes(getHiscoreDatPath(mameHome)));
-        res.send(renderHiscoreDetailPage(game, report, getViewer(req)));
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const romName = String(req.params.romName);
+        if (!/^[a-z0-9_]+$/.test(romName)) {
+            res.status(404).send(renderPage('<section class="card"><p class="error">Unknown rom.</p></section>', 'hiscores', getViewer(req)));
+            return;
+        }
+        const {game, report} = await inspectGameHiscores(romName);
+        const config = new Config();
+        config.load();
+        const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
+        const comment = String(req.body.comment || '').slice(0, 1000);
+        const withLogs = req.body.logs === 'on';
+        const bundle = buildDiagnosticBundle({
+            romName, comment, inspection: report,
+            versions: {
+                maui: getRunningVersion(),
+                mhiex: typeof MHIEX_VERSION === 'string' ? MHIEX_VERSION : 'unknown',
+                mame: mameBinary ? await getMameVersion(mameBinary) : UNKNOWN_MAME_VERSION,
+            },
+            logDir: withLogs ? getLogDirectory() : null,
+        });
+        if (req.body.action === 'zip') {
+            res.attachment(`diagnostic-${romName}-${archiveStamp(new Date())}.zip`);
+            res.type('application/zip').send(diagnosticZip(bundle));
+            return;
+        }
+        const fail = (status: number, error: string) => res.status(status).send(renderHiscoreDetailPage(game, report, getViewer(req), {
+            error, comment, withLogs,
+        }));
+        const client = await createOnlineClient();
+        if (!client) {
+            fail(409, 'This cabinet is not ONLINE: download the zip and send it by mail instead.');
+            return;
+        }
+        const result = await client.sendDiagnostic(bundle);
+        if (result.kind !== 'ok') {
+            fail(502, describeDiagnosticFailure(result));
+            return;
+        }
+        recordSentDiagnostic({
+            romName, id: result.value, sentAt: new Date().toISOString(), files: bundle.files.length,
+            size: bundle.files.reduce((size, file) => size + file.content.length, 0), logs: withLogs,
+        });
+        res.redirect(`/hiscores/${romName}?sent=${encodeURIComponent(result.value)}`);
     });
 
     app.post('/users/create', async (req, res) => {
@@ -9361,7 +10845,7 @@ export function createBoApp(
         }
 
         // Only romName + media status is needed here (see downloadMissingFavoriteMedia() below) -
-        // a cheap fs check, unlike resolveFavoriteRow()'s `mame -lx` spawn per rom, which this
+        // a cheap fs check, unlike resolveFavorites()'s `mame -lx` per rom, which this
         // route has no use for (progress lines below only ever print row.romName).
         const rows = context.romNames.map(romName => ({romName, ...getFavoriteMediaStatus(context, romName)}));
 
@@ -9427,7 +10911,7 @@ export function createBoApp(
     // Starting packs come from the repository only (MAME > Import, Games > Repository): kept as a
     // redirect rather than a 404 for anyone with the old standalone upload page bookmarked.
     app.get('/import', (req, res) => {
-        res.redirect('/');
+        res.redirect('/mame#import');
     });
 
     // Every route that downloads from the repository: ONLINE mode only (see RepositoryAuth.ts).
@@ -9444,10 +10928,6 @@ export function createBoApp(
     // Proxied server-side (rather than the browser fetching index.json directly) so the cabinet
     // credentials never reach the browser at all.
     app.get('/import/from-url/packs', async (req, res) => {
-        if (!req.session.boAdvanced) {
-            res.status(403).send('Available in Advanced configuration only.');
-            return;
-        }
         if (refuseOffline(res)) {
             return;
         }
@@ -9505,9 +10985,9 @@ export function createBoApp(
         }
     });
 
-    // Not Advanced-only, unlike the game packs below: the carousel needs the configuration pack to
-    // have genres, and the starter pack is what a new cabinet starts with. The starter pack comes
-    // with the configuration pack, like every game pack from the repository.
+    // The carousel needs the configuration pack to have genres, and the starter pack is what a new
+    // cabinet starts with. The starter pack comes with the configuration pack, like every game
+    // pack from the repository.
     const importFromRepository = (withStarterPack: boolean) => async (req: Request, res: Response) => {
         if (refuseOffline(res)) {
             return;
@@ -9533,14 +11013,14 @@ export function createBoApp(
         res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
         res.socket?.setNoDelay(true);
         res.write(renderPageHead(fromSetup ? 'setup' : 'mame', getViewer(req)));
-        await runConfPackImport(res, config, repository);
+        const confPackInstalled = await runConfPackImport(res, config, repository);
         if (withStarterPack) {
-            if (getMissingConfPackFiles(getMameInfo(config)).length) {
+            if (!confPackInstalled) {
                 res.write('<p class="error flash">The configuration pack could not be installed: starter pack not imported.</p>');
             } else {
                 const title = `Starter pack import in progress… (${escapeHtml(STARTER_PACK_FILENAME)})`;
                 await runRepositoryImport(res, config, repository, title, STARTER_PACK_FILENAME);
-                streamFavoritesRefreshAfterImport(res, config);
+                await streamFavoritesRefreshAfterImport(res, config);
             }
         }
 
@@ -9565,10 +11045,6 @@ export function createBoApp(
     app.post('/import/starter-pack', importFromRepository(true));
 
     app.post('/import/from-url', async (req, res) => {
-        if (!req.session.boAdvanced) {
-            res.status(403).send('Available in Advanced configuration only.');
-            return;
-        }
         if (refuseOffline(res)) {
             return;
         }
@@ -9602,10 +11078,9 @@ export function createBoApp(
 
         // Packs are imported one after the other (one progress card each): an import rewrites
         // favorites.ini and shared category files, so they must not overlap.
-        // The configuration pack first, every time (see ConfPack.ts): game packs no longer ship
-        // the category files, so this keeps them matching the repository's.
-        await runConfPackImport(res, config, repository);
-        if (getMissingConfPackFiles(getMameInfo(config)).length) {
+        // The configuration pack first when the repository's changed (see ConfPack.ts): game packs
+        // no longer ship the category files, so this keeps them matching the repository's.
+        if (!await runConfPackImport(res, config, repository, true)) {
             res.write('<p class="error flash">The configuration pack could not be installed: game packs not imported.</p>');
             res.write(renderPageTail());
             res.end();
@@ -9637,16 +11112,19 @@ export function createBoApp(
             res.write('</div></section>');
         }
 
-        streamFavoritesRefreshAfterImport(res, config);
+        await streamFavoritesRefreshAfterImport(res, config);
 
         if (imported) {
             // Back to the list of games, which now holds the new ones. replace(): this page is the
             // answer to a POST, and going back to the pack picker before it would show the games
             // just imported as still to download. A failed import stays here, with its log.
             const asked = [...selection.values()].reduce((total, romNames) => total + romNames.length, 0);
+            finishImportProgress(res, 'Opening the games list…');
             res.write(`<script>location.replace('/favorites?imported=${asked}')</script>`);
+        } else {
+            // Not when leaving: it costs the server time the games list waits for.
+            res.write(renderRepoImportCard(getMameInfo(config)));
         }
-        res.write(renderRepoImportCard(getMameInfo(config)));
         res.write(renderPageTail());
         res.end();
 
@@ -9701,6 +11179,11 @@ export function createBoApp(
             config.frontSleepMinutes = frontSleepMinutes;
         }
         config.frontSleepScreenOff = req.body.frontSleepScreenOff === 'on';
+        // Read again by the front at each launch: no reload.
+        const launchStageSeconds = Number(req.body.launchStageSeconds);
+        if (Number.isInteger(launchStageSeconds) && launchStageSeconds >= 0 && launchStageSeconds <= 30) {
+            config.launchStageSeconds = launchStageSeconds;
+        }
         const previousOnlineBadge = `${config.onlineBadgeDotOnly}/${config.onlineBadgeHideIp}`;
         config.onlineBadgeDotOnly = req.body.onlineBadgeDotOnly === 'on';
         config.onlineBadgeHideIp = req.body.onlineBadgeHideIp === 'on';
@@ -9711,6 +11194,27 @@ export function createBoApp(
         if (typeof req.body.displayMode === 'string') {
             config.displayMode = parseDisplayModeSetting(req.body.displayMode);
         }
+        if (typeof req.body.videoOutput === 'string') {
+            config.videoOutput = parseVideoOutputSetting(req.body.videoOutput);
+        }
+        let audioError: string | undefined;
+        if (typeof req.body.audioOutput === 'string' && !soundServerRunning()) {
+            const audioOutput = parseAudioOutputSetting(req.body.audioOutput);
+            let outputs: ScreenOutputInfo[] = [];
+            try {
+                outputs = listScreenOutputs();
+            } catch {
+                // No xrandr answer: no screen output to follow.
+            }
+            try {
+                // At once (the next game opens the sound device again), and even unchanged: the
+                // screen output it follows may have changed.
+                applyAudioOutput(resolveAudioOutput(audioOutput, currentScreenOutput(config.videoOutput, outputs), listAudioDevices()));
+                config.audioOutput = audioOutput;
+            } catch (error) {
+                audioError = error instanceof Error ? error.message : String(error);
+            }
+        }
         config.save();
         if (config.uiMode !== previousUiMode || shownCategories(config) !== previousCategories
             || frontIdleKey() !== previousFrontIdle
@@ -9719,7 +11223,33 @@ export function createBoApp(
             // builds its carousel and starts its idle watch when Home.vue is mounted.
             reloadFront();
         }
-        await sendMauiPage(req, res, config, {mauiInfo: 'Configuration saved.'});
+        await sendMauiPage(req, res, config, {
+            mauiInfo: audioError ? `Configuration saved, but not the sound output: ${audioError}` : 'Configuration saved.',
+        });
+    });
+
+    // The Sounds subtab (SoundsBoCard.ts).
+    app.post('/maui/sounds/save', async (req, res) => {
+        const config = new Config();
+        config.load();
+        config.gamesVolume = parseVolumePercent(req.body.gamesVolume, config.gamesVolume);
+        config.uiSoundsEnabled = req.body.uiSoundsEnabled === 'on';
+        config.uiSoundsVolume = parseVolumePercent(req.body.uiSoundsVolume, config.uiSoundsVolume);
+        config.uiSoundsDisabled = disabledFromForm(req.body.uiSoundsOn);
+        config.save();
+        // Read again by the front without a reload (UiSounds.ts).
+        uiSounds.changed();
+        await sendMauiPage(req, res, config, {soundsInfo: 'Sounds saved.'});
+    });
+
+    // A Play button of the Sounds subtab: that sound on the cabinet, at the volume typed in.
+    app.post('/maui/ui-sounds/test', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).end();
+            return;
+        }
+        const sound = isUiSoundToggle(req.body.sound) ? req.body.sound : 'launch';
+        res.status(uiSounds.test(parseVolumePercent(req.body.volume, DEFAULT_UI_SOUNDS_VOLUME), sound) ? 204 : 409).end();
     });
 
     app.post('/maui/online/save', async (req, res) => {
@@ -9740,7 +11270,7 @@ export function createBoApp(
     });
 
     // Development only: renderScoresBackfillCard(). Same path as the scores of a game
-    // (ScoreOutbox.ts): queued, then sent, which also fills the best cache.
+    // (ScoreOutbox.ts): queued, then sent.
     app.post('/maui/online/backfill-scores', async (req, res) => {
         if (process.env.NODE_ENV !== 'development') {
             res.sendStatus(404);
@@ -9755,8 +11285,6 @@ export function createBoApp(
             await sendMauiPage(req, res, config, {backfillError: 'ONLINE is not running.'});
             return;
         }
-        // MAUI-API may have been emptied (dev:reset-scores): let it decide again.
-        await scoreStore.clearBests();
         const players = await User.findAll();
         let queued = 0;
         for (const table of await readCabinetTables(getMameHomePath())) {
@@ -10092,6 +11620,24 @@ export function createBoApp(
         await sendMauiPage(req, res, config, {networkInfo: `Connected to ${ssid}.`});
     });
 
+    // A network out of range, saved for when the cabinet gets there (WifiControl.ts saveWifi()).
+    app.post('/maui/network/save', async (req, res) => {
+        if (refuseCabinetSystemRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const ssid = typeof req.body.ssid === 'string' ? req.body.ssid : '';
+        const password = typeof req.body.password === 'string' ? req.body.password : '';
+        try {
+            await saveWifi(ssid, password);
+        } catch (error) {
+            await sendMauiPage(req, res, config, {networkError: `${ssid || 'Network'} not saved: ${(error as Error).message}`});
+            return;
+        }
+        await sendMauiPage(req, res, config, {networkInfo: `${ssid} saved: the cabinet joins it once in range.`});
+    });
+
     app.post('/maui/network/forget', async (req, res) => {
         if (refuseCabinetSystemRequest(req, res)) {
             return;
@@ -10235,7 +11781,7 @@ export function createBoApp(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/'));
+        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/mame'));
     });
 
     /**
@@ -10304,7 +11850,7 @@ export function createBoApp(
             + (plugins?.pluginsAdded ? `<p>${plugins.pluginsAdded} plugin(s) initialized in plugin.ini.</p>` : '')
             + (plugins && !plugins.saved ? '<p class="error">The plugins folder could not be saved: mame.ini not found.</p>' : '')
             + '<p>Back to the MAME configuration in <span id="redirect-countdown">5</span> '
-            + 'second(s)… <a href="/">Go now</a>.</p></section>'
+            + 'second(s)… <a href="/mame#config">Go now</a>.</p></section>'
             + '<script>'
             + 'var secondsLeft = 5;'
             + 'var countdownEl = document.getElementById("redirect-countdown");'
@@ -10312,7 +11858,7 @@ export function createBoApp(
             + 'secondsLeft -= 1;'
             + 'countdownEl.textContent = Math.max(secondsLeft, 0);'
             + '}, 1000);'
-            + 'setTimeout(function () { window.location.href = "/"; }, 5000);'
+            + 'setTimeout(function () { window.location.href = "/mame#config"; }, 5000);'
             + '</script>',
             'mame', getViewer(req),
         ));
@@ -10516,7 +12062,7 @@ export function createBoApp(
         const removed: string = typeof req.body.remove === 'string' ? req.body.remove : '';
         const action: string = removed ? 'remove' : (req.body.action || '').trim();
         const send = (controls: MauiControlsState) => sendMauiPage(req, res, config, {controls});
-        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'reset'].includes(action)) {
+        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'remove-all', 'reset'].includes(action)) {
             res.status(422);
             await send({key, error: 'Unknown action.'});
             return;
@@ -10527,6 +12073,10 @@ export function createBoApp(
         let caughtByPage = false;
         if (action === 'reset') {
             bindings = resetKey(bindings, key);
+        } else if (action === 'remove-all') {
+            for (const input of inputsOfKey(bindings, key)) {
+                bindings = removeInput(bindings, input);
+            }
         } else if (action === 'remove') {
             const input = parseMauiInputId(removed);
             // Only an input the card showed for this key.
@@ -10583,6 +12133,132 @@ export function createBoApp(
             frontControls.cancelCapture();
         }
         await send({key, info});
+    });
+
+    // The Hotkeys card (renderHotkeysCard()): its step by step "Add a hotkey" (each step posts the
+    // draft, "catch" / "capture1|2" fill a key in with the input caught by the page, or by the front
+    // within 30 s), then "add" saves it; "remove" and "reset" act on the list.
+    app.post('/maui/hotkeys', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const action: string = typeof req.body.action === 'string' ? req.body.action : 'step';
+        const field = (name: string): string => (typeof req.body[name] === 'string' ? req.body[name].trim() : '');
+        const draft: HotkeyDraft = {
+            action: field('hotkeyAction'),
+            type: field('type'),
+            keys: [field('key1'), field('key2')],
+            holdSeconds: field('holdSeconds'),
+        };
+        // A key pressed, not held: nothing to ask about how long.
+        if (draft.type === 'press') {
+            draft.holdSeconds = '0';
+        }
+        const send = (hotkeys: HotkeysState) => sendMauiPage(req, res, config, {hotkeys});
+        let bindings = readMauiBindings();
+        let info: string | undefined;
+
+        if (action === 'start') {
+            await send({draft: EMPTY_HOTKEY_DRAFT});
+            return;
+        }
+        if (action === 'cancel') {
+            await send({});
+            return;
+        }
+        if (action === 'back') {
+            await send({draft: previousHotkeyDraft(draft)});
+            return;
+        }
+        if (action === 'step') {
+            if (draft.keys[1] && draft.keys[1] === draft.keys[0]) {
+                draft.keys[1] = '';
+                await send({draft, error: 'The second key must be another one.'});
+                return;
+            }
+            await send({draft});
+            return;
+        }
+        if (action === 'catch' || action === 'capture1' || action === 'capture2') {
+            const slot = action === 'catch' ? Number(field('slot')) : Number(action.slice(-1));
+            if (slot !== 1 && slot !== 2) {
+                await send({draft, error: 'Unknown key.'});
+                return;
+            }
+            let input: MauiInput | undefined;
+            if (action === 'catch') {
+                input = parseMauiInputId(field('code'));
+                if (input?.device === 'pad') {
+                    // Caught by the page itself: the front stops waiting.
+                    input = {...input, layout: bindings.pads[input.layout] ? input.layout : 'standard'};
+                    frontControls.cancelCapture();
+                }
+            } else {
+                const caught = await frontControls.capturePad(30000);
+                if ('cancelled' in caught) {
+                    await send({draft});
+                    return;
+                }
+                if ('error' in caught) {
+                    await send({draft, error: caught.error});
+                    return;
+                }
+                input = caught.axis !== undefined
+                    ? {device: 'pad', layout: caught.layout, axis: caught.axis, direction: caught.direction ?? 0}
+                    : {device: 'pad', layout: caught.layout, button: caught.button ?? 0};
+            }
+            if (!input) {
+                await send({draft, error: 'Not a key, a mouse button or a gamepad input.'});
+                return;
+            }
+            const id = mauiInputId(input);
+            if (slot === 2 && id === draft.keys[0]) {
+                await send({draft, error: 'The second key must be another one.'});
+                return;
+            }
+            draft.keys[slot - 1] = id;
+            await send({draft});
+            return;
+        }
+
+        if (action === 'add') {
+            const hotkey = draftHotkey(draft);
+            if (!hotkey) {
+                await send({draft, error: `A hotkey is an action, one or two different keys, and a hold of 0 to ${MAX_HOLD_MS / 1000} seconds.`});
+                return;
+            }
+            if (bindings.hotkeys.some(known => sameHotkey(known, hotkey))) {
+                await send({draft, error: 'This hotkey is already there.'});
+                return;
+            }
+            info = describeHotkeyTakeover(bindings, hotkey);
+            // One input pressed, not held: it only triggers the hotkey (an input does one thing).
+            const input = hotkey.keys.length === 1 && hotkey.holdMs === 0 ? parseMauiInputId(hotkey.keys[0]) : undefined;
+            if (input && keyOfInput(bindings, input)) {
+                bindings = removeInput(bindings, input);
+            }
+            bindings = {...bindings, hotkeys: [...bindings.hotkeys, hotkey]};
+        } else if (action === 'remove') {
+            const index = Number(field('index'));
+            if (!Number.isInteger(index) || index < 0 || index >= bindings.hotkeys.length) {
+                await send({});
+                return;
+            }
+            bindings = {...bindings, hotkeys: bindings.hotkeys.filter((_, at) => at !== index)};
+        } else if (action === 'reset') {
+            bindings = {...bindings, hotkeys: defaultHotkeys()};
+        } else {
+            res.status(422);
+            await send({error: 'Unknown action.'});
+            return;
+        }
+        try {
+            writeFileSync(getMauiControlsPath(), serializeMauiBindings(bindings), 'utf8');
+        } catch (error) {
+            await send({draft, error: `Saving failed: ${(error as Error).message}`});
+            return;
+        }
+        frontControls.controlsChanged();
+        await send({info: info ? `Saved. ${info}` : 'Saved.'});
     });
 
     // The Spinner, trackball, paddle card: mame.ini's <family>_device values.
@@ -10646,6 +12322,150 @@ export function createBoApp(
         }
     });
 
+    // The Controls card's export (MameControlsFile.ts): default.cfg's global controls and the
+    // pinned gamepads, for another cabinet with the same controllers.
+    app.get('/input-probe/controls/export', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, req.session.boAdvanced === true));
+            return;
+        }
+        const controls = readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath));
+        const pinnedDevices = readPinnedDevices(mameInfo);
+        if (!controls.size && !pinnedDevices.size) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath}, mameInfo, req.session.boAdvanced === true,
+                undefined, undefined, undefined, undefined, undefined, undefined,
+                {portType: '', error: 'Nothing to export: the controls are still MAME\'s own and no gamepad is pinned.'},
+            ));
+            return;
+        }
+        const now = new Date();
+        const mameVersion = await getMameVersion(join(config.mamePath, config.mameBinaryName));
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="mame-controls-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildMameControlsFile({controls, pinnedDevices}, mameVersion, now));
+    });
+
+    // The Controls card's import: replaces default.cfg's global controls with the file's, and pins
+    // its gamepads. Checked against this MAME's own controls first (see isImportableSeq()).
+    app.post('/input-probe/controls/import', controlsUpload.single('file'), (req, res) => {
+        // It rewrites MAME's controls: same-origin only, the BO having no CSRF token.
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined,
+            remapState,
+        ));
+        const defaults = readInputDefaults(join(config.mamePath, config.mameBinaryName));
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read first.'}, 409);
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            renderWith({portType: '', error: 'Pick a .json file exported from the Controls tab.'}, 422);
+            return;
+        }
+        let imported: ReturnType<typeof parseMameControlsFile>;
+        try {
+            imported = parseMameControlsFile(req.file.buffer.toString('utf8'), defaults);
+        } catch (error) {
+            renderWith({portType: '', error: `Import failed: ${(error as Error).message}`}, 422);
+            return;
+        }
+
+        try {
+            const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+            applyCfgEdit(() => writeDefaultCfgUiInputs(cfgPath, imported.controls));
+            for (const [joycode, deviceId] of imported.pinnedDevices) {
+                pinDevice(mameInfo, deviceId, joycode);
+            }
+        } catch (error) {
+            console.error('[boServer] Controls import failed:', error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            renderWith({portType: '', error: `Import failed: ${message}`}, 500);
+            return;
+        }
+        const plural = (count: number, word: string) => `${count} ${word}${count > 1 ? 's' : ''}`;
+        renderWith({
+            portType: '',
+            notice: `Import done: ${plural(imported.controls.size, 'control')} changed from MAME's own, `
+                + `${plural(imported.pinnedDevices.size, 'gamepad')} pinned.`,
+        });
+    });
+
+    // The Controls card's "Copy these keys to Player 2" (or to Player 1): every action's gamepad
+    // controls go to the same action of the other player, JOY 1 and JOY 2 swapped; that player
+    // keeps its own keys (mirrorSeqToOtherPlayer()).
+    app.post('/input-probe/controls/copy-player', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const from = typeof req.body.from === 'string' ? req.body.from : '';
+        const to = COPY_PLAYERS[from];
+        if (!to) {
+            res.status(422).send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
+            return;
+        }
+        const targetTab = String(REMAP_GROUPS.findIndex(group => group.title === to));
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined,
+            {tab: targetTab, ...remapState},
+        ));
+        const defaults = readInputDefaults(join(config.mamePath, config.mameBinaryName));
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read again first.'}, 409);
+            return;
+        }
+        const sourceActions = REMAP_GROUPS.find(group => group.title === from)?.actions ?? [];
+        const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+        try {
+            const persisted = readDefaultCfgUiInputs(cfgPath);
+            let copied = 0;
+            for (const action of sourceActions) {
+                const target = otherPlayerPortType(action.portType);
+                if (!target || !defaults.seqs.has(target)) {
+                    continue;
+                }
+                const current = getControlSeq(target, persisted, defaults);
+                const mirrored = mirrorSeqToOtherPlayer(getControlSeq(action.portType, persisted, defaults), current);
+                if (mirrored !== seqFromAlternatives(seqAlternatives(current))) {
+                    saveControlSeq(cfgPath, target, mirrored, defaults);
+                    copied++;
+                }
+            }
+            renderWith({
+                portType: '',
+                notice: copied
+                    ? `${from}'s gamepad controls copied to ${to} (JOY 1 and JOY 2 swapped): ${copied} action${copied > 1 ? 's' : ''} changed.`
+                    : `${to} already had these controls: nothing changed.`,
+            });
+        } catch (error) {
+            console.error(`[boServer] Copying ${from}'s controls failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            renderWith({portType: '', error: `Copy failed: ${message}`}, 500);
+        }
+    });
+
     // One action of the Controls card: add a control (pressed, or picked from MAME's keys and mouse
     // buttons), remove one (its cross posts `remove`), or go back to MAME's default.
     app.post('/input-probe/remap', (req, res) => {
@@ -10660,7 +12480,7 @@ export function createBoApp(
         const formAction: string = removed ? 'remove' : (req.body.action || '').trim();
         const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
 
-        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'reset'].includes(formAction)) {
+        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'remove-all', 'reset'].includes(formAction)) {
             // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe/devices
             // above - the form only renders once mameInfo.error is unset. !action: portType isn't in
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
@@ -10689,6 +12509,11 @@ export function createBoApp(
 
             if (formAction === 'reset') {
                 applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
+                renderWith({portType});
+                return;
+            }
+            if (formAction === 'remove-all') {
+                saveControlSeq(cfgPath, portType, seqFromAlternatives([]), defaults);
                 renderWith({portType});
                 return;
             }
@@ -10756,6 +12581,157 @@ export function createBoApp(
             gameRemapState,
         );
 
+    // The per-game card's file actions (renderGameControlsFileActions()), on the picked game without
+    // MAME: its romName is one of the roms present, never a path fragment from the client.
+    const pickedGame = (req: Request) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const raw = typeof req.body?.romName === 'string' ? req.body.romName : req.query.romName;
+        const romName = typeof raw === 'string' ? raw.trim() : '';
+        const valid = !mameInfo.error && !!mameInfo.romPath && listRomNames(mameInfo.romPath).includes(romName);
+        return {config, mameInfo, romName: valid ? romName : '', cfgPath: getGameCfgPath(mameInfo.iniPath, romName)};
+    };
+
+    app.get('/input-probe/game/export', async (req, res) => {
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const overrides = existsSync(cfgPath) ? listGameCfgOverrides(readFileSync(cfgPath, 'utf8')) : [];
+        if (!overrides.length) {
+            res.status(422).send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+                romName, error: 'Nothing to export: this game follows the global controls.',
+            }));
+            return;
+        }
+        const now = new Date();
+        const mameVersion = await getMameVersion(join(config.mamePath, config.mameBinaryName));
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="mame-controls-${romName}-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildGameControlsFile(romName, overrides, mameVersion, now));
+    });
+
+    // The game's cfg file as it is, to keep or to look at.
+    app.get('/input-probe/game/cfg', (req, res) => {
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        if (!existsSync(cfgPath)) {
+            res.status(404).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: 'This game has no cfg file.'}));
+            return;
+        }
+        res.set('Content-Type', 'application/xml');
+        res.set('Content-Disposition', `attachment; filename="${romName}.cfg"`);
+        res.send(readFileSync(cfgPath));
+    });
+
+    // Deletes the game's cfg file: controls, DIP switches and counters back to MAME's defaults.
+    // Through applyCfgEdit(): a MAME running the game would write the file again on exit.
+    app.post('/input-probe/game/delete-cfg', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            applyCfgEdit(() => rmSync(cfgPath, {force: true}));
+        } catch (error) {
+            console.error(`[boServer] Deleting cfg/${romName}.cfg failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: `Deleting failed: ${message}`}));
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, notice: `cfg/${romName}.cfg deleted.`}));
+    });
+
+    // Back to the global controls: every override of the game goes, its DIP switches, sound output
+    // and counters stay (removeAllGameCfgInputSeqs()). Through applyCfgEdit(): a MAME running it
+    // would write them back on exit.
+    app.post('/input-probe/game/reset-all', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            if (existsSync(cfgPath)) {
+                applyCfgEdit(() => writeFileSync(cfgPath, removeAllGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')), 'utf8'));
+            }
+        } catch (error) {
+            console.error(`[boServer] Dropping the controls of "${romName}" failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: `Saving failed: ${message}`}));
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, notice: 'This game follows the global controls again.'}));
+    });
+
+    // Replaces the game's own controls with a file's (GameControlsFile.ts), for the same game.
+    app.post('/input-probe/game/import', gameControlsUpload.single('file'), (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const fail = (error: string, status = 422) =>
+            res.status(status).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error}));
+        const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
+        if (!defaults) {
+            fail('MAME\'s controls must be read first (Global controls tab).', 409);
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            fail('Pick a .json file exported from this card.');
+            return;
+        }
+        let overrides: ReturnType<typeof parseGameControlsFile>;
+        try {
+            overrides = parseGameControlsFile(req.file.buffer.toString('utf8'), romName, defaults.codes);
+        } catch (error) {
+            fail(`Import failed: ${(error as Error).message}`);
+            return;
+        }
+        try {
+            applyCfgEdit(() => {
+                const existing = existsSync(cfgPath) ? removeAllGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')) : undefined;
+                const updated = overrides.reduce<string | undefined>(
+                    (xml, override) => setGameCfgInputSeq(xml, romName, {...override, defaultSeq: '', name: ''}, override.seq, override.seqType),
+                    existing,
+                );
+                mkdirSync(dirname(cfgPath), {recursive: true});
+                writeFileSync(cfgPath, updated ?? '', 'utf8');
+            });
+        } catch (error) {
+            console.error(`[boServer] Importing the controls of "${romName}" failed:`, error);
+            fail(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`, 500);
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+            romName, notice: `Import done: ${overrides.length} control${overrides.length > 1 ? 's' : ''} of its own for this game.`,
+        }));
+    });
+
     app.post('/input-probe/game/start', async (req, res) => {
         const config = new Config();
         config.load();
@@ -10797,7 +12773,7 @@ export function createBoApp(
         // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
         // roms actually present - never a client-supplied path fragment.
         if (mameInfo.error || !romNames.includes(romName) || !seqType
-            || !['capture', 'capture-axis', 'add', 'remove', 'reset'].includes(action)) {
+            || !['capture', 'capture-axis', 'add', 'remove', 'remove-all', 'reset'].includes(action)) {
             res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
@@ -10856,6 +12832,11 @@ export function createBoApp(
                 if (seqAlternatives(current).includes(seqAlternatives(removed).join(' '))) {
                     save(removeSeqAlternative(current, removed));
                 }
+                res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
+                return;
+            }
+            if (action === 'remove-all') {
+                save(seqFromAlternatives([]));
                 res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }

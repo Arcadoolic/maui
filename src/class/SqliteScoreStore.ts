@@ -7,7 +7,7 @@ import type {LeaderboardStore} from '@/class/LeaderboardSync';
 
 type Sequelize = SequelizeTS.Sequelize;
 
-// ScoreStore on the app's SQLite database: tables score_outbox and online_best
+// ScoreStore on the app's SQLite database: table score_outbox
 // (migrations/20261002120000-score-outbox.js). Dates are ISO strings, which sort as dates.
 
 export class SqliteScoreStore implements ScoreStore {
@@ -44,27 +44,6 @@ export class SqliteScoreStore implements ScoreStore {
                 {replacements: [attempts, nextAttemptAt.toISOString(), ids]},
             );
         }
-    }
-
-    public async getBest(playerId: string, romname: string, table: string): Promise<number | null> {
-        const rows = await this.sequelize.query<{best: number}>(
-            'SELECT best FROM online_best WHERE player_id = ? AND romname = ? AND table_name = ?',
-            {replacements: [playerId, romname, table], type: QueryTypes.SELECT},
-        );
-        return rows.length > 0 ? Number(rows[0].best) : null;
-    }
-
-    public async setBest(playerId: string, romname: string, table: string, best: number): Promise<void> {
-        await this.sequelize.query(
-            'INSERT INTO online_best (player_id, romname, table_name, best) VALUES (?, ?, ?, ?) '
-            + 'ON CONFLICT (player_id, romname, table_name) DO UPDATE SET best = excluded.best',
-            {replacements: [playerId, romname, table, best]},
-        );
-    }
-
-    /** Forgets every cached best (development: after maui-api's dev:reset-scores). */
-    public async clearBests(): Promise<void> {
-        await this.sequelize.query('DELETE FROM online_best');
     }
 
     /** Scores waiting, for the BO. */

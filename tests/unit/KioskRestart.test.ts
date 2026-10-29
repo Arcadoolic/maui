@@ -2,7 +2,7 @@ import {describe, it, expect} from 'vitest';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'fs';
 import {tmpdir} from 'os';
 import {join} from 'path';
-import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
+import {canRestartKiosk, isKioskLayout, powerOff, restartKiosk} from '@/class/KioskRestart';
 
 describe('canRestartKiosk', () => {
     it('runs the rule\'s harmless reset-failed through sudo -n, which cannot prompt', async () => {
@@ -58,5 +58,32 @@ describe('isKioskLayout', () => {
         } finally {
             rmSync(home, {recursive: true, force: true});
         }
+    });
+});
+
+describe('powerOff', () => {
+    it('powers off through the sudo rule first', async () => {
+        const calls: string[] = [];
+        const refused = await powerOff((file, args, _options, callback) => {
+            calls.push([file, ...args].join(' '));
+            callback(null);
+        });
+        expect(refused).toBeNull();
+        expect(calls).toEqual(['sudo -n /usr/bin/systemctl poweroff']);
+    });
+
+    it('falls back on systemd\'s own permission without the rule', async () => {
+        const calls: string[] = [];
+        const refused = await powerOff((file, args, _options, callback) => {
+            calls.push([file, ...args].join(' '));
+            callback(file === 'sudo' ? new Error('a password is required') : null);
+        });
+        expect(refused).toBeNull();
+        expect(calls).toEqual(['sudo -n /usr/bin/systemctl poweroff', '/usr/bin/systemctl poweroff']);
+    });
+
+    it('says why when neither is allowed', async () => {
+        const refused = await powerOff((_file, _args, _options, callback) => callback(new Error('denied')));
+        expect(refused).toMatch(/Not allowed to shut the cabinet down/);
     });
 });

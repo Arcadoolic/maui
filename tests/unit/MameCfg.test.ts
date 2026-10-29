@@ -5,8 +5,10 @@ import {
     inputIconKey,
     isAnalogPortType,
     isRemappablePortType,
+    listGameCfgOverrides,
     parseGameFields,
     readGameCfgInputSeqs,
+    removeAllGameCfgInputSeqs,
     removeGameCfgInputSeq,
     setGameCfgInputSeq,
     type GameField,
@@ -226,5 +228,50 @@ describe('inputIconKey', () => {
         expect(inputIconKey('P1_BUTTON12')).toBe('button');
         expect(inputIconKey('UI_CONFIGURE')).toBeUndefined();
         expect(inputIconKey('P1_JOYSTICKLEFT_UP')).toBeUndefined();
+    });
+});
+
+describe('listGameCfgOverrides / removeAllGameCfgInputSeqs', () => {
+    const cfg = `<?xml version="1.0"?>
+<mameconfig version="10">
+    <system name="1942">
+        <input>
+            <port tag=":DSWA" type="DIPSWITCH" mask="7" defvalue="7" value="3" />
+            <port type="P1_BUTTON1" tag=":P1" mask="16" defvalue="16">
+                <newseq type="standard">
+                    JOYCODE_1_BUTTON3
+                </newseq>
+            </port>
+            <port type="P1_DIAL" tag=":DIAL" mask="255" defvalue="0">
+                <newseq type="increment">
+                    KEYCODE_RIGHT
+                </newseq>
+            </port>
+        </input>
+        <mixer>
+            <sound_map tag=":mono" />
+        </mixer>
+    </system>
+</mameconfig>
+`;
+
+    it('lists every override with what MAME matches it by', () => {
+        expect(listGameCfgOverrides(cfg)).toEqual([
+            {portType: 'P1_BUTTON1', tag: ':P1', mask: 16, defvalue: 16, seqType: 'standard', seq: 'JOYCODE_1_BUTTON3'},
+            {portType: 'P1_DIAL', tag: ':DIAL', mask: 255, defvalue: 0, seqType: 'increment', seq: 'KEYCODE_RIGHT'},
+        ]);
+    });
+
+    it('drops the overrides and keeps the DIP switches and the mixer', () => {
+        const cleaned = removeAllGameCfgInputSeqs(cfg);
+        expect(listGameCfgOverrides(cleaned)).toEqual([]);
+        expect(cleaned).toContain('<port tag=":DSWA" type="DIPSWITCH" mask="7" defvalue="7" value="3" />');
+        expect(cleaned).toContain('<sound_map tag=":mono" />');
+        expect(cleaned).not.toContain('P1_BUTTON1');
+    });
+
+    it('drops the input block once nothing is left in it', () => {
+        expect(removeAllGameCfgInputSeqs(setGameCfgInputSeq(cfgWithMixer, '1942', button1, 'JOYCODE_1_BUTTON1')))
+            .toBe(cfgWithMixer);
     });
 });

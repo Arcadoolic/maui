@@ -5,6 +5,10 @@
 // read it through getRunningVersion() in boServer.ts, which guards for that.
 declare const MAUI_BUILD_VERSION_SUFFIX: string;
 
+// The installed @arcadoolic/mhiex's version, injected the same way: what a diagnostic reports
+// (DiagnosticBundle.ts).
+declare const MHIEX_VERSION: string;
+
 interface ControllerMapping {
     buttons: {[key: number]: string};
     axes: {[key: number]: {[value: number]: string}};

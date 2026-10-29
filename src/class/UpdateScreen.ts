@@ -13,8 +13,9 @@ export interface UpdateScreen {
 }
 
 const DOWNLOAD_SHARE = 80;
-const EXTRACT_PERCENT = 85;
+// The extraction fills the bar from DOWNLOAD_SHARE up to SWITCH_PERCENT.
 const SWITCH_PERCENT = 95;
+const CLEANUP_PERCENT = 98;
 
 function megabytes(bytes: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -31,10 +32,17 @@ export function describeUpdateStep(step: UpdateStep): UpdateScreen {
             : megabytes(step.doneBytes);
         return {label: 'DOWNLOADING', percent, detail, failed: false};
     }
-    case 'extract':
-        return {label: 'INSTALLING', percent: EXTRACT_PERCENT, detail: 'Unpacking the new version', failed: false};
+    case 'extract': {
+        // The estimate (the installed version's size) may be off: never past the next step.
+        const fraction = step.totalEntries > 0 ? Math.min(step.entries / step.totalEntries, 0.99) : 0;
+        const percent = DOWNLOAD_SHARE + Math.floor(fraction * (SWITCH_PERCENT - DOWNLOAD_SHARE));
+        const detail = step.entries > 0 ? `Unpacking the new version: ${step.entries} files` : 'Unpacking the new version';
+        return {label: 'INSTALLING', percent, detail, failed: false};
+    }
     case 'switch':
         return {label: 'INSTALLING', percent: SWITCH_PERCENT, detail: 'Switching to the new version', failed: false};
+    case 'cleanup':
+        return {label: 'INSTALLING', percent: CLEANUP_PERCENT, detail: 'Removing the older backup', failed: false};
     case 'restart':
         return {label: 'RESTARTING', percent: 100, detail: 'See you in a moment', failed: false};
     case 'failed':

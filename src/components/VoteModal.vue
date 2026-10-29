@@ -17,12 +17,15 @@
                 <div class="choice up" :class="{selected: selected === 2}" @mouseenter="hover(2)" @click="pick(2)">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="THUMB_PATH"/></svg>
                 </div>
+                <div class="choice star" :class="{selected: selected === 3}" @mouseenter="hover(3)" @click="pick(3)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="STAR_PATH"/></svg>
+                </div>
             </div>
             <div class="hint">
-                <span class="arcadeButton"></span>
+                <control-icon action="confirm"></control-icon>
                 to vote
                 <span class="later" @click="mouse && emit('skip')">
-                    <span class="arcadeButton rectangle"></span>
+                    <control-icon action="scores"></control-icon>
                     to decide later
                 </span>
             </div>
@@ -37,6 +40,7 @@ import {MAUI_KEYS} from '@/class/MauiControls';
 import {controlKey} from '@/class/MauiControlsRuntime';
 import {Vote, VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP} from '@/class/GameVote';
 import Modal from '@/components/Modal.vue';
+import ControlIcon from '@/components/ControlIcon.vue';
 import {getConfiguration} from '@/services';
 
 // Nobody may be standing at the cabinet anymore: the prompt goes away by itself, like a skip.
@@ -46,12 +50,25 @@ const AUTO_SKIP_MS = 20000;
 const THUMB_PATH = 'M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 '
     + '7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z';
 
-const CHOICES: Vote[] = [VOTE_DOWN, VOTE_NEUTRAL, VOTE_UP];
+// Material "star" icon.
+const STAR_PATH = 'M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z';
 
-const emit = defineEmits<{vote: [vote: Vote], skip: []}>();
+// The star is a thumbs up that also puts the game in "My favourites" (GameVote.ts voteFields()).
+const CHOICES: {vote: Vote, starred: boolean}[] = [
+    {vote: VOTE_DOWN, starred: false},
+    {vote: VOTE_NEUTRAL, starred: false},
+    {vote: VOTE_UP, starred: false},
+    {vote: VOTE_UP, starred: true},
+];
+
+const emit = defineEmits<{vote: [vote: Vote, starred: boolean], skip: []}>();
 
 // Neutral first: an accidental double press on the confirm key never removes a game.
-const selected = ref(CHOICES.indexOf(VOTE_NEUTRAL));
+const selected = ref(CHOICES.findIndex(choice => choice.vote === VOTE_NEUTRAL));
+
+function vote(index: number) {
+    emit('vote', CHOICES[index].vote, CHOICES[index].starred);
+}
 
 // Windowed mode, like the list of games (Home.vue): pointing at a choice selects it, a click votes
 // it, a click on "to decide later" decides later.
@@ -65,7 +82,7 @@ function hover(index: number) {
 
 function pick(index: number) {
     if (mouse) {
-        emit('vote', CHOICES[index]);
+        vote(index);
     }
 }
 
@@ -87,7 +104,7 @@ onKeydown((e, isGamepad) => {
         selected.value = Math.min(CHOICES.length - 1, selected.value + 1);
         break;
     case MAUI_KEYS.enter:
-        emit('vote', CHOICES[selected.value]);
+        vote(selected.value);
         break;
     case MAUI_KEYS.space:
         emit('skip');
@@ -141,6 +158,9 @@ onKeyup(() => {
     .choice.down.selected {
         color: #ff5b4d;
     }
+    .choice.star.selected {
+        color: #ffc400;
+    }
     /* Windowed mode: the choices take the mouse instead of moving the window (App.vue's drag). */
     .vote.mouse .choice, .vote.mouse .later {
         -webkit-app-region: no-drag;
@@ -149,23 +169,11 @@ onKeyup(() => {
     .later {
         display: inline-flex;
         align-items: center;
+        margin-left: 13px;
     }
     .hint {
         display: flex;
         align-items: center;
         justify-content: center;
-    }
-    .arcadeButton {
-        display: inline-block;
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        box-shadow: #a7a700 1px 1px;
-        margin: 0 10px 0 25px;
-        background-color: snow;
-    }
-    .arcadeButton.rectangle {
-        border-radius: 0;
-        width: 50px;
     }
 </style>

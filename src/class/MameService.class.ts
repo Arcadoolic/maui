@@ -1,11 +1,19 @@
 import {existsSync, readFileSync, rmSync, writeFileSync} from 'fs';
-import {join} from 'path';
+import {isAbsolute, join} from 'path';
 import Helpers from '@/class/Helpers.class';
 import Config from '@/class/Config.class';
+import Log from 'electron-log';
 import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
+import {gameVolumeArgs} from '@/class/Volume';
+import {gameSoundDevice, listAudioDevices, soundServerRunning, waitForPlaybackClosed} from '@/class/AudioOutput';
+import {applyGameSoundOutput, resetBrokenGameSoundMaps, speakerTagsFromListXml} from '@/class/MameSoundMap';
+import {watchJoystickReturn} from '@/class/JoystickReturn';
+
+// How long a game's launch waits for its sound card (waitForSoundCard()).
+const SOUND_CARD_WAIT_MS = 10_000;
 
 export default class MameService {
     public mameIni: { [key: string]: string[] } = {};
@@ -103,6 +111,59 @@ export default class MameService {
         return parseFavorites(readFileSync(favoritePath, 'utf8'));
     }
 
+    /** MAME's cfg_directory (cfg files per game: inputs, sound outputs...), from its home. */
+    public get cfgDirectory(): string {
+        const directory = this.mameIni.cfg_directory?.[0] || 'cfg';
+        return isAbsolute(directory) ? directory : join(this.iniPath, directory);
+    }
+
+    /**
+     * Before a game starts: the output the BO set for the sound (AudioOutput.ts) written into the
+     * game's cfg file, MAME's only way to choose one (MameSoundMap.ts), and the options that make
+     * MAME open it: its SDL module, whose ALSA names the file holds. Where a sound server runs, it
+     * picks the output: nothing is written there, the maps it left silent are put back on the
+     * default output. Read from the config file each time, the BO may have changed it. Never what
+     * keeps a game from starting.
+     */
+    protected async prepareSoundOutput(romName: string): Promise<string[]> {
+        if (process.platform !== 'linux') {
+            return [];
+        }
+        try {
+            if (soundServerRunning()) {
+                resetBrokenGameSoundMaps(this.cfgDirectory, romName, listAudioDevices().map(device => device.node));
+                return [];
+            }
+            const config = new Config();
+            config.load();
+            const device = gameSoundDevice(config.audioOutput, config.videoOutput);
+            applyGameSoundOutput(this.cfgDirectory, romName, device?.node ?? '', () => speakerTagsFromListXml(execFileSync(
+                this.mameBinary,
+                ['-listxml', romName, ...this.mameHomeArgs],
+                {encoding: 'utf8', cwd: this.iniPath, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024},
+            )));
+            await this.waitForSoundCard(romName, device?.id.split(',')[0]);
+            return ['-sound', 'sdl'];
+        } catch (error) {
+            console.warn('[MameService] Sound output not set for ' + romName + ':', error);
+            return [];
+        }
+    }
+
+    /**
+     * Without a sound server, the card the game plays on (any card when MAME picks it) must be
+     * let go by the front's sounds before MAME opens it (AudioOutput.ts waitForPlaybackClosed()).
+     * Launched anyway past SOUND_CARD_WAIT_MS: a silent game rather than none.
+     */
+    protected async waitForSoundCard(romName: string, card: string | undefined): Promise<void> {
+        const waited = await waitForPlaybackClosed(card, SOUND_CARD_WAIT_MS);
+        if (waited === null) {
+            Log.warn(`[MameService] ${card ?? 'A sound card'} still busy after ${SOUND_CARD_WAIT_MS} ms: ${romName} may be silent.`);
+        } else if (waited > 0) {
+            Log.info(`[MameService] Waited ${waited} ms for ${card ?? 'the sound cards'} to be let go before ${romName}.`);
+        }
+    }
+
     /**
      * Exec mame with param -lx to get game informations in XML
      * @param romName
@@ -195,18 +256,26 @@ export default class MameService {
         );
     }
 
+    /** The games' volume set in the BO (Volume.ts), read each time: the BO may have changed it. */
+    protected readGameVolumeArgs(): string[] {
+        const config = new Config();
+        config.load();
+        return gameVolumeArgs(config.gamesVolume);
+    }
+
     /**
      * Start game on mame
      * @param romName
      */
-    public startGame(romName: string, capture = this.prepareCapture()): Promise<ChildProcess> {
+    public startGame(romName: string, capture = this.prepareCapture(romName)): Promise<ChildProcess> {
         return new Promise(async (resolve, reject) => {
             await this.stopGame();
+            const soundArgs = await this.prepareSoundOutput(romName);
             // With the BO's capture daemon, so the BO can list and rebind this game's controls
             // while it's being played (see CaptureDaemon.ts), and which reports on the game for its
             // scores (ScoreCapture.ts): `capture` prepared beforehand to say where.
             this.gameProcess = execFile(this.mameBinary, [
-                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS,
+                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS, ...soundArgs, ...this.readGameVolumeArgs(),
                 ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
             ], {
                 killSignal: 'SIGQUIT',
@@ -220,7 +289,14 @@ export default class MameService {
                     return reject(stderr);
                 }
             });
+            // A joystick lost during the game and back is out of MAME's reach, its quit button
+            // too: the game is quit for the player (JoystickReturn.ts).
+            const stopWatch = watchJoystickReturn(() => {
+                Log.warn('[MameService] A joystick lost during ' + romName + ' is back, out of MAME\'s reach: quitting the game.');
+                void this.stopGame();
+            });
             this.gameProcess.on('close', (e) => {
+                stopWatch();
                 this.gameProcess = null;
                 if (capture) {
                     rmSync(capture.dir, {recursive: true, force: true});
@@ -234,9 +310,9 @@ export default class MameService {
      * The game still launches without it (the BO then can't configure it live) if the script
      * can't be set up.
      */
-    public prepareCapture(): {dir: string; scriptPath: string} | null {
+    public prepareCapture(romName: string): {dir: string; scriptPath: string} | null {
         try {
-            return prepareCaptureDir(getRendererPublicPath());
+            return prepareCaptureDir(getRendererPublicPath(), romName);
         } catch (error) {
             console.error('[MameService] Capture daemon unavailable:', error);
             return null;

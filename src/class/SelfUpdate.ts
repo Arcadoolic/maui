@@ -1,10 +1,12 @@
 import {app as electronApp} from 'electron';
-import {execFileSync, spawn} from 'child_process';
+import {spawn} from 'child_process';
 import {chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync} from 'fs';
 import {homedir, tmpdir} from 'os';
 import {dirname, join} from 'path';
 import {Readable, Transform} from 'stream';
 import {pipeline} from 'stream/promises';
+import {countEntries, extractAppImage} from '@/class/AppImageExtract';
+import {plainFs} from '@/class/PlainFs';
 import {canRestartKiosk, isKioskLayout, restartKiosk} from '@/class/KioskRestart';
 import {findLinuxAppImage} from '@/class/LinuxUpdate';
 import {findWindowsInstaller, isInstalledByInstaller, WINDOWS_INSTALLER_ARGS} from '@/class/WindowsUpdate';
@@ -19,7 +21,7 @@ import type {UpdateStep} from '@/class/FrontUpdateBridge';
 // need it.
 
 // The steps of an installation are the ones the front shows (FrontUpdateBridge.ts).
-export type UpdateProgress = (step: Extract<UpdateStep, {step: 'download' | 'extract' | 'switch'}>) => void;
+export type UpdateProgress = (step: Extract<UpdateStep, {step: 'download' | 'extract' | 'switch' | 'cleanup'}>) => void;
 
 // How often a download reports, at most: a line per megabyte in the BO, a bar on the front.
 const DOWNLOAD_REPORT_BYTES = 1024 * 1024;
@@ -116,14 +118,18 @@ export async function installAppImage(downloadUrl: string, progress: UpdateProgr
     // OS, and renameSync() across devices fails with EXDEV - which used to happen *after* the
     // current install had already been moved to .old, leaving no ~/squashfs-root at all.
     const workDir = mkdtempSync(join(dirname(squashfsRoot), '.mame-awesome-ui-update-'));
+    // The size of the installed version, counted while downloading: the extraction's estimate.
+    const totalEntries = countEntries(squashfsRoot);
     try {
         const appImagePath = join(workDir, 'download.AppImage');
         await downloadUpdateAsset(downloadUrl, appImagePath, progress);
 
         chmodSync(appImagePath, 0o755);
 
-        progress({step: 'extract'});
-        execFileSync(appImagePath, ['--appimage-extract'], {cwd: workDir, stdio: ['ignore', 'pipe', 'pipe']});
+        // Asynchronous: a synchronous extraction froze the main process (BO and front) for minutes.
+        const total = await totalEntries;
+        progress({step: 'extract', entries: 0, totalEntries: total});
+        await extractAppImage(appImagePath, workDir, entries => progress({step: 'extract', entries, totalEntries: total}));
 
         const newSquashfsRoot = join(workDir, 'squashfs-root');
         if (!existsSync(newSquashfsRoot)) {
@@ -157,7 +163,10 @@ export async function installAppImage(downloadUrl: string, progress: UpdateProgr
             throw error;
         }
     } finally {
-        rmSync(workDir, {recursive: true, force: true});
+        // The previous backup (a whole version) goes with it: asynchronous too, and without
+        // Electron's .asar support, which made rm() go into app.asar and fail (PlainFs.ts).
+        progress({step: 'cleanup'});
+        await plainFs.promises.rm(workDir, {recursive: true, force: true});
     }
 }
 

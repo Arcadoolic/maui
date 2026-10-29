@@ -1,10 +1,9 @@
-import {readFileSync, readdirSync} from 'fs';
+import {readFileSync, readdirSync, statSync} from 'fs';
 import {parse as iniParse} from 'ini';
 import Game from '@/model/Game.model';
 import MameService from '@/class/MameService.class';
 import Category from '@/model/Category.model';
 import HiscoreService from '@/class/HiscoreService.class';
-import Log from 'electron-log';
 import {splitGameTitle} from '@/class/GameTitle';
 // Sequelize's own helpers (literal...) come from sequelize-typescript, never from the sequelize package
 // itself: imported in the renderer, that makes vite-plugin-electron-renderer generate a module
@@ -19,13 +18,28 @@ const Sequelize = SequelizeTS.Sequelize;
  * jumps (AlphaJump.ts) rely on it.
  */
 export const GAMES_BY_TITLE: NonNullable<NonNullable<Parameters<typeof Game.findAll>[0]>['order']> = [[Sequelize.literal('shortname COLLATE NOCASE'), 'ASC'], ['romName', 'ASC']];
-import {Vote, VOTE_DOWN} from '@/class/GameVote';
+import {Vote, VOTE_DOWN, voteFields} from '@/class/GameVote';
 import {removeFavoriteFromDisk} from '@/class/FavoritesStore';
 import {parseCatverIni} from '@/class/CatverGenres';
 
+/** A file's path and modification time, '' without a file: what tells a new version of it. */
+function fileVersion(path: string | null | undefined): string {
+    if (!path) {
+        return '';
+    }
+    try {
+        return `${path}|${statSync(path).mtimeMs}`;
+    } catch {
+        return '';
+    }
+}
+
 export default class GameService {
-    protected static genreIni?: { [genre: string]: { [romName: string]: boolean } };
-    protected static nplayersIni?: { [romName: string]: { [romName: string]: boolean } };
+    // Parsed once per file version: `key` is the file's path and modification time ('' without
+    // a file), so a configuration pack installed or replaced while MAUI runs is read again at the
+    // next sync - the front's reload after an import keeps these statics.
+    protected static genreIni?: {key: string; data: { [genre: string]: { [romName: string]: boolean } }};
+    protected static nplayersIni?: {key: string; data: { [romName: string]: { [romName: string]: boolean } }};
 
     protected static nplayersTranslation: { [k: string]: Nplayers } = {
         '12P sim': {sim: 12, alt: 0},
@@ -118,7 +132,6 @@ export default class GameService {
         }
         await Game.bulkCreate(games, {
             updateOnDuplicate: ['hi', 'id_category', 'player_alt', 'player_sim'],
-            logging: Log.log,
         });
         // The list loadGames() cached no longer matches the table.
         this.games = undefined;
@@ -136,16 +149,16 @@ export default class GameService {
      * parseCatverIni().
      */
     public getGameCategories() {
-        if (!GameService.genreIni) {
-            const catverIniPath = this.mameService.catverIniPath;
-            const genreIniPath = this.mameService.genreIniPath;
-            GameService.genreIni = catverIniPath
-                ? parseCatverIni(readFileSync(catverIniPath, 'utf8'))
-                : genreIniPath
-                    ? iniParse(readFileSync(genreIniPath, 'utf8'))
-                    : {};
+        const catverIniPath = this.mameService.catverIniPath;
+        const path = catverIniPath ?? this.mameService.genreIniPath;
+        const key = fileVersion(path);
+        if (GameService.genreIni?.key !== key) {
+            GameService.genreIni = {
+                key,
+                data: !path ? {} : catverIniPath ? parseCatverIni(readFileSync(path, 'utf8')) : iniParse(readFileSync(path, 'utf8')),
+            };
         }
-        return GameService.genreIni;
+        return GameService.genreIni.data;
     }
 
     /**
@@ -171,13 +184,14 @@ export default class GameService {
      * @param romName
      */
     public getGameNplayers(romName: string): Nplayers {
-        if (!GameService.nplayersIni) {
-            GameService.nplayersIni = this.mameService.nplayersIniPath
-                ? iniParse(readFileSync(this.mameService.nplayersIniPath, 'utf8'))
-                : {};
+        const path = this.mameService.nplayersIniPath;
+        const key = fileVersion(path);
+        if (GameService.nplayersIni?.key !== key) {
+            GameService.nplayersIni = {key, data: path ? iniParse(readFileSync(path, 'utf8')) : {}};
         }
-        for (const nplayers in GameService.nplayersIni) {
-            if (GameService.nplayersIni[nplayers][romName]) {
+        const nplayersIni = GameService.nplayersIni.data;
+        for (const nplayers in nplayersIni) {
+            if (nplayersIni[nplayers][romName]) {
                 if (GameService.nplayersTranslation[nplayers]) {
                     return GameService.nplayersTranslation[nplayers];
                 } else {
@@ -220,11 +234,14 @@ export default class GameService {
      * Save the cabinet's vote on a game (see GameVote.ts). A thumbs down also takes the game out
      * of mame's favorites when `removeFromFavorites` is set (BO, MAUI tab) - the game is then
      * soft-deleted by the same favorites resync Init.vue runs on every start, and stays
-     * restorable from the BO's "Removed" tab. Returns whether the game left the favorites.
+     * restorable from the BO's "Removed" tab. `starred`: the star, a thumbs up that also puts the
+     * game in "My favourites" (voteFields()). Returns whether the game left the favorites.
      */
-    public async applyVote(game: Game, vote: Vote, removeFromFavorites: boolean): Promise<boolean> {
-        await Game.update({vote}, {where: {romName: game.romName}});
-        game.vote = vote;
+    public async applyVote(game: Game, vote: Vote, removeFromFavorites: boolean, starred = false): Promise<boolean> {
+        const fields = voteFields(vote, starred);
+        await Game.update(fields, {where: {romName: game.romName}});
+        game.vote = fields.vote;
+        game.starred = fields.starred;
         if (vote !== VOTE_DOWN || !removeFromFavorites) {
             return false;
         }
@@ -256,6 +273,17 @@ export default class GameService {
     public async loadHiscoreGames() {
         return await Game.findAll({
             where: {hi: true},
+            order: GAMES_BY_TITLE,
+        });
+    }
+
+    /**
+     * Starred games - the content of the dynamic "My favourites" category. Queried on every call,
+     * like loadHiscoreGames(), so a star given a moment ago is there.
+     */
+    public async loadStarredGames() {
+        return await Game.findAll({
+            where: {starred: true},
             order: GAMES_BY_TITLE,
         });
     }

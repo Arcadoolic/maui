@@ -23,12 +23,6 @@ class MemoryStore implements ScoreStore {
     public async remove() {}
 
     public async reschedule() {}
-
-    public async getBest() {
-        return null;
-    }
-
-    public async setBest() {}
 }
 
 const player = (pseudo3: string): PublishablePlayer => ({

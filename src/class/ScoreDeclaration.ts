@@ -139,10 +139,10 @@ export class ScoreDeclarations {
             return false;
         }
         game.given.set(playerId, held.row.score);
-        const queued = await queueDeclaredScore(this.deps.store, playerId, held.row, {
+        await queueDeclaredScore(this.deps.store, playerId, held.row, {
             romname, achievedAt: held.achievedAt, startupId: held.startupId, newId: this.deps.newId,
             ...(held.integrity ? {integrity: held.integrity} : {}),
         });
-        return queued !== null;
+        return true;
     }
 }

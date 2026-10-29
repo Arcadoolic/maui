@@ -4,7 +4,7 @@ import Hiscore from '@/model/Hiscore.model';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
 import {latestBestMessages, type BandMessage} from '@/class/CabinetMessages';
-import * as Log from 'electron-log';
+import Log from 'electron-log';
 import {scorePseudo3} from '@/class/HiscoreSupport';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 
@@ -51,6 +51,19 @@ export default class HiscoreService {
             score: row.score,
             suffix: row.scoreSuffix,
         })), limit);
+    }
+
+    /**
+     * The best score an active player of this cabinet holds on `game`, 0 when none: compared before
+     * and after a game for the front's fanfare (UiSounds.ts champion).
+     */
+    public async loadCabinetBest(game: Game): Promise<number> {
+        const best = await Hiscore.findOne({
+            where: {id_game: game.id_game},
+            include: [{model: User, required: true, where: {active: true}}],
+            order: [['score', 'DESC']],
+        });
+        return best?.score ?? 0;
     }
 
     /**

@@ -15,7 +15,7 @@
                 </div>
             </div>
             <div class="hint">
-                <span class="arcadeButton"></span>
+                <control-icon action="confirm"></control-icon>
                 to choose
             </div>
         </div>
@@ -28,15 +28,18 @@ import {useControllable} from '@/composables/useControllable';
 import {MAUI_KEYS} from '@/class/MauiControls';
 import {controlKey} from '@/class/MauiControlsRuntime';
 import Modal from '@/components/Modal.vue';
+import ControlIcon from '@/components/ControlIcon.vue';
 import {getConfiguration} from '@/services';
 
-// Asked when the cabinet wakes up from idle (Home.vue, FrontUpdate.ts): yes installs the version
-// and restarts MAUI on it, no keeps this one. Laid out like the vote (VoteModal.vue).
+// Asked when the cabinet wakes up from idle, or once the start of MAUI found a version (Home.vue,
+// FrontUpdate.ts): yes installs the version and restarts MAUI on it, no keeps this one. Laid out
+// like the vote (VoteModal.vue).
 
 defineProps<{version: string}>();
-const emit = defineEmits<{answer: [install: boolean]}>();
+const emit = defineEmits<{answer: [install: boolean], expire: []}>();
 
-// Whoever woke the cabinet may have walked away: no answer is a no, like the vote's skip.
+// Nobody answered: `expire`, which Home.vue takes as a no after a wake (whoever woke the cabinet
+// walked away), and not at the start, when nobody may be in front of it.
 const AUTO_NO_MS = 20000;
 
 // Material "thumb_up" icon (the "no" one is the same path flipped), as in VoteModal.vue.
@@ -65,7 +68,7 @@ function pick(index: number) {
 
 let autoNo: number | undefined;
 onMounted(() => {
-    autoNo = window.setTimeout(() => emit('answer', false), AUTO_NO_MS);
+    autoNo = window.setTimeout(() => emit('expire'), AUTO_NO_MS);
 });
 onUnmounted(() => clearTimeout(autoNo));
 
@@ -154,14 +157,5 @@ onKeyup(() => {
         display: flex;
         align-items: center;
         justify-content: center;
-    }
-    .arcadeButton {
-        display: inline-block;
-        width: 30px;
-        height: 30px;
-        border-radius: 50%;
-        box-shadow: #a7a700 1px 1px;
-        margin: 0 10px 0 0;
-        background-color: snow;
     }
 </style>

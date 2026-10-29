@@ -9,8 +9,11 @@ export default class Gamepads {
     public static gamepadsIndex: number[] = [];
     public static animationFrameRequest: number = 0;
     public static controllerMapping: {[key: string]: ControllerMapping} = ControllerMappingJson;
+    // Inputs without a MAUI key that a hotkey uses (Hotkeys.ts, mauiInputId() form): their presses
+    // are sent too, with an empty key.
+    public static hotkeyInputs: Set<string> = new Set();
     public static gamepadKeyPressed:
-    Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null}>}> = [];
+    Array<{buttons: boolean[], axes: Array<{wasPressed: boolean, lastPressedKey: string|null, lastPressedInput: string}>}> = [];
     protected static stop: boolean = false;
     // True while the requestAnimationFrame polling loop is actually scheduled. Guards init()
     // against starting a second concurrent loop (e.g. two focus events firing close together,
@@ -113,21 +116,25 @@ export default class Gamepads {
             }
 
             // Joysticks
+            const layout = this.layoutOf(gamepad);
             gamepad.axes.forEach((value: number, index: number) => {
                 let eventName: string|null = null;
-                if (mapping.axes[index]) {
+                if (mapping.axes[index] || this.hotkeyInputs.has(`axis|${index}|0|${layout}`)
+                    || this.hotkeyInputs.has(`axis|${index}|1|${layout}`)) {
                     if (!this.gamepadKeyPressed[gamepadsKey].axes[index]) {
                         this.gamepadKeyPressed[gamepadsKey].axes[index] = {
                             wasPressed: false as boolean,
                             lastPressedKey: null as string|null,
+                            lastPressedInput: '',
                         };
                     }
                     const axe = this.gamepadKeyPressed[gamepadsKey].axes[index];
                     if (Math.abs(value) > this.AXIS_DEADZONE && !axe.wasPressed) {
                         eventName = 'gamepadKeydown';
                         axe.wasPressed = true;
-                        axe.lastPressedKey = value > 0 ?
-                            mapping.axes[index][1] : mapping.axes[index][0];
+                        const direction = value > 0 ? 1 : 0;
+                        axe.lastPressedKey = mapping.axes[index]?.[direction] ?? '';
+                        axe.lastPressedInput = `axis|${index}|${direction}|${layout}`;
                     // Symmetric with the press threshold above, rather than an exact `=== 0`
                     // check: plenty of sticks/hat-switches never rest at a perfect 0 (potentiometer
                     // calibration drift, or a residual value from the driver), which left wasPressed
@@ -143,6 +150,7 @@ export default class Gamepads {
                             detail: {
                                 key: axe.lastPressedKey,
                                 value,
+                                input: axe.lastPressedInput,
                             },
                         });
                         window.dispatchEvent(event);
@@ -152,7 +160,8 @@ export default class Gamepads {
 
             gamepad.buttons.forEach((button, index: number) => {
                 let eventName: string|null = null;
-                if (mapping.buttons[index]) {
+                const input = `button|${index}|${layout}`;
+                if (mapping.buttons[index] || this.hotkeyInputs.has(input)) {
                     const wasPressed = this.gamepadKeyPressed[gamepadsKey].buttons[index];
                     if (button.pressed && !wasPressed) {
                         eventName = 'gamepadKeydown';
@@ -165,8 +174,9 @@ export default class Gamepads {
                     if (eventName && !this.capturing) {
                         const event = new CustomEvent(eventName, {
                             detail: {
-                                key: mapping.buttons[index],
+                                key: mapping.buttons[index] ?? '',
                                 value: button.value,
+                                input,
                             },
                         });
                         window.dispatchEvent(event);
@@ -261,7 +271,13 @@ export default class Gamepads {
     // fall back to the standard layout instead of silently dropping their input:
     // most of them follow it in practice regardless of what the browser reports.
     protected static mappingFor(gamepad: PolledPad): ControllerMapping {
-        return this.controllerMapping[gamepad.mapping || gamepad.id] ?? this.controllerMapping.standard;
+        return this.controllerMapping[this.layoutOf(gamepad)];
+    }
+
+    /** The layout a pad's inputs are read with: its own when it has one, else the standard one. */
+    protected static layoutOf(gamepad: PolledPad): string {
+        const own = gamepad.mapping || gamepad.id;
+        return this.controllerMapping[own] ? own : 'standard';
     }
 
     /**
@@ -296,7 +312,7 @@ export default class Gamepads {
             if (axe && axe.wasPressed) {
                 window.dispatchEvent(new CustomEvent(
                     'gamepadKeyup',
-                    { detail: {key: axe.lastPressedKey, value: 0}},
+                    { detail: {key: axe.lastPressedKey, value: 0, input: axe.lastPressedInput}},
                 ));
             }
         }
@@ -304,7 +320,7 @@ export default class Gamepads {
             if (this.gamepadKeyPressed[gamepadIndex].buttons[buttonIndex]) {
                 window.dispatchEvent(new CustomEvent(
                     'gamepadKeyup',
-                    { detail: {key: mapping.buttons[buttonIndex], value: 0}},
+                    { detail: {key: mapping.buttons[buttonIndex] ?? '', value: 0, input: `button|${buttonIndex}|${this.layoutOf(gamepad)}`}},
                 ));
             }
         }

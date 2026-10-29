@@ -18,8 +18,8 @@ describe('toBoardRows', () => {
         const avatarOf = vi.fn((pseudo3: string, hash: string | null) => hash ? `file:///${hash}.png` : null);
 
         expect(toBoardRows(json, 2, avatarOf)).toEqual([
-            {key: 'id-NOB/300', pseudo3: 'NOB', score: 300, avatar: 'file:///h1.png'},
-            {key: 'id-SKI/200', pseudo3: 'SKI', score: 200, avatar: null},
+            {key: 'id-NOB/300', player: 'id-NOB', pseudo3: 'NOB', score: 300, avatar: 'file:///h1.png'},
+            {key: 'id-SKI/200', player: 'id-SKI', pseudo3: 'SKI', score: 200, avatar: null},
         ]);
         expect(avatarOf).toHaveBeenCalledWith('NOB', 'h1');
     });

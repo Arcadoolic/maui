@@ -21,7 +21,11 @@ const Sequelize = SequelizeTS.Sequelize;
 // players are not in them: their scores stay in the local database and show again in LOCAL mode.
 
 export interface BoardRow {
+    // One score: changes with it.
     key: string;
+    // One player, whatever their score: MAUI-API's id in ONLINE mode, the local one otherwise.
+    // Two players may share their initials across cabinets.
+    player: string;
     pseudo3: string;
     score: number;
     // file:// URL, null for the default picture.
@@ -40,6 +44,7 @@ export function toBoardRows(entriesJson: string | null, limit: number, avatarOf:
     }
     return entries.slice(0, limit).map(entry => ({
         key: `${entry.playerId}/${entry.score}`,
+        player: entry.playerId,
         pseudo3: entry.pseudo3,
         score: entry.score,
         avatar: avatarOf(entry.pseudo3, entry.avatar),
@@ -100,6 +105,7 @@ function localRows(hiscores: Hiscore[]): BoardRow[] {
     const avatarOf = avatarResolver();
     return hiscores.map(hiscore => ({
         key: String(hiscore.id_hiscore),
+        player: String(hiscore.user.id_user),
         pseudo3: hiscore.user.pseudo_3,
         score: hiscore.score,
         avatar: avatarOf(hiscore.user.pseudo_3, null),

@@ -445,6 +445,32 @@ describe('player sync', () => {
     });
 });
 
+describe('score recovery requests', () => {
+    it('answers them after the player sync, then every 10 heartbeats', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const order: string[] = [];
+        const syncPlayers = vi.fn(async () => {
+            order.push('sync');
+            return {kind: 'ok' as const, value: 0};
+        });
+        const answerRecoveries = vi.fn(async () => {
+            order.push('answer');
+            return {queued: 1, notFound: 0, failure: null};
+        });
+        const flushScores = vi.fn(async () => ({sent: 0, accepted: 0, notImproved: 0, rejected: {}}));
+        const {instance} = session(fetchImpl, {syncPlayers, answerRecoveries, flushScores});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(order).toEqual(['sync', 'answer']);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(answerRecoveries).toHaveBeenCalledTimes(2);
+        instance.stop();
+    });
+});
+
 describe('score flush', () => {
     const empty = {sent: 0, accepted: 0, notImproved: 0, rejected: {}};
 
@@ -549,3 +575,50 @@ describe('leaderboard refresh', () => {
     });
 });
 
+describe('during a game', () => {
+    const empty = {sent: 0, accepted: 0, notImproved: 0, rejected: {}};
+
+    it('only sends the heartbeat, then does what waited as soon as the game ends, its game first', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl, calls} = api();
+        const syncPlayers = vi.fn(async () => ({kind: 'ok' as const, value: 0}));
+        const flushScores = vi.fn(async () => empty);
+        const reportOpinions = vi.fn(async () => ({sent: 0}));
+        const refreshLeaderboards = vi.fn(async () => undefined);
+        const {instance} = session(fetchImpl, {syncPlayers, flushScores, reportOpinions, refreshLeaderboards});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        [syncPlayers, flushScores, reportOpinions, refreshLeaderboards].forEach(mock => mock.mockClear());
+
+        instance.pause();
+        // 10 heartbeats: the player sync and the leaderboards would have been due.
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(paths(calls).filter(p => p === '/heartbeat')).toHaveLength(10);
+        expect(await instance.flushScoresNow()).toBeNull();
+        [syncPlayers, flushScores, reportOpinions, refreshLeaderboards].forEach(mock => expect(mock).not.toHaveBeenCalled());
+
+        instance.resume('mslug');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(flushScores).toHaveBeenCalledOnce();
+        expect(reportOpinions).toHaveBeenCalledOnce();
+        expect(syncPlayers).toHaveBeenCalledOnce();
+        expect(refreshLeaderboards).toHaveBeenCalledWith(expect.anything(), 'mslug');
+
+        // Back to the usual: the next refresh asks no game first.
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(refreshLeaderboards).toHaveBeenLastCalledWith(expect.anything(), undefined);
+        instance.stop();
+    });
+
+    it('does nothing more when the game ends without a session running', async () => {
+        const {fetchImpl} = api();
+        const flushScores = vi.fn(async () => empty);
+        const {instance} = session(fetchImpl, {flushScores});
+
+        instance.pause();
+        instance.resume('dkong');
+
+        expect(flushScores).not.toHaveBeenCalled();
+    });
+});

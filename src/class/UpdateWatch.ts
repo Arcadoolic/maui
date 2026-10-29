@@ -27,10 +27,16 @@ async function fetchReleases(): ReturnType<ReleasesFetcher> {
 export class UpdateWatch {
     private releases: WatchedRelease[] = [];
     private timers: ReturnType<typeof setTimeout>[] = [];
+    private readonly listeners: (() => void)[] = [];
 
+    /**
+     * `canInstall`: whether this machine can install a version from its files' names (a Windows
+     * cabinet needs the installer, which development builds only carry when asked for).
+     */
     public constructor(
         private readonly currentVersion: string,
         private readonly fetcher: ReleasesFetcher = fetchReleases,
+        private readonly canInstall: (assetNames: string[]) => boolean = () => true,
     ) {}
 
     /** Not at once: the start of the application is not slowed down by it. */
@@ -43,18 +49,28 @@ export class UpdateWatch {
         this.timers.push(first, every);
     }
 
+    /** Called after each check GitHub answered: the front's offer at the start (background.ts). */
+    public onCheck(listener: () => void): void {
+        this.listeners.push(listener);
+    }
+
     /** A failure keeps what was known. Never throws. */
     public async check(): Promise<void> {
         try {
             this.releases = await this.fetcher();
         } catch {
             // Out of reach for now: tried again at the next check.
+            return;
         }
+        this.listeners.forEach(listener => listener());
     }
 
-    /** The newer version on `channel`, null when there is none or GitHub never answered. */
+    /**
+     * The newer version on `channel` this machine can install, null when there is none or GitHub
+     * never answered.
+     */
     public available(channel: UpdateChannel = 'releases'): string | null {
-        return newestAbove(this.releases, this.currentVersion, channel);
+        return newestAbove(this.releases, this.currentVersion, channel, release => this.canInstall(release.assets.map(asset => asset.name)));
     }
 
     /** A version of the list, with its files; null when GitHub did not list it. */

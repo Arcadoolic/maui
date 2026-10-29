@@ -329,6 +329,20 @@ describe('Config front idle', () => {
         }
     });
 
+    it('shows the launch screen 2 seconds by default, a whole number of seconds from 0 to 30', () => {
+        expect(new Config().launchStageSeconds).toBe(2);
+        for (const [written, expected] of [[0, 0], [12, 12], [30, 30], [31, 2], [-1, 2], [1.5, 2], ['5', 2], [undefined, 2]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.launchStageSeconds = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.launchStageSeconds).toBe(expected);
+        }
+    });
+
     it('switches the screen off asleep unless told not to', () => {
         expect(new Config().frontSleepScreenOff).toBe(true);
         for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
@@ -340,6 +354,39 @@ describe('Config front idle', () => {
             const config = new Config();
             config.load();
             expect(config.frontSleepScreenOff).toBe(expected);
+        }
+    });
+
+    it('plays the front\'s sounds by default, and reads their settings back', () => {
+        const defaults = new Config();
+        expect([defaults.uiSoundsEnabled, defaults.uiSoundsVolume, defaults.uiSoundsDisabled]).toEqual([true, 60, []]);
+        expect(defaults.gamesVolume).toBe(100);
+        for (const [enabled, volume, disabled, expected] of [
+            [false, 0, ['star', 'move', 'nope'], [false, 0, ['move', 'star']]],
+            [undefined, undefined, undefined, [true, 60, []]],
+            ['no', 250, 'move', [true, 60, []]],
+        ] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            Object.assign(raw, {uiSoundsEnabled: enabled, uiSoundsVolume: volume, uiSoundsDisabled: disabled});
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect([config.uiSoundsEnabled, config.uiSoundsVolume, config.uiSoundsDisabled]).toEqual(expected);
+        }
+    });
+
+    it('reads the games\' volume back, 100 when missing or out of range', () => {
+        for (const [written, expected] of [[30, 30], [0, 0], [undefined, 100], [140, 100], ['loud', 100]] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.gamesVolume = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.gamesVolume).toBe(expected);
         }
     });
 });
@@ -378,6 +425,7 @@ describe('Config.save', () => {
 
         const raw = JSON.parse(readFileSync(configPath, 'utf8'));
         expect(Object.keys(raw).sort()).toEqual([
+            'audioOutput',
             'bezelAspect',
             'boIdleMinutes',
             'cabinetPlayersPublic',
@@ -389,6 +437,8 @@ describe('Config.save', () => {
             'frontSleepScreenOff',
             'frontUpdateEnabled',
             'fullscreen',
+            'gamesVolume',
+            'launchStageSeconds',
             'mameBinaryName',
             'mamePath',
             'onlineBadgeDotOnly',
@@ -405,7 +455,11 @@ describe('Config.save', () => {
             'ssUserPassword',
             'thumbsDownRemovesFavorite',
             'uiMode',
+            'uiSoundsDisabled',
+            'uiSoundsEnabled',
+            'uiSoundsVolume',
             'updateChannel',
+            'videoOutput',
             'voteEnabled',
         ]);
     });

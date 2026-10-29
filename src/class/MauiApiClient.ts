@@ -3,6 +3,7 @@
 // LOCAL mode. Branches on the problem `code`, never on `title` or `detail`, as the contract asks.
 
 import type {GameOpinion} from '@/class/OpinionReport';
+import type {DiagnosticBundle} from '@/class/DiagnosticBundle';
 import type {GameIntegrityReport} from '@/class/GameIntegrity';
 
 export interface MauiApiCredentials {
@@ -89,13 +90,47 @@ export interface ScoreSubmission {
     // ISO 8601, the cabinet's clock.
     achievedAt: string;
     startupId?: string | null;
-    // Set when the game wrote no name and the player was picked on the cabinet (maui-api D61).
-    attribution?: 'declared';
+    // Set when the game wrote no name and the player was picked on the cabinet (maui-api D61), or
+    // when the score answers an administrator's request (maui-api D93), with `recoveryId`.
+    attribution?: 'declared' | 'recovered';
+    // The request this score answers (maui-api D93): its id is the request's too.
+    recoveryId?: string;
     // What the cabinet saw of the game, up to the score (maui-api D87).
     integrity?: GameIntegrityReport;
 }
 
 export type ScoreStatus = 'accepted' | 'not_improved' | 'rejected';
+
+// A score this cabinet's file holds and MAUI-API never got, asked for by an administrator (maui-api D93).
+export interface ScoreRecoveryRequest {
+    id: string;
+    playerId: string;
+    romname: string;
+    table: string;
+    score: number;
+    // When the game was played: the score's date.
+    achievedAt: string;
+}
+
+export type RecoveryNotFoundReason = 'not_in_table' | 'player_not_on_cabinet' | 'unsupported' | 'no_file' | 'unreadable';
+
+function parseScoreRecoveries(body: unknown): ScoreRecoveryRequest[] | null {
+    if (!isObject(body) || !Array.isArray(body.recoveries)) {
+        return null;
+    }
+    const requests: ScoreRecoveryRequest[] = [];
+    for (const item of body.recoveries) {
+        if (!isObject(item) || typeof item.id !== 'string' || typeof item.player_id !== 'string' || typeof item.romname !== 'string'
+            || typeof item.table !== 'string' || typeof item.score !== 'number' || typeof item.achieved_at !== 'string') {
+            return null;
+        }
+        requests.push({
+            id: item.id, playerId: item.player_id, romname: item.romname, table: item.table,
+            score: item.score, achievedAt: item.achieved_at,
+        });
+    }
+    return requests;
+}
 
 export interface ScoreResult {
     id: string;
@@ -433,9 +468,22 @@ export class MauiApiClient {
                 achieved_at: score.achievedAt,
                 startup_id: score.startupId ?? null,
                 ...(score.attribution ? {attribution: score.attribution} : {}),
+                ...(score.recoveryId ? {recovery_id: score.recoveryId} : {}),
                 ...(score.integrity ? {integrity: score.integrity} : {}),
             }))},
         );
+    }
+
+    /** The open requests of this cabinet to recover a score (maui-api D93). */
+    public listScoreRecoveries(): Promise<ApiResult<ScoreRecoveryRequest[]>> {
+        return this.call('GET', '/score-recoveries', 200, async response => parseScoreRecoveries(await readJson(response)));
+    }
+
+    /** A requested score not found in the file: why, and the table read (maui-api D93). */
+    public reportScoreRecovery(id: string, reason: RecoveryNotFoundReason, table: {rank: number; score: number | string; name: string}[]): Promise<ApiResult<void>> {
+        return this.call('POST', `/score-recoveries/${encodeURIComponent(id)}/result`, 204, async () => undefined, {
+            outcome: 'not_found', reason, table: table.map(row => ({rank: row.rank, score: row.score, name: row.name})),
+        });
     }
 
     /** The latest score events of the fleet, newest first (maui-api D82). */
@@ -511,6 +559,31 @@ export class MauiApiClient {
             },
             form,
         );
+    }
+
+    /**
+     * The files of a game and what the cabinet makes of them, for an administrator to look into a
+     * missing score (maui-api D92): its id in MAUI-API.
+     */
+    public sendDiagnostic(bundle: DiagnosticBundle): Promise<ApiResult<string>> {
+        const form = new FormData();
+        form.append('romname', bundle.romName);
+        if (bundle.comment !== null) {
+            form.append('comment', bundle.comment);
+        }
+        form.append('report', JSON.stringify(bundle.report));
+        bundle.files.forEach((file, index) => {
+            form.append(`files[${index}][area]`, file.area);
+            form.append(`files[${index}][name]`, file.name);
+            if (file.modified) {
+                form.append(`files[${index}][modified]`, file.modified.toISOString());
+            }
+            form.append(`files[${index}][content]`, new Blob([new Uint8Array(file.content)]), file.name);
+        });
+        return this.call('POST', '/diagnostics', 201, async (response) => {
+            const body = await readJson(response);
+            return isObject(body) && typeof body.id === 'string' ? body.id : null;
+        }, form);
     }
 
     private headers(hasBody: boolean): Record<string, string> {

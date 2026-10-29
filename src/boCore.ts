@@ -13,6 +13,7 @@ import {SqliteOpinionStore} from '@/class/SqliteOpinionStore';
 import {ScoreCapture} from '@/class/ScoreCapture';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
+import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
 import type {FrontControls} from '@/class/FrontControlsBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
@@ -21,12 +22,14 @@ import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
 import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
 import {syncPlayers} from '@/class/PlayerSync';
+import {answerScoreRecoveries, readRecoveryTable, recordRecoveryAnswer} from '@/class/ScoreRecovery';
 import {isOnlineActive} from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {BoOnDemand, type BoApp} from '@/class/BoOnDemand';
 import {CABINET_BO_PORT, describeBoUrl} from '@/class/BoUrl';
 import {isKioskLayout} from '@/class/KioskRestart';
 import {UpdateWatch} from '@/class/UpdateWatch';
+import {findInstallAsset, isSelfUpdateCapable} from '@/class/SelfUpdate';
 // Same *TS import shape as Database.class.ts, which is not imported: it pulls in
 // GameService.class -> MameService.class -> Helpers.class.ts's @electron/remote import at module
 // scope, which would break the main process. The models themselves are electron-free.
@@ -180,12 +183,12 @@ const IDLE_CHECK_MS = 60 * 1000;
 /**
  * Starts what always runs, and opens the BO's port. `databaseReady` resolves once the database
  * exists and is migrated (see bootstrapDatabase()); BO requests arriving before wait for it.
- * `reloadFront`, `onReset`, `showGameOnFront`, `frontControls` and `favoritesChanged` are handed to
- * the BO when it is loaded (see createBoApp()).
+ * `reloadFront`, `onReset`, `showGameOnFront`, `frontControls`, `favoritesChanged` and `uiSounds` are
+ * handed to the BO when it is loaded (see createBoApp()).
  */
 export function startCore(
     port: number, reloadFront: () => void, onReset: () => void, showGameOnFront: FrontGameShower,
-    frontControls: FrontControls, favoritesChanged: FrontFavoritesNotifier,
+    frontControls: FrontControls, favoritesChanged: FrontFavoritesNotifier, uiSounds: FrontUiSounds,
 ): StartedCore {
     const refusedAvatars = new Set<string>();
     // Default avatars written as SVG by an earlier version become PNGs (see DefaultAvatar.ts). A
@@ -233,7 +236,13 @@ export function startCore(
         syncPlayers: client => syncPlayers(client, readLocalAvatar, refusedAvatars, saveLocalAvatar, new AvatarLedgerFile()),
         flushScores: client => flushOutbox(scoreStore, client),
         reportOpinions: client => reportOpinions(opinionStore, client),
-        refreshLeaderboards: client => leaderboards.refresh(client),
+        refreshLeaderboards: (client, first) => leaderboards.refresh(client, first),
+        answerRecoveries: client => answerScoreRecoveries(client, {
+            players: () => User.findAll(),
+            readTable: (romname, table) => readRecoveryTable(getMameHomePath(), romname, table),
+            store: scoreStore,
+            record: recordRecoveryAnswer,
+        }),
     });
     const scores = new ScoreCapture({
         mameHome: getMameHomePath,
@@ -262,7 +271,7 @@ export function startCore(
         // from the disk before this.
         load: async (): Promise<BoApp> => {
             const {createBoApp} = await import('@/boServer');
-            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront, frontControls, favoritesChanged);
+            return createBoApp(core, databaseReady, reloadFront, onReset, showGameOnFront, frontControls, favoritesChanged, uiSounds);
         },
         idleMs: () => {
             const config = new Config();
@@ -299,7 +308,11 @@ export function startCore(
     // Neither keeps the process alive, nor outlives the port.
     idleCheck.unref();
     server.on('close', () => clearInterval(idleCheck));
-    const updates = new UpdateWatch(getRunningVersion());
+    // Only what this machine can install, when it installs updates itself: elsewhere (macOS, a
+    // development checkout) every version is worth announcing.
+    const updates = new UpdateWatch(getRunningVersion(), undefined, isSelfUpdateCapable()
+        ? names => findInstallAsset(names) !== null
+        : undefined);
     updates.start();
     server.on('close', () => updates.stop());
     return {

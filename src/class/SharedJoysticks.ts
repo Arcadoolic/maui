@@ -20,6 +20,8 @@ export interface JoystickNode {
     devicePath: string;
     /** What Chromium identifies the gamepad by: two nodes with the same key are merged. */
     chromiumKey: string;
+    /** The input node's sysfs path: a joystick unplugged and plugged again comes back under another one. */
+    inputPath: string;
     name: string;
     vendorId: string;
     productId: string;
@@ -65,6 +67,7 @@ export function listJoysticks(classDir = '/sys/class/input'): JoystickNode[] {
                 number: Number(entry.slice(2)),
                 devicePath: `/dev/input/${entry}`,
                 chromiumKey: chromiumKey(inputDir),
+                inputPath: inputDir,
                 name: readFileSync(join(inputDir, 'name'), 'utf8').trim(),
                 vendorId: readFileSync(join(inputDir, 'id', 'vendor'), 'utf8').trim(),
                 productId: readFileSync(join(inputDir, 'id', 'product'), 'utf8').trim(),

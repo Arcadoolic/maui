@@ -1,8 +1,12 @@
 <template>
-    <div class="home" :class="{empty: noGames, asleep}">
+    <div class="home" :class="{empty: noGames, asleep, launching}">
         <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
+        </modal>
+
+        <modal v-if="notice">
+            <p>{{notice}}</p>
         </modal>
 
         <modal v-if="backOfficeUrl">
@@ -18,7 +22,7 @@
 
         <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
 
-        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer"></update-modal>
+        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer" @expire="onUpdateExpire"></update-modal>
 
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
@@ -43,7 +47,7 @@
 
         <transition name="games">
             <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"
-                   :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
+                   :launching="launching" :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
         </transition>
 
         <transition name="alpha-jump">
@@ -55,14 +59,20 @@
         <transition name="flyer">
             <div class="flyer-container" v-show="showFlyer">
                 <div class="flyer" :class="{landscape: flyerLandscape}" v-if="flyer" :style="{backgroundImage: flyer ? 'url(' + flyer + ')' : false}"></div>
+                <div class="launchLoading" v-if="launching">
+                    <div class="spinner"><i v-for="cell in 8" :key="cell"></i></div>
+                    <p>Loading<span>.</span><span>.</span><span>.</span></p>
+                </div>
             </div>
         </transition>
+
+        <LaunchStage v-if="launching && selectedGame" :game="selectedGame"></LaunchStage>
 
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
                     :mouse="mouseNav" @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
 
         <transition name="slide">
-            <Hiscores :game="selectedGame" v-if="hiscoresVisible"></Hiscores>
+            <Hiscores :game="selectedGame" :fresh="revealedScores" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
         <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
@@ -80,6 +90,7 @@ import Games from '@/components/Games.vue';
 import Gamepads from '@/class/Gamepads.class';
 import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
+import LaunchStage from '@/components/LaunchStage.vue';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
 import {useSetupProgress} from '@/composables/useSetupProgress';
@@ -90,15 +101,17 @@ import {
     CarouselCategory, ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
 import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
-import {loadBeatThisGames, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {loadBeatThisGames, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {freshScores as newScoreKeys} from '@/class/ScoreReveal';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
-import {MAUI_KEYS, LONG_PRESS_MS, HOLD_MS} from '@/class/MauiControls';
-import {controlKey} from '@/class/MauiControlsRuntime';
+import {MAUI_KEYS, HOLD_MS} from '@/class/MauiControls';
+import {controlInput, controlKey, getHotkeys, onControlsChanged} from '@/class/MauiControlsRuntime';
+import {HOTKEY_HOLD_TITLES, HotkeyEngine, type HotkeyAction} from '@/class/Hotkeys';
 import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
-import * as Log from 'electron-log';
+import Log from 'electron-log';
 import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
@@ -110,8 +123,12 @@ import {
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
+import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
+import {uiSounds, uiSoundSettings, voteSound, type UiSoundToggle} from '@/class/UiSounds';
+import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
@@ -120,7 +137,7 @@ import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
 import {UPDATE_NOTICE_GLOBAL, type UpdateNoticeReader} from '@/class/UpdateNoticeBridge';
 import {
-    FRONT_UPDATE_GLOBAL, UPDATE_PROGRESS_CHANNEL, type FrontUpdateControl, type UpdateStep,
+    FRONT_UPDATE_GLOBAL, UPDATE_AVAILABLE_CHANNEL, UPDATE_PROGRESS_CHANNEL, type FrontUpdateControl, type UpdateStep,
 } from '@/class/FrontUpdateBridge';
 import UpdateModal from '@/components/UpdateModal.vue';
 import UpdateProgress from '@/components/UpdateProgress.vue';
@@ -140,16 +157,27 @@ const displayedCategoryIndex = ref(0);
 const hasPlayerInfo = ref(false);
 
 const timeouts: {
-    quit?: number,
     showGame?: number,
     showFlyer?: number,
-    addPlayer?: number,
-    backOffice?: number,
     hideBackOffice?: number,
+    hideNotice?: number,
     hold?: number,
+    endLaunchStage?: number,
     holdRepeat?: number,
     roll?: number,
+    hideReveal?: number,
 } = {};
+
+// The scores a game just played added to its leaderboard (ScoreReveal.ts): the hiscores panel
+// opens a few seconds to show them, once the questions after the game are answered and while the
+// list is still on that game. The leaderboard as it was at the launch, and until when (after the
+// game ended) its changes are still looked for: ONLINE ones come back from MAUI-API a little later.
+const REVEAL_SHOWN_MS = 6000;
+const REVEAL_WATCH_MS = 2 * 60_000;
+let revealWatch: {game: Game; before: string[]; until: number} | null = null;
+let pendingReveal: {romName: string; keys: string[]} | null = null;
+// The rows Hiscores.vue draws as new (Hiscores.vue's `fresh`).
+const revealedScores = ref<string[]>([]);
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
 // in Lite mode.
@@ -171,6 +199,13 @@ const showGames = ref(true);
 const showTitle = ref(true);
 const showFlyer = ref(true);
 const showLoader = ref(false);
+// The game picked is starting (startGame()): the other marquees leave, the picked one and its flyer
+// grow, and LaunchStage.vue tells the podium, until MAME takes the screen (endLaunchStageBehindMame()).
+const launching = ref(false);
+// Without a blur (no window manager to move the focus to MAME's window), the stage ends this long
+// after MAME was started.
+const LAUNCH_STAGE_MAX_MS = 10_000;
+let endLaunchStage: (() => void) | null = null;
 const showAddUser = ref(false);
 // The game whose vote is being asked, right after it was quit (see askVote()).
 const voteGame = ref<Game | null>(null);
@@ -197,9 +232,12 @@ const noGames = computed(() => gamesLoaded.value && !games.value.length);
 // No game yet on a new cabinet: the setup guide's steps instead of a bare message (Lot VI.3).
 const setupProgress = useSetupProgress();
 
-// The BO's address on the local network, while it is shown (see askBackOffice()).
+// The BO's address on the local network, while it is shown (see showBackOffice()).
 const backOfficeUrl = ref('');
 const BACK_OFFICE_SHOWN_MS = 15000;
+// A line a hotkey has to say ("Shutting down…", or why it did nothing), and how long it stays.
+const notice = ref('');
+const NOTICE_SHOWN_MS = 8000;
 // Nobody at the controls for a while (IdleWatch.ts): the cabinet shows its messages, its latest
 // best scores, until the next key - which only takes them away.
 const IDLE_MESSAGES = 20;
@@ -222,6 +260,9 @@ const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
         asleep.value = isAsleep;
         if (isAsleep) {
             stopRoll();
+            uiSounds.release();
+        } else {
+            uiSounds.play('wake');
         }
         if (screenOff) {
             // A keyboard key wakes the screen by itself, a gamepad button only through this.
@@ -250,13 +291,47 @@ function frontUpdate(): FrontUpdateControl | undefined {
     }
 }
 
+// The offer on the screen came at the start of MAUI (onUpdateAvailable()) rather than with the key
+// that woke the cabinet: nobody may be there to answer it.
+let updateOfferAtStart = false;
+
 /** On waking up from idle: the newer version of MAUI, when the BO lets the front install it. */
 function offerUpdate() {
+    updateOfferAtStart = false;
     try {
         updateOffer.value = frontUpdate()?.offer() ?? null;
     } catch (err) {
         Log.warn('[Home] Update offer not read: ' + (err instanceof Error ? err.message : String(err)));
     }
+}
+
+/**
+ * A check found a version to offer (UPDATE_AVAILABLE_CHANNEL, mostly 30 s after the start): offered
+ * at once, unless a game, a question or sleep is in the way, in which case the next wake does.
+ */
+const onUpdateAvailable = () => {
+    if (updateOffer.value || updating.value || gameRunning || isBoMameRunning() || asleep.value || showAddUser.value
+        || whoPlayed.value || voteGame.value || backOfficeUrl.value) {
+        return;
+    }
+    try {
+        const version = frontUpdate()?.offer() ?? null;
+        if (version) {
+            updateOfferAtStart = true;
+            updateOffer.value = version;
+        }
+    } catch (err) {
+        Log.warn('[Home] Update offer not read: ' + (err instanceof Error ? err.message : String(err)));
+    }
+};
+
+/** Nobody answered: a no after a wake, nothing at the start (asked again at the next wake). */
+function onUpdateExpire() {
+    if (updateOfferAtStart) {
+        updateOffer.value = null;
+        return;
+    }
+    onUpdateAnswer(false);
 }
 
 function onUpdateAnswer(install: boolean) {
@@ -277,6 +352,9 @@ function onUpdateAnswer(install: boolean) {
 }
 
 const onUpdateStep = (_event: unknown, step: UpdateStep) => {
+    if (step.step === 'restart') {
+        uiSounds.play('updated');
+    }
     if (updating.value) {
         updating.value = {...updating.value, step};
     }
@@ -306,7 +384,6 @@ async function loadIdleMessages() {
 }
 
 // Keys of the two-key long press currently held down.
-const heldKeys = new Set<string>();
 // A game is being launched or runs: the front takes no input, keyboard or controller, until it
 // is quit (see lockFront()).
 let gameRunning = false;
@@ -374,6 +451,7 @@ function selectGame(index: number) {
 }
 
 function onGameChange(previous: boolean) {
+    uiSounds.play('move');
     selectGame(previous ?
         ((selectedGameIndex.value <= 0) ? games.value.length - 1 : selectedGameIndex.value - 1) :
         ((selectedGameIndex.value >= games.value.length - 1) ? 0 : selectedGameIndex.value + 1));
@@ -394,9 +472,14 @@ function startHold(previous: boolean) {
         const selected = categories.value[selectedCategoryIndex.value];
         const alpha = !!selected && isDynamicCategory(selected)
             && (selected.dynamic === 'all' || selected.dynamic === 'hiscores');
-        const step = () => alpha
-            ? selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous))
-            : onGameChange(previous);
+        const step = () => {
+            if (!alpha) {
+                onGameChange(previous);
+                return;
+            }
+            uiSounds.play('alphaJump');
+            selectGame(getJumpIndex(games.value.map(game => game.shortname), selectedGameIndex.value, previous));
+        };
         alphaJumping.value = alpha;
         timeouts.holdRepeat = window.setInterval(step, alpha ? HOLD_MS.alphaJump : HOLD_MS.fastScroll);
         step();
@@ -425,6 +508,8 @@ async function loadCategoryGames(categoryIndex: number): Promise<Game[]> {
             return await gameService.loadHiscoreGames();
         case 'beat-this':
             return await loadBeatThisGames();
+        case 'starred':
+            return await gameService.loadStarredGames();
         }
     }
     if (isMergedCategory(selected)) {
@@ -441,6 +526,7 @@ function onCategoryChange(previous: boolean) {
 
 function goToCategory(index: number) {
     stopHold();
+    uiSounds.play('category');
     const showGameFn = async () => {
         // The title finished sliding out (showTitle is false since the switch started): swap its
         // text now, it slides back in with the new name once the games are loaded below.
@@ -596,24 +682,25 @@ function lockFront() {
     gameRunning = true;
     syncIdleBlock();
     stopHold();
-    heldKeys.clear();
-    cancelBackOffice();
-    clearTimeout(timeouts.quit);
-    clearTimeout(timeouts.addPlayer);
-    showLoader.value = false;
+    hotkeys.reset();
     Gamepads.suspend();
 }
 
 function unlockFront() {
     gameRunning = false;
+    endLaunchStage?.();
+    launching.value = false;
     syncIdleBlock();
     Gamepads.resume();
 }
 
-/** The front is not left alone while a game runs, a modal is up or there is no game to show. */
+/**
+ * The front is not left alone while a game runs (launched here or from the BO), a modal is up or
+ * there is no game to show.
+ */
 function syncIdleBlock() {
     stopRoll();
-    idleWatch.block(gameRunning || showAddUser.value || !!whoPlayed.value || !!voteGame.value
+    idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
         || !!updateOffer.value || !!updating.value || !!backOfficeUrl.value || noGames.value);
 }
 
@@ -625,30 +712,56 @@ function startGame() {
         return;
     }
     lockFront();
+    launching.value = true;
     // ONLINE: the table as it is before the game, so that only its new scores are sent.
     // The capture daemon's directory first: the game's report on itself goes with its scores.
-    const capture = mameService.prepareCapture();
-    void notifyScoreCapture(game.romName, capture?.dir ?? null).then(() => mameService.startGame(game.romName, capture)).then(
+    const capture = mameService.prepareCapture(game.romName);
+    void watchScoreReveal(game);
+    // The launch sound, then the sound card let go for MAME (UiSounds.ts), and the stage shown as
+    // long as the BO's MAUI card says (Config.launchStageSeconds, which it may have changed since
+    // the front loaded): MAME does not take the processor from it, nor cover it.
+    const config = getConfiguration();
+    config.load();
+    const stageShown = new Promise<void>(resolve => setTimeout(resolve, config.launchStageSeconds * 1000));
+    void Promise.all([uiSounds.playThenSuspend('launch'), stageShown])
+        .then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
+        .then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
+            endLaunchStageBehindMame();
             getGameService().recordLaunch(game.romName).catch((err) => {
                 Log.error('[Home] Error on game ' + game.id_game + ' launch recording.');
                 Log.error(err);
             });
             // A game that could not even start (mame missing) may only say so here.
-            gameProcess.on('error', unlockFront);
+            gameProcess.on('error', () => {
+                uiSounds.resume();
+                unlockFront();
+                // ONLINE waits for the end of the game (OnlineSession.pause()): it never came.
+                void endScoreCapture(game.romName);
+            });
             gameProcess.on('close', () => {
                 // Before the questions asked after a game (who played, vote), answered with the
                 // controller.
                 unlockFront();
+                uiSounds.resume();
+                uiSounds.play('back');
                 const pending = endScoreCapture(game.romName);
-                hiService.saveHiscores(game).then(async () => {
+                // The cabinet's best score on the game before and after it: a fanfare when it went up.
+                hiService.loadCabinetBest(game).then(async (bestBefore) => {
+                    await hiService.saveHiscores(game);
+                    return bestBefore;
+                }).then(async (bestBefore) => {
                     emitter.emit('game-quit');
                     if (favoritesChangedDuringGame) {
                         await syncFavorites();
                     }
                     await onScoresChanged();
+                    if (await hiService.loadCabinetBest(game) > bestBefore) {
+                        await uiSounds.playAndWait('champion');
+                    }
                     await askWhoPlayed(await pending);
-                    return askVote(game);
+                    await askVote(game);
+                    return checkScoreReveal();
                 }).catch((err) => {
                     Log.error('[Home] Error after game ' + game.id_game + ' quit.');
                     Log.error(err);
@@ -656,11 +769,106 @@ function startGame() {
             });
         },
         (err) => {
+            uiSounds.resume();
             unlockFront();
+            void endScoreCapture(game.romName);
             Log.error('[Home] Error on game ' + game.id_game + ' launch.');
             Log.error(err);
         },
     );
+}
+
+/**
+ * Once MAME's window has taken the focus, the front goes back behind it as it was: nothing is
+ * seen moving back when the game is quit.
+ */
+function endLaunchStageBehindMame() {
+    const end = () => {
+        window.removeEventListener('blur', end);
+        clearTimeout(timeouts.endLaunchStage);
+        endLaunchStage = null;
+        launching.value = false;
+    };
+    if (!document.hasFocus()) {
+        end();
+        return;
+    }
+    endLaunchStage = end;
+    window.addEventListener('blur', end);
+    timeouts.endLaunchStage = window.setTimeout(end, LAUNCH_STAGE_MAX_MS);
+}
+
+/** The leaderboard of a game being launched, to tell its new scores once it is quit. Never throws. */
+async function watchScoreReveal(game: Game) {
+    revealWatch = null;
+    pendingReveal = null;
+    if (!game.hi) {
+        return;
+    }
+    try {
+        const before = (await loadHiscores(game)).map(row => row.key);
+        revealWatch = {game, before, until: Infinity};
+    } catch (err) {
+        Log.warn('[Home] Leaderboard not read before the game: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
+/**
+ * After a game, and each time the leaderboards change for a little while after it: the scores the
+ * game added are shown (revealScores()). Never throws.
+ */
+async function checkScoreReveal() {
+    const watch = revealWatch;
+    if (!watch || gameRunning) {
+        return;
+    }
+    if (watch.until === Infinity) {
+        watch.until = Date.now() + REVEAL_WATCH_MS;
+    } else if (Date.now() > watch.until) {
+        revealWatch = null;
+        return;
+    }
+    try {
+        const rows = await loadHiscores(watch.game);
+        const keys = newScoreKeys(watch.before, rows);
+        if (!keys.length) {
+            return;
+        }
+        // Shown once: a later change is compared to what is on the board now.
+        watch.before = rows.map(row => row.key);
+        pendingReveal = {romName: watch.game.romName, keys: [...(pendingReveal?.keys ?? []), ...keys]};
+        revealScores();
+    } catch (err) {
+        Log.warn('[Home] Leaderboard not read after the game: ' + (err instanceof Error ? err.message : String(err)));
+    }
+}
+
+/**
+ * Opens the hiscores panel REVEAL_SHOWN_MS with the new scores drawn as such, then closes it again
+ * (unless it was open already). Waits for the questions after the game and any other modal; given
+ * up when the list moved to another game meanwhile.
+ */
+function revealScores() {
+    const reveal = pendingReveal;
+    if (!reveal || gameRunning || asleep.value || showAddUser.value || whoPlayed.value || voteGame.value
+        || updateOffer.value || updating.value || backOfficeUrl.value) {
+        return;
+    }
+    pendingReveal = null;
+    if (selectedGame.value?.romName !== reveal.romName) {
+        return;
+    }
+    const wasShown = showHiscores.value && !timeouts.hideReveal;
+    revealedScores.value = reveal.keys;
+    showHiscores.value = true;
+    clearTimeout(timeouts.hideReveal);
+    timeouts.hideReveal = window.setTimeout(() => {
+        timeouts.hideReveal = undefined;
+        revealedScores.value = [];
+        if (!wasShown) {
+            showHiscores.value = false;
+        }
+    }, REVEAL_SHOWN_MS);
 }
 
 /**
@@ -682,16 +890,21 @@ async function askVote(game: Game) {
     }
 }
 
-async function onVote(vote: Vote) {
+async function onVote(vote: Vote, starred: boolean) {
     const game = voteGame.value;
     voteGame.value = null;
+    const sound = game && voteSound(vote, starred);
+    if (sound) {
+        uiSounds.play(sound);
+    }
     if (!game || vote === VOTE_NEUTRAL) {
         // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again.
         return;
     }
     try {
-        const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite);
-        if (removed) {
+        const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite, starred);
+        // A star: "My favourites" comes into the carousel with its first game, or gets one more.
+        if (removed || starred) {
             await reloadCarousel();
         }
     } catch (err) {
@@ -867,60 +1080,102 @@ async function loadCategories() {
         showAllGames: config.showAllGamesCategory,
         showBeatThis: config.showBeatThisCategory,
         showHiscoresOnly: config.showHiscoresOnlyCategory,
+        hasStarredGames: (await gameService.loadStarredGames()).length > 0,
         hasBeatThisGames: config.showBeatThisCategory && (await loadBeatThisGames()).length > 0,
         hasHiscoreGames: config.showHiscoresOnlyCategory && (await gameService.loadHiscoreGames()).length > 0,
     });
 }
 
-function addPlayer() {
-    loaderDuration.value = LONG_PRESS_MS.newPlayer / 1000;
-    showLoader.value = true;
-    loaderTitle.value = 'Add new player ?';
-    timeouts.addPlayer = window.setTimeout(() => {
-        showLoader.value = false;
-        showAddUser.value = true;
-    }, LONG_PRESS_MS.newPlayer);
-}
-
 /**
- * The scores and new-player keys held together: loads the BO, which is not kept in memory on a
- * cabinet nobody is setting up (boCore.ts), and shows where to reach it. Each key started its own
- * long press on the way down: both are taken back.
+ * Loads the BO, which is not kept in memory on a cabinet nobody is setting up (boCore.ts), and
+ * shows where to reach it.
  */
-function askBackOffice() {
-    clearTimeout(timeouts.quit);
-    clearTimeout(timeouts.addPlayer);
+async function showBackOffice() {
     clearTimeout(timeouts.hideBackOffice);
     showHiscores.value = false;
-    backOfficeUrl.value = '';
-    loaderDuration.value = LONG_PRESS_MS.backOffice / 1000;
-    loaderTitle.value = 'Back office ?';
-    showLoader.value = true;
-    timeouts.backOffice = window.setTimeout(async () => {
-        timeouts.backOffice = undefined;
-        showLoader.value = false;
-        let url = boUrl.value;
-        try {
-            const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
-            url = wake ? await wake() : boUrl.value;
-        } catch (err) {
-            Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
-        }
-        backOfficeUrl.value = url;
-        timeouts.hideBackOffice = window.setTimeout(() => {
-            backOfficeUrl.value = '';
-        }, BACK_OFFICE_SHOWN_MS);
-    }, LONG_PRESS_MS.backOffice);
+    let url = boUrl.value;
+    try {
+        const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
+        url = wake ? await wake() : boUrl.value;
+    } catch (err) {
+        Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
+    }
+    backOfficeUrl.value = url;
+    timeouts.hideBackOffice = window.setTimeout(() => {
+        backOfficeUrl.value = '';
+    }, BACK_OFFICE_SHOWN_MS);
 }
 
-function cancelBackOffice() {
-    if (timeouts.backOffice === undefined) {
-        return;
+/** What a hotkey of the BO's Controls tab does once it goes off (Hotkeys.ts). */
+function runHotkey(action: HotkeyAction) {
+    switch (action) {
+    case 'backOffice':
+        void showBackOffice();
+        break;
+    case 'quit':
+        remote.app.quit();
+        break;
+    case 'newPlayer':
+        showAddUser.value = true;
+        break;
+    case 'shutdown':
+        void shutDown();
+        break;
     }
-    clearTimeout(timeouts.backOffice);
-    timeouts.backOffice = undefined;
-    showLoader.value = false;
 }
+
+function showNotice(text: string, hideAfterMs?: number) {
+    clearTimeout(timeouts.hideNotice);
+    notice.value = text;
+    if (hideAfterMs) {
+        timeouts.hideNotice = window.setTimeout(() => {
+            notice.value = '';
+        }, hideAfterMs);
+    }
+}
+
+/** A dedicated cabinet goes down (KioskRestart.ts powerOff()); anywhere else, or without the right, says why not. */
+async function shutDown() {
+    showNotice('Shutting down…');
+    let refused: string | null;
+    try {
+        const request = remote.getGlobal(SHUTDOWN_GLOBAL) as ShutdownRequest | undefined;
+        refused = request ? await request() : 'Shutting down is not available.';
+    } catch (err) {
+        refused = err instanceof Error ? err.message : String(err);
+    }
+    if (refused) {
+        showNotice(refused, NOTICE_SHOWN_MS);
+    }
+}
+
+// Turns the keys pressed on the list of games into what they do: a hotkey, or a key's own job
+// (onListKeyDown()), a little later for the keys a held or two-key hotkey uses.
+const hotkeys = new HotkeyEngine(getHotkeys(), {
+    keyDown: key => onListKeyDown(key),
+    keyUp: key => onListKeyUp(key),
+    action: runHotkey,
+    holdStart: (hotkey) => {
+        loaderDuration.value = hotkey.holdMs / 1000;
+        loaderTitle.value = HOTKEY_HOLD_TITLES[hotkey.action];
+        showLoader.value = true;
+        uiSounds.startCharge(hotkey.holdMs);
+    },
+    holdEnd: () => {
+        showLoader.value = false;
+        uiSounds.stopCharge();
+    },
+});
+const stopHotkeysListener = onControlsChanged(() => hotkeys.setHotkeys(getHotkeys()));
+const stopBoMameListener = onBoMameChanged(() => {
+    // A MAME the BO launched needs the sound card too (UiSounds.ts).
+    if (isBoMameRunning()) {
+        uiSounds.suspend();
+    } else if (!gameRunning) {
+        uiSounds.resume();
+    }
+    syncIdleBlock();
+});
 
 const {onKeydown, onKeyup} = useControllable();
 
@@ -933,14 +1188,27 @@ const onShowGame = (_event: unknown, romName: string) => {
     void showGame(romName);
 };
 const onFavoritesChanged = () => void syncFavorites();
+const onUiSoundsChanged = () => {
+    const config = getConfiguration();
+    config.load();
+    uiSounds.setSettings(uiSoundSettings(config));
+};
+const onUiSoundsTest = (_event: unknown, volume: number, sound: UiSoundToggle) => uiSounds.test(volume, sound);
 onUnmounted(() => {
     stopLeaderboardsListener?.();
+    stopHotkeysListener();
+    stopBoMameListener();
+    hotkeys.reset();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
+    ipcRenderer.off(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);
+    ipcRenderer.off(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
     ipcRenderer.off(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
+    ipcRenderer.off(UPDATE_AVAILABLE_CHANNEL, onUpdateAvailable);
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
+    clearTimeout(timeouts.hideReveal);
     idleWatch.stop();
     if (gameRunning) {
         unlockFront();
@@ -949,14 +1217,56 @@ onUnmounted(() => {
 // A keyboard key released while the window is not focused sends no keyup (Gamepads.class.ts
 // sends its own for a controller).
 window.addEventListener('blur', stopHold);
+window.addEventListener('blur', () => hotkeys.reset());
 // A modal takes the keys over: the list stops where it is.
 watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value, (modal) => {
     if (modal) {
         stopHold();
+        hotkeys.reset();
+        return;
     }
+    // New scores waiting for the questions after the game to be answered.
+    revealScores();
 });
 watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
     !!backOfficeUrl.value, noGames.value], syncIdleBlock);
+
+/** A key's own job on the list of games, as a press. */
+function onListKeyDown(key: string) {
+    switch (key) {
+    case MAUI_KEYS.up:
+        onGameChange(true);
+        startHold(true);
+        break;
+    case MAUI_KEYS.down:
+        onGameChange(false);
+        startHold(false);
+        break;
+    case MAUI_KEYS.left:
+        if (hasCategories.value) {
+            onCategoryChange(true);
+        }
+        break;
+    case MAUI_KEYS.right:
+        if (hasCategories.value) {
+            onCategoryChange(false);
+        }
+        break;
+    case MAUI_KEYS.space:
+        showHiscores.value = !showHiscores.value;
+        break;
+    case MAUI_KEYS.enter:
+        startGame();
+        break;
+    }
+}
+
+/** A key's own job on the list of games, as a release. */
+function onListKeyUp(key: string) {
+    if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
+        stopHold();
+    }
+}
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
@@ -970,47 +1280,7 @@ function registerKeyMapping() {
         if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || updateOffer.value || updating.value) {
             return;
         }
-        const key = controlKey(e, isGamepad);
-        if (key === MAUI_KEYS.space || key === MAUI_KEYS.p) {
-            heldKeys.add(key);
-            if (heldKeys.has(MAUI_KEYS.space) && heldKeys.has(MAUI_KEYS.p)) {
-                // Also reached by a held keyboard key repeating: started once.
-                if (timeouts.backOffice === undefined) {
-                    askBackOffice();
-                }
-                return;
-            }
-        }
-        switch (key) {
-        case MAUI_KEYS.up:
-            onGameChange(true);
-            startHold(true);
-            break;
-        case MAUI_KEYS.down:
-            onGameChange(false);
-            startHold(false);
-            break;
-        case MAUI_KEYS.left:
-            if (hasCategories.value) {
-                onCategoryChange(true);
-            }
-            break;
-        case MAUI_KEYS.right:
-            if (hasCategories.value) {
-                onCategoryChange(false);
-            }
-            break;
-        case MAUI_KEYS.space:
-            showHiscores.value = !showHiscores.value;
-            timeouts.quit = window.setTimeout(() => remote.app.quit(), LONG_PRESS_MS.quit);
-            break;
-        case MAUI_KEYS.enter:
-            startGame();
-            break;
-        case MAUI_KEYS.p:
-            addPlayer();
-            break;
-        }
+        hotkeys.press({key: controlKey(e, isGamepad), input: controlInput(e, isGamepad)});
     });
 
     onKeyup((e, isGamepad) => {
@@ -1025,18 +1295,7 @@ function registerKeyMapping() {
         if (showAddUser.value || whoPlayed.value || voteGame.value) {
             return;
         }
-        if (heldKeys.delete(key)) {
-            cancelBackOffice();
-        }
-        switch (key) {
-        case MAUI_KEYS.space:
-            clearTimeout(timeouts.quit);
-            break;
-        case MAUI_KEYS.p:
-            showLoader.value = false;
-            clearTimeout(timeouts.addPlayer);
-            break;
-        }
+        hotkeys.release({key, input: controlInput(e, isGamepad)});
     });
 }
 
@@ -1073,10 +1332,18 @@ if (!getIsInit()) {
         registerKeyMapping();
         syncIdleBlock();
         idleWatch.start();
-        stopLeaderboardsListener = onLeaderboardsChanged(() => void onScoresChanged());
+        stopLeaderboardsListener = onLeaderboardsChanged(() => {
+            void onScoresChanged();
+            // MAUI-API's answer to the game just played: its new scores, if any.
+            void checkScoreReveal();
+        });
         ipcRenderer.on(SHOW_GAME_CHANNEL, onShowGame);
         ipcRenderer.on(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
+        ipcRenderer.on(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);
+        ipcRenderer.on(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
+        uiSounds.setSettings(uiSoundSettings(getConfiguration()));
         ipcRenderer.on(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
+        ipcRenderer.on(UPDATE_AVAILABLE_CHANNEL, onUpdateAvailable);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();
@@ -1274,6 +1541,134 @@ if (!getIsInit()) {
         width: 100cqh;
         height: 100cqw;
         transform: translate(-50%, -50%) rotateZ(-94deg);
+    }
+
+    /* A game starting (launching): the flyer grows a little, the category and the scores leave,
+       the game's title stays (Games.vue and LaunchStage.vue do the rest). */
+    .flyer-container {
+        transition: transform 0.5s ease-out 0.25s;
+    }
+
+    /* The title comes down just above the picked marquee (Games.vue's li.selected: its top at 33vh
+       once moved and grown), over its middle. */
+    .gameTitle {
+        top: 0;
+        left: 0;
+        transition: top 0.45s ease 0.25s, transform 0.45s ease 0.25s, left 0.45s ease 0.25s,
+            width 0.45s ease 0.25s;
+    }
+
+    .home.launching .gameTitle {
+        top: 33vh;
+        left: 5vw;
+        width: 58vw;
+        padding-bottom: 1vh;
+        transform: translateY(-100%);
+        background: none;
+    }
+
+    .home.launching .flyer-container {
+        transform: scale(1.08);
+    }
+
+    /* Over the flyer while the game starts: how long MAME takes to load is not known, so it turns
+       until MAME takes the screen. Tilted like a portrait flyer (a landscape one fills the same
+       place). */
+    .launchLoading {
+        position: absolute;
+        inset: 0;
+        transform: rotateZ(-4deg);
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4vh;
+        color: #fff513;
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 2vw;
+        text-shadow: 0 3px 0 rgb(255, 81, 0), 0 6px 0 #000000;
+        animation: loading-in 0.4s ease-out 0.3s both;
+    }
+
+    /* Pixel art: 8 square blocks around a 3x3 grid, the lit one going round clockwise with a
+       trail, in steps. In Lite mode (no endless animation, App.vue) they all stand lit. */
+    .launchLoading .spinner {
+        display: grid;
+        grid-template-columns: repeat(3, 2.4vh);
+        grid-template-rows: repeat(3, 2.4vh);
+        gap: 0.6vh;
+    }
+
+    .launchLoading .spinner i {
+        background: #fff513;
+        box-shadow: 0 0.6vh 0 rgb(255, 81, 0);
+        animation: loading-chase 0.8s steps(1) infinite;
+    }
+
+    .launchLoading .spinner i:nth-child(1) { grid-area: 1 / 1; animation-delay: -0.7s; }
+    .launchLoading .spinner i:nth-child(2) { grid-area: 1 / 2; animation-delay: -0.6s; }
+    .launchLoading .spinner i:nth-child(3) { grid-area: 1 / 3; animation-delay: -0.5s; }
+    .launchLoading .spinner i:nth-child(4) { grid-area: 2 / 3; animation-delay: -0.4s; }
+    .launchLoading .spinner i:nth-child(5) { grid-area: 3 / 3; animation-delay: -0.3s; }
+    .launchLoading .spinner i:nth-child(6) { grid-area: 3 / 2; animation-delay: -0.2s; }
+    .launchLoading .spinner i:nth-child(7) { grid-area: 3 / 1; animation-delay: -0.1s; }
+    .launchLoading .spinner i:nth-child(8) { grid-area: 2 / 1; animation-delay: 0s; }
+
+    .launchLoading p span {
+        animation: loading-dot 1.2s steps(1) infinite;
+    }
+
+    .launchLoading p span:nth-child(2) {
+        animation-delay: 0.4s;
+    }
+
+    .launchLoading p span:nth-child(3) {
+        animation-delay: 0.8s;
+    }
+
+    html.lite .launchLoading .spinner i, html.lite .launchLoading p span {
+        animation: none;
+    }
+
+    @keyframes loading-in {
+        0% {
+            opacity: 0;
+        }
+        100% {
+            opacity: 1;
+        }
+    }
+
+    /* Lit, then dimmer at each step as the light moves on round the ring. */
+    @keyframes loading-chase {
+        0% {
+            opacity: 1;
+        }
+        12.5% {
+            opacity: 0.6;
+        }
+        25% {
+            opacity: 0.35;
+        }
+        37.5% {
+            opacity: 0.15;
+        }
+    }
+
+    @keyframes loading-dot {
+        0% {
+            opacity: 0;
+        }
+        50% {
+            opacity: 1;
+        }
+    }
+
+    .home.launching .categoryTitle, .home.launching .categories,
+    .home.launching .hiscores {
+        opacity: 0;
+        transition: opacity 0.3s ease-in;
     }
 
     .flyer-enter-from, .flyer-leave-to {

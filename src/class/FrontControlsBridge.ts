@@ -5,6 +5,8 @@ export const CAPTURE_PAD_CHANNEL = 'maui:capture-pad';
 export const PAD_CAPTURED_CHANNEL = 'maui:pad-captured';
 export const CONTROLS_CHANGED_CHANNEL = 'maui:controls-changed';
 export const CANCEL_CAPTURE_CHANNEL = 'maui:cancel-capture';
+// The BO's own MAME (its config session) started or stopped: the front never falls asleep under it.
+export const MAME_SESSION_CHANNEL = 'maui:mame-session';
 
 /** A gamepad input caught by the front: a button, or an axis pushed one way. */
 export interface PadCapture {
@@ -33,4 +35,6 @@ export interface FrontControls {
     controlsChanged: () => void;
     /** The BO's page caught the press itself: the front stops waiting for one. */
     cancelCapture: () => void;
+    /** The BO's MAME started (true) or stopped (false). */
+    mameSessionChanged: (running: boolean) => void;
 }

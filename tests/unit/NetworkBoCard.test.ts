@@ -51,7 +51,7 @@ describe('renderNetworkCard', () => {
             ],
             saved: [{uuid: HOME_UUID, name: 'Home', ssid: 'Home', active: false}],
         }));
-        expect(html.match(/type="password"/g)).toHaveLength(1);
+        expect(html.match(/aria-label="Password for /g)).toHaveLength(1);
         expect(html).toContain('aria-label="Password for Neighbour"');
         expect(html.match(/action="\/maui\/network\/connect"/g)).toHaveLength(3);
     });
@@ -72,5 +72,10 @@ describe('renderNetworkCard', () => {
         const withCable = renderNetworkCard(state({saved}));
         expect(withCable).toContain('action="/maui/network/radio"');
         expect(withCable).toContain('action="/maui/network/forget"');
+    });
+
+    it('offers to save a network for later, radio off included', () => {
+        expect(renderNetworkCard(state({wifi: 'off'}))).toContain('action="/maui/network/save"');
+        expect(renderNetworkCard(state({wifi: 'missing'}))).not.toContain('action="/maui/network/save"');
     });
 });

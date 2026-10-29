@@ -230,17 +230,20 @@ de X/matchbox/l'app sur `tty1`.
 
 Après une mise à jour (§7), reprendre sur la nouvelle version passe par
 `sudo systemctl restart getty@tty1` : `agetty` relance la session, `startx` et
-l'app repartent sur le nouveau `~/squashfs-root`. Pour que `puckman` puisse le
-faire sans saisir de mot de passe, on lui ouvre **uniquement** ces deux
-commandes, en chemins exacts et sans joker :
+l'app repartent sur le nouveau `~/squashfs-root`. Le raccourci « Shut the cabinet
+down » du front (onglet MAUI > Controls, carte MAUI hotkeys) éteint la borne par
+`sudo systemctl poweroff`. Pour que `puckman` puisse le faire sans saisir de mot
+de passe, on lui ouvre **uniquement** ces trois commandes, en chemins exacts et
+sans joker :
 
 ```bash
 # 1. Écrire la règle dans un fichier temporaire et la faire valider par visudo
 #    (une erreur de syntaxe dans /etc/sudoers.d peut bloquer sudo pour tout le monde)
 cat > /tmp/puckman-restart-kiosk << 'EOF'
 # Permet à l'utilisateur de la borne de relancer sa session graphique (autologin sur tty1),
-# par exemple après une mise à jour de MAUI. Rien d'autre : commandes exactes, pas de joker.
-puckman ALL=(root) NOPASSWD: /usr/bin/systemctl restart getty@tty1, /usr/bin/systemctl reset-failed getty@tty1
+# par exemple après une mise à jour de MAUI, et d'éteindre la borne depuis un raccourci de MAUI.
+# Rien d'autre : commandes exactes, pas de joker.
+puckman ALL=(root) NOPASSWD: /usr/bin/systemctl restart getty@tty1, /usr/bin/systemctl reset-failed getty@tty1, /usr/bin/systemctl poweroff
 EOF
 /usr/sbin/visudo -cf /tmp/puckman-restart-kiosk   # /usr/sbin n'est pas dans le PATH d'un utilisateur normal
 
@@ -254,7 +257,7 @@ Vérifier (depuis SSH ou `tty2`, voir ci-dessous) :
 ```bash
 command -v systemctl                      # doit afficher /usr/bin/systemctl, le chemin de la règle
 sudo -k                                   # oublie le mot de passe mis en cache par un sudo précédent
-sudo -n -l | grep getty                   # liste les deux commandes autorisées
+sudo -n -l | grep systemctl              # liste les trois commandes autorisées
 sudo -n systemctl reset-failed getty@tty1 # sans effet ici, mais prouve l'absence de mot de passe
 sudo -n systemctl restart getty@tty1      # relance la session, sans mot de passe
 ```
@@ -271,6 +274,9 @@ pour toute commande que `sudo` autorise, mot de passe ou non.
   kiosk, qui serait coupé au milieu de la commande.
 - `reset-failed getty@tty1` sert au piège du §5.5 (`start-limit-hit`) : il
   remet le compteur d'échecs à zéro avant de relancer.
+- `poweroff` : sans lui, MAUI tente `systemctl poweroff` sans sudo, que systemd
+  (polkit) n'accepte que si la session kiosk est la seule ouverte, donc pas avec
+  une session SSH en cours.
 - Le nom du fichier ne doit contenir ni `.` ni `~` (sudo ignore ces fichiers).
 - Le bouton **Restart the application** du BO (onglet MAUI > Update, §7.1)
   lance cette même commande : sans la règle, il affiche une erreur au lieu de
@@ -336,6 +342,19 @@ EOF
 
 Test : `aplay /usr/share/sounds/alsa/Front_Center.wav` (sans `-D`, donc via
 le device par défaut) doit être audible sur l'écran.
+
+> 💡 Depuis le BO (onglet MAUI, carte mame-awesome-ui, groupe *Screen*) :
+> « Screen output » choisit le port HDMI de l'écran (`xrandr`, au prochain
+> démarrage) et « Sound output » la sortie son (par défaut celle de l'écran),
+> sans root. MAME ne suit pas la sortie par défaut d'ALSA : depuis la 0.278,
+> chaque jeu désigne sa sortie dans son `cfg/<jeu>.cfg` (`<sound_map>`), et
+> sans elle prend la première carte, le jack. MAUI l'écrit donc avant chaque
+> partie, et `~/.asoundrc` fait passer `hw:` par `plug` : SDL ouvre la carte
+> par son nom `hw:`, que le HDMI du Pi refuse en direct (§6.2).
+> Tout ceci seulement sans serveur son : si PipeWire ou PulseAudio tourne
+> (Raspberry Pi OS desktop), c'est lui qui choisit la sortie. Le BO grise
+> alors « Sound output », MAUI supprime son `~/.asoundrc` et remet sur la
+> sortie par défaut (`node=""`) les `<sound_map>` que MAME a laissés muets.
 
 ### 6.3 Sink par défaut PulseAudio (MAME lui-même)
 
