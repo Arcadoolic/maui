@@ -5485,7 +5485,7 @@ function renderControlsCard(
         <section class="card">
             <h2>Global controls</h2>
             <p class="info">What triggers each MAME action, in every game (unless a game has its own
-            controls, below). Each one is a key, a mouse button or a gamepad button: its
+            controls, in the Per-game controls tab). Each one is a key, a mouse button or a gamepad button: its
             <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
                 <li><strong>Gamepad icon</strong>: launch MAME with the button at the top of
@@ -5518,7 +5518,7 @@ function renderControlsCard(
             </form>
             <h3>Share these controls</h3>
             <p class="info">Export the global controls, with the gamepads pinned to a JOY number
-            (Detected devices card), to a file another player with the same controllers can import.
+            (Gamepads tab), to a file another player with the same controllers can import.
             An import replaces this cabinet's global controls with the file's; a game's own controls
             are left as they are. A pinned gamepad only applies to a controller of the same model.</p>
             <form method="get" action="/input-probe/controls/export">
@@ -5901,7 +5901,7 @@ function renderGameRemapCard(
             <h2>Per-game controls</h2>
             <p class="info">Changes what triggers a command in <strong>one game only</strong>
             (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
-            controls above.</p>
+            controls (Global controls tab).</p>
             ${targetRom && targetRom === selectedRom ? `
                 <ol class="info">
                     <li>Below, each card is a command of this game, with what triggers it: <em>From the
@@ -5915,7 +5915,7 @@ function renderGameRemapCard(
                     <strong>Movement</strong>: <strong>Add a movement</strong>, then wait a second
                     and turn the spinner, move the mouse or push the stick. Its keys move it each
                     way. MAME only reads the mouse or a USB spinner when the
-                    <strong>Spinner, trackball, paddle</strong> card above says so.</li>
+                    <strong>Spinner, trackball</strong> tab says so.</li>
                     <li>Each change is saved and works in the running game at once.
                     The <strong>bin</strong> leaves a command with no control in this game.</li>
                     <li><strong>↺</strong> drops what this game had of its
@@ -6062,19 +6062,32 @@ function renderForm(
         const withCfg = listRomsWithInputCfg(mameInfo.iniPath, romNames);
         refreshAdoptedMame(config, romNames);
         const inputDefaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
+        // One subtab per card: together they made one very long page.
         sections.push({
             id: 'controls',
-            label: 'Controls',
+            label: 'Global controls',
             html: renderControlsCard(
                 romNames,
                 readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath)),
                 inputDefaults,
                 remapState,
-            )
-                + renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState)
-                + renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
-                    findOtherMameRom(config, romNames), inputDefaults)
-                + renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+            ),
+        });
+        sections.push({
+            id: 'game-controls',
+            label: 'Per-game controls',
+            html: renderGameRemapCard(romNames, romLabels, withCfg, mameInfo.iniPath, gameRemapState,
+                findOtherMameRom(config, romNames), inputDefaults),
+        });
+        sections.push({
+            id: 'devices',
+            label: 'Gamepads',
+            html: renderDeviceProbeCard(romNames, readPinnedDevices(mameInfo), deviceProbeState),
+        });
+        sections.push({
+            id: 'analog',
+            label: 'Spinner, trackball',
+            html: renderAnalogDevicesCard(romNames, mameInfo.mameIniPath, analogDevicesState),
         });
         sections.push({
             id: 'import',
@@ -6100,11 +6113,13 @@ function renderForm(
     // being earlier in `sections` (see renderPageTail()'s script). Most specific first.
     const defaultSubtab = dangerZoneInfo !== undefined ? 'danger'
         : importError !== undefined || exportError !== undefined ? 'import'
-            : (deviceProbeState !== undefined || remapState !== undefined
-                || gameRemapState !== undefined || analogDevicesState !== undefined) ? 'controls'
-                : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
-                    // Controls otherwise, even when Config holds a standing warning (missing plugins...).
-                    : sections.some(section => section.id === 'controls') ? 'controls' : undefined;
+            : deviceProbeState !== undefined ? 'devices'
+                : gameRemapState !== undefined ? 'game-controls'
+                    : analogDevicesState !== undefined ? 'analog'
+                        : remapState !== undefined ? 'controls'
+                            : (mameInfoMessage !== undefined || error !== undefined || info !== undefined) ? 'config'
+                                // Global controls otherwise, even when Config holds a standing warning (missing plugins...).
+                                : sections.some(section => section.id === 'controls') ? 'controls' : undefined;
     // Right of the subtabs (kept in view while scrolling, see .subtabs-bar): the one button that
     // launches/closes the shared MAME config session the Controls cards capture through - see
     // startMameConfigSession(). Shown to every signed-in user, like the Controls tab itself.
