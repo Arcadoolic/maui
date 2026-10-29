@@ -99,7 +99,9 @@ import {
 import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
-import {ICON_SVG_ATTRS, renderIconButton} from '@/class/BoIconButton';
+import {
+    GAMEPAD_ICON_PATHS, ICON_SVG_ATTRS, KEY_MOUSE_ICON_PATHS, renderCaptionedIconButton, renderIconButton,
+} from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
 import type {FrontUiSounds} from '@/class/FrontUiSoundsBridge';
@@ -3240,6 +3242,35 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--bg);
             background-color: var(--warn);
         }
+        /* The ways to add a control: an icon with its caption under it, always visible. */
+        button.captioned-icon-button {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            min-width: 88px;
+            margin-top: 0;
+            padding: 8px 12px;
+            color: var(--accent);
+            background-color: transparent;
+            border: 1px solid currentColor;
+        }
+        button.captioned-icon-button svg {
+            width: 28px;
+            height: 28px;
+        }
+        button.captioned-icon-button .icon-caption-text {
+            font-size: 0.8em;
+            line-height: 1.2;
+        }
+        button.captioned-icon-button:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
+        button.captioned-icon-button.listening {
+            color: var(--bg);
+            background-color: var(--warn);
+            border-color: var(--warn);
+        }
         .control-reread {
             margin-top: 16px;
         }
@@ -3684,7 +3715,7 @@ function renderPageTail(): string {
                 }
                 clearTimeout(listening.timer);
                 listening.button.classList.remove('listening');
-                listening.button.textContent = listening.label;
+                listening.caption.textContent = listening.label;
                 document.removeEventListener('keydown', onKey, true);
                 document.removeEventListener('mousedown', onMouse, true);
                 // The menu a right click opens comes after its mousedown: still blocked a moment.
@@ -3698,7 +3729,7 @@ function renderPageTail(): string {
                 event.stopPropagation();
                 var form = listening.button.form;
                 if (!token) {
-                    listening.button.textContent = 'Not known to MAME - try another';
+                    listening.caption.textContent = 'Not known to MAME - try another';
                     return;
                 }
                 var slot = listening.button.dataset.slot;
@@ -3729,12 +3760,14 @@ function renderPageTail(): string {
                     if (again) {
                         return;
                     }
+                    // Only the caption changes: an icon button keeps its icon.
+                    var caption = button.querySelector('.icon-caption-text') || button;
                     listening = {
-                        button: button, label: button.textContent, raw: button.dataset.controlListen === 'raw',
-                        timer: setTimeout(stop, 15000),
+                        button: button, caption: caption, label: caption.textContent,
+                        raw: button.dataset.controlListen === 'raw', timer: setTimeout(stop, 15000),
                     };
                     button.classList.add('listening');
-                    button.textContent = 'Press a key or click…';
+                    caption.textContent = 'Press a key or click…';
                     document.addEventListener('keydown', onKey, true);
                     document.addEventListener('mousedown', onMouse, true);
                     // A right click opens no menu while listening.
@@ -5141,9 +5174,11 @@ function renderControlChips(seq: string, names: Map<string, string>): string {
 function renderControlAddButtons(captureDisabled: string, canListen: boolean, rawCodes = false): string {
     return `
         <div class="binding-actions">
-            <button type="submit" name="action" value="capture"${captureDisabled}${rawCodes ? ' data-pad-listen' : ''}>Add a gamepad button</button>
+            ${renderCaptionedIconButton('Add a gamepad button', 'Gamepad', GAMEPAD_ICON_PATHS,
+                `type="submit" name="action" value="capture"${captureDisabled}${rawCodes ? ' data-pad-listen' : ''}`)}
             ${canListen ? `
-                <button type="button" data-control-listen${rawCodes ? '="raw"' : ''}>Add a key or mouse button</button>
+                ${renderCaptionedIconButton('Add a key or mouse button', 'Key or mouse', KEY_MOUSE_ICON_PATHS,
+                    `type="button" data-control-listen${rawCodes ? '="raw"' : ''}`)}
                 <input type="hidden" name="code" value="">
                 <button type="submit" name="action" value="add" hidden data-control-add></button>
             ` : ''}
@@ -5232,10 +5267,10 @@ function renderControlsCard(
             controls, below). Each one is a key, a mouse button or a gamepad button: its
             <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Add a gamepad button</strong>: launch MAME with the button at the top of
+                <li><strong>Gamepad</strong>: launch MAME with the button at the top of
                 the page first, then click and press the gamepad button (or push the direction)
                 within 30 seconds - MAME picks it up even when its window is not the one in front.</li>
-                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                <li><strong>Key or mouse</strong>: click, then press the key or click
                 the mouse button (anywhere in the page) on the keyboard and mouse of this computer.
                 No need to launch MAME. Keys are named after their place on a US keyboard, the way
                 MAME does: on an AZERTY keyboard, the A key shows as Q.</li>
@@ -5566,9 +5601,9 @@ function renderGameRemapCard(
                     <li>Below, each card is a command of this game, with what triggers it: <em>From the
                     global controls</em> as long as you haven't changed it for this game. Its
                     <strong>✕</strong> removes one, and the others keep working.</li>
-                    <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                    <li><strong>Gamepad</strong>: click, then press the button (or push the
                     direction) on the gamepad within 30 seconds - MAME picks it up even when its window
-                    is not the one in front. <strong>Add a key or mouse button</strong>: click, then
+                    is not the one in front. <strong>Key or mouse</strong>: click, then
                     press the key or click the mouse button in this page.</li>
                     <li>A spinner, trackball or paddle (Arkanoid's <em>Dial</em>...) has a
                     <strong>Movement</strong>: <strong>Add a movement</strong>, then wait a second
@@ -6519,12 +6554,12 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
             what the keys do in the games. Each action is triggered by a key, a mouse button or a
             gamepad button: its <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Add a gamepad button</strong>: click, then press the button (or push the
+                <li><strong>Gamepad</strong>: click, then press the button (or push the
                 stick) on the cabinet within 30 seconds - MAUI's window catches it, and the press
                 does nothing else meanwhile. When this page is open on the computer the gamepad is
                 plugged in, the page catches it too. A pad with a layout of its own (named on its
                 pills) gets the button for itself, any other pad for every pad without one.</li>
-                <li><strong>Add a key or mouse button</strong>: click, then press the key or click
+                <li><strong>Key or mouse</strong>: click, then press the key or click
                 the mouse button in this page. Keys are named after their place on a US keyboard:
                 on an AZERTY keyboard, the A key shows as Q.</li>
                 <li>A key or a button does one thing in MAUI: added to an action, it leaves the one
@@ -6682,8 +6717,10 @@ function renderHotkeyStepBody(bindings: MauiBindings, draft: HotkeyDraft, step: 
                 <p>${slot === 1 ? (draft.type === 'combo' ? 'First key' : 'The key') : `Second key, pressed with ${escapeHtml(describeHotkeyKey(draft.keys[0]))}`}:
                 press it on the cabinet (or here for a key or a mouse button)…</p>
                 <div class="binding-actions">
-                    <button type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}">Catch a gamepad button</button>
-                    <button type="button" data-control-listen="raw" data-slot="${slot}">Catch a key or mouse button</button>
+                    ${renderCaptionedIconButton('Catch a gamepad button', 'Gamepad', GAMEPAD_ICON_PATHS,
+                        `type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}"`)}
+                    ${renderCaptionedIconButton('Catch a key or mouse button', 'Key or mouse', KEY_MOUSE_ICON_PATHS,
+                        `type="button" data-control-listen="raw" data-slot="${slot}"`)}
                 </div>
                 <p>…or pick a MAUI action, whatever control triggers it:</p>
                 <div class="hotkey-choices">
