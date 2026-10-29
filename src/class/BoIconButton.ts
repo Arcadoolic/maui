@@ -23,14 +23,17 @@ export const KEY_MOUSE_ICON_PATHS = '<rect x="0.75" y="5" width="9.5" height="6.
     + '<path d="M2.8 7.2h.01M4.6 7.2h.01M6.4 7.2h.01M8.2 7.2h.01M3.4 9.4h4.2"/>'
     + '<rect x="11.5" y="4.5" width="3.75" height="7" rx="1.875"/><path d="M13.375 4.5v2.3"/>';
 
+export const RESET_ICON_PATHS = '<path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 2.5V5h2.5"/>';
+
 /**
- * A button adding a control: its icon above a caption that stays visible (`caption`, also what a
- * listening script rewrites, class "icon-caption-text", and the accessible name); `label` is its
- * tooltip. `attributes` are added as they are (type, name, value, data-*...).
+ * A small icon-only button of the controls cards; `label` is its tooltip and accessible name.
+ * `attributes` are added as they are (type, name, value, data-*...). `tone`: accent (blue) adds,
+ * warn (amber) goes back to a default, danger (red) removes.
  */
-export function renderCaptionedIconButton(label: string, caption: string, svgPaths: string, attributes: string): string {
-    return `<button ${attributes} class="captioned-icon-button" title="${escapeHtml(label)}">
+export function renderControlIconButton(
+    label: string, svgPaths: string, attributes: string, tone: 'accent' | 'warn' | 'danger' = 'accent',
+): string {
+    return `<button ${attributes} class="control-icon-button control-icon-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
         <svg ${ICON_SVG_ATTRS}>${svgPaths}</svg>
-        <span class="icon-caption-text">${escapeHtml(caption)}</span>
     </button>`;
 }

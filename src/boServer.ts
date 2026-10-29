@@ -100,7 +100,8 @@ import {escapeHtml} from '@/class/EscapeHtml';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {
-    GAMEPAD_ICON_PATHS, ICON_SVG_ATTRS, KEY_MOUSE_ICON_PATHS, renderCaptionedIconButton, renderIconButton,
+    GAMEPAD_ICON_PATHS, ICON_SVG_ATTRS, KEY_MOUSE_ICON_PATHS, RESET_ICON_PATHS, renderControlIconButton,
+    renderIconButton,
 } from '@/class/BoIconButton';
 import type {FrontGameShower} from '@/class/FrontShowGameBridge';
 import type {FrontFavoritesNotifier} from '@/class/FrontFavoritesBridge';
@@ -3242,31 +3243,31 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             color: var(--bg);
             background-color: var(--warn);
         }
-        /* The ways to add a control: an icon with its caption under it, always visible. */
-        button.captioned-icon-button {
+        /* The controls cards' icon buttons (add, back to the default, remove all): small, their
+           text in their tooltip. */
+        button.control-icon-button {
+            border-radius: var(--radius-md);
             display: inline-flex;
-            flex-direction: column;
             align-items: center;
-            gap: 4px;
-            min-width: 88px;
+            justify-content: center;
+            min-width: 32px;
+            min-height: 32px;
             margin-top: 0;
-            padding: 8px 12px;
+            padding: 7px;
             color: var(--accent);
             background-color: transparent;
             border: 1px solid currentColor;
         }
-        button.captioned-icon-button svg {
-            width: 28px;
-            height: 28px;
+        button.control-icon-button.control-icon-warn {
+            color: var(--warn);
         }
-        button.captioned-icon-button .icon-caption-text {
-            font-size: 0.8em;
-            line-height: 1.2;
+        button.control-icon-button.control-icon-danger {
+            color: var(--danger);
         }
-        button.captioned-icon-button:hover:not(:disabled) {
+        button.control-icon-button:hover:not(:disabled) {
             background-color: rgba(255, 255, 255, 0.12);
         }
-        button.captioned-icon-button.listening {
+        button.control-icon-button.listening {
             color: var(--bg);
             background-color: var(--warn);
             border-color: var(--warn);
@@ -3715,7 +3716,7 @@ function renderPageTail(): string {
                 }
                 clearTimeout(listening.timer);
                 listening.button.classList.remove('listening');
-                listening.caption.textContent = listening.label;
+                listening.button.title = listening.label;
                 document.removeEventListener('keydown', onKey, true);
                 document.removeEventListener('mousedown', onMouse, true);
                 // The menu a right click opens comes after its mousedown: still blocked a moment.
@@ -3729,7 +3730,7 @@ function renderPageTail(): string {
                 event.stopPropagation();
                 var form = listening.button.form;
                 if (!token) {
-                    listening.caption.textContent = 'Not known to MAME - try another';
+                    listening.button.title = 'Not known to MAME - try another';
                     return;
                 }
                 var slot = listening.button.dataset.slot;
@@ -3760,14 +3761,13 @@ function renderPageTail(): string {
                     if (again) {
                         return;
                     }
-                    // Only the caption changes: an icon button keeps its icon.
-                    var caption = button.querySelector('.icon-caption-text') || button;
+                    // An icon button: its tooltip says what is awaited, its color that it waits.
                     listening = {
-                        button: button, caption: caption, label: caption.textContent,
+                        button: button, label: button.title,
                         raw: button.dataset.controlListen === 'raw', timer: setTimeout(stop, 15000),
                     };
                     button.classList.add('listening');
-                    caption.textContent = 'Press a key or click…';
+                    button.title = 'Press a key or click…';
                     document.addEventListener('keydown', onKey, true);
                     document.addEventListener('mousedown', onMouse, true);
                     // A right click opens no menu while listening.
@@ -5170,20 +5170,40 @@ function renderControlChips(seq: string, names: Map<string, string>): string {
  * the token in `code`) - only offered once MAME's keys are known (`canListen`). `rawCodes`: the
  * page posts the browser's own codes ("key|KeyA", "mouse|2") instead of MAME tokens (MAUI's tab),
  * and also listens to the gamepads itself while the front catches the press (data-pad-listen).
+ * `captureDisabled`: no MAME runs to catch a gamepad press, its tooltip then says how to launch it.
  */
-function renderControlAddButtons(captureDisabled: string, canListen: boolean, rawCodes = false): string {
+function renderControlAddButtons(
+    captureDisabled: boolean, canListen: boolean, rawCodes = false,
+    // In the same row: the action's way back to its default (its tooltip), and a button removing
+    // all its controls (when it has any).
+    extras: {reset?: string; removeAll?: boolean} = {},
+): string {
     return `
         <div class="binding-actions">
-            ${renderCaptionedIconButton('Add a gamepad button', 'Gamepad', GAMEPAD_ICON_PATHS,
-                `type="submit" name="action" value="capture"${captureDisabled}${rawCodes ? ' data-pad-listen' : ''}`)}
+            ${renderControlIconButton(
+                captureDisabled
+                    ? 'Launch MAME with the grey button at the top right of your screen to add a gamepad button'
+                    : 'Add a gamepad button',
+                GAMEPAD_ICON_PATHS,
+                `type="submit" name="action" value="capture"${captureDisabled ? ' disabled' : ''}${rawCodes ? ' data-pad-listen' : ''}`,
+            )}
             ${canListen ? `
-                ${renderCaptionedIconButton('Add a key or mouse button', 'Key or mouse', KEY_MOUSE_ICON_PATHS,
+                ${renderControlIconButton('Add a key or mouse button', KEY_MOUSE_ICON_PATHS,
                     `type="button" data-control-listen${rawCodes ? '="raw"' : ''}`)}
                 <input type="hidden" name="code" value="">
                 <button type="submit" name="action" value="add" hidden data-control-add></button>
             ` : ''}
+            ${renderControlRowExtras(extras)}
         </div>
     `;
+}
+
+/** The reset and remove-all buttons of an action's row, see renderControlAddButtons(). */
+function renderControlRowExtras(extras: {reset?: string; removeAll?: boolean}): string {
+    return (extras.reset ? renderControlIconButton(extras.reset, RESET_ICON_PATHS,
+        'type="submit" name="action" value="reset"', 'warn') : '')
+        + (extras.removeAll ? renderControlIconButton('Remove every control of this action',
+            TRASH_ICON_PATHS, 'type="submit" name="action" value="remove-all"', 'danger') : '');
 }
 
 /**
@@ -5223,7 +5243,7 @@ function renderControlsCard(
     const sessionRunning = !!getCaptureTarget();
     // A gamepad press is only seen by a running MAME; a key or a mouse button is taken by the page
     // itself, and removing needs nothing.
-    const captureDisabled = sessionRunning ? '' : ' disabled title="Launch MAME first"';
+    const captureDisabled = !sessionRunning;
     // What the page may send for a key or a mouse button: only tokens MAME itself listed.
     const listenKeys = Object.fromEntries(Object.entries(browserKeyTokens()).filter(([, token]) => defaults.codes.has(token)));
     const listenMouse = [0, 1, 2, 3, 4].map(button => browserMouseToken(button))
@@ -5239,12 +5259,10 @@ function renderControlsCard(
                     <form method="post" action="/input-probe/remap" class="control-form">
                         <input type="hidden" name="portType" value="${escapeHtml(action.portType)}">
                         ${renderControlChips(getControlSeq(action.portType, persisted, defaults), defaults.codes)}
-                        ${renderControlAddButtons(captureDisabled, true)}
-                        ${persisted.has(action.portType) ? `
-                            <div class="binding-actions">
-                                <button type="submit" name="action" value="reset">Back to MAME's default</button>
-                            </div>
-                        ` : ''}
+                        ${renderControlAddButtons(captureDisabled, true, false, {
+                            reset: persisted.has(action.portType) ? 'Back to MAME\'s default' : undefined,
+                            removeAll: seqAlternatives(getControlSeq(action.portType, persisted, defaults)).length > 0,
+                        })}
                     </form>
                     ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
                     ${actionState?.sharedWith?.length ? `
@@ -5267,14 +5285,16 @@ function renderControlsCard(
             controls, below). Each one is a key, a mouse button or a gamepad button: its
             <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Gamepad</strong>: launch MAME with the button at the top of
+                <li><strong>Gamepad icon</strong>: launch MAME with the button at the top of
                 the page first, then click and press the gamepad button (or push the direction)
                 within 30 seconds - MAME picks it up even when its window is not the one in front.</li>
-                <li><strong>Key or mouse</strong>: click, then press the key or click
+                <li><strong>Keyboard and mouse icon</strong>: click, then press the key or click
                 the mouse button (anywhere in the page) on the keyboard and mouse of this computer.
                 No need to launch MAME. Keys are named after their place on a US keyboard, the way
                 MAME does: on an AZERTY keyboard, the A key shows as Q.</li>
-                <li><strong>Back to MAME's default</strong> gives the action MAME's own controls again.</li>
+                <li><strong>↺</strong> gives the action MAME's own controls again.</li>
+                <li>The <strong>bin</strong> takes every control away from the action: nothing
+                triggers it until one is added.</li>
             </ul>
             <p class="info">Saved at once in <code>default.cfg</code>; a running MAME uses the change
             from its next start.</p>
@@ -5539,6 +5559,11 @@ function renderGameRemapCard(
             const axis = !!field.analog && seqType === 'standard';
             const title = !field.analog ? '' : axis ? 'Movement (spinner, mouse, stick)'
                 : `Keys: ${analogKeyDirection(field.portType, seqType)}`;
+            const seq = override ?? getInheritedGameSeq(field, seqType);
+            const extras = {
+                reset: override !== undefined ? 'Back to the global controls' : undefined,
+                removeAll: seqAlternatives(seq).length > 0,
+            };
             return `
                 <form method="post" action="/input-probe/game/remap" class="control-form">
                     <input type="hidden" name="romName" value="${escapeHtml(romName)}">
@@ -5546,17 +5571,13 @@ function renderGameRemapCard(
                     <input type="hidden" name="seqType" value="${seqType}">
                     ${title ? `<p class="control-seq-title">${title}</p>` : ''}
                     <p class="control-origin">${override !== undefined ? 'This game only' : 'From the global controls'}</p>
-                    ${renderControlChips(override ?? getInheritedGameSeq(field, seqType), defaults?.codes ?? new Map<string, string>())}
+                    ${renderControlChips(seq, defaults?.codes ?? new Map<string, string>())}
                     ${axis ? `
                         <div class="binding-actions">
                             <button type="submit" name="action" value="capture-axis">Add a movement</button>
+                            ${renderControlRowExtras(extras)}
                         </div>
-                    ` : renderControlAddButtons('', !!defaults)}
-                    ${override !== undefined ? `
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="reset">Back to the global controls</button>
-                        </div>
-                    ` : ''}
+                    ` : renderControlAddButtons(false, !!defaults, false, extras)}
                 </form>
             `;
         };
@@ -5601,17 +5622,18 @@ function renderGameRemapCard(
                     <li>Below, each card is a command of this game, with what triggers it: <em>From the
                     global controls</em> as long as you haven't changed it for this game. Its
                     <strong>✕</strong> removes one, and the others keep working.</li>
-                    <li><strong>Gamepad</strong>: click, then press the button (or push the
+                    <li><strong>Gamepad icon</strong>: click, then press the button (or push the
                     direction) on the gamepad within 30 seconds - MAME picks it up even when its window
-                    is not the one in front. <strong>Key or mouse</strong>: click, then
+                    is not the one in front. <strong>Keyboard and mouse icon</strong>: click, then
                     press the key or click the mouse button in this page.</li>
                     <li>A spinner, trackball or paddle (Arkanoid's <em>Dial</em>...) has a
                     <strong>Movement</strong>: <strong>Add a movement</strong>, then wait a second
                     and turn the spinner, move the mouse or push the stick. Its keys move it each
                     way. MAME only reads the mouse or a USB spinner when the
                     <strong>Spinner, trackball, paddle</strong> card above says so.</li>
-                    <li>Each change is saved and works in the running game at once.</li>
-                    <li><strong>Back to the global controls</strong> drops what this game had of its
+                    <li>Each change is saved and works in the running game at once.
+                    The <strong>bin</strong> leaves a command with no control in this game.</li>
+                    <li><strong>↺</strong> drops what this game had of its
                     own for a command. ${fromMaui
                         ? 'Keep playing when you are done: the changes are kept.'
                         : `When you are done, close MAME with the button at the top of the page or
@@ -6529,12 +6551,10 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
                     <ul class="control-chips">
                         ${chips || '<li class="control-none">No control: this action can\'t be used</li>'}
                     </ul>
-                    ${renderControlAddButtons('', true, true)}
-                    ${isDefaultKey(bindings, action.key) ? '' : `
-                        <div class="binding-actions">
-                            <button type="submit" name="action" value="reset">Back to MAUI's default</button>
-                        </div>
-                    `}
+                    ${renderControlAddButtons(false, true, true, {
+                        reset: isDefaultKey(bindings, action.key) ? undefined : 'Back to MAUI\'s default',
+                        removeAll: inputsOfKey(bindings, action.key).length > 0,
+                    })}
                 </form>
                 ${actionState?.error ? `<p class="error flash">${escapeHtml(actionState.error)}</p>` : ''}
                 ${actionState?.info ? `<p class="warn flash">${escapeHtml(actionState.info)}</p>` : ''}
@@ -6554,18 +6574,19 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
             what the keys do in the games. Each action is triggered by a key, a mouse button or a
             gamepad button: its <strong>✕</strong> removes it, and the others keep working.</p>
             <ul class="info">
-                <li><strong>Gamepad</strong>: click, then press the button (or push the
+                <li><strong>Gamepad icon</strong>: click, then press the button (or push the
                 stick) on the cabinet within 30 seconds - MAUI's window catches it, and the press
                 does nothing else meanwhile. When this page is open on the computer the gamepad is
                 plugged in, the page catches it too. A pad with a layout of its own (named on its
                 pills) gets the button for itself, any other pad for every pad without one.</li>
-                <li><strong>Key or mouse</strong>: click, then press the key or click
+                <li><strong>Keyboard and mouse icon</strong>: click, then press the key or click
                 the mouse button in this page. Keys are named after their place on a US keyboard:
                 on an AZERTY keyboard, the A key shows as Q.</li>
                 <li>A key or a button does one thing in MAUI: added to an action, it leaves the one
                 it had.</li>
-                <li><strong>Back to MAUI's default</strong> gives the action its controls of origin
-                again. Every change is used by the cabinet at once.</li>
+                <li><strong>↺</strong> gives the action its controls of origin
+                again. The <strong>bin</strong> takes every control away from it. Every change is
+                used by the cabinet at once.</li>
             </ul>
             <div class="binding-grid">${cards}</div>
         </section>
@@ -6717,9 +6738,9 @@ function renderHotkeyStepBody(bindings: MauiBindings, draft: HotkeyDraft, step: 
                 <p>${slot === 1 ? (draft.type === 'combo' ? 'First key' : 'The key') : `Second key, pressed with ${escapeHtml(describeHotkeyKey(draft.keys[0]))}`}:
                 press it on the cabinet (or here for a key or a mouse button)…</p>
                 <div class="binding-actions">
-                    ${renderCaptionedIconButton('Catch a gamepad button', 'Gamepad', GAMEPAD_ICON_PATHS,
+                    ${renderControlIconButton('Catch a gamepad button', GAMEPAD_ICON_PATHS,
                         `type="submit" name="action" value="capture${slot}" data-pad-listen data-slot="${slot}"`)}
-                    ${renderCaptionedIconButton('Catch a key or mouse button', 'Key or mouse', KEY_MOUSE_ICON_PATHS,
+                    ${renderControlIconButton('Catch a key or mouse button', KEY_MOUSE_ICON_PATHS,
                         `type="button" data-control-listen="raw" data-slot="${slot}"`)}
                 </div>
                 <p>…or pick a MAUI action, whatever control triggers it:</p>
@@ -11715,7 +11736,7 @@ export function createBoApp(
         const removed: string = typeof req.body.remove === 'string' ? req.body.remove : '';
         const action: string = removed ? 'remove' : (req.body.action || '').trim();
         const send = (controls: MauiControlsState) => sendMauiPage(req, res, config, {controls});
-        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'reset'].includes(action)) {
+        if (!MAUI_ACTIONS.some(known => known.key === key) || !['capture', 'add', 'remove', 'remove-all', 'reset'].includes(action)) {
             res.status(422);
             await send({key, error: 'Unknown action.'});
             return;
@@ -11726,6 +11747,10 @@ export function createBoApp(
         let caughtByPage = false;
         if (action === 'reset') {
             bindings = resetKey(bindings, key);
+        } else if (action === 'remove-all') {
+            for (const input of inputsOfKey(bindings, key)) {
+                bindings = removeInput(bindings, input);
+            }
         } else if (action === 'remove') {
             const input = parseMauiInputId(removed);
             // Only an input the card showed for this key.
@@ -12070,7 +12095,7 @@ export function createBoApp(
         const formAction: string = removed ? 'remove' : (req.body.action || '').trim();
         const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
 
-        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'reset'].includes(formAction)) {
+        if (mameInfo.error || !action || !['capture', 'add', 'remove', 'remove-all', 'reset'].includes(formAction)) {
             // mameInfo.error: same "shouldn't normally be reachable" caveat as /input-probe/devices
             // above - the form only renders once mameInfo.error is unset. !action: portType isn't in
             // REMAP_ACTIONS_BY_TYPE - only reachable by posting outside the rendered form, since
@@ -12099,6 +12124,11 @@ export function createBoApp(
 
             if (formAction === 'reset') {
                 applyCfgEdit(() => removeDefaultCfgUiInput(cfgPath, portType));
+                renderWith({portType});
+                return;
+            }
+            if (formAction === 'remove-all') {
+                saveControlSeq(cfgPath, portType, seqFromAlternatives([]), defaults);
                 renderWith({portType});
                 return;
             }
@@ -12207,7 +12237,7 @@ export function createBoApp(
         // romName is only ever used to build cfg/<romName>.cfg below, so it has to be one of the
         // roms actually present - never a client-supplied path fragment.
         if (mameInfo.error || !romNames.includes(romName) || !seqType
-            || !['capture', 'capture-axis', 'add', 'remove', 'reset'].includes(action)) {
+            || !['capture', 'capture-axis', 'add', 'remove', 'remove-all', 'reset'].includes(action)) {
             res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
             return;
         }
@@ -12266,6 +12296,11 @@ export function createBoApp(
                 if (seqAlternatives(current).includes(seqAlternatives(removed).join(' '))) {
                     save(removeSeqAlternative(current, removed));
                 }
+                res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
+                return;
+            }
+            if (action === 'remove-all') {
+                save(seqFromAlternatives([]));
                 res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, fieldId}));
                 return;
             }
