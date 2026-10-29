@@ -138,6 +138,7 @@ import {findMameProcesses, isProcessAlive, readProcessArgs, stopMameProcesses} f
 import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import {buildStarredFile, MAX_STARRED_FILE_BYTES, parseStarredFile} from '@/class/StarredGamesFile';
+import {buildMameControlsFile, MAX_MAME_CONTROLS_FILE_BYTES, parseMameControlsFile} from '@/class/MameControlsFile';
 import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
 import {renderBluetoothCard} from '@/class/BluetoothBoCard';
 import {
@@ -4504,6 +4505,8 @@ interface RemapState {
     // MAME's defaults).
     portType: string;
     error?: string;
+    // The card as a whole went well (an import), shown with an empty portType only.
+    notice?: string;
     // The other actions the control just added also triggers.
     sharedWith?: string[];
     // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
@@ -5164,8 +5167,9 @@ function renderControlsCard(
     if (!romNames.length) {
         return '';
     }
-    const cardError = state && !state.portType && state.error
-        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '';
+    const cardError = (state && !state.portType && state.error
+        ? `<p class="error flash">${escapeHtml(state.error)}</p>` : '')
+        + (state && !state.portType && state.notice ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : '');
     if (!defaults) {
         return `
             <section class="card">
@@ -5251,6 +5255,19 @@ function renderControlsCard(
             }</script>
             <form method="post" action="/input-probe/controls/defaults" class="control-reread">
                 <button type="submit">Read MAME's controls again</button>
+            </form>
+            <h3>Share these controls</h3>
+            <p class="info">Export the global controls, with the gamepads pinned to a JOY number
+            (Detected devices card), to a file another player with the same controllers can import.
+            An import replaces this cabinet's global controls with the file's; a game's own controls
+            are left as they are. A pinned gamepad only applies to a controller of the same model.</p>
+            <form method="get" action="/input-probe/controls/export">
+                <button type="submit">Export the controls</button>
+            </form>
+            <form method="post" action="/input-probe/controls/import" enctype="multipart/form-data">
+                <label for="controlsImportFile">File to import (a .json exported here)</label>
+                <input type="file" id="controlsImportFile" name="file" accept=".json" required>
+                <button type="submit">Import</button>
             </form>
         </section>
     `;
@@ -9379,6 +9396,7 @@ export function createBoApp(
     const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 100 * 1024 * 1024}});
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     const starredUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_STARRED_FILE_BYTES, files: 1}});
+    const controlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_MAME_CONTROLS_FILE_BYTES, files: 1}});
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -11914,6 +11932,91 @@ export function createBoApp(
             const message = error instanceof Error ? error.message : 'unexpected error';
             res.status(500).send(renderWith({portType: '', error: `Reading MAME's controls failed: ${message}`}));
         }
+    });
+
+    // The Controls card's export (MameControlsFile.ts): default.cfg's global controls and the
+    // pinned gamepads, for another cabinet with the same controllers.
+    app.get('/input-probe/controls/export', async (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, req.session.boAdvanced === true));
+            return;
+        }
+        const controls = readDefaultCfgUiInputs(getDefaultCfgPath(mameInfo.iniPath));
+        const pinnedDevices = readPinnedDevices(mameInfo);
+        if (!controls.size && !pinnedDevices.size) {
+            res.status(422).send(renderForm(
+                {mamePath: config.mamePath}, mameInfo, req.session.boAdvanced === true,
+                undefined, undefined, undefined, undefined, undefined, undefined,
+                {portType: '', error: 'Nothing to export: the controls are still MAME\'s own and no gamepad is pinned.'},
+            ));
+            return;
+        }
+        const now = new Date();
+        const mameVersion = await getMameVersion(join(config.mamePath, config.mameBinaryName));
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="mame-controls-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildMameControlsFile({controls, pinnedDevices}, mameVersion, now));
+    });
+
+    // The Controls card's import: replaces default.cfg's global controls with the file's, and pins
+    // its gamepads. Checked against this MAME's own controls first (see isImportableSeq()).
+    app.post('/input-probe/controls/import', controlsUpload.single('file'), (req, res) => {
+        // It rewrites MAME's controls: same-origin only, the BO having no CSRF token.
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined,
+            remapState,
+        ));
+        const defaults = readInputDefaults(join(config.mamePath, config.mameBinaryName));
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read first.'}, 409);
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            renderWith({portType: '', error: 'Pick a .json file exported from the Controls tab.'}, 422);
+            return;
+        }
+        let imported: ReturnType<typeof parseMameControlsFile>;
+        try {
+            imported = parseMameControlsFile(req.file.buffer.toString('utf8'), defaults);
+        } catch (error) {
+            renderWith({portType: '', error: `Import failed: ${(error as Error).message}`}, 422);
+            return;
+        }
+
+        try {
+            const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+            applyCfgEdit(() => writeDefaultCfgUiInputs(cfgPath, imported.controls));
+            for (const [joycode, deviceId] of imported.pinnedDevices) {
+                pinDevice(mameInfo, deviceId, joycode);
+            }
+        } catch (error) {
+            console.error('[boServer] Controls import failed:', error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            renderWith({portType: '', error: `Import failed: ${message}`}, 500);
+            return;
+        }
+        const plural = (count: number, word: string) => `${count} ${word}${count > 1 ? 's' : ''}`;
+        renderWith({
+            portType: '',
+            notice: `Import done: ${plural(imported.controls.size, 'control')} changed from MAME's own, `
+                + `${plural(imported.pinnedDevices.size, 'gamepad')} pinned.`,
+        });
     });
 
     // One action of the Controls card: add a control (pressed, or picked from MAME's keys and mouse
