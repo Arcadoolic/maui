@@ -58,7 +58,7 @@
         "@semantic-release/npm": "^13.2.0",
         "@semantic-release/release-notes-generator": "^14.1.1",
         "@stylistic/eslint-plugin": "^5.10.0",
-        "@swc/core": "^1.16.18",
+        "@swc/core": "^1.16.20",
         "@types/adm-zip": "^0.6.0",
         "@types/bcryptjs": "^3.0.0",
         "@types/bluebird": "^3.5.27",
