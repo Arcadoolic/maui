@@ -32,9 +32,11 @@ import {
     compareGameFields,
     gameFieldId,
     inputIconKey,
+    listGameCfgOverrides,
     parseGameFields,
     portTypePlayer,
     readGameCfgInputSeqs,
+    removeAllGameCfgInputSeqs,
     removeGameCfgInputSeq,
     GAME_SEQ_TYPES,
     setGameCfgInputSeq,
@@ -142,6 +144,7 @@ import {captureDirFromArgs, captureLaunchArgs, prepareCaptureDir} from '@/class/
 import {isSameOriginRequest} from '@/class/SameOrigin';
 import {buildStarredFile, MAX_STARRED_FILE_BYTES, parseStarredFile} from '@/class/StarredGamesFile';
 import {buildMameControlsFile, MAX_MAME_CONTROLS_FILE_BYTES, parseMameControlsFile} from '@/class/MameControlsFile';
+import {buildGameControlsFile, MAX_GAME_CONTROLS_FILE_BYTES, parseGameControlsFile} from '@/class/GameControlsFile';
 import {ONLY_LINK_REASON, renderNetworkCard} from '@/class/NetworkBoCard';
 import {renderBluetoothCard} from '@/class/BluetoothBoCard';
 import {
@@ -471,68 +474,132 @@ const INPUT_CFG_ICON = '\u{1F3AE}';
 const INPUT_CFG_LEGEND = `${INPUT_CFG_ICON} = this game already has its own key configuration (<code>cfg/&lt;rom&gt;.cfg</code>).`;
 
 /**
- * Searchable rom picker: a text field filtering a plain <select> (works without the script, just
- * unfiltered) of game names sorted alphabetically, each flagged with an icon when it has its own
- * input cfg. The script is self-contained (finds its picker through document.currentScript) since
- * several pickers can share the page. Typing turns the select into a short list box so the
- * matches are visible without opening it; every term must appear, accents and case ignored, in
- * the game name or its rom name.
+ * Searchable rom picker: a search field with a list of the matching games under it (a combobox),
+ * every term having to appear, accents and case ignored, in the game name or its rom name. Picking
+ * one (click, or arrows then Enter) closes the list and opens `pickUrl` + the rom name, so the
+ * page shows that game; the field then holds its name. Games with their own input cfg are flagged
+ * with an icon. The games are handed to the script as JSON, at most MAX_ROM_RESULTS listed at once.
+ * `romName` (a hidden field) is what the surrounding form posts.
  */
+const MAX_ROM_RESULTS = 50;
+
 function renderRomPicker(
-    selectId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom?: string,
+    inputId: string, romNames: string[], romLabels: Map<string, string>, withCfg: Set<string>, selectedRom: string,
+    pickUrl: string,
 ): string {
-    const options = romNames
-        .map(romName => ({romName, label: romLabels.get(romName) ?? romName}))
-        .sort((a, b) => a.label.localeCompare(b.label))
-        .map(({romName, label}) => `
-            <option value="${escapeHtml(romName)}" data-search="${escapeHtml(`${label} ${romName}`)}"
-                ${selectedRom === romName ? 'selected' : ''}>${withCfg.has(romName) ? `${INPUT_CFG_ICON} ` : ''}${escapeHtml(label)}</option>
-        `).join('');
+    const games = romNames
+        .map(romName => ({romName, label: romLabels.get(romName) ?? romName, cfg: withCfg.has(romName)}))
+        .sort((a, b) => a.label.localeCompare(b.label));
+    const selectedLabel = romLabels.get(selectedRom) ?? selectedRom;
+    const listId = `${inputId}-results`;
 
     return `
-        <div class="rom-picker">
-            <label for="${escapeHtml(selectId)}">Game</label>
-            <input type="search" class="rom-search" placeholder="Search a game…" autocomplete="off"
-                aria-label="Search a game">
-            <select id="${escapeHtml(selectId)}" name="romName">${options}</select>
-            <p class="info table-search-count rom-search-count" hidden></p>
+        <div class="rom-picker" data-pick-url="${escapeHtml(pickUrl)}">
+            <label for="${escapeHtml(inputId)}">Game</label>
+            <div class="rom-combobox">
+                <input type="search" id="${escapeHtml(inputId)}" class="rom-search" value="${escapeHtml(selectedLabel)}"
+                    placeholder="Search a game by name or rom name…" autocomplete="off" role="combobox"
+                    aria-autocomplete="list" aria-expanded="false" aria-controls="${escapeHtml(listId)}">
+                <ul id="${escapeHtml(listId)}" class="rom-results" role="listbox" hidden></ul>
+            </div>
+            <input type="hidden" name="romName" value="${escapeHtml(selectedRom)}">
             <p class="info">${INPUT_CFG_LEGEND}</p>
+            <script type="application/json" class="rom-games">${JSON.stringify(games).replace(/</g, '\\u003c')}</script>
             <script>(function () {
                 var root = document.currentScript.parentNode;
                 var search = root.querySelector('.rom-search');
-                var select = root.querySelector('select');
-                var count = root.querySelector('.rom-search-count');
-                // Last game really picked: kept across searches with no result, which empty the select.
-                var chosen = select.value;
-                var all = Array.prototype.map.call(select.options, function (option) {
-                    return {option: option, haystack: fold(option.dataset.search || '')};
-                });
+                var list = root.querySelector('.rom-results');
+                var games = JSON.parse(root.querySelector('.rom-games').textContent);
+                var selectedLabel = search.value;
+                var shown = [];
+                var active = -1;
                 function fold(text) {
                     return text.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase();
                 }
-                function applySearch() {
-                    var terms = fold(search.value).split(/\\s+/).filter(Boolean);
-                    var matches = all.filter(function (entry) {
-                        return terms.every(function (term) { return entry.haystack.indexOf(term) >= 0; });
-                    });
-                    while (select.firstChild) { select.removeChild(select.firstChild); }
-                    matches.forEach(function (entry) { select.appendChild(entry.option); });
-                    if (matches.some(function (entry) { return entry.option.value === chosen; })) {
-                        select.value = chosen;
-                    } else if (matches.length) {
-                        select.selectedIndex = 0;
-                        chosen = select.value;
-                    }
-                    select.size = terms.length && matches.length > 1 ? Math.min(matches.length, 8) : 1;
-                    count.hidden = terms.length === 0;
-                    count.textContent = matches.length
-                        ? matches.length + ' game(s) found out of ' + all.length + '.'
-                        : 'No game matches this search.';
+                games.forEach(function (game) { game.haystack = fold(game.label + ' ' + game.romName); });
+                function close() {
+                    list.hidden = true;
+                    search.setAttribute('aria-expanded', 'false');
+                    search.removeAttribute('aria-activedescendant');
                 }
-                select.addEventListener('change', function () { chosen = select.value; });
-                search.addEventListener('input', applySearch);
+                function highlight(index) {
+                    active = index;
+                    Array.prototype.forEach.call(list.children, function (item, i) {
+                        item.classList.toggle('active', i === index);
+                        item.setAttribute('aria-selected', i === index ? 'true' : 'false');
+                    });
+                    var item = list.children[index];
+                    if (item && item.id) {
+                        search.setAttribute('aria-activedescendant', item.id);
+                        item.scrollIntoView({block: 'nearest'});
+                    }
+                }
+                function open() {
+                    // The selected game's own name lists them all, as an empty field does.
+                    var text = search.value === selectedLabel ? '' : search.value;
+                    var terms = fold(text).split(/\\s+/).filter(Boolean);
+                    var matches = games.filter(function (game) {
+                        return terms.every(function (term) { return game.haystack.indexOf(term) >= 0; });
+                    });
+                    shown = matches.slice(0, ${MAX_ROM_RESULTS});
+                    list.innerHTML = '';
+                    shown.forEach(function (game, index) {
+                        var item = document.createElement('li');
+                        item.id = list.id + '-' + index;
+                        item.setAttribute('role', 'option');
+                        var name = document.createElement('span');
+                        name.textContent = (game.cfg ? '${INPUT_CFG_ICON} ' : '') + game.label;
+                        var rom = document.createElement('span');
+                        rom.className = 'rom-results-rom';
+                        rom.textContent = game.romName;
+                        item.appendChild(name);
+                        item.appendChild(rom);
+                        // mousedown, not click: the field keeps the focus, so blur does not close first.
+                        item.addEventListener('mousedown', function (event) {
+                            event.preventDefault();
+                            pick(game);
+                        });
+                        list.appendChild(item);
+                    });
+                    var more = matches.length - shown.length;
+                    if (!matches.length || more > 0) {
+                        var note = document.createElement('li');
+                        note.className = 'rom-results-note';
+                        note.textContent = matches.length
+                            ? more + ' more game(s): type more of the name.'
+                            : 'No game matches this search.';
+                        list.appendChild(note);
+                    }
+                    list.hidden = false;
+                    search.setAttribute('aria-expanded', 'true');
+                    highlight(shown.length ? 0 : -1);
+                }
+                function pick(game) {
+                    close();
+                    search.value = game.label;
+                    root.querySelector('input[name="romName"]').value = game.romName;
+                    location.href = root.dataset.pickUrl + encodeURIComponent(game.romName);
+                }
+                search.addEventListener('focus', function () { search.select(); open(); });
+                search.addEventListener('input', open);
+                search.addEventListener('blur', function () {
+                    close();
+                    if (!search.value.trim()) { search.value = selectedLabel; }
+                });
                 search.addEventListener('keydown', function (event) {
-                    if (event.key === 'Enter') { event.preventDefault(); }
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        if (list.hidden) { open(); return; }
+                        var step = event.key === 'ArrowDown' ? 1 : -1;
+                        highlight(Math.max(0, Math.min(shown.length - 1, active + step)));
+                    } else if (event.key === 'Enter') {
+                        // Never submits the form: Enter picks the highlighted game.
+                        event.preventDefault();
+                        if (!list.hidden && shown[active]) { pick(shown[active]); }
+                    } else if (event.key === 'Escape') {
+                        close();
+                        search.value = selectedLabel;
+                    }
                 });
             })();</script>
         </div>
@@ -3334,6 +3401,75 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             background-color: var(--warn);
             border-color: var(--warn);
         }
+        /* The per-game card's game picker (renderRomPicker()): the matches drop under the field. */
+        .rom-combobox {
+            position: relative;
+        }
+        .rom-results {
+            position: absolute;
+            z-index: 20;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 320px;
+            overflow-y: auto;
+            margin: 4px 0 0;
+            padding: 4px;
+            list-style: none;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+        }
+        .rom-results li {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 6px 10px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+        .rom-results li.active, .rom-results li:hover {
+            color: var(--bg);
+            background-color: var(--accent);
+        }
+        .rom-results .rom-results-rom {
+            font-size: 0.85em;
+            opacity: 0.7;
+        }
+        .rom-results li.rom-results-note {
+            color: var(--text-muted);
+            font-style: italic;
+            background: none;
+            cursor: default;
+        }
+        .game-file {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background-color: var(--surface-inset);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+        }
+        .game-file-status {
+            margin: 0;
+        }
+        .game-file .button-row {
+            margin-top: 12px;
+        }
+        .game-file .button-row:empty {
+            display: none;
+        }
+        .game-file .button-row + .game-file-status {
+            margin-top: 20px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
+        }
+        .game-file .button-row form > button[type="submit"]:last-child, .game-file .file-import {
+            margin-top: 12px;
+        }
+        .game-file .button-row form > button[type="submit"]:last-child {
+            margin-top: 0;
+        }
         .control-copy-player {
             margin-bottom: 12px;
         }
@@ -5511,9 +5647,71 @@ interface GameRemapState {
     romName: string;
     fieldId?: string;
     error?: string;
+    // The game's file as a whole went well (an import, back to the global controls).
+    notice?: string;
     // The game's other commands the control just added also triggers.
     sharedWith?: string[];
     releasedFrom?: string[];
+}
+
+/**
+ * Under the picker, what can be done for the picked game without launching MAME: its cfg file
+ * itself (download it, delete it), and its controls of its own - export them, import a file of them
+ * (once MAME's controls were read, to check its keys: `canImport`), or go back to the global ones.
+ */
+function renderGameControlsFileActions(romName: string, label: string, iniPath: string, canImport: boolean): string {
+    const cfgPath = getGameCfgPath(iniPath, romName);
+    const hasCfg = existsSync(cfgPath);
+    const overrides = hasCfg ? listGameCfgOverrides(readFileSync(cfgPath, 'utf8')) : [];
+    const commands = new Set(overrides.map(override => `${override.portType}|${override.tag}|${override.mask}`)).size;
+    const romField = `<input type="hidden" name="romName" value="${escapeHtml(romName)}">`;
+    const cfgName = `cfg/${romName}.cfg`;
+    const status = commands
+        ? `<strong>${escapeHtml(label)}</strong> has its own controls for ${commands} command${commands > 1 ? 's' : ''}.`
+        : `<strong>${escapeHtml(label)}</strong> follows the global controls.`;
+    const cfgStatus = hasCfg
+        ? `File <code>${escapeHtml(cfgName)}</code>: its controls, DIP switches, sound output and counters.`
+        : `No <code>${escapeHtml(cfgName)}</code> file yet: MAME writes it the first time the game is quit.`;
+    return `
+        <div class="game-file">
+            <p class="game-file-status">${cfgStatus}</p>
+            ${hasCfg ? `
+                <div class="button-row">
+                    <form method="get" action="/input-probe/game/cfg">
+                        ${romField}
+                        <button type="submit" class="button-secondary">Download the cfg file</button>
+                    </form>
+                    <form method="post" action="/input-probe/game/delete-cfg"
+                        onsubmit="return confirm('Delete ${escapeHtml(cfgName)}? Its controls, DIP switches and counters go with it: the game starts with MAME\\'s defaults and the global controls.')">
+                        ${romField}
+                        <button type="submit" class="button-danger">Delete the cfg file</button>
+                    </form>
+                </div>
+            ` : ''}
+            <p class="game-file-status">${status}</p>
+            <div class="button-row">
+                ${commands ? `
+                    <form method="get" action="/input-probe/game/export">
+                        ${romField}
+                        <button type="submit" class="button-secondary">Export its controls</button>
+                    </form>
+                    <form method="post" action="/input-probe/game/reset-all"
+                        onsubmit="return confirm('Drop every control of its own ${escapeHtml(label.replace(/['\\]/g, ''))} has? It follows the global controls again.')">
+                        ${romField}
+                        <button type="submit" class="button-danger">Back to the global controls</button>
+                    </form>
+                ` : ''}
+            </div>
+            ${canImport ? `
+                <form method="post" action="/input-probe/game/import" enctype="multipart/form-data" class="file-import">
+                    ${romField}
+                    <label for="gameControlsImportFile">Controls of this game to import (a .json exported here, for the same game)</label>
+                    <input type="file" id="gameControlsImportFile" name="file" accept=".json" required>
+                    <button type="submit">Import</button>
+                </form>
+            ` : '<p class="info">Read MAME\'s controls in the Global controls tab to import a file of controls.</p>'}
+        </div>
+    `;
 }
 
 function getGameCfgPath(iniPath: string, romName: string): string {
@@ -5619,7 +5817,7 @@ function renderGameRemapCard(
     const fromMaui = !!targetRom && !isMameConfigSessionAlive();
     const selectedRom = state?.romName ?? targetRom ?? otherRom
         ?? [...romNames].sort((a, b) => (romLabels.get(a) ?? a).localeCompare(romLabels.get(b) ?? b))[0];
-    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom);
+    const picker = renderRomPicker('gameRemapRomName', romNames, romLabels, withCfg, selectedRom, '/mame?game=');
     // Once a change is saved for the running game, relaunching it is what puts the change in effect
     // (see hasPendingCfgEdits()): the button says so and stands out, like the global "Apply controls".
     const applyPending = targetRom === selectedRom && hasPendingCfgEdits();
@@ -5699,7 +5897,7 @@ function renderGameRemapCard(
     };
 
     return `
-        <section class="card">
+        <section class="card" id="game-controls">
             <h2>Per-game controls</h2>
             <p class="info">Changes what triggers a command in <strong>one game only</strong>
             (saved in <code>cfg/&lt;rom&gt;.cfg</code>); every other game keeps the global
@@ -5742,6 +5940,8 @@ function renderGameRemapCard(
                 ${picker}
                 <button type="submit"${applyPending ? ' class="button-attention"' : ''}>${gameLaunchLabel}</button>
             </form>
+            ${renderGameControlsFileActions(selectedRom, romLabels.get(selectedRom) ?? selectedRom, iniPath, !!defaults)}
+            ${state?.notice && !state.fieldId ? `<p class="info flash">${escapeHtml(state.notice)}</p>` : ''}
             ${targetRom === selectedRom ? renderPendingRelaunchNotice() : ''}
             ${targetRom ? `
                 <p><strong>MAME:</strong> running ${escapeHtml(romLabels.get(targetRom) ?? targetRom)}${fromMaui ? ', launched from MAUI' : ''}</p>
@@ -9542,6 +9742,7 @@ export function createBoApp(
     const avatarUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: 5 * 1024 * 1024}});
     const starredUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_STARRED_FILE_BYTES, files: 1}});
     const controlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_MAME_CONTROLS_FILE_BYTES, files: 1}});
+    const gameControlsUpload = multer({storage: multer.memoryStorage(), limits: {fileSize: MAX_GAME_CONTROLS_FILE_BYTES, files: 1}});
     // Every route below reads the database sooner or later (the login page first): hold requests
     // until it exists, instead of failing on a missing table for the first second of a first launch.
     app.use((req, res, next) => {
@@ -9714,8 +9915,13 @@ export function createBoApp(
         if (typeof req.query.pluginsPath === 'string') {
             mameInfo.pluginsPath = req.query.pluginsPath;
         }
+        // The game picked in the per-game controls card (renderRomPicker()): one of the roms present.
+        const game = typeof req.query.game === 'string' ? req.query.game : '';
+        const gameRemapState = game && mameInfo.romPath && listRomNames(mameInfo.romPath).includes(game)
+            ? {romName: game} : undefined;
         res.send(renderForm(
             {mamePath}, mameInfo, req.session.boAdvanced === true,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, gameRemapState,
         ));
     });
 
@@ -12341,6 +12547,157 @@ export function createBoApp(
             undefined, // remapState
             gameRemapState,
         );
+
+    // The per-game card's file actions (renderGameControlsFileActions()), on the picked game without
+    // MAME: its romName is one of the roms present, never a path fragment from the client.
+    const pickedGame = (req: Request) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const raw = typeof req.body?.romName === 'string' ? req.body.romName : req.query.romName;
+        const romName = typeof raw === 'string' ? raw.trim() : '';
+        const valid = !mameInfo.error && !!mameInfo.romPath && listRomNames(mameInfo.romPath).includes(romName);
+        return {config, mameInfo, romName: valid ? romName : '', cfgPath: getGameCfgPath(mameInfo.iniPath, romName)};
+    };
+
+    app.get('/input-probe/game/export', async (req, res) => {
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const overrides = existsSync(cfgPath) ? listGameCfgOverrides(readFileSync(cfgPath, 'utf8')) : [];
+        if (!overrides.length) {
+            res.status(422).send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+                romName, error: 'Nothing to export: this game follows the global controls.',
+            }));
+            return;
+        }
+        const now = new Date();
+        const mameVersion = await getMameVersion(join(config.mamePath, config.mameBinaryName));
+        res.set('Content-Type', 'application/json');
+        res.set('Content-Disposition', `attachment; filename="mame-controls-${romName}-${now.toISOString().slice(0, 10)}.json"`);
+        res.send(buildGameControlsFile(romName, overrides, mameVersion, now));
+    });
+
+    // The game's cfg file as it is, to keep or to look at.
+    app.get('/input-probe/game/cfg', (req, res) => {
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        if (!existsSync(cfgPath)) {
+            res.status(404).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: 'This game has no cfg file.'}));
+            return;
+        }
+        res.set('Content-Type', 'application/xml');
+        res.set('Content-Disposition', `attachment; filename="${romName}.cfg"`);
+        res.send(readFileSync(cfgPath));
+    });
+
+    // Deletes the game's cfg file: controls, DIP switches and counters back to MAME's defaults.
+    // Through applyCfgEdit(): a MAME running the game would write the file again on exit.
+    app.post('/input-probe/game/delete-cfg', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            applyCfgEdit(() => rmSync(cfgPath, {force: true}));
+        } catch (error) {
+            console.error(`[boServer] Deleting cfg/${romName}.cfg failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: `Deleting failed: ${message}`}));
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, notice: `cfg/${romName}.cfg deleted.`}));
+    });
+
+    // Back to the global controls: every override of the game goes, its DIP switches, sound output
+    // and counters stay (removeAllGameCfgInputSeqs()). Through applyCfgEdit(): a MAME running it
+    // would write them back on exit.
+    app.post('/input-probe/game/reset-all', (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        try {
+            if (existsSync(cfgPath)) {
+                applyCfgEdit(() => writeFileSync(cfgPath, removeAllGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')), 'utf8'));
+            }
+        } catch (error) {
+            console.error(`[boServer] Dropping the controls of "${romName}" failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            res.status(500).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error: `Saving failed: ${message}`}));
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, notice: 'This game follows the global controls again.'}));
+    });
+
+    // Replaces the game's own controls with a file's (GameControlsFile.ts), for the same game.
+    app.post('/input-probe/game/import', gameControlsUpload.single('file'), (req, res) => {
+        if (!isSameOriginRequest({origin: req.get('origin'), referer: req.get('referer'), host: req.get('host')})) {
+            res.status(403).send('Cross-site request refused.');
+            return;
+        }
+        const {config, mameInfo, romName, cfgPath} = pickedGame(req);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (!romName) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const fail = (error: string, status = 422) =>
+            res.status(status).send(renderGameRemapPage(config, mameInfo, isAdvanced, {romName, error}));
+        const defaults = config.mamePath ? readInputDefaults(join(config.mamePath, config.mameBinaryName)) : undefined;
+        if (!defaults) {
+            fail('MAME\'s controls must be read first (Global controls tab).', 409);
+            return;
+        }
+        if (!req.file || !req.file.originalname.toLowerCase().endsWith('.json')) {
+            fail('Pick a .json file exported from this card.');
+            return;
+        }
+        let overrides: ReturnType<typeof parseGameControlsFile>;
+        try {
+            overrides = parseGameControlsFile(req.file.buffer.toString('utf8'), romName, defaults.codes);
+        } catch (error) {
+            fail(`Import failed: ${(error as Error).message}`);
+            return;
+        }
+        try {
+            applyCfgEdit(() => {
+                const existing = existsSync(cfgPath) ? removeAllGameCfgInputSeqs(readFileSync(cfgPath, 'utf8')) : undefined;
+                const updated = overrides.reduce<string | undefined>(
+                    (xml, override) => setGameCfgInputSeq(xml, romName, {...override, defaultSeq: '', name: ''}, override.seq, override.seqType),
+                    existing,
+                );
+                mkdirSync(dirname(cfgPath), {recursive: true});
+                writeFileSync(cfgPath, updated ?? '', 'utf8');
+            });
+        } catch (error) {
+            console.error(`[boServer] Importing the controls of "${romName}" failed:`, error);
+            fail(`Import failed: ${error instanceof Error ? error.message : 'unexpected error'}`, 500);
+            return;
+        }
+        res.send(renderGameRemapPage(config, mameInfo, isAdvanced, {
+            romName, notice: `Import done: ${overrides.length} control${overrides.length > 1 ? 's' : ''} of its own for this game.`,
+        }));
+    });
 
     app.post('/input-probe/game/start', async (req, res) => {
         const config = new Config();

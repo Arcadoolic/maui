@@ -294,3 +294,52 @@ export function removeGameCfgInputSeq(xml: string, field: GameField, seqType: Ga
         ? `${before}<input>${updatedInner.replace(/\n(?:[ \t]*\n)+/g, '\n')}</input>${after}`
         : `${before.replace(/[ \t]*$/, '')}${after.replace(/^[ \t]*\n/, '')}`;
 }
+
+/** One `<newseq>` override of a game's cfg, with what MAME matches it by. */
+export interface GameCfgOverride {
+    portType: string;
+    tag: string;
+    mask: number;
+    defvalue: number;
+    seqType: GameSeqType;
+    seq: string;
+}
+
+/** Every `<newseq>` override of a game's cfg, in file order. */
+export function listGameCfgOverrides(xml: string): GameCfgOverride[] {
+    const overrides: GameCfgOverride[] = [];
+    const inputBlock = INPUT_BLOCK.exec(xml);
+    if (!inputBlock) {
+        return overrides;
+    }
+    for (const port of inputBlock[1].matchAll(PORT_ELEMENT)) {
+        const attributes = parseAttributes(port[1]);
+        for (const seqType of GAME_SEQ_TYPES) {
+            const seq = newSeqRegex(seqType).exec(port[2] ?? '');
+            if (seq) {
+                overrides.push({
+                    portType: attributes.get('type') ?? '',
+                    tag: unescapeAttribute(attributes.get('tag') ?? ''),
+                    mask: Number(attributes.get('mask') ?? 0),
+                    defvalue: Number(attributes.get('defvalue') ?? 0),
+                    seqType,
+                    seq: seq[1].trim(),
+                });
+            }
+        }
+    }
+    return overrides;
+}
+
+/**
+ * Drops every `<newseq>` override of a game's cfg, so all its commands follow the global controls
+ * again. Everything else is kept (DIP switches, counters, sound output...): a port left empty goes,
+ * and so does an emptied `<input>` block.
+ */
+export function removeAllGameCfgInputSeqs(xml: string): string {
+    let updated = xml;
+    for (const override of listGameCfgOverrides(xml)) {
+        updated = removeGameCfgInputSeq(updated, {...override, defaultSeq: '', name: ''}, override.seqType);
+    }
+    return updated;
+}
