@@ -25,7 +25,7 @@ import {buildMameBackup, listMameBackupPaths, MAME_BACKUP_PARTS, parseMameBackup
 import ScreenScraperClient, {ScreenScraperCredentials} from '@/class/ScreenScraperClient.class';
 import {
     addSeqAlternative, browserKeyTokens, browserMouseToken, describeSeqAlternative, parseInputDefaults, parseUiSeqs, removeSeqAlternative, removeTokenFromSeq,
-    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults,
+    seqAlternativeKind, seqAlternatives, seqFromAlternatives, type InputDefaults, mirrorSeqToOtherPlayer, otherPlayerPortType,
 } from '@/class/MameInputSeq';
 import {parseListFull} from '@/class/MameListFull';
 import {
@@ -3272,6 +3272,9 @@ function renderPageHead(active: Tab, viewer: Viewer, hasSubtabs: boolean = false
             background-color: var(--warn);
             border-color: var(--warn);
         }
+        .control-copy-player {
+            margin-bottom: 12px;
+        }
         .control-reread {
             margin-top: 16px;
         }
@@ -4540,6 +4543,8 @@ interface RemapState {
     error?: string;
     // The card as a whole went well (an import), shown with an empty portType only.
     notice?: string;
+    // The tab to show (REMAP_GROUPS index) when no portType says it.
+    tab?: string;
     // The other actions the control just added also triggers.
     sharedWith?: string[];
     // In-game UI ports (see IN_GAME_UI_PORTS) the captured token was removed from because MAME
@@ -5303,8 +5308,10 @@ function renderControlsCard(
             ${renderPlayerTabs('global', REMAP_GROUPS.map((group, index) => ({
                 id: String(index),
                 title: group.title,
-                html: `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
-            })), state?.portType ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType))) : undefined)}
+                html: renderCopyPlayerForm(group.title) + `<div class="binding-grid">${renderActionItems(group.actions)}</div>`,
+            })), state?.portType
+                ? String(REMAP_GROUPS.findIndex(group => group.actions.some(action => action.portType === state.portType)))
+                : state?.tab)}
             <script type="application/json" id="control-listen-codes">${
                 JSON.stringify({keys: listenKeys, mouse: listenMouse}).replace(/</g, '\\u003c')
             }</script>
@@ -5325,6 +5332,24 @@ function renderControlsCard(
                 <button type="submit">Import</button>
             </form>
         </section>
+    `;
+}
+
+// The players whose controls one button copies to the other (mirrorSeqToOtherPlayer()).
+const COPY_PLAYERS: Record<string, string> = {'Player 1': 'Player 2', 'Player 2': 'Player 1'};
+
+/** "Copy these keys to Player 2" on Player 1's tab, and the other way round; nothing elsewhere. */
+function renderCopyPlayerForm(groupTitle: string): string {
+    const to = COPY_PLAYERS[groupTitle];
+    if (!to) {
+        return '';
+    }
+    return `
+        <form method="post" action="/input-probe/controls/copy-player" class="control-copy-player"
+            onsubmit="return confirm('Replace the gamepad controls of ${to} with those of ${groupTitle}, JOY 1 and JOY 2 swapped? ${to} keeps its keyboard keys.')">
+            <input type="hidden" name="from" value="${escapeHtml(groupTitle)}">
+            <button type="submit" class="button-secondary">Copy these keys to ${escapeHtml(to)}</button>
+        </form>
     `;
 }
 
@@ -12079,6 +12104,65 @@ export function createBoApp(
             notice: `Import done: ${plural(imported.controls.size, 'control')} changed from MAME's own, `
                 + `${plural(imported.pinnedDevices.size, 'gamepad')} pinned.`,
         });
+    });
+
+    // The Controls card's "Copy these keys to Player 2" (or to Player 1): every action's gamepad
+    // controls go to the same action of the other player, JOY 1 and JOY 2 swapped; that player
+    // keeps its own keys (mirrorSeqToOtherPlayer()).
+    app.post('/input-probe/controls/copy-player', (req, res) => {
+        const config = new Config();
+        config.load();
+        const mameInfo = getMameInfo(config);
+        const isAdvanced = req.session.boAdvanced === true;
+        if (mameInfo.error || !config.mamePath) {
+            res.status(422).send(renderForm({mamePath: config.mamePath || ''}, mameInfo, isAdvanced));
+            return;
+        }
+        const from = typeof req.body.from === 'string' ? req.body.from : '';
+        const to = COPY_PLAYERS[from];
+        if (!to) {
+            res.status(422).send(renderForm({mamePath: config.mamePath}, mameInfo, isAdvanced));
+            return;
+        }
+        const targetTab = String(REMAP_GROUPS.findIndex(group => group.title === to));
+        const renderWith = (remapState: RemapState, status = 200) => res.status(status).send(renderForm(
+            {mamePath: config.mamePath}, mameInfo, isAdvanced,
+            undefined, undefined, undefined, undefined, undefined, undefined,
+            {tab: targetTab, ...remapState},
+        ));
+        const defaults = readInputDefaults(join(config.mamePath, config.mameBinaryName));
+        if (!defaults) {
+            renderWith({portType: '', error: 'MAME\'s controls must be read again first.'}, 409);
+            return;
+        }
+        const sourceActions = REMAP_GROUPS.find(group => group.title === from)?.actions ?? [];
+        const cfgPath = getDefaultCfgPath(mameInfo.iniPath);
+        try {
+            const persisted = readDefaultCfgUiInputs(cfgPath);
+            let copied = 0;
+            for (const action of sourceActions) {
+                const target = otherPlayerPortType(action.portType);
+                if (!target || !defaults.seqs.has(target)) {
+                    continue;
+                }
+                const current = getControlSeq(target, persisted, defaults);
+                const mirrored = mirrorSeqToOtherPlayer(getControlSeq(action.portType, persisted, defaults), current);
+                if (mirrored !== seqFromAlternatives(seqAlternatives(current))) {
+                    saveControlSeq(cfgPath, target, mirrored, defaults);
+                    copied++;
+                }
+            }
+            renderWith({
+                portType: '',
+                notice: copied
+                    ? `${from}'s gamepad controls copied to ${to} (JOY 1 and JOY 2 swapped): ${copied} action${copied > 1 ? 's' : ''} changed.`
+                    : `${to} already had these controls: nothing changed.`,
+            });
+        } catch (error) {
+            console.error(`[boServer] Copying ${from}'s controls failed:`, error);
+            const message = error instanceof Error ? error.message : 'unexpected error';
+            renderWith({portType: '', error: `Copy failed: ${message}`}, 500);
+        }
     });
 
     // One action of the Controls card: add a control (pressed, or picked from MAME's keys and mouse

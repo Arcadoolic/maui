@@ -217,3 +217,35 @@ export function browserKeyTokens(): Record<string, string> {
     ];
     return Object.fromEntries(codes.map(code => [code, browserKeyToken(code)!]));
 }
+
+/**
+ * Player 2's port type for one of player 1 and the other way round ("P1_BUTTON1" <-> "P2_BUTTON1",
+ * "COIN1" <-> "COIN2", "START1" <-> "START2"), undefined for any other.
+ */
+export function otherPlayerPortType(portType: string): string | undefined {
+    const swap: Record<string, string> = {1: '2', 2: '1'};
+    const playerPrefix = /^P([12])_(.+)$/.exec(portType);
+    if (playerPrefix) {
+        return `P${swap[playerPrefix[1]]}_${playerPrefix[2]}`;
+    }
+    const numbered = /^(COIN|START)([12])$/.exec(portType);
+    return numbered ? `${numbered[1]}${swap[numbered[2]]}` : undefined;
+}
+
+function isGamepadAlternative(alternative: string): boolean {
+    return alternative.split(/\s+/).some(token => inputCodeKind(token) === 'joystick');
+}
+
+/**
+ * What the other player gets when one player's controls are copied to them: `source`'s gamepad
+ * alternatives with joysticks 1 and 2 swapped ("JOYCODE_1_BUTTON1" -> "JOYCODE_2_BUTTON1" and back),
+ * after `target`'s own keyboard and mouse ones. `source`'s keys are left out: shared, one key would
+ * play both players. Other joysticks (3 and up) are copied as they are.
+ */
+export function mirrorSeqToOtherPlayer(source: string, target: string): string {
+    const kept = seqAlternatives(target).filter(alternative => !isGamepadAlternative(alternative));
+    const mirrored = seqAlternatives(source)
+        .filter(isGamepadAlternative)
+        .map(alternative => alternative.replace(/\bJOYCODE_([12])_/g, (_, joystick: string) => `JOYCODE_${joystick === '1' ? 2 : 1}_`));
+    return seqFromAlternatives([...new Set([...kept, ...mirrored])]);
+}
