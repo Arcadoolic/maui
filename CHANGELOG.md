@@ -1,3 +1,9 @@
+## [2.20.0](https://github.com/Arcadoolic/maui/compare/2.19.0...2.20.0) (2026-11-03)
+
+### Features
+
+* **online:** the games' pictures are MAUI-API's on an ONLINE cabinet (maui-api D99) ([5c551b8](https://github.com/Arcadoolic/maui/commit/5c551b8efcc6277ac83ed10e4a8d86939b5e0fd4))
+
 ## [2.19.0](https://github.com/Arcadoolic/maui/compare/2.18.0...2.19.0) (2026-10-29)
 
 ### Features
