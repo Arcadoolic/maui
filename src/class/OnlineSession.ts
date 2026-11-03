@@ -14,6 +14,7 @@ import {readOsName} from '@/class/OsName';
 import type {FlushSummary} from '@/class/ScoreOutbox';
 import type {OpinionReportSummary} from '@/class/OpinionReport';
 import type {RecoverySummary} from '@/class/ScoreRecovery';
+import type {MediaSyncSummary} from '@/class/MediaSync';
 
 // ONLINE mode for one run of MAUI: a startup report, then a heartbeat at a fixed interval (no
 // backoff: MAUI-API shows a cabinet offline after 3 minutes without one, see docs/DECISIONS.md).
@@ -57,6 +58,10 @@ export interface OnlineSessionDeps {
     // Answers the administrators' requests to recover a score (ScoreRecovery.ts, maui-api D93):
     // after the player sync, at startup and every PLAYER_SYNC_EVERY heartbeats. None: no requests.
     answerRecoveries?: (client: MauiApiClient) => Promise<RecoverySummary>;
+    // Makes the pictures of the games those MAUI-API chose (MediaSync.ts, maui-api D99): after the
+    // startup report and with the player sync, never during a game; `force` from the BO. It keeps
+    // its own pace (every 6 hours at most). None: no pictures (tests).
+    syncMedia?: (client: MauiApiClient, force: boolean) => Promise<MediaSyncSummary>;
 }
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -167,6 +172,7 @@ export class OnlineSession {
             void this.syncPlayers(client).then(() => this.answerRecoveries(client));
             void this.flushScores(client).then(() => this.refreshLeaderboards(client));
             void this.reportOpinions(client);
+            void this.syncMedia(client);
         }
         this.handle(startup, client, generation);
     }
@@ -267,6 +273,11 @@ export class OnlineSession {
         this.paused = true;
     }
 
+    /** A game is being played (see pause()). */
+    public isPaused(): boolean {
+        return this.paused;
+    }
+
     /**
      * The game `romname` ended: its scores are sent at once, then the leaderboards refreshed, that
      * game's first, and what came due during the game is done. Never throws.
@@ -283,6 +294,41 @@ export class OnlineSession {
         if (this.syncDue) {
             this.syncDue = false;
             void this.syncPlayers(client).then(() => this.answerRecoveries(client));
+            void this.syncMedia(client);
+        }
+    }
+
+    /**
+     * The pictures asked for now, from the BO: the summary, or null when the session is not
+     * running or has no pictures to sync.
+     */
+    public async syncMediaNow(): Promise<MediaSyncSummary | null> {
+        const client = this.client;
+        if (!client || this.status.state !== 'running' || !this.deps.syncMedia) {
+            return null;
+        }
+        return this.syncMedia(client, true);
+    }
+
+    /** Never throws: a failure is logged, the pictures are asked again at the next turn. */
+    private async syncMedia(client: MauiApiClient, force = false): Promise<MediaSyncSummary | null> {
+        if (!this.deps.syncMedia) {
+            return null;
+        }
+        try {
+            const summary = await this.deps.syncMedia(client, force);
+            if (summary.failure) {
+                const reason = summary.failure.kind === 'rejected' ? `HTTP ${summary.failure.status}, ${summary.failure.code}` : summary.failure.kind;
+                this.log(`[online] Pictures of the games not checked (${reason}).`);
+            }
+            if (summary.written.length || summary.failed.length) {
+                this.log(`[online] Pictures of the games: ${summary.written.length} updated, ${summary.failed.length} not downloaded`
+                    + (summary.stoppedForGame ? ', stopped for a game' : '') + '.');
+            }
+            return summary;
+        } catch (error) {
+            this.log(`[online] Pictures of the games not synced: ${error instanceof Error ? error.message : String(error)}`);
+            return null;
         }
     }
 
@@ -417,6 +463,7 @@ export class OnlineSession {
                         this.caughtUp = true;
                         void this.syncPlayers(client).then(() => this.answerRecoveries(client));
                         void this.refreshLeaderboards(client);
+                        void this.syncMedia(client);
                     }
                 }
                 if (result.kind === 'ok' && !this.paused) {

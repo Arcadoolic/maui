@@ -126,6 +126,7 @@ import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {useMediaChanges} from '@/composables/useMediaChanges';
 import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
 import {uiSounds, uiSoundSettings, voteSound, type UiSoundToggle} from '@/class/UiSounds';
 import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
@@ -414,10 +415,22 @@ function generateFlyerPath(): string {
         // pathToFileURL(), not format({pathname, protocol: 'file', ...}): format() leaves Windows
         // backslashes as-is instead of converting them to the forward slashes a file: URL needs,
         // which broke image loading on Windows (the flyer never displayed).
-        return pathToFileURL(path).href;
+        return media.versioned(pathToFileURL(path).href, selectedGame.value.romName);
     }
     return '';
 }
+
+// Pictures replaced by MAUI-API's (MediaSync.ts): the flyers read again, the one shown reloaded.
+const media = useMediaChanges();
+watch(media.revision, () => {
+    if (!gameService) {
+        return;
+    }
+    flyers.value = gameService.loadFlyers();
+    if (flyer.value) {
+        flyer.value = generateFlyerPath();
+    }
+});
 
 // Known once the image is loaded: until then the flyer keeps its previous orientation (it is hidden
 // while the game changes anyway, see onGameChange()).

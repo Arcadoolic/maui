@@ -35,6 +35,7 @@ import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {getMameService, getGameService, isLite} from '@/services';
 import defaultMarqueeUrl from '@/assets/default_marquee.jpg';
+import {useMediaChanges} from '@/composables/useMediaChanges';
 
 const props = withDefaults(defineProps<{
     games: Game[];
@@ -73,6 +74,14 @@ const flyers = ref<string[]>(gameService.loadFlyers());
 const logosPath = ref(mameService.logoPath);
 const logos = ref<string[]>(gameService.loadLogos());
 
+// Pictures replaced by MAUI-API's (MediaSync.ts): the lists read again, those games' images reloaded.
+const media = useMediaChanges();
+watch(media.revision, () => {
+    marquees.value = gameService.loadMarquees();
+    flyers.value = gameService.loadFlyers();
+    logos.value = gameService.loadLogos();
+});
+
 watch(() => props.selectedGameIndex, (val) => {
     if (gameListRef.value) {
         gameListRef.value.style.top = (-10 * val) + '%';
@@ -103,17 +112,17 @@ function toFileUrl(path: string): string {
 
 function getMarquee(romName: string) {
     const path = findMediaPath(marqueesPath.value, marquees.value, romName);
-    return path ? toFileUrl(path) : defaultMarqueeUrl;
+    return path ? media.versioned(toFileUrl(path), romName) : defaultMarqueeUrl;
 }
 
 function getFlyer(romName: string) {
     const path = findMediaPath(flyersPath.value, flyers.value, romName);
-    return path ? toFileUrl(path) : '';
+    return path ? media.versioned(toFileUrl(path), romName) : '';
 }
 
 function getLogo(romName: string) {
     const path = findMediaPath(logosPath.value, logos.value, romName);
-    return path ? toFileUrl(path) : '';
+    return path ? media.versioned(toFileUrl(path), romName) : '';
 }
 
 /**

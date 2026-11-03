@@ -37,9 +37,11 @@ export type DownloadResult = {status: 'ok'} | {status: 'error'; message: string}
 const API_BASE_URL = 'https://api.screenscraper.fr/api2/jeuInfos.php';
 // Arcade/"Mame" system on ScreenScraper, confirmed via screenscraper.fr/romsinfos.php?plateforme=75.
 const ARCADE_SYSTEME_ID = '75';
-// World first, then Japan (confirmed as "jp", not "jap", against a real API response), then a
-// reasonable Western fallback before giving up on region and taking whatever is available.
-const REGION_PRIORITY = ['wor', 'jp', 'us', 'eu', 'ss'];
+// Europe first, then the world, the US and Japan ("jp", not "jap", confirmed against a real API
+// response), then ScreenScraper's own: MAUI-API's order (maui-api D88, D99), so that an OFFLINE
+// cabinet's download picks what an ONLINE one gets from MAUI-API. An ONLINE cabinet does not ask
+// ScreenScraper for its pictures at all (MediaSync.ts).
+const REGION_PRIORITY = ['eu', 'wor', 'us', 'jp', 'ss'];
 // "marquee" is the standard cabinet marquee (1200x449 on "gng") - not "screenmarquee"
 // (1024x512, a different media entirely) nor its "screenmarqueesmall" thumbnail (512x128).
 // "flyer" is the arcade-specific flyer type (vs. "box-2D" used by non-arcade systems).
