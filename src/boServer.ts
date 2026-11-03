@@ -7381,7 +7381,37 @@ function renderScreenScraperCard(values: ScreenScraperValues, error?: string, in
  * it's a ScreenScraper action, not a favorites-list concern - the favorites table stays there,
  * showing per-rom marquee/flyer/logo status, with a pointer back to this tab for the button.
  */
-function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summary?: DownloadSummary): string {
+/**
+ * An ONLINE cabinet's pictures are MAUI-API's (MediaSync.ts, maui-api D99), kept up to date by the
+ * session every 6 hours at most: the download asks for them now instead of ScreenScraper.
+ */
+interface OnlineMediaCard {
+    online: boolean;
+    // What the sync now did, once asked.
+    result?: {message: string; failed: boolean};
+}
+
+function renderOnlineMediaDownloadCard(card: OnlineMediaCard): string {
+    return `
+        <section class="card">
+            <h2>Media download</h2>
+            ${card.result ? `<p class="${card.result.failed ? 'error' : 'info'} flash">${escapeHtml(card.result.message)}</p>` : ''}
+            <form method="post" action="/favorites/download-media">
+                <p class="info">This cabinet is ONLINE: the marquees, flyers and logos of its games are those MAUI-API
+                chose for every cabinet and for the hiscores site (Europe first, then the world, the US and Japan; a
+                game's priority region and media donor are set in MAUI-API's back office). They are kept up to date
+                every 6 hours at most; a picture that differs is replaced, one MAUI-API has none of is left as it is.
+                ScreenScraper is not asked from here.</p>
+                <button type="submit">Update the artwork from MAUI-API now</button>
+            </form>
+        </section>
+    `;
+}
+
+function renderScreenScraperDownloadCard(hasCreds: boolean, error?: string, summary?: DownloadSummary, online?: OnlineMediaCard): string {
+    if (online?.online) {
+        return renderOnlineMediaDownloadCard(online);
+    }
     if (!hasCreds) {
         return `
             <section class="card">
@@ -7413,10 +7443,11 @@ function renderScreenScraperPage(
     info?: string,
     downloadError?: string,
     summary?: DownloadSummary,
+    online?: OnlineMediaCard,
 ): string {
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
-    const defaultSubtab = (downloadError !== undefined || summary !== undefined) ? 'download'
+    const defaultSubtab = (downloadError !== undefined || summary !== undefined || online?.result !== undefined) ? 'download'
         : (error !== undefined || info !== undefined) ? 'credentials'
             : undefined;
     return renderSubtabbedPage('screenscraper', [
@@ -7424,7 +7455,7 @@ function renderScreenScraperPage(
         {
             id: 'download',
             label: 'Download',
-            html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary),
+            html: renderScreenScraperDownloadCard(hasCreds, downloadError, summary, online),
         },
     ], 'advanced', defaultSubtab);
 }
@@ -10103,7 +10134,7 @@ export function createBoApp(
             ssUserId: config.ssUserId,
             ssUserPassword: config.ssUserPassword,
             bezelAspect: config.bezelAspect,
-        }, hasScreenScraperCredentials(config)));
+        }, hasScreenScraperCredentials(config), undefined, undefined, undefined, undefined, {online: !!core.online.currentClient()}));
     });
 
     /**
@@ -10837,6 +10868,24 @@ export function createBoApp(
             bezelAspect: config.bezelAspect,
         };
         const hasCreds = hasScreenScraperCredentials(config);
+
+        // ONLINE: MAUI-API's pictures (maui-api D99), not ScreenScraper's.
+        if (core.online.currentClient()) {
+            const result = await core.online.syncMediaNow();
+            const message = result === null
+                ? 'MAUI-API could not be asked: see the Online tab.'
+                : result.failure
+                    ? `MAUI-API refused the list of pictures (${result.failure.kind === 'rejected' ? result.failure.code : result.failure.kind}).`
+                    : `${result.written.length} picture(s) updated from MAUI-API`
+                        + (result.failed.length ? `, ${result.failed.length} could not be downloaded (asked again later)` : '')
+                        + (result.stoppedForGame ? ', stopped because a game started' : '') + '.';
+            res.send(renderScreenScraperPage(ssValues, hasCreds, undefined, undefined, undefined, undefined, {
+                online: true,
+                result: {message, failed: result === null || !!result.failure || result.failed.length > 0},
+            }));
+            return;
+        }
+
         const context = getFavoritesContext(config);
 
         if ('error' in context) {
@@ -11754,6 +11803,7 @@ export function createBoApp(
         res.send(renderScreenScraperPage(
             {...values, ssDevPassword: config.ssDevPassword, ssUserPassword: config.ssUserPassword},
             hasScreenScraperCredentials(config), undefined, 'ScreenScraper configuration saved.',
+            undefined, undefined, {online: !!core.online.currentClient()},
         ));
     });
 

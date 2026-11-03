@@ -622,3 +622,57 @@ describe('during a game', () => {
         expect(flushScores).not.toHaveBeenCalled();
     });
 });
+
+describe('pictures of the games (maui-api D99)', () => {
+    const done = {checked: true, written: [], failed: [], stoppedForGame: false};
+
+    it('syncs them after the startup report, then with the player sync', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const syncMedia = vi.fn(async () => done);
+        const {instance} = session(fetchImpl, {syncMedia});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(syncMedia).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(syncMedia).toHaveBeenCalledTimes(2);
+        instance.stop();
+    });
+
+    it('waits for the end of a game when it came due during it, and survives a throw', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const syncMedia = vi.fn(async () => done);
+        const {instance, log} = session(fetchImpl, {syncMedia});
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        syncMedia.mockClear();
+
+        instance.pause();
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(syncMedia).not.toHaveBeenCalled();
+
+        syncMedia.mockRejectedValueOnce(new Error('EACCES'));
+        instance.resume('dkong');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(syncMedia).toHaveBeenCalledOnce();
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+        expect(instance.getStatus().state).toBe('running');
+        instance.stop();
+    });
+
+    it('syncs them on demand, forced, and says how it went', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const syncMedia = vi.fn(async () => done);
+        const {instance} = session(fetchImpl, {syncMedia});
+
+        expect(await instance.syncMediaNow()).toBeNull();
+        await instance.start();
+        expect(await instance.syncMediaNow()).toEqual(done);
+        expect(syncMedia).toHaveBeenLastCalledWith(expect.anything(), true);
+        instance.stop();
+    });
+});

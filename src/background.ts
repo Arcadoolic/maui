@@ -26,6 +26,7 @@ import {
 } from '@/class/ScoreCaptureBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
+import {MEDIA_CHANGED_CHANNEL} from '@/class/FrontMediaBridge';
 import {UI_SOUNDS_CHANGED_CHANNEL, UI_SOUNDS_TEST_CHANNEL} from '@/class/FrontUiSoundsBridge';
 import {
     CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, MAME_SESSION_CHANNEL, PAD_CAPTURED_CHANNEL,
@@ -402,6 +403,12 @@ app.on('ready', async () => {
     (global as Record<string, unknown>)[SCORE_ATTRIBUTE_GLOBAL] = attributeScore;
     // New shared leaderboards (LeaderboardSync.ts): the front reads them again (LeaderboardSource.ts).
     bo.leaderboards.onChange(() => win?.webContents.send(LEADERBOARDS_CHANGED_CHANNEL));
+    // Pictures of games replaced by MAUI-API's (MediaSync.ts): the front shows them again.
+    bo.media.onChange(romnames => {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send(MEDIA_CHANGED_CHANNEL, romnames);
+        }
+    });
     // The cabinet's own way to the BO (Home.vue): loads it and tells where it is.
     const wakeBackOffice: BoWaker = async () => {
         try {

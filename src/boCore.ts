@@ -18,6 +18,8 @@ import type {FrontControls} from '@/class/FrontControlsBridge';
 import {SqliteLeaderboardStore, SqliteScoreStore} from '@/class/SqliteScoreStore';
 import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {AvatarLedgerFile} from '@/class/AvatarLedger';
+import {MediaSync} from '@/class/MediaSync';
+import {getMameLocations} from '@/class/MameLocations';
 import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
 import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
@@ -161,6 +163,8 @@ export interface BoCore {
     scores: ScoreCapture;
     scoreStore: SqliteScoreStore;
     leaderboards: LeaderboardSync;
+    // The pictures of the games, MAUI-API's (maui-api D99).
+    media: MediaSync;
     // PNGs MAUI-API refused (too big...): not sent again during this run.
     refusedAvatars: Set<string>;
 }
@@ -221,6 +225,16 @@ export function startCore(
         },
         romnames: async () => (await Game.findAll({where: {hi: true}, attributes: ['romName']})).map(game => game.romName),
     });
+    const media = new MediaSync({
+        romnames: async () => (await Game.findAll({attributes: ['romName']})).map(game => game.romName),
+        folders: () => {
+            const locations = getMameLocations(getMameHomePath());
+            return {marquee: locations.marqueePath, flyer: locations.flyerPath, logo: locations.logoPath};
+        },
+        statePath: join(os.homedir(), '.mame-awesome-ui', 'media-sync.json'),
+        // Called once the session exists: never before start().
+        paused: () => online.isPaused(),
+    });
     // Created here so the BO's Online routes can restart it; started and stopped by background.ts.
     const online = new OnlineSession({
         mauiVersion: getRunningVersion(),
@@ -243,6 +257,7 @@ export function startCore(
             store: scoreStore,
             record: recordRecoveryAnswer,
         }),
+        syncMedia: (client, force) => media.sync(client, {force}),
     });
     const scores = new ScoreCapture({
         mameHome: getMameHomePath,
@@ -264,7 +279,7 @@ export function startCore(
         },
         mauiVersion: getRunningVersion,
     });
-    const core: BoCore = {sequelize, online, scores, scoreStore, leaderboards, refusedAvatars};
+    const core: BoCore = {sequelize, online, scores, scoreStore, leaderboards, media, refusedAvatars};
 
     const bo = new BoOnDemand({
         // A chunk of its own in the main process's build: express and the rest are not even read
