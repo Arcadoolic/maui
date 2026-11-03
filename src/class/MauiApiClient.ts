@@ -173,6 +173,12 @@ export type ApiResult<T> =
 
 export type ApiFailure = Exclude<ApiResult<unknown>, {kind: 'ok'}>;
 
+/** What a cabinet shows of a game (maui-api D99). */
+export type GameMediaType = 'marquee' | 'flyer' | 'logo';
+export const GAME_MEDIA_TYPES: readonly GameMediaType[] = ['marquee', 'flyer', 'logo'];
+/** By romname, the SHA-256 of each first picture. */
+export type GameMediaHashes = Record<string, Partial<Record<GameMediaType, string>>>;
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_AFTER_SECONDS = 60;
 const MAX_VERSION_LENGTH = 32;
@@ -379,6 +385,29 @@ function isTimeout(error: unknown): boolean {
     return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
 }
 
+const SHA256 = /^[0-9a-f]{64}$/;
+
+function parseGameMediaHashes(body: unknown): GameMediaHashes | null {
+    if (!isObject(body) || !isObject(body.games)) {
+        return null;
+    }
+    const games: GameMediaHashes = {};
+    for (const [romname, hashes] of Object.entries(body.games)) {
+        if (!isObject(hashes)) {
+            return null;
+        }
+        const kept: Partial<Record<GameMediaType, string>> = {};
+        for (const type of GAME_MEDIA_TYPES) {
+            const hash = hashes[type];
+            if (typeof hash === 'string' && SHA256.test(hash)) {
+                kept[type] = hash;
+            }
+        }
+        games[romname] = kept;
+    }
+    return games;
+}
+
 export class MauiApiClient {
     private readonly fetchImpl: typeof fetch;
     private readonly timeoutMs: number;
@@ -526,6 +555,39 @@ export class MauiApiClient {
         return leaderboards === null
             ? {kind: 'unavailable', reason: 'invalid_response', status: response.status}
             : {kind: 'ok', value: {notModified: false, etag: response.headers.get('ETag'), value: leaderboards}};
+    }
+
+    /**
+     * The hash of the first marquee, flyer and logo of every game, as MAUI-API chose them for
+     * every place they are shown (maui-api D99); `etag` from the last answer.
+     */
+    public async getMedia(etag: string | null = null): Promise<ApiResult<Conditional<GameMediaHashes>>> {
+        const response = await this.send('GET', '/media', etag ? {'If-None-Match': etag} : {});
+        if (!(response instanceof Response)) {
+            return response;
+        }
+        if (response.status === 304) {
+            return {kind: 'ok', value: {notModified: true}};
+        }
+        if (!response.ok) {
+            return toFailure(response);
+        }
+        const games = parseGameMediaHashes(await readJson(response));
+        return games === null
+            ? {kind: 'unavailable', reason: 'invalid_response', status: response.status}
+            : {kind: 'ok', value: {notModified: false, etag: response.headers.get('ETag'), value: games}};
+    }
+
+    /** One of those pictures, as stored (a flyer is mostly a JPEG). */
+    public async getGameMedia(romname: string, type: GameMediaType): Promise<ApiResult<Uint8Array>> {
+        const response = await this.send('GET', `/games/${encodeURIComponent(romname)}/media/${type}`, {Accept: 'image/*'});
+        if (!(response instanceof Response)) {
+            return response;
+        }
+        if (!response.ok) {
+            return toFailure(response);
+        }
+        return {kind: 'ok', value: new Uint8Array(await response.arrayBuffer())};
     }
 
     /** The PNG of a public player (maui-api D53). */
