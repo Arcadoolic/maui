@@ -14,9 +14,10 @@ import multer from 'multer';
 import bcrypt from 'bcryptjs';
 import Config from '@/class/Config.class';
 import {BACKUP_PARTS, buildBackup, deleteBackupParts, parseBackupParts, restoreBackup, type BackupPartId} from '@/class/MauiBackup';
-import {describeSetup, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
+import {describeSetup, SETUP_STEP_TITLES, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
 import {readSetupFacts} from '@/class/SetupFacts';
 import {renderSetupNavLabel, renderSetupPage} from '@/class/SetupBoPage';
+import {adoptMameHomeLayout} from '@/class/DebianMameIni';
 import {
     ensureFirstDirectory, getAvailablePlugins, getFirstExistingDirectory, getMameIniValue, getMameLocations,
     getMissingPlugins, repairPluginIni, resolveDirectoryPath, setMameIniValue, enableRequiredPlugins,
@@ -9637,6 +9638,11 @@ function onlineUserFields(player: OnlinePlayer): Pick<User, 'remote_id' | 'is_pu
  * Friendly message for the common User.create() failure modes (unique pseudo_3,
  * length validators) instead of a raw Sequelize error dump.
  */
+/** One of the setup guide's steps (SetupSteps.ts), from a query param; anything else is undefined. */
+function parseSetupStepId(value: unknown): SetupStepId | undefined {
+    return typeof value === 'string' && Object.hasOwn(SETUP_STEP_TITLES, value) ? value as SetupStepId : undefined;
+}
+
 function describeUserError(error: unknown): string {
     if (error instanceof UniqueConstraintError) {
         return 'A player with this nickname already exists.';
@@ -9657,6 +9663,8 @@ function renderBrowsePage(
     target: PathField, currentDir: string, carried: Record<PathField, string>, viewer: Viewer,
     // Where the chosen folder is brought back: the MAME tab, or the setup guide.
     returnTo: '/mame' | '/setup' = '/mame',
+    // The setup guide's step opened again, kept open when the folder is brought back.
+    setupEdit?: SetupStepId,
 ): string {
     let entries: string[] = [];
     let error: string|undefined;
@@ -9679,9 +9687,11 @@ function renderBrowsePage(
         .map(field => `${field}=${encodeURIComponent(values[field])}`)
         .join('&');
     const carryQuery = query(carried);
-    const fromQuery = returnTo === '/setup' ? '&from=setup' : '';
+    const editQuery = setupEdit ? `&edit=${setupEdit}` : '';
+    const fromQuery = returnTo === '/setup' ? `&from=setup${editQuery}` : '';
     const navLink = (dir: string) => `/browse?target=${target}&path=${encodeURIComponent(dir)}${carryQuery ? `&${carryQuery}` : ''}${fromQuery}`;
-    const selectLink = (dir: string) => `${returnTo}?${query({...carried, [target]: dir})}`;
+    const backLink = (values: Record<PathField, string>) => `${returnTo}?${[query(values), editQuery.slice(1)].filter(Boolean).join('&')}`;
+    const selectLink = (dir: string) => backLink({...carried, [target]: dir});
 
     const rows = entries.map(name => {
         const fullPath = join(currentDir, name);
@@ -9698,7 +9708,7 @@ function renderBrowsePage(
                 ${canGoUp ? ` &nbsp; <a href="${navLink(parentDir)}">⬆ Parent folder</a>` : ''}
             </p>
             <ul class="browse-list">${rows || '<li><em>No subfolder</em></li>'}</ul>
-            <p><a href="${returnTo}?${carryQuery}">Cancel</a></p>
+            <p><a href="${backLink(carried)}">Cancel</a></p>
         </section>
     `, 'mame', viewer);
 }
@@ -10016,8 +10026,11 @@ export function createBoApp(
         const iniPath = getMameHomePath();
         const pluginsPath = getMameIniValue(join(iniPath, 'mame.ini'), 'pluginspath');
         const queryValue = (name: string) => typeof req.query[name] === 'string' ? req.query[name] as string : undefined;
+        // A done step opened again (its Change link, or /browse bringing a folder back to it); a
+        // failed save keeps its step open.
+        const editing = message?.error ? message.step : parseSetupStepId(queryValue('edit'));
         res.status(message?.error ? 422 : 200).send(renderPage(renderSetupPage({
-            progress, facts, message,
+            progress, facts, message, editing,
             mamePath: typed.mamePath ?? queryValue('mamePath') ?? config.mamePath ?? '',
             pluginsPath: typed.pluginsPath ?? queryValue('pluginsPath')
                 ?? (pluginsPath ? resolveDirectoryPath(pluginsPath, iniPath) : ''),
@@ -11831,7 +11844,11 @@ export function createBoApp(
             currentDir = os.homedir();
         }
 
-        res.send(renderBrowsePage(target, currentDir, carried, getViewer(req), req.query.from === 'setup' ? '/setup' : '/mame'));
+        const fromSetup = req.query.from === 'setup';
+        res.send(renderBrowsePage(
+            target, currentDir, carried, getViewer(req), fromSetup ? '/setup' : '/mame',
+            fromSetup ? parseSetupStepId(req.query.edit) : undefined,
+        ));
     });
 
     /**
@@ -11857,7 +11874,10 @@ export function createBoApp(
                     + `${error instanceof Error ? error.message : 'unexpected error'}.`,
             };
         }
-        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
+        // mame.ini exists from here on (ensureMameConfigBootstrapped() above). Debian's (copied by
+        // /usr/games/mame before -createconfig) gets ~/.mame's folders first: saved again, the
+        // MAME step repairs a cabinet whose roms went to the system's folder.
+        adoptMameHomeLayout(getMameHomePath());
         const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
         setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
         config.mamePath = mamePath;

@@ -44,6 +44,37 @@ describe('renderSetupPage', () => {
         expect(found).not.toContain('No plugin found');
     });
 
+    it('offers to change a done step, and opens it again with its form', () => {
+        const mame = {...FRESH, mameReady: true};
+        const closed = page(mame);
+        expect(closed).toContain('href="/setup?edit=mame">Change</a>');
+        expect(closed).not.toContain('action="/setup/mame"');
+        const open = page(mame, {editing: 'mame', mamePath: '/usr/games'});
+        expect(open).toContain('action="/setup/mame"');
+        expect(open).toContain('<input type="hidden" name="edit" value="mame">');
+        expect(open).toContain('Changing');
+        expect(open).toContain('<a href="/setup">Cancel</a>');
+        expect(open).not.toContain('href="/setup?edit=mame"');
+    });
+
+    it('keeps a done step open when saving it again failed', () => {
+        const html = page({...FRESH, mameReady: true}, {message: {step: 'mame', error: 'No mame binary found in "/tmp".'}});
+        expect(html).toContain('action="/setup/mame"');
+        expect(html).toContain('No mame binary found');
+    });
+
+    it('opens the plugins step again on its folder', () => {
+        const done = {...FRESH, mameReady: true, pluginsFound: true, disabledRequiredPlugins: []};
+        const html = page(done, {editing: 'plugins', pluginsPath: '/usr/share/games/mame/plugins'});
+        expect(html).toContain('name="pluginsPath"');
+        expect(html).toContain('<input type="hidden" name="edit" value="plugins">');
+        expect(html).not.toContain('No plugin found');
+    });
+
+    it('never offers to change a step that is not done', () => {
+        expect(page(FRESH, {editing: 'online'})).not.toContain('action="/setup/online"');
+    });
+
     it('streams the pack imports and brings them back here', () => {
         const html = page({...FRESH, mameReady: true, pluginsFound: true, disabledRequiredPlugins: [], onlineActive: true});
         expect(html).toMatch(/action="\/import\/conf-pack" data-stream>\s*<input type="hidden" name="from" value="setup">/);
