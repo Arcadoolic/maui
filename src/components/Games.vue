@@ -10,10 +10,12 @@
                     <div class="marquee"
                          :style="{
                              marginLeft: Math.max(9 - Math.abs(selectedGameIndex - index), 0) + '%',
+                             '--marquee-ratio': marqueeRatios[game.romName],
                          }"
                     >
                         <div class="marqueeArt">
-                            <img class="marqueeImg" :src="getMarquee(game.romName)" loading="lazy" decoding="async" alt="">
+                            <img class="marqueeImg" :src="getMarquee(game.romName)" loading="lazy" decoding="async" alt=""
+                                 @load="onMarqueeLoad(game.romName, $event)">
                             <div v-if="hasFlyerLogoFallback(game.romName)" class="flyerLogoFallback">
                                 <img class="flyerBackground" :src="getFlyer(game.romName)" loading="lazy" decoding="async" alt="">
                                 <img class="logoOverlay" :src="getLogo(game.romName)" loading="lazy" decoding="async" alt="">
@@ -87,6 +89,22 @@ watch(() => props.selectedGameIndex, (val) => {
         gameListRef.value.style.top = (-10 * val) + '%';
     }
 });
+
+// Each marquee's own width / height, once its picture is loaded: the selected one is drawn whole,
+// in a box of its own shape (from 2.6:1 to 4.3:1 in the packs), instead of cropped to the list's.
+const marqueeRatios = ref<Record<string, number>>({});
+
+function onMarqueeLoad(romName: string, event: Event) {
+    const img = event.target as HTMLImageElement;
+    if (!img.naturalWidth || !img.naturalHeight) {
+        return;
+    }
+    // Kept within reason: a broken or odd picture must not squash the row.
+    const ratio = Math.min(Math.max(img.naturalWidth / img.naturalHeight, 1.5), 6);
+    if (Math.abs((marqueeRatios.value[romName] ?? 0) - ratio) > 0.01) {
+        marqueeRatios.value = {...marqueeRatios.value, [romName]: ratio};
+    }
+}
 
 // Between two marquees leaving: those 5 rows or more away from the selected one leave together.
 const LAUNCH_STAGGER_MS = 50;
@@ -186,6 +204,8 @@ function hasFlyerLogoFallback(romName: string): boolean {
         width: 100%;
         position: relative;
         align-items: center;
+        /* What the selected marquee's box is measured against (cqw, cqh below). */
+        container-type: size;
     }
 
     .games ul li.selected {
@@ -238,9 +258,13 @@ function hasFlyerLogoFallback(romName: string): boolean {
      * Pi), applying blur/saturate to every row - not just the one that's visible full-size -
      * forces the compositor to recompute them for the whole list on every frame.
      */
+    /* The selected marquee is drawn whole: its box takes the picture's shape (--marquee-ratio,
+       set once it is loaded), as large as the row allows - the full width on a wide marquee, 80%
+       of the row's height on a tall one. A box of the list's own shape cropped the picture's ends
+       on a 4:3 screen, its top and bottom on a 16:9 one. */
     .games ul li.selected .marquee {
-        width: 100%;
-        height: 80%;
+        width: min(100cqw, 80cqh * var(--marquee-ratio, 3.4));
+        height: min(80cqh, 100cqw / var(--marquee-ratio, 3.4));
         box-shadow: 0 0 30px #000000;
     }
 
@@ -294,6 +318,7 @@ function hasFlyerLogoFallback(romName: string): boolean {
 
     .champions {
         position: absolute;
+        top: 0;
         right: -10%;
         height: 100%;
         width: 100%;

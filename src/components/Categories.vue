@@ -66,14 +66,21 @@ function getCategoryClasses(index: number) {
         cursor: pointer;
     }
 
+    /* The wheel, a square in the bottom right corner, its centre off the screen: sized on the
+       screen's height (25% of a 16:9 screen's width), a third of the width at most, and pushed
+       out by a share of its own size, so that it looks the same whatever the screen's shape (on
+       a 4:3 one, a size taken from the width and an offset from the height pushed it out). The
+       next and the previous categories are centred 45% of the wheel from its corner (their
+       transforms below): pushed out by 55% both ways, the next one's centre is on the screen's
+       right edge and the previous one's on its bottom edge, half of each shown. */
     .categories {
-        width: 25%;
-        height: 0;
-        padding-bottom: 25%;
+        width: min(44.44vh, 33vw);
+        aspect-ratio: 1;
         position: absolute;
         display: block;
-        right: -12%;
-        bottom: -25%;
+        right: 0;
+        bottom: 0;
+        transform: translate(55%, 55%);
     }
 
     .categories .category {
