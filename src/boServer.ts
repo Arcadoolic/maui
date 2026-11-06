@@ -17,6 +17,7 @@ import {BACKUP_PARTS, buildBackup, deleteBackupParts, parseBackupParts, restoreB
 import {describeSetup, type SetupFacts, type SetupProgress, type SetupStepId} from '@/class/SetupSteps';
 import {readSetupFacts} from '@/class/SetupFacts';
 import {renderSetupNavLabel, renderSetupPage} from '@/class/SetupBoPage';
+import {adoptMameHomeLayout} from '@/class/DebianMameIni';
 import {
     ensureFirstDirectory, getAvailablePlugins, getFirstExistingDirectory, getMameIniValue, getMameLocations,
     getMissingPlugins, repairPluginIni, resolveDirectoryPath, setMameIniValue, enableRequiredPlugins,
@@ -11857,7 +11858,10 @@ export function createBoApp(
                     + `${error instanceof Error ? error.message : 'unexpected error'}.`,
             };
         }
-        // mame.ini exists from here on (ensureMameConfigBootstrapped() above).
+        // mame.ini exists from here on (ensureMameConfigBootstrapped() above). Debian's (copied by
+        // /usr/games/mame before -createconfig) gets ~/.mame's folders first: saved again, the
+        // MAME step repairs a cabinet whose roms went to the system's folder.
+        adoptMameHomeLayout(getMameHomePath());
         const plugins = pluginsPath ? savePluginsPath(pluginsPath) : null;
         setMameIniValue(join(getMameHomePath(), 'mame.ini'), 'window', windowed ? '1' : '0');
         config.mamePath = mamePath;
