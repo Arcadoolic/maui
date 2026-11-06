@@ -11761,6 +11761,13 @@ export function createBoApp(
         const name = typeof req.body.name === 'string' && req.body.name ? req.body.name : address;
         try {
             const device = await pairBluetooth(address);
+            if (!device.bonded) {
+                await sendMauiPage(req, res, config, {
+                    bluetoothError: `${name} paired, but Bluetooth did not keep its key: it will have to be paired again once switched off. `
+                        + 'Forget it, put it back in its pairing mode and pair it again.',
+                });
+                return;
+            }
             await sendMauiPage(req, res, config, {
                 bluetoothInfo: device.connected
                     ? `${name} paired and connected.`

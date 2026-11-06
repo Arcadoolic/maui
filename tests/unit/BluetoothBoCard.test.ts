@@ -3,7 +3,7 @@ import {renderBluetoothCard} from '@/class/BluetoothBoCard';
 import type {BluetoothDevice} from '@/class/BluetoothControl';
 
 function device(overrides: Partial<BluetoothDevice> = {}): BluetoothDevice {
-    return {address: 'E4:17:D8:AA:BB:CC', name: '8BitDo Pro 2', gamepad: true, paired: false, connected: false, battery: null, ...overrides};
+    return {address: 'E4:17:D8:AA:BB:CC', name: '8BitDo Pro 2', gamepad: true, paired: false, bonded: false, trusted: false, connected: false, battery: null, ...overrides};
 }
 
 describe('renderBluetoothCard', () => {
@@ -20,10 +20,16 @@ describe('renderBluetoothCard', () => {
     });
 
     it('lists the paired devices with their state and battery', () => {
-        const html = renderBluetoothCard({power: 'on', paired: [device({paired: true, connected: true, battery: 80})]});
+        const html = renderBluetoothCard({power: 'on', paired: [device({paired: true, bonded: true, trusted: true, connected: true, battery: 80})]});
         expect(html).toContain('Connected - battery 80%');
         expect(html).toContain('action="/maui/bluetooth/remove"');
         expect(html).not.toContain('action="/maui/bluetooth/pair"');
+        expect(html).not.toContain('class="warn"');
+    });
+
+    it('warns about a device paired without its keys, or not trusted', () => {
+        expect(renderBluetoothCard({power: 'on', paired: [device({paired: true, trusted: true})]})).toContain('Not remembered');
+        expect(renderBluetoothCard({power: 'on', paired: [device({paired: true, bonded: true})]})).toContain('Not trusted');
     });
 
     it('shows the gamepads found, the other devices folded away', () => {
