@@ -1,3 +1,10 @@
+## [2.20.1](https://github.com/Arcadoolic/maui/compare/2.20.0...2.20.1) (2026-11-06)
+
+### Bug Fixes
+
+* **hiscores:** read Raiden's scores above 65535 (mhiex 2.2.10) ([9459769](https://github.com/Arcadoolic/maui/commit/9459769d19c176870f4b1f529a7615f66b73aa09))
+* **setup:** put ~/.mame first in Debian's mame.ini ([9ca6364](https://github.com/Arcadoolic/maui/commit/9ca6364a32c5cae2cbb24b60a49878160a2dfe78)), closes [#309](https://github.com/Arcadoolic/maui/issues/309)
+
 ## [2.20.0](https://github.com/Arcadoolic/maui/compare/2.19.0...2.20.0) (2026-11-03)
 
 ### Features
