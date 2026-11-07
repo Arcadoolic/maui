@@ -103,6 +103,18 @@ describe('LeaderboardSync', () => {
         expect(h.cached.has(HASH)).toBe(true);
     });
 
+    it('asks every batch in full after forgetEtags(), for the BO\'s avatar check', async () => {
+        const h = harness(['dkong'], (batch, etag) => etag === '"v1"'
+            ? {kind: 'ok', value: {notModified: true}}
+            : {kind: 'ok', value: {notModified: false, etag: '"v1"', value: [board('dkong')]}});
+
+        await h.sync.refresh(h.client);
+        h.sync.forgetEtags();
+        await h.sync.refresh(h.client);
+
+        expect(h.getLeaderboards).toHaveBeenLastCalledWith(['dkong'], null);
+    });
+
     it('asks a batch again in full while one of its avatars could not be downloaded', async () => {
         const hash = HASH;
         const h = harness(['dkong'], (batch, etag) => etag === '"v1"'

@@ -165,6 +165,8 @@ import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, confPackVersion, getMissingCo
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
+import {brokenLocalAvatars, removeBrokenOnlineAvatars} from '@/class/AvatarRepair';
+import {getOnlineAvatarsPath} from '@/class/OnlineAvatars';
 import Hiscore from '@/model/Hiscore.model';
 import BoUser from '@/model/BoUser.model';
 import {UniqueConstraintError, ValidationError} from 'sequelize';
@@ -6770,6 +6772,8 @@ interface MauiPageMessages {
     onlineError?: string;
     backfillInfo?: string;
     backfillError?: string;
+    avatarsInfo?: string;
+    avatarsError?: string;
     networkInfo?: string;
     networkError?: string;
     // Look again at the Wi-Fi networks in range before rendering (seconds).
@@ -7214,6 +7218,7 @@ function renderOnlineSection(messages: MauiPageMessages): string {
         ? {stopped: status.state === 'stopped', status: describeOnlineStatus(status, view.url)}
         : undefined;
     return renderOnlineCard(view, {error: messages.onlineError, info: messages.onlineInfo}, session)
+        + (view.state === 'configured' ? renderAvatarCheckCard(messages) : '')
         + renderScoreRecoveriesCard()
         + (process.env.NODE_ENV === 'development' && onlineSession?.currentClient() ? renderScoresBackfillCard(messages) : '');
 }
@@ -7244,6 +7249,25 @@ function renderScoreRecoveriesCard(): string {
                 <code>${escapeHtml(answer.romname)}</code>, ${escapeHtml(answer.score.toLocaleString('en-US'))}
                 ${answer.pseudo3 ? `by <code>${escapeHtml(answer.pseudo3)}</code>` : ''}:
                 ${answer.outcome === 'queued' ? 'found, sent' : `not found (${escapeHtml(RECOVERY_REASONS[answer.reason ?? 'not_in_table'])})`}</li>`).join('')}</ul>
+        </section>`;
+}
+
+/**
+ * "Check the avatars" (AvatarRepair.ts): a player shown as a broken image on the front is repaired
+ * here, without waiting for the next restart.
+ */
+function renderAvatarCheckCard(messages: MauiPageMessages): string {
+    return `
+        <section class="card">
+            <h2>Avatars</h2>
+            ${messages.avatarsError ? `<p class="error flash">${escapeHtml(messages.avatarsError)}</p>` : ''}
+            ${messages.avatarsInfo ? `<p class="info flash">${escapeHtml(messages.avatarsInfo)}</p>` : ''}
+            <p>A player's picture shown as a broken image? MAUI checks every avatar it keeps: the damaged ones of
+            the leaderboards are removed and downloaded again from MAUI-API, as are those of the players
+            created on another cabinet.</p>
+            <form method="post" action="/maui/online/check-avatars">
+                <button type="submit">Check the avatars</button>
+            </form>
         </section>`;
 }
 
@@ -7316,7 +7340,8 @@ function renderMauiPage(
     // See renderForm()'s own defaultSubtab for why this is computed from which message was
     // actually passed for this response, not inferred client-side from scanning for .flash.
     const defaultSubtab = messages.dangerZoneInfo !== undefined ? 'danger'
-        : (messages.onlineError ?? messages.onlineInfo ?? messages.backfillError ?? messages.backfillInfo) !== undefined ? 'online'
+        : (messages.onlineError ?? messages.onlineInfo ?? messages.backfillError ?? messages.backfillInfo
+            ?? messages.avatarsError ?? messages.avatarsInfo) !== undefined ? 'online'
             : (messages.importExportError !== undefined || messages.importExportInfo !== undefined) ? 'import-export'
                 : (messages.updateInfoMessage !== undefined || messages.updateInfoError !== undefined) ? 'update'
                     : (messages.networkError ?? messages.networkInfo) !== undefined || messages.networkRescan ? 'network'
@@ -11333,6 +11358,42 @@ export function createBoApp(
 
     // Development only: renderScoresBackfillCard(). Same path as the scores of a game
     // (ScoreOutbox.ts): queued, then sent.
+    app.post('/maui/online/check-avatars', async (req, res) => {
+        if (refuseOnlineRequest(req, res)) {
+            return;
+        }
+        const config = new Config();
+        config.load();
+        const removed = removeBrokenOnlineAvatars(getOnlineAvatarsPath());
+        const found = removed.length === 0
+            ? 'No damaged picture in the leaderboards.'
+            : `${removed.length} damaged picture(s) removed from the leaderboards.`;
+        const client = online.currentClient();
+        if (!client) {
+            await sendMauiPage(req, res, config, {
+                avatarsError: `${found} ONLINE is not running: they are downloaded again once it is.`,
+            });
+            return;
+        }
+        // Every batch asked in full: a removed picture whose leaderboards did not change is downloaded too.
+        core.leaderboards.forgetEtags();
+        const refresh = await core.leaderboards.refresh(client);
+        const synced = await online.syncPlayersNow();
+        const pseudos = (await User.findAll()).map(user => user.pseudo_3);
+        const stillBroken = brokenLocalAvatars(config.avatarsPath, pseudos);
+        const view = getOnlineView();
+        const url = view.state === 'configured' ? view.url : '';
+        const problems = [
+            refresh.failure ? `the leaderboards could not be refreshed: ${describeFailure(refresh.failure, url)}` : '',
+            synced === 'failed' ? 'the players could not be synchronised (see maui.log)' : '',
+            stillBroken.length ? `not a PNG, to change in the Players tab: ${stillBroken.map(pseudo3 => `${pseudo3}.png`).join(', ')}` : '',
+        ].filter(Boolean);
+        const done = `${found} ${refresh.avatars} picture(s) downloaded from MAUI-API.`;
+        await sendMauiPage(req, res, config, problems.length
+            ? {avatarsError: `${done} But ${problems.join('; ')}.`}
+            : {avatarsInfo: `${done} Players synchronised.`});
+    });
+
     app.post('/maui/online/backfill-scores', async (req, res) => {
         if (process.env.NODE_ENV !== 'development') {
             res.sendStatus(404);

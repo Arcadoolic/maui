@@ -77,6 +77,11 @@ export class LeaderboardSync {
         return result;
     }
 
+    /** The next refresh asks every batch in full, so that each avatar missing from the cache is downloaded. */
+    public forgetEtags(): void {
+        this.etags.clear();
+    }
+
     private tell(): void {
         this.listeners.forEach(listener => listener());
     }
