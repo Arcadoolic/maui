@@ -10,6 +10,11 @@ export const MAX_UPLOAD_BYTES = 256 * 1024;
 export const MAX_UPLOAD_DIMENSION = 1024;
 export const SHRUNK_DIMENSIONS = [512, 384, 256, 192, 128] as const;
 
+/** SHA-256 of a PNG, as MAUI-API gives an avatar's (maui-api D53). */
+export function pngHash(png: Uint8Array): string {
+    return createHash('sha256').update(png).digest('hex');
+}
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Width and height of a PNG, read from its IHDR chunk; null for anything else. */
@@ -53,5 +58,5 @@ export function avatarForUpload(png: Uint8Array, resize: PngResizer): {png: Uint
             break;
         }
     }
-    return upload ? {png: upload, hash: createHash('sha256').update(upload).digest('hex')} : null;
+    return upload ? {png: upload, hash: pngHash(upload)} : null;
 }

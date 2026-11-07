@@ -2,6 +2,7 @@ import {describe, it, expect, vi} from 'vitest';
 import {downloadAvatars, planPlayerSync, syncPlayers, uploadAvatars, type LocalPlayer} from '@/class/PlayerSync';
 import type {MauiApiClient, OnlinePlayer} from '@/class/MauiApiClient';
 import User from '@/model/User.model';
+import {pngHash} from '@/class/AvatarForUpload';
 
 const ID_A = '01a0f983-0000-7000-8000-00000000000a';
 const ID_B = '01a0f983-0000-7000-8000-00000000000b';
@@ -132,11 +133,12 @@ describe('uploadAvatars', () => {
 describe('an avatar set by an administrator', () => {
     const mine = new Uint8Array([1, 2, 3]);
     const theirs = new Uint8Array([7, 8, 9]);
+    const ADMIN = pngHash(theirs);
     const ledgerOf = (known: string | null) => {
         const entries = new Map<string, string>(known ? [[ID_A, known]] : []);
         return {get: (id: string) => entries.get(id) ?? null, set: (id: string, hash: string) => { entries.set(id, hash); }, entries};
     };
-    const admins = remote({avatar: 'admin', avatarByAdmin: true, isOrigin: true});
+    const admins = remote({avatar: ADMIN, avatarByAdmin: true, isOrigin: true});
 
     it('is taken by the cabinet the player was created on, which does not send its own over it', async () => {
         const uploadAvatar = vi.fn(async () => ({kind: 'ok' as const, value: 'x'}));
@@ -150,7 +152,7 @@ describe('an avatar set by an administrator', () => {
         expect(uploadAvatar).not.toHaveBeenCalled();
         expect(await downloadAvatars(client, [local({remote_id: ID_A})], [admins], read, save, ledger)).toBe(1);
         expect(save).toHaveBeenCalledWith('ACE', theirs);
-        expect(ledger.entries.get(ID_A)).toBe('admin');
+        expect(ledger.entries.get(ID_A)).toBe(ADMIN);
     });
 
     it('is taken the first time too, when the cabinet has no record of what it last had', async () => {
@@ -166,12 +168,12 @@ describe('an avatar set by an administrator', () => {
         const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: theirs}));
         const client = {uploadAvatar, getAvatar} as unknown as MauiApiClient;
         // The cabinet has had the administrator's picture, then its own was changed.
-        const ledger = ledgerOf('admin');
+        const ledger = ledgerOf(ADMIN);
         const save = vi.fn();
         const read = () => ({png: mine, hash: 'newer'});
 
         expect(await uploadAvatars(client, [local({remote_id: ID_A})], [admins], read, new Set(), ledger)).toBe(1);
-        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, mine, 'admin');
+        expect(uploadAvatar).toHaveBeenCalledWith(ID_A, mine, ADMIN);
         expect(ledger.entries.get(ID_A)).toBe('newer');
         // And nothing is taken back from MAUI-API.
         expect(await downloadAvatars(client, [local({remote_id: ID_A})], [admins], read, save, ledger)).toBe(0);
@@ -214,9 +216,9 @@ describe('downloadAvatars', () => {
         const client = {getAvatar} as unknown as MauiApiClient;
         const save = vi.fn();
 
-        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'theirs'})], reader('mine'), save)).toBe(1);
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: pngHash(png)})], reader('mine'), save)).toBe(1);
         // No local PNG at all: the default picture a link starts with is an SVG.
-        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: 'theirs'})], reader(null), save)).toBe(1);
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: pngHash(png)})], reader(null), save)).toBe(1);
 
         expect(getAvatar).toHaveBeenCalledWith(ID_A);
         expect(save).toHaveBeenCalledTimes(2);
@@ -235,6 +237,21 @@ describe('downloadAvatars', () => {
 
         expect(getAvatar).not.toHaveBeenCalled();
         expect(save).not.toHaveBeenCalled();
+    });
+
+    it('saves nothing but the picture MAUI-API announced, an error page or a cut download being left for next time', async () => {
+        // A 200 that is not the avatar: an HTML page from a proxy, half a PNG, a picture changed in between.
+        const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: new TextEncoder().encode('<html>')}));
+        const client = {getAvatar} as unknown as MauiApiClient;
+        const save = vi.fn();
+
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: pngHash(png)})], reader('mine'), save)).toBe(0);
+        expect(save).not.toHaveBeenCalled();
+
+        // The next synchronisation gets the right one.
+        getAvatar.mockResolvedValueOnce({kind: 'ok', value: png});
+        expect(await downloadAvatars(client, [local({remote_id: ID_A})], [remote({avatar: pngHash(png)})], reader('mine'), save)).toBe(1);
+        expect(save).toHaveBeenCalledWith('ACE', png);
     });
 
     it('saves nothing when MAUI-API does not give the avatar', async () => {
