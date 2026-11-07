@@ -1,4 +1,5 @@
 import type {ApiFailure, Leaderboard, MauiApiClient} from '@/class/MauiApiClient';
+import {pngHash} from '@/class/AvatarForUpload';
 
 // The shared leaderboards of the games of this cabinet (maui-api D52), kept in a local cache for the
 // front (LeaderboardSource.ts), with the avatars of their players (maui-api D53). Asked by batches
@@ -11,6 +12,7 @@ export interface LeaderboardStore {
 }
 
 export interface AvatarCache {
+    // A file there but not of that hash counts as missing: it is downloaded again.
     has(hash: string): boolean;
     save(hash: string, png: Uint8Array): void;
 }
@@ -114,7 +116,9 @@ export class LeaderboardSync {
         let fetched = 0;
         for (const [hash, playerId] of missing) {
             const png = await client.getAvatar(playerId);
-            if (png.kind === 'ok') {
+            // Only the picture of that hash: anything else (an error page, a cut download, an
+            // avatar changed in between) would sit in the cache under that name for good.
+            if (png.kind === 'ok' && pngHash(png.value) === hash) {
                 this.deps.avatars.save(hash, png.value);
                 fetched++;
             }

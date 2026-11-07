@@ -1,6 +1,7 @@
 import User from '@/model/User.model';
 import type {ApiResult, MauiApiClient, OnlinePlayer, OnlinePlayerStatus} from '@/class/MauiApiClient';
 import type {AvatarLedger} from '@/class/AvatarLedger';
+import {pngHash} from '@/class/AvatarForUpload';
 
 // Keeps the local players in line with MAUI-API (maui-api docs/DECISIONS.md D48): visibility and
 // status of the players linked to this cabinet, as GET /players reports them. Run by OnlineSession
@@ -141,7 +142,8 @@ export async function downloadAvatars(
             continue;
         }
         const png = await client.getAvatar(online.id);
-        if (png.kind === 'ok') {
+        // Only the picture MAUI-API announced: anything else is left for the next synchronisation.
+        if (png.kind === 'ok' && pngHash(png.value) === online.avatar) {
             saveAvatar(player.pseudo_3, png.value);
             if (online.isOrigin) {
                 ledger?.set(online.id, online.avatar);

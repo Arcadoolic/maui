@@ -20,7 +20,7 @@ import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {AvatarLedgerFile} from '@/class/AvatarLedger';
 import {MediaSync} from '@/class/MediaSync';
 import {getMameLocations} from '@/class/MameLocations';
-import {getOnlineAvatarsPath, onlineAvatarFile} from '@/class/OnlineAvatars';
+import {getOnlineAvatarsPath, hasOnlineAvatar, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
 import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
 import {syncPlayers} from '@/class/PlayerSync';
@@ -214,7 +214,7 @@ export function startCore(
     const leaderboards = new LeaderboardSync({
         store: new SqliteLeaderboardStore(sequelize),
         avatars: {
-            has: hash => existsSync(onlineAvatarFile(hash) ?? ''),
+            has: hash => hasOnlineAvatar(hash),
             save: (hash, png) => {
                 const file = onlineAvatarFile(hash);
                 if (file) {
