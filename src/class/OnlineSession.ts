@@ -62,6 +62,10 @@ export interface OnlineSessionDeps {
     // startup report and with the player sync, never during a game; `force` from the BO. It keeps
     // its own pace (every 6 hours at most). None: no pictures (tests).
     syncMedia?: (client: MauiApiClient, force: boolean) => Promise<MediaSyncSummary>;
+    // Installs the repository's configuration pack when it changed (ConfPackUpdate.ts): once per
+    // start, after the startup report, so a corrected hiscore.dat reaches the cabinet before its
+    // first game. Never throws. None: no update (tests).
+    updateConfPack?: () => Promise<void>;
 }
 
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -173,6 +177,7 @@ export class OnlineSession {
             void this.flushScores(client).then(() => this.refreshLeaderboards(client));
             void this.reportOpinions(client);
             void this.syncMedia(client);
+            void this.deps.updateConfPack?.();
         }
         this.handle(startup, client, generation);
     }

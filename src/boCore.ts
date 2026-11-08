@@ -20,12 +20,13 @@ import {LeaderboardSync} from '@/class/LeaderboardSync';
 import {AvatarLedgerFile} from '@/class/AvatarLedger';
 import {MediaSync} from '@/class/MediaSync';
 import {getMameLocations} from '@/class/MameLocations';
+import {updateConfPack} from '@/class/ConfPackUpdate';
 import {getOnlineAvatarsPath, hasOnlineAvatar, onlineAvatarFile} from '@/class/OnlineAvatars';
 import {avatarForUpload} from '@/class/AvatarForUpload';
 import {replaceSvgDefaultAvatars} from '@/class/DefaultAvatar';
 import {syncPlayers} from '@/class/PlayerSync';
 import {answerScoreRecoveries, readRecoveryTable, recordRecoveryAnswer} from '@/class/ScoreRecovery';
-import {isOnlineActive} from '@/class/RepositoryAuth';
+import {isOnlineActive, resolveRepository} from '@/class/RepositoryAuth';
 import {readMameVersion} from '@/class/MameVersion';
 import {BoOnDemand, type BoApp} from '@/class/BoOnDemand';
 import {CABINET_BO_PORT, describeBoUrl} from '@/class/BoUrl';
@@ -258,6 +259,18 @@ export function startCore(
             record: recordRecoveryAnswer,
         }),
         syncMedia: (client, force) => media.sync(client, {force}),
+        updateConfPack: async () => {
+            const result = await updateConfPack({
+                repository: () => resolveRepository(),
+                mameHome: getMameHomePath(),
+                log: message => console.warn(message),
+            });
+            if (result.kind === 'installed') {
+                console.warn(`[conf-pack] Configuration pack updated (${result.version ?? 'version unknown'}).`);
+            } else if (result.kind === 'failed') {
+                console.warn(`[conf-pack] Configuration pack not updated: ${result.reason}.`);
+            }
+        },
     });
     const scores = new ScoreCapture({
         mameHome: getMameHomePath,
