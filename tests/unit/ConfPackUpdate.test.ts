@@ -99,6 +99,9 @@ describe('updateConfPack', () => {
         rmSync(join(home, 'folders', 'genre.ini'));
         expect((await run(pack)).kind).toBe('installed');
         expect(existsSync(join(home, 'folders', 'genre.ini'))).toBe(true);
+        rmSync(join(home, 'hiscore.dat'));
+        expect((await run(pack)).kind).toBe('installed');
+        expect(existsSync(join(home, 'hiscore.dat'))).toBe(true);
     });
 
     it('does nothing before MAME is configured', async () => {

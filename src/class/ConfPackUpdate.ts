@@ -103,7 +103,9 @@ export async function updateConfPack(deps: ConfPackUpdateDeps): Promise<ConfPack
         }
         const companion = await fetchCompanion(repository.url, repository.headers, fetchImpl);
         const version = confPackVersion(companion);
-        const filesInPlace = !getMissingConfPackFiles(getMameLocations(deps.mameHome)).length;
+        // hiscore.dat too: a mame home replaced by another one keeps conf-pack.json's version.
+        const filesInPlace = !getMissingConfPackFiles(getMameLocations(deps.mameHome)).length
+            && existsSync(join(deps.mameHome, 'hiscore.dat'));
         if (version && version === readInstalledConfPackVersion(installedPath) && filesInPlace) {
             return {kind: 'up_to_date', version};
         }
