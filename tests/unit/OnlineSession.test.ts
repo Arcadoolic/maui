@@ -676,3 +676,20 @@ describe('pictures of the games (maui-api D99)', () => {
         instance.stop();
     });
 });
+
+describe('configuration pack (ConfPackUpdate.ts)', () => {
+    it('is brought up to date once per start, after the startup report', async () => {
+        writeOnlineSettings(configured, path);
+        const {fetchImpl} = api();
+        const updateConfPack = vi.fn(async () => undefined);
+        const {instance} = session(fetchImpl, {updateConfPack});
+
+        await instance.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(updateConfPack).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+        expect(updateConfPack).toHaveBeenCalledTimes(1);
+        instance.stop();
+    });
+});

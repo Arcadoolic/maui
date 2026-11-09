@@ -20,7 +20,32 @@ permissions:
   pull-requests: write
 
 jobs:
+  # The configuration pack this version expects (conf-pack-expected.json, scripts/check-conf-pack.mjs):
+  # nothing is built while the repository serves another hiscore.dat. Needs the maui-api service
+  # account maui-repository publishes with, as repository secrets.
+  conf-pack:
+    if: "github.event_name == 'push' && !contains(github.event.head_commit.message, 'chore(release):')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Check the published configuration pack
+        env:
+          MAUI_REPO_URL: ${{ secrets.MAUI_REPO_URL }}
+          MAUI_REPO_KEY: ${{ secrets.MAUI_REPO_KEY }}
+          MAUI_REPO_TOKEN: ${{ secrets.MAUI_REPO_TOKEN }}
+        run: node scripts/check-conf-pack.mjs
+
   release:
+    needs: conf-pack
     if: "github.event_name == 'push' && !contains(github.event.head_commit.message, 'chore(release):')"
     runs-on: ubuntu-latest
     outputs:
