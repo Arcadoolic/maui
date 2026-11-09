@@ -162,6 +162,7 @@ import type {BoApp} from '@/class/BoOnDemand';
 // not imported in the main process).
 import Category from '@/model/Category.model';
 import {CONF_PACK_FILENAME, STARTER_PACK_FILENAME, confPackVersion, getMissingConfPackFiles, isGamePack} from '@/class/ConfPack';
+import {readInstalledConfPackVersion, writeInstalledConfPackVersion} from '@/class/ConfPackUpdate';
 import {generateDataKey, unwrapDataKey, wrapDataKey} from '@/class/SecretBox';
 import Game from '@/model/Game.model';
 import User from '@/model/User.model';
@@ -1291,20 +1292,6 @@ function getPackImportTargets(config: Config): PackImportTargets {
  * Imports the repository's configuration pack (a plain `folders/` ZIP, so the whole file) into
  * an already-headed streamed response.
  */
-// The configuration pack version installed last (confPackVersion()), beside the favorites cache.
-function getInstalledConfPackPath(): string {
-    return join(dirname(getFavoritesCachePath()), 'conf-pack.json');
-}
-
-function readInstalledConfPackVersion(): string | null {
-    try {
-        const {version} = JSON.parse(readFileSync(getInstalledConfPackPath(), 'utf8')) as {version?: unknown};
-        return typeof version === 'string' ? version : null;
-    } catch {
-        return null;
-    }
-}
-
 /**
  * Installs the repository's configuration pack. `onlyWhenChanged` (before a game pack import):
  * not when the version installed last is the repository's and its files are in place - nothing
@@ -1322,7 +1309,7 @@ async function runConfPackImport(
         res, config, repository, `Updating the configuration pack… (${escapeHtml(CONF_PACK_FILENAME)})`, CONF_PACK_FILENAME,
     );
     if (ok && version) {
-        writeFileSync(getInstalledConfPackPath(), JSON.stringify({version}));
+        writeInstalledConfPackVersion(version);
     }
     return installed();
 }
