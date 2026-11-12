@@ -1,5 +1,5 @@
 <template>
-    <div class="categories" :class="{mouse}" data-mouse-nav>
+    <div class="categories" :class="{mouse, away, returning}" data-mouse-nav>
         <div
             class="category"
             v-for="(category, index) in categories"
@@ -19,7 +19,11 @@ const props = withDefaults(defineProps<{
     selectedCategoryIndex?: number;
     // Windowed mode: a click on a category goes to it (Home.vue).
     mouse?: boolean;
-}>(), {selectedCategoryIndex: 0, mouse: false});
+    // The global podium takes the screen (Home.vue): the wheel turns while its categories go one
+    // after the other, then they come back the other way round (`returning`).
+    away?: boolean;
+    returning?: boolean;
+}>(), {selectedCategoryIndex: 0, mouse: false, away: false, returning: false});
 
 const emit = defineEmits<{pick: [index: number]}>();
 
@@ -94,6 +98,23 @@ function getCategoryClasses(index: number) {
         background-size: contain;
         background-image: url(../assets/categories/_default.svg);
     }
+
+    /* The global podium (Home.vue): the wheel turns, its categories go one after the other, from
+       the next ones to the previous ones, and come back the other way round. */
+    .categories {
+        transition: transform 1s ease-in-out;
+    }
+    .categories.away {
+        transform: translate(55%, 55%) rotate(-120deg);
+    }
+    .categories.away .category {
+        opacity: 0;
+    }
+    .categories.away .category.next2, .categories.returning .category.previous2 { transition-delay: 0s; }
+    .categories.away .category.next, .categories.returning .category.previous { transition-delay: 0.15s; }
+    .categories.away .category.selected, .categories.returning .category.selected { transition-delay: 0.3s; }
+    .categories.away .category.previous, .categories.returning .category.next { transition-delay: 0.45s; }
+    .categories.away .category.previous2, .categories.returning .category.next2 { transition-delay: 0.6s; }
 
     .categories .category.next2 {
         display: block;

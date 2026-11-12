@@ -19,7 +19,7 @@ import {MAUI_KEYS, LONG_PRESS_MS} from './MauiControls';
  * act at once. Electron-free, so it stays unit-testable.
  */
 
-export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'backOffice', 'quit', 'shutdown', 'vote', 'star'] as const;
+export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'ranking', 'quit', 'shutdown', 'vote', 'star'] as const;
 export type ActionId = typeof ACTION_IDS[number];
 // What a hotkey triggers: one of the actions.
 export type HotkeyAction = ActionId;
@@ -35,7 +35,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
     confirm: 'Launch the selected game',
     scores: 'Show / hide the game scores',
     newPlayer: 'Create a new player',
-    backOffice: 'Show the back office address',
+    ranking: 'Show the global podium of MAUI-API, as on the hiscores front (ONLINE only)',
     quit: 'Quit MAUI',
     shutdown: 'Shut the cabinet down (dedicated cabinet only)',
     vote: 'Vote on the selected game',
@@ -47,7 +47,7 @@ export const HOTKEY_HOLD_TITLES: Record<ActionId, string> = {
     confirm: 'Launch ?',
     scores: 'Scores ?',
     newPlayer: 'Add new player ?',
-    backOffice: 'Back office ?',
+    ranking: 'Global podium ?',
     quit: 'Quit MAUI ?',
     shutdown: 'Shut down ?',
     vote: 'Vote ?',
@@ -91,7 +91,7 @@ export function defaultActions(): ActionSettings {
         confirm: {inputs: [], holdMs: 0},
         scores: {inputs: [], holdMs: 0},
         newPlayer: {inputs: [], holdMs: LONG_PRESS_MS.newPlayer},
-        backOffice: {inputs: ['key|KeyB'], holdMs: 0},
+        ranking: {inputs: ['key|KeyB'], holdMs: 0},
         quit: {inputs: ['key|Escape'], holdMs: LONG_PRESS_MS.quit},
         shutdown: {inputs: ['key|KeyO'], holdMs: LONG_PRESS_MS.shutdown},
         vote: {inputs: ['key|KeyV'], holdMs: 0},

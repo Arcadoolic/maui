@@ -8,7 +8,7 @@ import {
 // still has to run any such set.
 const defaultHotkeys = (): Hotkey[] => [
     {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 2000},
-    {action: 'backOffice', keys: ['maui|Space', 'maui|KeyP'], holdMs: 2000},
+    {action: 'ranking', keys: ['maui|Space', 'maui|KeyP'], holdMs: 2000},
     {action: 'quit', keys: ['maui|Space'], holdMs: 3000},
 ];
 
@@ -102,7 +102,7 @@ describe('HotkeyEngine with the default hotkeys', () => {
         timers.advance(2000);
         hotkeyEngine.release(p);
         hotkeyEngine.release(space);
-        expect(log).toEqual(['hold quit', 'hold end', 'hold backOffice', 'hold end', 'action backOffice']);
+        expect(log).toEqual(['hold quit', 'hold end', 'hold ranking', 'hold end', 'action ranking']);
     });
 
     it('ignores the repeats of a keyboard key held down', () => {
@@ -123,10 +123,10 @@ describe('HotkeyEngine with the default hotkeys', () => {
 
 describe('HotkeyEngine with single inputs', () => {
     it('fires a one-key hotkey at once', () => {
-        const {hotkeyEngine, log} = engine([{action: 'backOffice', keys: [select.input], holdMs: 0}]);
+        const {hotkeyEngine, log} = engine([{action: 'ranking', keys: [select.input], holdMs: 0}]);
         hotkeyEngine.press(select);
         hotkeyEngine.release(select);
-        expect(log).toEqual(['action backOffice']);
+        expect(log).toEqual(['action ranking']);
     });
 
     it('fires a two-key hotkey pressed together, and neither key acts', () => {
@@ -167,7 +167,7 @@ describe('compileHotkeys', () => {
     it('gives New player held and the other actions their keyboard keys by default', () => {
         expect(compileHotkeys(defaultActions())).toEqual([
             {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 2000},
-            {action: 'backOffice', keys: ['key|KeyB'], holdMs: 0},
+            {action: 'ranking', keys: ['key|KeyB'], holdMs: 0},
             {action: 'quit', keys: ['key|Escape'], holdMs: 3000},
             {action: 'shutdown', keys: ['key|KeyO'], holdMs: 3000},
             {action: 'vote', keys: ['key|KeyV'], holdMs: 0},
@@ -222,7 +222,7 @@ describe('parseActions', () => {
         expect(actions.quit).toEqual(defaultActions().quit);
         // A MAUI key's action has no controls of its own.
         expect(actions.newPlayer).toEqual({inputs: [], holdMs: 0});
-        expect(actions.backOffice).toEqual(defaultActions().backOffice);
+        expect(actions.ranking).toEqual(defaultActions().ranking);
     });
 
     it('drops a second key that is one of the controls', () => {
@@ -235,12 +235,13 @@ describe('parseActions', () => {
             {action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0},
             {action: 'quit', keys: ['button|9|standard', 'button|8|standard'], holdMs: 1000},
             {action: 'quit', keys: ['button|3|standard'], holdMs: 0},
-            {action: 'backOffice', keys: ['maui|Space', 'maui|KeyP'], holdMs: 2000},
+            // Back office was an action of its own, replaced by the hiscores board.
+            {action: 'backOffice', keys: ['button|2|standard'], holdMs: 0},
             {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 3000},
             {action: 'reboot', keys: ['button|1|standard'], holdMs: 0},
         ]}, isKey);
         expect(actions.quit).toEqual({inputs: ['button|9|standard'], holdMs: 1000, with: 'button|8|standard'});
-        expect(actions.backOffice).toEqual(defaultActions().backOffice);
+        expect(actions.ranking).toEqual(defaultActions().ranking);
         expect(actions.newPlayer).toEqual(defaultActions().newPlayer);
     });
 

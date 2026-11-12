@@ -7,7 +7,7 @@ import {join} from 'path';
 import {writeFileSync} from 'fs';
 import {homedir} from 'os';
 import {getMameHomePath, isDefaultPasswordReplaced, startCore, type StartedCore} from '@/boCore';
-import {BO_URL_GLOBAL, BO_WAKE_GLOBAL, type BoUrlReader, type BoWaker} from '@/class/BoWakeBridge';
+import {BO_URL_GLOBAL, type BoUrlReader} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
 import {onlineIndicator} from '@/class/OnlineSetup';
@@ -410,16 +410,6 @@ app.on('ready', async () => {
         }
     });
     // The cabinet's own way to the BO (Home.vue): loads it and tells where it is.
-    const wakeBackOffice: BoWaker = async () => {
-        try {
-            await bo.bo.wake();
-        } catch (error) {
-            // The URL is still worth showing: the request made to it reports the failure (503).
-            console.error('[background] Back office not loaded:', error);
-        }
-        return bo.getUrl();
-    };
-    (global as Record<string, unknown>)[BO_WAKE_GLOBAL] = wakeBackOffice;
     // Read by the first-run screen and the empty game list (useBoUrl.ts).
     const readBackOfficeUrl: BoUrlReader = () => bo.getUrl();
     (global as Record<string, unknown>)[BO_URL_GLOBAL] = readBackOfficeUrl;

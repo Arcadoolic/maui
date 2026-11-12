@@ -177,9 +177,9 @@ describe('findTriggerConflict', () => {
 
     it('refuses the same two keys in either order', () => {
         const bindings = defaultMauiBindings();
-        bindings.actions.backOffice = {inputs: ['key|Space'], holdMs: 2000, with: 'key|KeyP'};
+        bindings.actions.ranking = {inputs: ['key|Space'], holdMs: 2000, with: 'key|KeyP'};
         bindings.actions.shutdown = {inputs: ['key|KeyP'], holdMs: 1000, with: 'key|Space'};
-        expect(findTriggerConflict(bindings, 'shutdown')).toEqual({action: 'shutdown', other: 'backOffice'});
+        expect(findTriggerConflict(bindings, 'shutdown')).toEqual({action: 'shutdown', other: 'ranking'});
     });
 
     it('refuses a second key among the controls, and the directions\' controls', () => {
