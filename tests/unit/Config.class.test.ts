@@ -273,6 +273,20 @@ describe('Config cabinet players', () => {
 });
 
 describe('Config front idle', () => {
+    it('shows the band of messages unless the BO picked another screen', () => {
+        expect(new Config().frontIdleScreen).toBe('messages');
+        for (const [written, expected] of [['champions', 'champions'], ['random', 'random'], ['nope', 'messages'], [undefined, 'messages']] as const) {
+            const seed = new Config();
+            seed.save();
+            const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+            raw.frontIdleScreen = written;
+            writeFileSync(configPath, JSON.stringify(raw));
+            const config = new Config();
+            config.load();
+            expect(config.frontIdleScreen).toBe(expected);
+        }
+    });
+
     it('goes to the announced games unless switched off', () => {
         expect(new Config().frontIdleShowsGames).toBe(true);
         for (const [written, expected] of [[false, false], [true, true], [undefined, true], ['no', true]] as const) {
@@ -432,6 +446,7 @@ describe('Config.save', () => {
             'displayMode',
             'frontIdleEnabled',
             'frontIdleMinutes',
+            'frontIdleScreen',
             'frontIdleShowsGames',
             'frontSleepMinutes',
             'frontSleepScreenOff',
