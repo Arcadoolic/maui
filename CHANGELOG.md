@@ -1,3 +1,23 @@
+## [2.21.0](https://github.com/Arcadoolic/maui/compare/2.20.1...2.21.0) (2026-11-12)
+
+### Features
+
+* **bo:** "Check the avatars" button in MAUI > Online ([36deb4a](https://github.com/Arcadoolic/maui/commit/36deb4af6f3bb734e69e8aae5b7ad7905f2ad6a4))
+* **conf-pack:** install a newer configuration pack by itself at startup ([265075a](https://github.com/Arcadoolic/maui/commit/265075ab4998dc06b35539dd6a6e315205070537))
+* **controls:** one card per action with its trigger, vote and star actions ([d3a2af8](https://github.com/Arcadoolic/maui/commit/d3a2af86c6af113be880ef1233e9c3bb96e4cb7e))
+* **front:** 4:3 screens: whole selected marquee, balanced category wheel, avatars and cup on the marquee's end ([5401d6a](https://github.com/Arcadoolic/maui/commit/5401d6af7d7c8a54ee2f5d66d7c6bae7a3b7774d))
+* **front:** a champions idle screen, picked in the BO ([bec699b](https://github.com/Arcadoolic/maui/commit/bec699b2ba44cfd057fe8410dbb1fec2f2a03a37))
+* **front:** the global podium in place of the back office address ([45fcf50](https://github.com/Arcadoolic/maui/commit/45fcf50a7b7af8fced3b428b9f28ae11ba47b8a8))
+* **hiscores:** read 74 more pack games' scores (mhiex 2.3.0) ([a356b47](https://github.com/Arcadoolic/maui/commit/a356b47acad17a4039e6204ae08bf2d6f7fba12e))
+* **setup:** change a done step of the guide, and put ~/.mame first in Debian's mame.ini ([14777f0](https://github.com/Arcadoolic/maui/commit/14777f0c6f37b7bf6eb3a5e2eb71cfbd8543c9c5))
+
+### Bug Fixes
+
+* **bo:** tell a Bluetooth pad that BlueZ will forget ([3f913ec](https://github.com/Arcadoolic/maui/commit/3f913ecee9cddbde6bd5ffd4fe5f0585d9d14d11))
+* **conf-pack:** install the pack again when hiscore.dat is missing ([2c569de](https://github.com/Arcadoolic/maui/commit/2c569de86e2cc3340a8a12007195f2a5afb4f5d1))
+* **hiscores:** read Raiden's scores above 65535 (mhiex 2.2.10) ([677a7d8](https://github.com/Arcadoolic/maui/commit/677a7d8654a08691c43875f91c5650ec89bbdd21))
+* **online:** keep only avatars matching their hash, repair broken cached ones ([6e69842](https://github.com/Arcadoolic/maui/commit/6e69842a8bd11ccd608aa6c43e78409583d16584))
+
 ## [2.20.1](https://github.com/Arcadoolic/maui/compare/2.20.0...2.20.1) (2026-11-06)
 
 ### Bug Fixes
