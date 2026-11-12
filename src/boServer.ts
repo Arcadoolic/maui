@@ -99,6 +99,7 @@ import {
     ACTION_LABELS, defaultActions, MAX_HOLD_MS, type ActionId, type ActionSetting,
 } from '@/class/Hotkeys';
 import {escapeHtml} from '@/class/EscapeHtml';
+import {IDLE_SCREEN_LABELS, IDLE_SCREEN_SETTINGS, parseIdleScreenSetting} from '@/class/IdleScreen';
 import {parseUiModeSetting, resolveUiMode, type UiMode} from '@/class/UiMode';
 import {parseDisplayModeSetting} from '@/class/DisplayMode';
 import {
@@ -6679,6 +6680,10 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                     <legend>When nobody plays</legend>
                     ${renderSettingCheckbox('frontIdleEnabled', config.frontIdleEnabled, 'Idle curtain',
                         'The cabinet shows the latest best scores of the fleet (its own while OFFLINE).')}
+                    <label for="frontIdleScreen">Idle screen <span class="checkbox-row-detail">What the cabinet shows once idle. The champions need ONLINE: without them, the latest best scores.</span></label>
+                    <select id="frontIdleScreen" name="frontIdleScreen">
+                        ${IDLE_SCREEN_SETTINGS.map(value => `<option value="${value}"${config.frontIdleScreen === value ? ' selected' : ''}>${escapeHtml(IDLE_SCREEN_LABELS[value])}</option>`).join('')}
+                    </select>
                     <label for="frontIdleMinutes">Minutes before the idle curtain comes down <span class="checkbox-row-detail">Without a key press on the list of games.</span></label>
                     <input type="number" id="frontIdleMinutes" name="frontIdleMinutes" min="1" max="120" step="1" value="${config.frontIdleMinutes}">
                     ${renderSettingCheckbox('frontIdleShowsGames', config.frontIdleShowsGames, 'Go to the games of the best scores',
@@ -11123,10 +11128,11 @@ export function createBoApp(
             config.boIdleMinutes = boIdleMinutes;
         }
         const frontIdleKey = () => `${config.frontIdleEnabled}/${config.frontIdleMinutes}/${config.frontIdleShowsGames}`
-            + `/${config.frontSleepMinutes}/${config.frontSleepScreenOff}`;
+            + `/${config.frontSleepMinutes}/${config.frontSleepScreenOff}/${config.frontIdleScreen}`;
         const previousFrontIdle = frontIdleKey();
         config.frontIdleEnabled = req.body.frontIdleEnabled === 'on';
         config.frontIdleShowsGames = req.body.frontIdleShowsGames === 'on';
+        config.frontIdleScreen = parseIdleScreenSetting(req.body.frontIdleScreen);
         const frontIdleMinutes = Number(req.body.frontIdleMinutes);
         if (Number.isInteger(frontIdleMinutes) && frontIdleMinutes >= 1 && frontIdleMinutes <= 120) {
             config.frontIdleMinutes = frontIdleMinutes;

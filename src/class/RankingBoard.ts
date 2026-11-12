@@ -56,12 +56,15 @@ export function boardTimeline(count: number, visible = BOARD_VISIBLE, timings = 
     return steps;
 }
 
-function fileUrl(path: string): string {
+export function fileUrl(path: string): string {
     return format({pathname: path, protocol: 'file', slashes: true});
 }
 
+/** A player with an avatar of MAUI-API: a line of the podium, a champion (ChampionsScreen.ts). */
+export type AvatarOwner = Pick<RankingLine, 'playerId' | 'avatar'>;
+
 /** The address of a player's downloaded avatar, null when the cache does not have it (yet). */
-export function rankingAvatarUrl(line: RankingLine, dir: string = getOnlineAvatarsPath()): string | null {
+export function rankingAvatarUrl(line: AvatarOwner, dir: string = getOnlineAvatarsPath()): string | null {
     const file = onlineAvatarFile(line.avatar, dir);
     return file && line.avatar && hasOnlineAvatar(line.avatar, dir) ? fileUrl(file) : null;
 }
@@ -71,7 +74,7 @@ export function rankingAvatarUrl(line: RankingLine, dir: string = getOnlineAvata
  * kept only when its content is the picture its hash names. Resolves to its address, else null.
  */
 export async function fetchRankingAvatar(
-    line: RankingLine, getAvatar: (playerId: string) => Promise<ApiResult<Uint8Array>>, dir: string = getOnlineAvatarsPath(),
+    line: AvatarOwner, getAvatar: (playerId: string) => Promise<ApiResult<Uint8Array>>, dir: string = getOnlineAvatarsPath(),
 ): Promise<string | null> {
     const file = onlineAvatarFile(line.avatar, dir);
     if (!file || !line.avatar) {

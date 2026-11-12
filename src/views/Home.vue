@@ -11,11 +11,15 @@
 
         <transition name="title">
             <div class="gameTitle podiumTitle" v-if="podiumStage === 'board'">
-                <h1>Global podium</h1>
+                <h1>{{stageScreen === 'podium' ? 'Global podium' : 'Champions'}}</h1>
+                <p v-if="stageScreen === 'champions'">First on their game, ahead of the others.</p>
             </div>
         </transition>
         <transition name="podium">
-            <ranking-board v-if="podiumStage === 'board'" @close="closePodium"></ranking-board>
+            <ranking-board v-if="podiumStage === 'board' && stageScreen === 'podium'" @close="closePodium"></ranking-board>
+        </transition>
+        <transition name="podium">
+            <champions-screen v-if="podiumStage === 'board' && stageScreen === 'champions'" :champions="championLines"></champions-screen>
         </transition>
 
 
@@ -81,7 +85,7 @@
             <Hiscores :game="selectedGame" :fresh="revealedScores" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
-        <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
+        <message-band v-if="idle && !asleep && idleScreen === 'messages' && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
 
         <update-progress v-if="updating" :version="updating.version" :step="updating.step" @close="updating = null"></update-progress>
     </div>
@@ -139,6 +143,10 @@ import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesSt
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
 import RankingBoard from '@/components/RankingBoard.vue';
+import ChampionsScreen from '@/components/ChampionsScreen.vue';
+import {pickIdleScreen, type IdleScreen} from '@/class/IdleScreen';
+import {CHAMPIONS_ASKED} from '@/class/ChampionsScreen';
+import type {ChampionLine} from '@/class/MauiApiClient';
 import {IdleWatch} from '@/class/IdleWatch';
 import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
@@ -241,16 +249,22 @@ const noGames = computed(() => gamesLoaded.value && !games.value.length);
 // No game yet on a new cabinet: the setup guide's steps instead of a bare message (Lot VI.3).
 const setupProgress = useSetupProgress();
 
-// The global podium (RankingBoard.vue, MAUI-API's): the list of games leaves the screen
-// (`leaving`: the marquees to the left, the flyer to the right, the title up, the category wheel
-// turning as its categories go one after the other, the category's name down), the board takes
-// its place (`board`) until its cycle ends or a key is pressed, then everything comes back the
-// other way round (`returning`).
+// The stage the list of games leaves the screen for (`leaving`: the marquees to the left, the
+// flyer to the right, the title up, the category wheel turning as its categories go one after the
+// other, the category's name down): the global podium (RankingBoard.vue, MAUI-API's) until its
+// cycle ends or a key is pressed, or the champions of the day (ChampionsScreen.vue) while the
+// cabinet is idle. Its title takes the game's (`board`), then everything comes back the other way
+// round (`returning`).
 type PodiumStage = 'off' | 'leaving' | 'board' | 'returning';
+type StageScreen = 'podium' | 'champions';
 const podiumStage = ref<PodiumStage>('off');
+const stageScreen = ref<StageScreen>('podium');
+const championLines = ref<ChampionLine[]>([]);
 const podiumAway = computed(() => podiumStage.value === 'leaving' || podiumStage.value === 'board');
-// The front's keys are the podium's while it is on.
-const showRanking = computed(() => podiumStage.value !== 'off');
+// The front's keys are the podium's while it is on (the champions' go to the idle cabinet's
+// wake-up), and nobody's while the list comes back.
+const showRanking = computed(() => podiumStage.value !== 'off' && stageScreen.value === 'podium');
+const stageReturning = computed(() => podiumStage.value === 'returning');
 // The longest of the leaving (or coming back) transitions, the categories' included (style below).
 const PODIUM_MOVE_MS = 1300;
 // A line a hotkey has to say ("Shutting down…", or why it did nothing), and how long it stays.
@@ -262,6 +276,8 @@ const STAR_NOTICE_MS = 2500;
 // best scores, until the next key - which only takes them away.
 const IDLE_MESSAGES = 20;
 const idle = ref(false);
+// What this idle time shows (Config.frontIdleScreen): the band of messages, or the champions.
+const idleScreen = ref<IdleScreen>('messages');
 const idleMessages = ref<BandMessage[]>([]);
 // Switched off in the BO: a delay of 0, the cabinet never turns idle.
 const idleDelayMs = getConfiguration().frontIdleEnabled ? getConfiguration().frontIdleMinutes * 60_000 : 0;
@@ -272,13 +288,21 @@ const screenOff = getConfiguration().frontSleepScreenOff && canSwitchScreenOff(r
 const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     idle.value = isIdle;
     if (isIdle) {
-        void loadIdleMessages();
+        void startIdleScreen();
+    } else if (stageScreen.value === 'champions') {
+        // The key that wakes the cabinet brings the list of games back.
+        closePodium();
     }
 }, {
     delayMs: getConfiguration().frontSleepMinutes * 60_000,
     onChange: (isAsleep) => {
         asleep.value = isAsleep;
         if (isAsleep) {
+            // Under the black screen, the list is back without moving.
+            if (stageScreen.value === 'champions' && podiumStage.value !== 'off') {
+                clearTimeout(timeouts.podium);
+                podiumStage.value = 'off';
+            }
             stopRoll();
             uiSounds.release();
         } else {
@@ -379,6 +403,33 @@ const onUpdateStep = (_event: unknown, step: UpdateStep) => {
         updating.value = {...updating.value, step};
     }
 };
+
+/**
+ * Each time the cabinet turns idle: the screen the BO picked (IdleScreen.ts), the champions of the
+ * day when MAUI-API has some, else the band of messages. Never throws.
+ */
+async function startIdleScreen() {
+    const screen = pickIdleScreen(getConfiguration().frontIdleScreen);
+    idleScreen.value = screen;
+    if (screen === 'champions') {
+        try {
+            const client = await createOnlineClient();
+            const answer = client ? await client.getChampions(CHAMPIONS_ASKED) : null;
+            if (answer?.kind === 'ok' && answer.value.length && idle.value && !asleep.value) {
+                championLines.value = answer.value;
+                openStage('champions');
+                return;
+            }
+        } catch (err) {
+            Log.warn('[Home] Champions not loaded: ' + (err instanceof Error ? err.message : String(err)));
+        }
+        if (!idle.value) {
+            return;
+        }
+        idleScreen.value = 'messages';
+    }
+    await loadIdleMessages();
+}
 
 /**
  * Read each time the cabinet turns idle: MAUI-API's latest score events in ONLINE mode, else, or
@@ -1154,9 +1205,14 @@ async function loadCategories() {
 
 /** The global podium: the list of games leaves, then the board comes (see podiumStage). */
 function openPodium() {
+    openStage('podium');
+}
+
+function openStage(screen: StageScreen) {
     if (podiumStage.value !== 'off') {
         return;
     }
+    stageScreen.value = screen;
     showHiscores.value = false;
     stopHold();
     podiumStage.value = 'leaving';
@@ -1372,8 +1428,8 @@ function registerKeyMapping() {
             offerUpdate();
             return;
         }
-        // Any key sends the global podium away, and does nothing else.
-        if (showRanking.value) {
+        // Any key sends the global podium away, and does nothing else; none while the list comes back.
+        if (showRanking.value || stageReturning.value) {
             closePodium();
             return;
         }
@@ -1824,6 +1880,10 @@ if (!getIsInit()) {
     }
     .home.podium-out .categoryTitle {
         transform: translateY(150%);
+    }
+    /* The stage's title and its baseline over everything it shows (the champions' flyer included). */
+    .gameTitle.podiumTitle {
+        z-index: 5;
     }
     .podium-enter-active, .podium-leave-active {
         transition: opacity 0.3s ease;

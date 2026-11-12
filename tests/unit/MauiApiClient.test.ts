@@ -517,6 +517,27 @@ describe('score events', () => {
     });
 });
 
+describe('champions', () => {
+    it('reads the champions with their game\'s pictures', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {champions: [{
+            player: {id: 'p1', pseudo_3: 'NOB', avatar: 'abc'},
+            game: {romname: 'pengo', description: 'Pengo (set 1)', marquee: 'm1', flyer: null, logo: 'l1'},
+            score: 10000, players: 3, since: '2026-11-02T10:00:00+00:00', days: 10,
+        }]}));
+
+        expect(await client.getChampions(10)).toEqual({kind: 'ok', value: [{
+            playerId: 'p1', pseudo3: 'NOB', avatar: 'abc', romname: 'pengo', description: 'Pengo (set 1)',
+            marquee: 'm1', flyer: null, logo: 'l1', score: 10000, players: 3, days: 10,
+        }]});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/champions?limit=10');
+    });
+
+    it('refuses an answer that is no list of champions', async () => {
+        expect((await clientReturning(json(200, {champions: [{player: {id: 'p1'}}]})).client.getChampions(5)).kind).not.toBe('ok');
+        expect((await clientReturning(json(200, {})).client.getChampions(5)).kind).not.toBe('ok');
+    });
+});
+
 describe('ranking', () => {
     it('reads the global podium with the avatars', async () => {
         const {client, fetchImpl} = clientReturning(json(200, {ranking: [

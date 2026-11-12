@@ -9,6 +9,7 @@ import {parseVideoOutputSetting} from '@/class/VideoOutput';
 import {FOLLOW_SCREEN, parseAudioOutputSetting} from '@/class/AudioOutput';
 import {DEFAULT_UI_SOUNDS_VOLUME, parseDisabledUiSounds, type UiSoundToggle} from '@/class/UiSounds';
 import {parseVolumePercent} from '@/class/Volume';
+import {parseIdleScreenSetting, type IdleScreenSetting} from '@/class/IdleScreen';
 
 // Held encrypted in the config file (see SecretBox.ts). Identifiers (ssDevId, ssUserId) stay in
 // the clear: they are shown back in the BO forms, the passwords are not.
@@ -120,6 +121,9 @@ export default class Config {
     public frontIdleMinutes: number = 2;
     // While idle, the list goes to the game each message is about (Home.vue onMessageShown()).
     public frontIdleShowsGames: boolean = true;
+    // What an idle cabinet shows (ChampionsScreen.ts): its band of messages, the champions of the
+    // day (ONLINE only, the band otherwise), or either, drawn each time it turns idle.
+    public frontIdleScreen: IdleScreenSetting = 'messages';
     // Left alone this many minutes more, the front falls asleep (IdleWatch.ts): a black screen, and
     // the screen switched off on a dedicated cabinet when frontSleepScreenOff (ScreenPower.ts). 0 =
     // never. Counted from the last key when the idle curtain is switched off.
@@ -202,6 +206,7 @@ export default class Config {
                 : 15;
             this.frontIdleEnabled = configFile.frontIdleEnabled !== false;
             this.frontIdleShowsGames = configFile.frontIdleShowsGames !== false;
+            this.frontIdleScreen = parseIdleScreenSetting(configFile.frontIdleScreen);
             this.frontIdleMinutes = Number.isInteger(configFile.frontIdleMinutes) && configFile.frontIdleMinutes >= 1
                 ? configFile.frontIdleMinutes
                 : 2;
@@ -274,6 +279,7 @@ export default class Config {
                 frontIdleEnabled: this.frontIdleEnabled,
                 frontIdleMinutes: this.frontIdleMinutes,
                 frontIdleShowsGames: this.frontIdleShowsGames,
+                frontIdleScreen: this.frontIdleScreen,
                 frontSleepMinutes: this.frontSleepMinutes,
                 frontSleepScreenOff: this.frontSleepScreenOff,
                 launchStageSeconds: this.launchStageSeconds,
