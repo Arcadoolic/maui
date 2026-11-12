@@ -3,7 +3,7 @@
  * Controls tab): a handful of keys, which the keyboard keys, mouse buttons and gamepad inputs set
  * in the BO's MAUI > Controls tab produce (MauiControlBindings.ts, MauiControlsRuntime.ts). Single
  * source of truth for both the screens (Home.vue, userRegistration.vue switch on MAUI_KEYS,
- * the default hotkeys of Hotkeys.ts use LONG_PRESS_MS) and that tab, which lists them with their role - so
+ * the default actions of Hotkeys.ts use LONG_PRESS_MS) and that tab, which lists them with their role - so
  * the tab can't drift from what the screens actually do.
  */
 
@@ -21,15 +21,13 @@ export const MAUI_KEYS = {
     p: 'KeyP',
 } as const;
 
-// The holds of the default hotkeys (Hotkeys.ts defaultHotkeys()), what Home.vue always did.
+// The holds of the default triggers (Hotkeys.ts defaultActions()).
 export const LONG_PRESS_MS = {
-    // Holding the scores key this long quits MAUI altogether.
-    quit: 3000,
-    // Holding the new-player key this long opens the trigram entry screen.
+    // Holding the new-player key this long opens the trigram entry screen, what Home.vue always did.
     newPlayer: 2000,
-    // Holding the scores and new-player keys together this long loads the BO and shows
-    // its address.
-    backOffice: 2000,
+    // Quitting MAUI (Escape) and shutting the cabinet down (O) never come from a key hit by mistake.
+    quit: 3000,
+    shutdown: 3000,
 } as const;
 
 /** Home.vue: holding up or down in the game list (see startHold()). */
@@ -66,9 +64,9 @@ export const MAUI_CONTROL_CONTEXTS: MauiControlContext[] = [
             {key: MAUI_KEYS.down, longPressMs: HOLD_MS.delay, role: 'Held: jump to the next letter in "All games" and "Hiscores only", scroll fast in the other categories'},
             {key: MAUI_KEYS.left, role: 'Previous category (if categories exist)'},
             {key: MAUI_KEYS.right, role: 'Next category (if categories exist)'},
-            {key: MAUI_KEYS.enter, role: 'Confirm: launch the selected game'},
-            {key: MAUI_KEYS.space, role: 'Show / hide the game scores (on release while a held hotkey uses the key)'},
-            {key: MAUI_KEYS.p, role: 'Nothing by itself: its hotkeys (by default, held to create a new player, with Scores to show the back office address)'},
+            {key: MAUI_KEYS.enter, role: 'Confirm: launch the selected game (as its trigger below says)'},
+            {key: MAUI_KEYS.space, role: 'Show / hide the game scores (as its trigger below says; on release when another action holds the key)'},
+            {key: MAUI_KEYS.p, role: 'Create a new player (as its trigger below says)'},
         ],
     },
     {

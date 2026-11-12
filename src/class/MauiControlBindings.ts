@@ -1,6 +1,8 @@
 import ControllerMappingJson from '../assets/controllers.json';
 import {MAUI_KEYS, STANDARD_BUTTON_NAMES} from './MauiControls';
-import {defaultHotkeys, MAUI_KEY_REF, parseHotkey, type Hotkey} from './Hotkeys';
+import {
+    ACTION_IDS, actionKeys, defaultActions, KEYED_ACTIONS, MAUI_KEY_REF, parseActions, type ActionId, type ActionSettings,
+} from './Hotkeys';
 
 /**
  * Which keyboard keys, mouse buttons and gamepad inputs produce each of MAUI's keys (MAUI_KEYS),
@@ -21,8 +23,9 @@ export interface MauiBindings {
     // Gamepad layouts, keyed like Gamepads.class.ts's mappingFor(): "standard" (every pad without a
     // layout of its own) or a pad's id. An empty string means the input does nothing.
     pads: Record<string, ControllerMapping>;
-    // The front's actions triggered by a key pressed, held, or two keys together (Hotkeys.ts).
-    hotkeys: Hotkey[];
+    // How each action of the list of games is triggered, and the controls of those that are not
+    // MAUI keys (Hotkeys.ts).
+    actions: ActionSettings;
 }
 
 export type MauiInput =
@@ -33,25 +36,86 @@ export type MauiInput =
 
 export const MAUI_KEY_VALUES: readonly string[] = Object.values(MAUI_KEYS);
 
+/** The keys that move around the list: pressed only, never part of an action's trigger. */
+export const DIRECTION_KEYS: readonly string[] = [MAUI_KEYS.up, MAUI_KEYS.down, MAUI_KEYS.left, MAUI_KEYS.right];
+
 export function defaultMauiBindings(): MauiBindings {
     return {
         keyboard: Object.fromEntries(MAUI_KEY_VALUES.map(key => [key, key])),
         mouse: {},
         pads: JSON.parse(JSON.stringify(ControllerMappingJson)) as Record<string, ControllerMapping>,
-        hotkeys: defaultHotkeys(),
+        actions: defaultActions(),
     };
 }
 
-/** A hotkey's key: one of MAUI's keys ("maui|Space") or a single input (a mauiInputId()). */
-export function isHotkeyKey(key: string): boolean {
-    return key.startsWith(MAUI_KEY_REF)
-        ? MAUI_KEY_VALUES.includes(key.slice(MAUI_KEY_REF.length))
-        : parseMauiInputId(key) !== undefined;
+/** An action's control or second key: a single input (a mauiInputId()), never another action's. */
+export function isActionInput(key: string): boolean {
+    return !key.startsWith(MAUI_KEY_REF) && parseMauiInputId(key) !== undefined;
 }
 
-/** The single inputs the hotkeys name: the front must hear them even when they have no MAUI key. */
+/** The single inputs the actions name: the front must hear them even when they have no MAUI key. */
 export function hotkeyInputs(bindings: MauiBindings): Set<string> {
-    return new Set(bindings.hotkeys.flatMap(hotkey => hotkey.keys.filter(key => !key.startsWith(MAUI_KEY_REF))));
+    return new Set(ACTION_IDS.flatMap((action) => {
+        const setting = bindings.actions[action];
+        return [...setting.inputs, ...(setting.with ? [setting.with] : [])];
+    }));
+}
+
+/** The inputs a key stands for: every input of a MAUI key (a MAUI key's action), or the single input. */
+export function resolveKey(bindings: MauiBindings, key: string): string[] {
+    return key.startsWith(MAUI_KEY_REF) ? inputsOfKey(bindings, key.slice(MAUI_KEY_REF.length)).map(mauiInputId) : [key];
+}
+
+function overlaps(a: string[], b: string[]): boolean {
+    return a.some(input => b.includes(input));
+}
+
+/**
+ * Why these actions can't be told apart on the list of games, null when they can: the second key
+ * among an action's own controls, or two actions sharing a control with the same kind of trigger
+ * (pressed, or held whatever the time: the engine can't run two holds of the same key) and the
+ * same second key (or none). The directions' controls are kept out altogether: a held or two-key
+ * hotkey would hold the list back. Names `action`'s side first when given (the one being changed).
+ */
+export function findTriggerConflict(bindings: MauiBindings, action?: ActionId): {action: ActionId; other?: ActionId | 'direction'} | null {
+    const resolved = ACTION_IDS.map((id) => {
+        const setting = bindings.actions[id];
+        return {
+            id,
+            first: actionKeys(id, setting).flatMap(key => resolveKey(bindings, key)),
+            second: setting.with ? resolveKey(bindings, setting.with) : undefined,
+            held: setting.holdMs > 0,
+        };
+    }).filter(entry => entry.first.length > 0);
+    const order = action ? [...resolved].sort((a, b) => Number(b.id === action) - Number(a.id === action)) : resolved;
+    const directions = DIRECTION_KEYS.flatMap(key => inputsOfKey(bindings, key).map(mauiInputId));
+    for (const entry of order) {
+        if (entry.second && overlaps(entry.first, entry.second)) {
+            return {action: entry.id};
+        }
+        if (overlaps(entry.first, directions) || (entry.second && overlaps(entry.second, directions))) {
+            return {action: entry.id, other: 'direction'};
+        }
+    }
+    for (const [index, a] of order.entries()) {
+        for (const b of order.slice(index + 1)) {
+            if (a.held !== b.held || !!a.second !== !!b.second) {
+                continue;
+            }
+            const clash = a.second && b.second
+                ? (overlaps(a.first, b.first) && overlaps(a.second, b.second)) || (overlaps(a.first, b.second) && overlaps(a.second, b.first))
+                : overlaps(a.first, b.first);
+            if (clash) {
+                return {action: a.id, other: b.id};
+            }
+        }
+    }
+    return null;
+}
+
+/** Whether the action is one of MAUI's keys (Confirm, Scores / back, New player). */
+export function isKeyedAction(action: ActionId): boolean {
+    return KEYED_ACTIONS[action] !== undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -98,15 +162,13 @@ export function parseMauiBindings(json: string | undefined): MauiBindings {
     }
     // A layout file without the standard layout would leave every other pad doing nothing.
     pads.standard ??= defaultMauiBindings().pads.standard;
-    // A file from before the hotkeys keeps the ones MAUI always had; an empty list is a choice.
-    const hotkeys = Array.isArray(parsed.hotkeys)
-        ? parsed.hotkeys.map(hotkey => parseHotkey(hotkey, isHotkeyKey)).filter((hotkey): hotkey is Hotkey => hotkey !== null)
-        : defaultHotkeys();
-    return {keyboard: cleanMap(parsed.keyboard, false), mouse: cleanMap(parsed.mouse, false), pads, hotkeys};
+    // A file from before the actions (version 1) keeps its hotkeys as the actions' triggers.
+    const actions = parseActions(parsed, isActionInput);
+    return {keyboard: cleanMap(parsed.keyboard, false), mouse: cleanMap(parsed.mouse, false), pads, actions};
 }
 
 export function serializeMauiBindings(bindings: MauiBindings): string {
-    return `${JSON.stringify({version: 1, ...bindings}, null, 4)}\n`;
+    return `${JSON.stringify({version: 2, ...bindings}, null, 4)}\n`;
 }
 
 /** The MAUI key `input` produces, '' for none. */

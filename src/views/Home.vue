@@ -20,7 +20,8 @@
         <who-played-modal v-if="whoPlayed" :key="whoPlayed.key" :score="whoPlayed.score" :index="whoPlayed.key" :total="whoPlayed.total" :players="whoPlayed.players"
                           @choose="whoPlayed.answer($event)" @skip="whoPlayed.answer(null)" @expire="whoPlayed.answer(undefined)"></who-played-modal>
 
-        <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
+        <vote-modal v-if="voteGame" :current="voteReopened ? {vote: voteGame.vote, starred: voteGame.starred} : undefined"
+                    @vote="onVote" @skip="voteGame = null"></vote-modal>
 
         <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer" @expire="onUpdateExpire"></update-modal>
 
@@ -107,7 +108,7 @@ import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, HOLD_MS} from '@/class/MauiControls';
-import {controlInput, controlKey, getHotkeys, onControlsChanged} from '@/class/MauiControlsRuntime';
+import {controlInput, controlKey, getHotkeys, isKeyPressOnly, onControlsChanged} from '@/class/MauiControlsRuntime';
 import {HOTKEY_HOLD_TITLES, HotkeyEngine, type HotkeyAction} from '@/class/Hotkeys';
 import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
@@ -116,7 +117,7 @@ import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
-import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
+import {Vote, VOTE_NEUTRAL, VOTE_UP, shouldAskVote} from '@/class/GameVote';
 import WhoPlayedModal from '@/components/WhoPlayedModal.vue';
 import {
     PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
@@ -208,8 +209,10 @@ const launching = ref(false);
 const LAUNCH_STAGE_MAX_MS = 10_000;
 let endLaunchStage: (() => void) | null = null;
 const showAddUser = ref(false);
-// The game whose vote is being asked, right after it was quit (see askVote()).
+// The game whose vote is being asked, right after it was quit (see askVote()), or from the list
+// (the Vote action, voteReopened: its vote is shown, and neutral is saved too).
 const voteGame = ref<Game | null>(null);
+const voteReopened = ref(false);
 // The newer version of MAUI offered when the cabinet wakes up from idle (see offerUpdate()), then
 // its installation, followed step by step until MAUI restarts (FrontUpdate.ts).
 const updateOffer = ref<string | null>(null);
@@ -239,6 +242,8 @@ const BACK_OFFICE_SHOWN_MS = 15000;
 // A line a hotkey has to say ("Shutting down…", or why it did nothing), and how long it stays.
 const notice = ref('');
 const NOTICE_SHOWN_MS = 8000;
+// The My favourites action's "Added to..." line.
+const STAR_NOTICE_MS = 2500;
 // Nobody at the controls for a while (IdleWatch.ts): the cabinet shows its messages, its latest
 // best scores, until the next key - which only takes them away.
 const IDLE_MESSAGES = 20;
@@ -899,7 +904,39 @@ async function askVote(game: Game) {
     config.load();
     await game.reload();
     if (shouldAskVote(game, config.voteEnabled)) {
+        voteReopened.value = false;
         voteGame.value = game;
+    }
+}
+
+/** The Vote action: the selected game's vote, whatever it is, to change it. */
+async function openVote() {
+    const game = selectedGame.value;
+    if (!game) {
+        return;
+    }
+    await game.reload();
+    voteReopened.value = true;
+    voteGame.value = game;
+}
+
+/** The My favourites action: the selected game gets its star (a thumbs up too), or loses it. */
+async function toggleStar() {
+    const game = selectedGame.value;
+    if (!game) {
+        return;
+    }
+    try {
+        await game.reload();
+        const starred = !game.starred;
+        // Taken away, the star leaves the thumbs up it came with.
+        await gameService.applyVote(game, VOTE_UP, false, starred);
+        uiSounds.play(starred ? 'star' : 'voteDown');
+        showNotice(starred ? 'Added to My favourites' : 'Removed from My favourites', STAR_NOTICE_MS);
+        await reloadCarousel();
+    } catch (err) {
+        Log.error('[Home] Error on game ' + game.id_game + ' star.');
+        Log.error(err);
     }
 }
 
@@ -910,14 +947,16 @@ async function onVote(vote: Vote, starred: boolean) {
     if (sound) {
         uiSounds.play(sound);
     }
-    if (!game || vote === VOTE_NEUTRAL) {
-        // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again.
+    // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again. From the
+    // list, it takes back the vote the game had.
+    if (!game || (vote === VOTE_NEUTRAL && !(voteReopened.value && (game.vote !== VOTE_NEUTRAL || game.starred)))) {
         return;
     }
+    const wasStarred = game.starred;
     try {
         const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite, starred);
         // A star: "My favourites" comes into the carousel with its first game, or gets one more.
-        if (removed || starred) {
+        if (removed || starred || wasStarred) {
             await reloadCarousel();
         }
     } catch (err) {
@@ -1134,6 +1173,18 @@ function runHotkey(action: HotkeyAction) {
     case 'shutdown':
         void shutDown();
         break;
+    case 'confirm':
+        startGame();
+        break;
+    case 'scores':
+        showHiscores.value = !showHiscores.value;
+        break;
+    case 'vote':
+        void openVote();
+        break;
+    case 'star':
+        void toggleStar();
+        break;
     }
 }
 
@@ -1265,11 +1316,21 @@ function onListKeyDown(key: string) {
             onCategoryChange(false);
         }
         break;
+    // Unless the BO gave them a hold or a second key: their hotkey does the job then (runHotkey()).
     case MAUI_KEYS.space:
-        showHiscores.value = !showHiscores.value;
+        if (isKeyPressOnly(key)) {
+            showHiscores.value = !showHiscores.value;
+        }
         break;
     case MAUI_KEYS.enter:
-        startGame();
+        if (isKeyPressOnly(key)) {
+            startGame();
+        }
+        break;
+    case MAUI_KEYS.p:
+        if (isKeyPressOnly(key)) {
+            showAddUser.value = true;
+        }
         break;
     }
 }
