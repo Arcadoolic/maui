@@ -1,16 +1,21 @@
 import {describe, it, expect, vi} from 'vitest';
 import {LeaderboardSync, LEADERBOARD_BATCH_SIZE} from '@/class/LeaderboardSync';
+import {pngHash} from '@/class/AvatarForUpload';
 import type {ApiResult, Conditional, Leaderboard, MauiApiClient} from '@/class/MauiApiClient';
 
 const board = (romname: string, avatar: string | null = null): Leaderboard => ({romname, table: 'default', entries: [{
     rank: 1, playerId: `p-${romname}`, pseudo3: 'NOB', avatar, score: 100, achievedAt: '2026-10-01T10:00:00+00:00', cabinet: 'c',
 }]});
 
+// What the API serves for every avatar here, and its hash.
+const PNG = new Uint8Array([1]);
+const HASH = pngHash(PNG);
+
 function harness(romnames: string[], answer: (batch: string[], etag: string | null) => ApiResult<Conditional<Leaderboard[]>>) {
     const saved: Leaderboard[] = [];
     const cached = new Set<string>();
     const getLeaderboards = vi.fn(async (batch: string[], etag: string | null) => answer(batch, etag));
-    const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: new Uint8Array([1])}));
+    const getAvatar = vi.fn(async () => ({kind: 'ok' as const, value: PNG}));
     const sync = new LeaderboardSync({
         store: {save: async boards => { saved.push(...boards); }},
         avatars: {has: hash => cached.has(hash), save: hash => { cached.add(hash); }},
@@ -72,7 +77,7 @@ describe('LeaderboardSync', () => {
     });
 
     it('downloads each missing avatar once', async () => {
-        const hash = 'a'.repeat(64);
+        const hash = HASH;
         const h = harness(['dkong', 'galaga'], batch => ({kind: 'ok', value: {notModified: false, etag: null, value: batch.map(r => board(r, hash))}}));
 
         const result = await h.sync.refresh(h.client);
@@ -82,8 +87,36 @@ describe('LeaderboardSync', () => {
         expect(result.avatars).toBe(1);
     });
 
+    it('keeps only the picture of the hash, asking the batch again in full otherwise', async () => {
+        const h = harness(['dkong'], (batch, etag) => etag === '"v1"'
+            ? {kind: 'ok', value: {notModified: true}}
+            : {kind: 'ok', value: {notModified: false, etag: '"v1"', value: batch.map(r => board(r, HASH))}});
+        // A 200 that is not that avatar: an HTML page from a proxy, a cut download.
+        h.getAvatar.mockResolvedValueOnce({kind: 'ok', value: new TextEncoder().encode('<html>')});
+
+        expect((await h.sync.refresh(h.client)).avatars).toBe(0);
+        expect(h.cached.has(HASH)).toBe(false);
+
+        const second = await h.sync.refresh(h.client);
+        expect(h.getLeaderboards).toHaveBeenLastCalledWith(['dkong'], null);
+        expect(second.avatars).toBe(1);
+        expect(h.cached.has(HASH)).toBe(true);
+    });
+
+    it('asks every batch in full after forgetEtags(), for the BO\'s avatar check', async () => {
+        const h = harness(['dkong'], (batch, etag) => etag === '"v1"'
+            ? {kind: 'ok', value: {notModified: true}}
+            : {kind: 'ok', value: {notModified: false, etag: '"v1"', value: [board('dkong')]}});
+
+        await h.sync.refresh(h.client);
+        h.sync.forgetEtags();
+        await h.sync.refresh(h.client);
+
+        expect(h.getLeaderboards).toHaveBeenLastCalledWith(['dkong'], null);
+    });
+
     it('asks a batch again in full while one of its avatars could not be downloaded', async () => {
-        const hash = 'b'.repeat(64);
+        const hash = HASH;
         const h = harness(['dkong'], (batch, etag) => etag === '"v1"'
             ? {kind: 'ok', value: {notModified: true}}
             : {kind: 'ok', value: {notModified: false, etag: '"v1"', value: batch.map(r => board(r, hash))}});

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: a thumbs up -->
+<rect x="10" y="28" width="9" height="24" rx="2" fill="#E73246"/>
+<path d="M24 30 L33 14 C36 10 41 12 40 17 L38 26 H50 C53 26 55 29 54 32 L50 48 C49 51 47 52 44 52 H24 Z" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linejoin="round"/>
+</svg>

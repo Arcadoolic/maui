@@ -1,4 +1,6 @@
+import {existsSync, readFileSync} from 'fs';
 import {join} from 'path';
+import {createHash} from 'crypto';
 import * as os from 'os';
 
 // Avatars of the players of the shared leaderboards (maui-api D53), downloaded from MAUI-API and
@@ -16,4 +18,18 @@ export function getOnlineAvatarsPath(): string {
 /** The file of an avatar hash, null for anything that is not one (never a path from the API). */
 export function onlineAvatarFile(hash: string | null, dir: string = getOnlineAvatarsPath()): string | null {
     return hash !== null && HASH.test(hash) ? join(dir, `${hash}.png`) : null;
+}
+
+/**
+ * Whether the cache has the picture of `hash`: a file of that name whose content is not that
+ * picture (an error page or a cut download, saved by an older MAUI) counts as missing, so that
+ * LeaderboardSync downloads it again instead of the front showing a broken image.
+ */
+export function hasOnlineAvatar(hash: string, dir: string = getOnlineAvatarsPath()): boolean {
+    const file = onlineAvatarFile(hash, dir);
+    try {
+        return file !== null && existsSync(file) && createHash('sha256').update(readFileSync(file)).digest('hex') === hash;
+    } catch {
+        return false;
+    }
 }

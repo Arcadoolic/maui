@@ -4,7 +4,7 @@ import {ipcRenderer} from 'electron';
 import Config from './Config.class';
 import Gamepads from './Gamepads.class';
 import {hotkeyInputs, parseMauiBindings, type MauiBindings} from './MauiControlBindings';
-import type {Hotkey} from './Hotkeys';
+import {compileHotkeys, isPressOnly, KEYED_ACTIONS, ACTION_IDS, type Hotkey} from './Hotkeys';
 import {
     CANCEL_CAPTURE_CHANNEL, CAPTURE_PAD_CHANNEL, CONTROLS_CHANGED_CHANNEL, PAD_CAPTURED_CHANNEL, type PadCaptureReply,
 } from './FrontControlsBridge';
@@ -30,9 +30,18 @@ function load(): void {
     changeListeners.forEach(listener => listener());
 }
 
-/** The hotkeys as the BO last set them (Hotkeys.ts). */
+/** The hotkeys of the actions as the BO last set them (Hotkeys.ts compileHotkeys()). */
 export function getHotkeys(): Hotkey[] {
-    return bindings.hotkeys;
+    return compileHotkeys(bindings.actions);
+}
+
+/**
+ * Whether a MAUI key does its job on the list of games as soon as it is pressed: always for the
+ * directions, and for Confirm, Scores / back or New player unless the BO gave it a hold or a second key.
+ */
+export function isKeyPressOnly(key: string): boolean {
+    const action = ACTION_IDS.find(id => KEYED_ACTIONS[id] === key);
+    return !action || isPressOnly(bindings.actions[action]);
 }
 
 /** Called each time the BO changes the controls; returns what stops it. */

@@ -1,37 +1,69 @@
 import {MAUI_KEYS, LONG_PRESS_MS} from './MauiControls';
 
 /**
- * MAUI's hotkeys (the BO's MAUI > Controls tab, kept in maui-controls.json with the rest of the
- * controls): an action of the front triggered by
- * - one key, pressed (a cabinet's own button for it),
- * - one key held a while (HOLD_DELAY_MS, then holdMs with a loader),
- * - two keys together, at once or held a while.
- * A key is either one of MAUI's keys, whatever produces it ("maui|Space": every input bound to
- * Scores / back), or a single input, MAUI key or not ("button|8|standard", a mauiInputId()): a
- * cabinet's Start + Select, for instance, which do nothing else in MAUI.
+ * MAUI's actions on the list of games and how each is triggered (the BO's MAUI > Controls tab, one
+ * card per action, kept in maui-controls.json with the rest of the controls): its controls
+ * pressed, held a while (HOLD_DELAY_MS, then holdMs with a loader), or together with a second key,
+ * at once or held a while.
  *
- * A key taking part in a held or two-key hotkey still does its own job, a little later: once
- * released, or once it is clear no hotkey is coming (COMBO_WINDOW_MS) - never when its hotkey
- * went off. The other keys act at once, as before. Electron-free, so it stays unit-testable.
+ * Confirm, Scores / back and New player are MAUI keys: their controls are the inputs bound to the
+ * key (MauiControlBindings.ts), which the other screens read too (player creation, the vote), and
+ * their trigger only counts on the list of games. The other actions have controls of their own
+ * (`inputs`), each a single input (a mauiInputId(), "button|8|standard"), shared with another
+ * action as long as their triggers differ. A second key is a single input too: no action is set
+ * through another one's controls.
+ *
+ * The settings are turned into hotkeys (compileHotkeys()) for the HotkeyEngine below: a key taking
+ * part in a held or two-key hotkey still does its own job, a little later - once released, or once
+ * it is clear no hotkey is coming (COMBO_WINDOW_MS) - never when its hotkey went off. The other keys
+ * act at once. Electron-free, so it stays unit-testable.
  */
 
-export const HOTKEY_ACTIONS = ['backOffice', 'quit', 'newPlayer', 'shutdown'] as const;
-export type HotkeyAction = typeof HOTKEY_ACTIONS[number];
+export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'ranking', 'quit', 'shutdown', 'vote', 'star'] as const;
+export type ActionId = typeof ACTION_IDS[number];
+// What a hotkey triggers: one of the actions.
+export type HotkeyAction = ActionId;
 
-export const HOTKEY_ACTION_LABELS: Record<HotkeyAction, string> = {
-    backOffice: 'Show the back office address',
-    quit: 'Quit MAUI',
+/** The actions that are MAUI keys, and which. */
+export const KEYED_ACTIONS: Partial<Record<ActionId, string>> = {
+    confirm: MAUI_KEYS.enter,
+    scores: MAUI_KEYS.space,
+    newPlayer: MAUI_KEYS.p,
+};
+
+export const ACTION_LABELS: Record<ActionId, string> = {
+    confirm: 'Launch the selected game',
+    scores: 'Show / hide the game scores',
     newPlayer: 'Create a new player',
+    ranking: 'Show the global podium of MAUI-API, as on the hiscores front (ONLINE only)',
+    quit: 'Quit MAUI',
     shutdown: 'Shut the cabinet down (dedicated cabinet only)',
+    vote: 'Vote on the selected game',
+    star: 'Add the selected game to "My favourites", or take it out',
 };
 
-// What the front shows while a hotkey is held (a loader filling up until it goes off).
-export const HOTKEY_HOLD_TITLES: Record<HotkeyAction, string> = {
-    backOffice: 'Back office ?',
-    quit: 'Quit MAUI ?',
+// What the front shows while an action is held (a loader filling up until it goes off).
+export const HOTKEY_HOLD_TITLES: Record<ActionId, string> = {
+    confirm: 'Launch ?',
+    scores: 'Scores ?',
     newPlayer: 'Add new player ?',
+    ranking: 'Global podium ?',
+    quit: 'Quit MAUI ?',
     shutdown: 'Shut down ?',
+    vote: 'Vote ?',
+    star: 'My favourites ?',
 };
+
+export interface ActionSetting {
+    // The action's own controls (not for a MAUI key's action: its inputs are the key's).
+    inputs: string[];
+    // 0: pressed (or both keys at once); else held this long.
+    holdMs: number;
+    // A second key (a mauiInputId()), pressed with one of the controls.
+    with?: string;
+}
+
+export type ActionSettings = Record<ActionId, ActionSetting>;
 
 export interface Hotkey {
     action: HotkeyAction;
@@ -49,39 +81,111 @@ export const COMBO_WINDOW_MS = 250;
 // then fills for holdMs): a plain press of the key never flashes it.
 export const HOLD_DELAY_MS = 1000;
 
-/** MAUI's hotkeys before the BO changed anything: what the front always did. */
-export function defaultHotkeys(): Hotkey[] {
-    return [
-        {action: 'backOffice', keys: [MAUI_KEY_REF + MAUI_KEYS.space, MAUI_KEY_REF + MAUI_KEYS.p], holdMs: LONG_PRESS_MS.backOffice},
-        {action: 'quit', keys: [MAUI_KEY_REF + MAUI_KEYS.space], holdMs: LONG_PRESS_MS.quit},
-        {action: 'newPlayer', keys: [MAUI_KEY_REF + MAUI_KEYS.p], holdMs: LONG_PRESS_MS.newPlayer},
-    ];
+/**
+ * The BO's "back to MAUI's default": the MAUI keys' actions as they always were, the others on a
+ * keyboard key of their own (held a while for those that end the session), until the BO gives them
+ * their cabinet's buttons.
+ */
+export function defaultActions(): ActionSettings {
+    return {
+        confirm: {inputs: [], holdMs: 0},
+        scores: {inputs: [], holdMs: 0},
+        newPlayer: {inputs: [], holdMs: LONG_PRESS_MS.newPlayer},
+        ranking: {inputs: ['key|KeyB'], holdMs: 0},
+        quit: {inputs: ['key|Escape'], holdMs: LONG_PRESS_MS.quit},
+        shutdown: {inputs: ['key|KeyO'], holdMs: LONG_PRESS_MS.shutdown},
+        vote: {inputs: ['key|KeyV'], holdMs: 0},
+        star: {inputs: ['key|KeyF'], holdMs: 0},
+    };
+}
+
+/** The keys that trigger the action (with its second key, if any): its MAUI key, or its own controls. */
+export function actionKeys(action: ActionId, setting: ActionSetting): string[] {
+    const key = KEYED_ACTIONS[action];
+    return key ? [MAUI_KEY_REF + key] : setting.inputs;
+}
+
+/** The action does its job as soon as its controls are pressed: no hold, no second key. */
+export function isPressOnly(setting: ActionSetting): boolean {
+    return setting.holdMs === 0 && !setting.with;
 }
 
 /**
- * A hotkey from an untrusted value (maui-controls.json edited by hand, a BO form), null when it is
- * not one. `isKey` tells a valid key reference.
+ * The hotkeys the engine needs: one per control of each action, except the MAUI keys' actions
+ * pressed alone, which are their key's own job.
  */
-export function parseHotkey(value: unknown, isKey: (key: string) => boolean): Hotkey | null {
+export function compileHotkeys(actions: ActionSettings): Hotkey[] {
+    return ACTION_IDS.flatMap((action) => {
+        const setting = actions[action];
+        if (KEYED_ACTIONS[action] && isPressOnly(setting)) {
+            return [];
+        }
+        return actionKeys(action, setting).map(key => ({
+            action, keys: setting.with ? [key, setting.with] : [key], holdMs: setting.holdMs,
+        }));
+    });
+}
+
+function parseHoldMs(value: unknown): number | null {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_HOLD_MS ? value : null;
+}
+
+/** An action's setting from an untrusted value, null when it is not one. `isKey` tells a valid input (a mauiInputId()). */
+export function parseActionSetting(action: ActionId, value: unknown, isKey: (key: string) => boolean): ActionSetting | null {
     if (typeof value !== 'object' || value === null) {
         return null;
     }
-    const {action, keys, holdMs} = value as Record<string, unknown>;
-    if (!HOTKEY_ACTIONS.includes(action as HotkeyAction) || !Array.isArray(keys)
-        || keys.length < 1 || keys.length > 2 || !keys.every(key => typeof key === 'string' && isKey(key))
-        || new Set(keys).size !== keys.length) {
+    const {inputs, holdMs, with: second} = value as Record<string, unknown>;
+    const hold = parseHoldMs(holdMs);
+    if (hold === null) {
         return null;
     }
-    if (typeof holdMs !== 'number' || !Number.isInteger(holdMs) || holdMs < 0 || holdMs > MAX_HOLD_MS) {
-        return null;
+    const own = KEYED_ACTIONS[action] || !Array.isArray(inputs)
+        ? []
+        : [...new Set(inputs.filter((input): input is string => typeof input === 'string' && isKey(input)))];
+    const setting: ActionSetting = {inputs: own, holdMs: hold};
+    if (typeof second === 'string' && isKey(second) && !actionKeys(action, setting).includes(second)) {
+        setting.with = second;
     }
-    return {action: action as HotkeyAction, keys: [...keys] as string[], holdMs};
+    return setting;
 }
 
-/** The same hotkey: same action, same keys in any order, same hold. */
-export function sameHotkey(a: Hotkey, b: Hotkey): boolean {
-    return a.action === b.action && a.holdMs === b.holdMs
-        && [...a.keys].sort().join('\n') === [...b.keys].sort().join('\n');
+/**
+ * The actions of maui-controls.json: `actions` (version 2), else the hotkeys list of version 1
+ * (each action's first hotkey on single inputs), else MAUI's defaults. An action missing or
+ * unreadable gets its default.
+ */
+export function parseActions(file: Record<string, unknown>, isKey: (key: string) => boolean): ActionSettings {
+    const actions = defaultActions();
+    if (typeof file.actions === 'object' && file.actions !== null) {
+        const stored = file.actions as Record<string, unknown>;
+        for (const action of ACTION_IDS) {
+            const setting = parseActionSetting(action, stored[action], isKey);
+            if (setting) {
+                actions[action] = setting;
+            }
+        }
+        return actions;
+    }
+    if (!Array.isArray(file.hotkeys)) {
+        return actions;
+    }
+    // Version 1: the hotkeys of the actions that are not MAUI keys, made of single inputs only
+    // (those set through a MAUI key are dropped: the BO sets them again on real controls).
+    const seen = new Set<string>();
+    for (const value of file.hotkeys as unknown[]) {
+        const {action, keys, holdMs} = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+        const hold = parseHoldMs(holdMs);
+        if (!ACTION_IDS.includes(action as ActionId) || KEYED_ACTIONS[action as ActionId] || seen.has(action as string)
+            || hold === null || !Array.isArray(keys) || keys.length < 1 || keys.length > 2
+            || !keys.every(key => typeof key === 'string' && isKey(key))) {
+            continue;
+        }
+        const [first, second] = keys as string[];
+        seen.add(action as string);
+        actions[action as ActionId] = {inputs: [first], holdMs: hold, ...(second && second !== first ? {with: second} : {})};
+    }
+    return actions;
 }
 
 /** A press as the front sees it: the MAUI key it produces ('' for none), and the input itself. */

@@ -1,5 +1,5 @@
 <template>
-    <div class="home" :class="{empty: noGames, asleep, launching}">
+    <div class="home" :class="{empty: noGames, asleep, launching, 'podium-out': podiumAway, 'podium-return': podiumStage === 'returning'}">
         <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -9,10 +9,18 @@
             <p>{{notice}}</p>
         </modal>
 
-        <modal v-if="backOfficeUrl">
-            <p>Back office</p>
-            <p>{{backOfficeUrl}}</p>
-        </modal>
+        <transition name="title">
+            <div class="gameTitle podiumTitle" v-if="podiumStage === 'board'">
+                <h1>{{stageScreen === 'podium' ? 'Global podium' : 'Champions'}}</h1>
+                <p v-if="stageScreen === 'champions'">First on their game, ahead of the others.</p>
+            </div>
+        </transition>
+        <transition name="podium">
+            <ranking-board v-if="podiumStage === 'board' && stageScreen === 'podium'" @close="closePodium"></ranking-board>
+        </transition>
+        <transition name="podium">
+            <champions-screen v-if="podiumStage === 'board' && stageScreen === 'champions'" :champions="championLines"></champions-screen>
+        </transition>
 
 
         <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
@@ -20,7 +28,8 @@
         <who-played-modal v-if="whoPlayed" :key="whoPlayed.key" :score="whoPlayed.score" :index="whoPlayed.key" :total="whoPlayed.total" :players="whoPlayed.players"
                           @choose="whoPlayed.answer($event)" @skip="whoPlayed.answer(null)" @expire="whoPlayed.answer(undefined)"></who-played-modal>
 
-        <vote-modal v-if="voteGame" @vote="onVote" @skip="voteGame = null"></vote-modal>
+        <vote-modal v-if="voteGame" :current="voteReopened ? {vote: voteGame.vote, starred: voteGame.starred} : undefined"
+                    @vote="onVote" @skip="voteGame = null"></vote-modal>
 
         <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer" @expire="onUpdateExpire"></update-modal>
 
@@ -69,13 +78,14 @@
         <LaunchStage v-if="launching && selectedGame" :game="selectedGame"></LaunchStage>
 
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
-                    :mouse="mouseNav" @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
+                    :mouse="mouseNav" :away="podiumAway" :returning="podiumStage === 'returning'"
+                    @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" :fresh="revealedScores" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
-        <message-band v-if="idle && !asleep && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
+        <message-band v-if="idle && !asleep && idleScreen === 'messages' && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
 
         <update-progress v-if="updating" :version="updating.version" :step="updating.step" @close="updating = null"></update-progress>
     </div>
@@ -107,7 +117,7 @@ import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
 import {MAUI_KEYS, HOLD_MS} from '@/class/MauiControls';
-import {controlInput, controlKey, getHotkeys, onControlsChanged} from '@/class/MauiControlsRuntime';
+import {controlInput, controlKey, getHotkeys, isKeyPressOnly, onControlsChanged} from '@/class/MauiControlsRuntime';
 import {HOTKEY_HOLD_TITLES, HotkeyEngine, type HotkeyAction} from '@/class/Hotkeys';
 import {getJumpIndex, getLetter, getLetters} from '@/class/AlphaJump';
 import {getIsInit, getConfiguration, getMameService, getGameService, getHiscoreService, isLite} from '@/services';
@@ -116,13 +126,12 @@ import UserRegistration from '@/components/userRegistration.vue';
 import Loader from '@/components/Loader.vue';
 import Modal from '@/components/Modal.vue';
 import VoteModal from '@/components/VoteModal.vue';
-import {Vote, VOTE_NEUTRAL, shouldAskVote} from '@/class/GameVote';
+import {Vote, VOTE_NEUTRAL, VOTE_UP, shouldAskVote} from '@/class/GameVote';
 import WhoPlayedModal from '@/components/WhoPlayedModal.vue';
 import {
     PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
-import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
@@ -133,6 +142,11 @@ import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
+import RankingBoard from '@/components/RankingBoard.vue';
+import ChampionsScreen from '@/components/ChampionsScreen.vue';
+import {pickIdleScreen, type IdleScreen} from '@/class/IdleScreen';
+import {CHAMPIONS_ASKED} from '@/class/ChampionsScreen';
+import type {ChampionLine} from '@/class/MauiApiClient';
 import {IdleWatch} from '@/class/IdleWatch';
 import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
@@ -160,8 +174,8 @@ const hasPlayerInfo = ref(false);
 const timeouts: {
     showGame?: number,
     showFlyer?: number,
-    hideBackOffice?: number,
     hideNotice?: number,
+    podium?: number,
     hold?: number,
     endLaunchStage?: number,
     holdRepeat?: number,
@@ -208,8 +222,10 @@ const launching = ref(false);
 const LAUNCH_STAGE_MAX_MS = 10_000;
 let endLaunchStage: (() => void) | null = null;
 const showAddUser = ref(false);
-// The game whose vote is being asked, right after it was quit (see askVote()).
+// The game whose vote is being asked, right after it was quit (see askVote()), or from the list
+// (the Vote action, voteReopened: its vote is shown, and neutral is saved too).
 const voteGame = ref<Game | null>(null);
+const voteReopened = ref(false);
 // The newer version of MAUI offered when the cabinet wakes up from idle (see offerUpdate()), then
 // its installation, followed step by step until MAUI restarts (FrontUpdate.ts).
 const updateOffer = ref<string | null>(null);
@@ -233,16 +249,35 @@ const noGames = computed(() => gamesLoaded.value && !games.value.length);
 // No game yet on a new cabinet: the setup guide's steps instead of a bare message (Lot VI.3).
 const setupProgress = useSetupProgress();
 
-// The BO's address on the local network, while it is shown (see showBackOffice()).
-const backOfficeUrl = ref('');
-const BACK_OFFICE_SHOWN_MS = 15000;
+// The stage the list of games leaves the screen for (`leaving`: the marquees to the left, the
+// flyer to the right, the title up, the category wheel turning as its categories go one after the
+// other, the category's name down): the global podium (RankingBoard.vue, MAUI-API's) until its
+// cycle ends or a key is pressed, or the champions of the day (ChampionsScreen.vue) while the
+// cabinet is idle. Its title takes the game's (`board`), then everything comes back the other way
+// round (`returning`).
+type PodiumStage = 'off' | 'leaving' | 'board' | 'returning';
+type StageScreen = 'podium' | 'champions';
+const podiumStage = ref<PodiumStage>('off');
+const stageScreen = ref<StageScreen>('podium');
+const championLines = ref<ChampionLine[]>([]);
+const podiumAway = computed(() => podiumStage.value === 'leaving' || podiumStage.value === 'board');
+// The front's keys are the podium's while it is on (the champions' go to the idle cabinet's
+// wake-up), and nobody's while the list comes back.
+const showRanking = computed(() => podiumStage.value !== 'off' && stageScreen.value === 'podium');
+const stageReturning = computed(() => podiumStage.value === 'returning');
+// The longest of the leaving (or coming back) transitions, the categories' included (style below).
+const PODIUM_MOVE_MS = 1300;
 // A line a hotkey has to say ("Shutting down…", or why it did nothing), and how long it stays.
 const notice = ref('');
 const NOTICE_SHOWN_MS = 8000;
+// The My favourites action's "Added to..." line.
+const STAR_NOTICE_MS = 2500;
 // Nobody at the controls for a while (IdleWatch.ts): the cabinet shows its messages, its latest
 // best scores, until the next key - which only takes them away.
 const IDLE_MESSAGES = 20;
 const idle = ref(false);
+// What this idle time shows (Config.frontIdleScreen): the band of messages, or the champions.
+const idleScreen = ref<IdleScreen>('messages');
 const idleMessages = ref<BandMessage[]>([]);
 // Switched off in the BO: a delay of 0, the cabinet never turns idle.
 const idleDelayMs = getConfiguration().frontIdleEnabled ? getConfiguration().frontIdleMinutes * 60_000 : 0;
@@ -253,13 +288,21 @@ const screenOff = getConfiguration().frontSleepScreenOff && canSwitchScreenOff(r
 const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     idle.value = isIdle;
     if (isIdle) {
-        void loadIdleMessages();
+        void startIdleScreen();
+    } else if (stageScreen.value === 'champions') {
+        // The key that wakes the cabinet brings the list of games back.
+        closePodium();
     }
 }, {
     delayMs: getConfiguration().frontSleepMinutes * 60_000,
     onChange: (isAsleep) => {
         asleep.value = isAsleep;
         if (isAsleep) {
+            // Under the black screen, the list is back without moving.
+            if (stageScreen.value === 'champions' && podiumStage.value !== 'off') {
+                clearTimeout(timeouts.podium);
+                podiumStage.value = 'off';
+            }
             stopRoll();
             uiSounds.release();
         } else {
@@ -312,7 +355,7 @@ function offerUpdate() {
  */
 const onUpdateAvailable = () => {
     if (updateOffer.value || updating.value || gameRunning || isBoMameRunning() || asleep.value || showAddUser.value
-        || whoPlayed.value || voteGame.value || backOfficeUrl.value) {
+        || whoPlayed.value || voteGame.value || showRanking.value) {
         return;
     }
     try {
@@ -360,6 +403,33 @@ const onUpdateStep = (_event: unknown, step: UpdateStep) => {
         updating.value = {...updating.value, step};
     }
 };
+
+/**
+ * Each time the cabinet turns idle: the screen the BO picked (IdleScreen.ts), the champions of the
+ * day when MAUI-API has some, else the band of messages. Never throws.
+ */
+async function startIdleScreen() {
+    const screen = pickIdleScreen(getConfiguration().frontIdleScreen);
+    idleScreen.value = screen;
+    if (screen === 'champions') {
+        try {
+            const client = await createOnlineClient();
+            const answer = client ? await client.getChampions(CHAMPIONS_ASKED) : null;
+            if (answer?.kind === 'ok' && answer.value.length && idle.value && !asleep.value) {
+                championLines.value = answer.value;
+                openStage('champions');
+                return;
+            }
+        } catch (err) {
+            Log.warn('[Home] Champions not loaded: ' + (err instanceof Error ? err.message : String(err)));
+        }
+        if (!idle.value) {
+            return;
+        }
+        idleScreen.value = 'messages';
+    }
+    await loadIdleMessages();
+}
 
 /**
  * Read each time the cabinet turns idle: MAUI-API's latest score events in ONLINE mode, else, or
@@ -584,7 +654,7 @@ function mouseAllowed(): boolean {
         stopRoll();
         return false;
     }
-    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !backOfficeUrl.value;
+    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !showRanking.value;
 }
 
 /** -1 (up), 1 (down) or 0 once `e` adds up to a step for `area`. */
@@ -714,7 +784,7 @@ function unlockFront() {
 function syncIdleBlock() {
     stopRoll();
     idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
-        || !!updateOffer.value || !!updating.value || !!backOfficeUrl.value || noGames.value);
+        || !!updateOffer.value || !!updating.value || !!showRanking.value || noGames.value);
 }
 
 function startGame() {
@@ -864,7 +934,7 @@ async function checkScoreReveal() {
 function revealScores() {
     const reveal = pendingReveal;
     if (!reveal || gameRunning || asleep.value || showAddUser.value || whoPlayed.value || voteGame.value
-        || updateOffer.value || updating.value || backOfficeUrl.value) {
+        || updateOffer.value || updating.value || showRanking.value) {
         return;
     }
     pendingReveal = null;
@@ -899,7 +969,39 @@ async function askVote(game: Game) {
     config.load();
     await game.reload();
     if (shouldAskVote(game, config.voteEnabled)) {
+        voteReopened.value = false;
         voteGame.value = game;
+    }
+}
+
+/** The Vote action: the selected game's vote, whatever it is, to change it. */
+async function openVote() {
+    const game = selectedGame.value;
+    if (!game) {
+        return;
+    }
+    await game.reload();
+    voteReopened.value = true;
+    voteGame.value = game;
+}
+
+/** The My favourites action: the selected game gets its star (a thumbs up too), or loses it. */
+async function toggleStar() {
+    const game = selectedGame.value;
+    if (!game) {
+        return;
+    }
+    try {
+        await game.reload();
+        const starred = !game.starred;
+        // Taken away, the star leaves the thumbs up it came with.
+        await gameService.applyVote(game, VOTE_UP, false, starred);
+        uiSounds.play(starred ? 'star' : 'voteDown');
+        showNotice(starred ? 'Added to My favourites' : 'Removed from My favourites', STAR_NOTICE_MS);
+        await reloadCarousel();
+    } catch (err) {
+        Log.error('[Home] Error on game ' + game.id_game + ' star.');
+        Log.error(err);
     }
 }
 
@@ -910,14 +1012,16 @@ async function onVote(vote: Vote, starred: boolean) {
     if (sound) {
         uiSounds.play(sound);
     }
-    if (!game || vote === VOTE_NEUTRAL) {
-        // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again.
+    // Neutral is the vote of a game nobody voted on: nothing to save, it is asked again. From the
+    // list, it takes back the vote the game had.
+    if (!game || (vote === VOTE_NEUTRAL && !(voteReopened.value && (game.vote !== VOTE_NEUTRAL || game.starred)))) {
         return;
     }
+    const wasStarred = game.starred;
     try {
         const removed = await gameService.applyVote(game, vote, getConfiguration().thumbsDownRemovesFavorite, starred);
         // A star: "My favourites" comes into the carousel with its first game, or gets one more.
-        if (removed || starred) {
+        if (removed || starred || wasStarred) {
             await reloadCarousel();
         }
     } catch (err) {
@@ -1099,31 +1203,41 @@ async function loadCategories() {
     });
 }
 
-/**
- * Loads the BO, which is not kept in memory on a cabinet nobody is setting up (boCore.ts), and
- * shows where to reach it.
- */
-async function showBackOffice() {
-    clearTimeout(timeouts.hideBackOffice);
-    showHiscores.value = false;
-    let url = boUrl.value;
-    try {
-        const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
-        url = wake ? await wake() : boUrl.value;
-    } catch (err) {
-        Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
+/** The global podium: the list of games leaves, then the board comes (see podiumStage). */
+function openPodium() {
+    openStage('podium');
+}
+
+function openStage(screen: StageScreen) {
+    if (podiumStage.value !== 'off') {
+        return;
     }
-    backOfficeUrl.value = url;
-    timeouts.hideBackOffice = window.setTimeout(() => {
-        backOfficeUrl.value = '';
-    }, BACK_OFFICE_SHOWN_MS);
+    stageScreen.value = screen;
+    showHiscores.value = false;
+    stopHold();
+    podiumStage.value = 'leaving';
+    timeouts.podium = window.setTimeout(() => {
+        podiumStage.value = 'board';
+    }, isLite() ? 0 : PODIUM_MOVE_MS);
+}
+
+/** The board's cycle ended, or a key was pressed: the list of games comes back. */
+function closePodium() {
+    if (podiumStage.value === 'off' || podiumStage.value === 'returning') {
+        return;
+    }
+    clearTimeout(timeouts.podium);
+    podiumStage.value = 'returning';
+    timeouts.podium = window.setTimeout(() => {
+        podiumStage.value = 'off';
+    }, isLite() ? 0 : PODIUM_MOVE_MS);
 }
 
 /** What a hotkey of the BO's Controls tab does once it goes off (Hotkeys.ts). */
 function runHotkey(action: HotkeyAction) {
     switch (action) {
-    case 'backOffice':
-        void showBackOffice();
+    case 'ranking':
+        openPodium();
         break;
     case 'quit':
         remote.app.quit();
@@ -1133,6 +1247,18 @@ function runHotkey(action: HotkeyAction) {
         break;
     case 'shutdown':
         void shutDown();
+        break;
+    case 'confirm':
+        startGame();
+        break;
+    case 'scores':
+        showHiscores.value = !showHiscores.value;
+        break;
+    case 'vote':
+        void openVote();
+        break;
+    case 'star':
+        void toggleStar();
         break;
     }
 }
@@ -1211,6 +1337,7 @@ onUnmounted(() => {
     stopLeaderboardsListener?.();
     stopHotkeysListener();
     stopBoMameListener();
+    clearTimeout(timeouts.podium);
     hotkeys.reset();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
@@ -1232,7 +1359,8 @@ onUnmounted(() => {
 window.addEventListener('blur', stopHold);
 window.addEventListener('blur', () => hotkeys.reset());
 // A modal takes the keys over: the list stops where it is.
-watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value, (modal) => {
+watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value
+    || showRanking.value, (modal) => {
     if (modal) {
         stopHold();
         hotkeys.reset();
@@ -1242,7 +1370,7 @@ watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!upda
     revealScores();
 });
 watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
-    !!backOfficeUrl.value, noGames.value], syncIdleBlock);
+    !!showRanking.value, noGames.value], syncIdleBlock);
 
 /** A key's own job on the list of games, as a press. */
 function onListKeyDown(key: string) {
@@ -1265,11 +1393,21 @@ function onListKeyDown(key: string) {
             onCategoryChange(false);
         }
         break;
+    // Unless the BO gave them a hold or a second key: their hotkey does the job then (runHotkey()).
     case MAUI_KEYS.space:
-        showHiscores.value = !showHiscores.value;
+        if (isKeyPressOnly(key)) {
+            showHiscores.value = !showHiscores.value;
+        }
         break;
     case MAUI_KEYS.enter:
-        startGame();
+        if (isKeyPressOnly(key)) {
+            startGame();
+        }
+        break;
+    case MAUI_KEYS.p:
+        if (isKeyPressOnly(key)) {
+            showAddUser.value = true;
+        }
         break;
     }
 }
@@ -1288,6 +1426,11 @@ function registerKeyMapping() {
         if (idleWatch.activity()) {
             stopRoll();
             offerUpdate();
+            return;
+        }
+        // Any key sends the global podium away, and does nothing else; none while the list comes back.
+        if (showRanking.value || stageReturning.value) {
+            closePodium();
             return;
         }
         if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || updateOffer.value || updating.value) {
@@ -1706,6 +1849,47 @@ if (!getIsInit()) {
 
     .category-enter-from, .category-leave-to {
         margin-bottom: -100%;
+    }
+
+    /* The global podium (podiumStage): the marquees leave to the left, the flyer to the right, the
+       title up, then the category's name goes down while the wheel turns (Categories.vue). Coming
+       back, the other way round: the categories and their name first, then the rest. The podium's
+       own title takes the game's place. */
+    .home.podium-out :deep(.gamesContainer), .home.podium-out .flyer-container,
+    .home.podium-out .gameTitle:not(.podiumTitle) {
+        transition: transform 0.5s ease-in 0s;
+    }
+    .home.podium-out .categoryTitle {
+        transition: transform 0.5s ease-in 0.3s;
+    }
+    .home.podium-return :deep(.gamesContainer), .home.podium-return .flyer-container,
+    .home.podium-return .gameTitle {
+        transition: transform 0.5s ease-out 0.7s;
+    }
+    .home.podium-return .categoryTitle {
+        transition: transform 0.5s ease-out 0s;
+    }
+    .home.podium-out :deep(.gamesContainer) {
+        transform: translateX(-110%);
+    }
+    .home.podium-out .flyer-container {
+        transform: translateX(110%);
+    }
+    .home.podium-out .gameTitle:not(.podiumTitle) {
+        transform: translateY(-150%);
+    }
+    .home.podium-out .categoryTitle {
+        transform: translateY(150%);
+    }
+    /* The stage's title and its baseline over everything it shows (the champions' flyer included). */
+    .gameTitle.podiumTitle {
+        z-index: 5;
+    }
+    .podium-enter-active, .podium-leave-active {
+        transition: opacity 0.3s ease;
+    }
+    .podium-enter-from, .podium-leave-to {
+        opacity: 0;
     }
 
     loader {

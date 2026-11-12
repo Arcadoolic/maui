@@ -1,6 +1,6 @@
 <template>
     <div class="champions">
-        <TransitionGroup tag="div" name="champion" class="championsContainer" :class="{astride, animated}" :css="animated" v-if="champions.length">
+        <TransitionGroup tag="div" name="champion" class="championsContainer" :class="{animated}" :css="animated" v-if="champions.length">
             <div v-for="(champion, index) of champions" :key="champion.player" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%'}">
                 <img v-if="champion.avatar" :src="champion.avatar" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
                 <img v-else src="../assets/defaultPlayer.png" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
@@ -22,11 +22,11 @@ const props = defineProps<{game: Game}>();
 // The best 3 players (LeaderboardSource.ts), drawn from the 3rd to the 1st.
 const champions = ref<BoardRow[]>([]);
 const loading = ref(true);
-// With fewer than 3 players, the last one is drawn astride the marquee's end, its centre on the
-// edge, and the best one a step to its left. The container (Games.vue's .champions) is as wide
-// as the marquee and starts 10% further right: that is where the edge is.
-const astride = computed(() => champions.value.length < 3);
-const edgeOffset = computed(() => astride.value ? 10 : 0);
+// Every avatar is drawn astride (centred on its `right`), a step of 10% from the next. One player:
+// its centre on the marquee's end; two or three: the 2nd's centre there, the best one a step to
+// its left and the 3rd a step to its right. The container (Games.vue's .champions) is as wide as
+// the marquee and starts 10% further right: the edge is at right 10%.
+const edgeOffset = computed(() => champions.value.length < 3 ? 10 : 0);
 let stopListening: (() => void) | null = null;
 // New scores (a game was quit, MAUI-API's leaderboards changed): the podium moves in view, a new
 // player popping in, the others sliding to their new place, the one pushed off fading out. Not
@@ -92,7 +92,7 @@ onUnmounted(() => {
         position: absolute;
     }
 
-    .astride .champion {
+    .champion {
         transform: translateX(50%);
     }
 
@@ -169,8 +169,17 @@ onUnmounted(() => {
         border-color: #cd7f32;
     }
 
+    /* No score yet: the cup, as tall as the marquee and placed like a single avatar, its centre
+       on the marquee's end (right 10%, see edgeOffset). In hiscores.svg the handles rise 3.8%
+       above the bowl's flat top and the foot is the picture's bottom: a little taller than the
+       marquee and raised by its handles' height, the bowl's top is level with the marquee's top
+       and the foot with its bottom, both a hair past them, so that the marquee's end is hidden
+       (it showed between the handles, then under the foot). */
     .default {
         position: absolute;
-        right: 0;
+        top: 0;
+        right: 10%;
+        height: 104.5%;
+        transform: translate(50%, -4%);
     }
 </style>

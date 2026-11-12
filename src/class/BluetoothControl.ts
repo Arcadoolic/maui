@@ -15,6 +15,8 @@ const POLL_MS = 1000;
 export const SCAN_SECONDS = 10;
 const FIND_SECONDS = 15;
 const PAIR_SECONDS = 30;
+// The keys come a moment after "Paired: yes".
+const BOND_SECONDS = 5;
 const CONNECT_SECONDS = 10;
 const POWER_SECONDS = 5;
 
@@ -96,6 +98,11 @@ export interface BluetoothDevice {
     // What the device says it is (BlueZ's "input-gaming" icon). Some pads only say so once paired.
     gamepad: boolean;
     paired: boolean;
+    // BlueZ kept its keys: a device paired without them is forgotten once it disconnects and has to
+    // be paired again each time it is switched on.
+    bonded: boolean;
+    // Allowed to connect on its own.
+    trusted: boolean;
     connected: boolean;
     // Percent, null when the device does not report it.
     battery: number | null;
@@ -138,11 +145,15 @@ export function parseDevice(address: string, text: string): BluetoothDevice {
     const info = fields(text);
     const name = info.get('Alias') ?? info.get('Name') ?? '';
     const battery = /\((\d+)\)/.exec(info.get('Battery Percentage') ?? '');
+    const paired = info.get('Paired') === 'yes';
     return {
         address,
         name: name.replace(/[-:]/g, '').toUpperCase() === address.replace(/:/g, '') ? '' : name,
         gamepad: info.get('Icon') === 'input-gaming',
-        paired: info.get('Paired') === 'yes',
+        paired,
+        // A BlueZ older than 5.68 does not tell: its paired devices are bonded ones.
+        bonded: info.has('Bonded') ? info.get('Bonded') === 'yes' : paired,
+        trusted: info.get('Trusted') === 'yes',
         connected: info.get('Connected') === 'yes',
         battery: battery ? Number(battery[1]) : null,
     };
@@ -238,25 +249,34 @@ async function waitFor(
 }
 
 /**
- * Pairs the device, in its pairing mode, and resolves to it. Trusted first, so that it reconnects
- * on its own each time it is switched on without BlueZ asking anyone. A pad that pairs but does
- * not connect right away is still a success: it connects at its next key press.
+ * Pairs the device, in its pairing mode, and resolves to it. Trusted first, and again once paired,
+ * so that it reconnects on its own each time it is switched on without BlueZ asking anyone. The
+ * search stops before pairing: some adapters (Intel, Broadcom) pair badly while they search. A pad
+ * that pairs but does not connect right away is still a success: it connects at its next key
+ * press. One paired without keys (`bonded` false) too, the caller warning that it will not last.
  */
 export async function pairBluetooth(address: string, tools: BluetoothTools = systemTools): Promise<BluetoothDevice> {
     if (!ADDRESS_PATTERN.test(address)) {
         throw new Error('Not a Bluetooth address.');
     }
     const session = tools.open();
+    let searching = true;
     try {
         session.send('scan on');
         if (!await waitFor(address, FIND_SECONDS, tools, device => device !== null)) {
             throw new Error('The device no longer answers: put it back in its pairing mode.');
         }
+        session.send('scan off');
+        searching = false;
         session.send(`trust ${address}`);
         session.send(`pair ${address}`);
         // A device that asks for a confirmation all the same gets it: nobody stands at the cabinet.
         if (!await waitFor(address, PAIR_SECONDS, tools, device => device?.paired === true, () => session.send('yes'))) {
             throw new Error('The device did not accept: put it back in its pairing mode and try again.');
+        }
+        await waitFor(address, BOND_SECONDS, tools, device => device?.bonded === true);
+        if ((await readDevice(address, tools))?.trusted === false) {
+            session.send(`trust ${address}`);
         }
         session.send(`connect ${address}`);
         await waitFor(address, CONNECT_SECONDS, tools, device => device?.connected === true);
@@ -266,7 +286,9 @@ export async function pairBluetooth(address: string, tools: BluetoothTools = sys
         }
         return device;
     } finally {
-        session.send('scan off');
+        if (searching) {
+            session.send('scan off');
+        }
         session.close();
     }
 }

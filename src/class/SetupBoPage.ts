@@ -13,6 +13,8 @@ export interface SetupPageInput {
     pluginsPath: string;
     // The outcome of the last action, shown on its step.
     message?: {step: SetupStepId; error?: string; info?: string};
+    // A step already done, opened again to change it (/setup?edit=<step>).
+    editing?: SetupStepId;
 }
 
 
@@ -55,6 +57,17 @@ function renderMessage(input: SetupPageInput, step: SetupStepId): string {
         + (message.info ? `<p class="info flash">${escapeHtml(message.info)}</p>` : '');
 }
 
+// A done step's form is shown again when it is opened to be changed, or when saving it again failed.
+function isReopened(step: SetupStep, input: SetupPageInput): boolean {
+    return step.state === 'done'
+        && (input.editing === step.id || (input.message?.step === step.id && !!input.message.error));
+}
+
+// Carried along by the Browse buttons (/browse, then back here), so that the step stays open.
+function renderEditField(step: SetupStepId, input: SetupPageInput): string {
+    return input.editing === step ? `<input type="hidden" name="edit" value="${step}">` : '';
+}
+
 // The Browse buttons go through /browse, which brings the chosen folder back to /setup (from=setup).
 function renderPathField(name: 'mamePath' | 'pluginsPath', label: string, value: string): string {
     return `
@@ -73,21 +86,24 @@ function renderAction(step: SetupStepId, input: SetupPageInput): string {
             return `
             <form method="post" action="/setup/mame" novalidate>
                 <input type="hidden" name="from" value="setup">
+                ${renderEditField('mame', input)}
                 ${renderPathField('mamePath', 'Folder containing the mame binary', input.mamePath)}
                 ${renderPathField('pluginsPath', 'MAME plugins folder (left empty: the "plugins" folder next to the binary, when there is one)', input.pluginsPath)}
                 <div class="button-row"><button type="submit">Save</button></div>
             </form>`;
         case 'plugins':
-            // No plugin at all: pluginspath is wrong, and only the folder can fix it.
-            return input.facts.pluginsFound
+            // No plugin at all: pluginspath is wrong, and only the folder can fix it. Opened again,
+            // the folder is what is changed.
+            return input.facts.pluginsFound && input.editing !== 'plugins'
                 ? `
             <form method="post" action="/setup/plugins">
                 <button type="submit">Switch on the plugins</button>
             </form>`
                 : `
-            <p class="error">No plugin found: point MAME at its plugins folder (the "plugins" folder next to the mame binary).</p>
+            ${input.facts.pluginsFound ? '' : '<p class="error">No plugin found: point MAME at its plugins folder (the "plugins" folder next to the mame binary).</p>'}
             <form method="post" action="/setup/plugins" novalidate>
                 <input type="hidden" name="from" value="setup">
+                ${renderEditField('plugins', input)}
                 ${renderPathField('pluginsPath', 'MAME plugins folder', input.pluginsPath)}
                 <div class="button-row"><button type="submit">Save and switch on the plugins</button></div>
             </form>`;
@@ -121,7 +137,11 @@ function renderAction(step: SetupStepId, input: SetupPageInput): string {
 
 function renderStep(step: SetupStep, index: number, input: SetupPageInput): string {
     let body: string;
-    if (step.state === 'current') {
+    const reopened = isReopened(step, input);
+    if (reopened) {
+        body = `<p>${escapeHtml(WHY[step.id])}</p>${renderMessage(input, step.id)}${renderAction(step.id, input)}
+            <p class="setup-cancel"><a href="/setup">Cancel</a></p>`;
+    } else if (step.state === 'current') {
         body = `<p>${escapeHtml(WHY[step.id])}</p>${renderMessage(input, step.id)}${renderAction(step.id, input)}`;
     } else if (step.state === 'manual') {
         body = `<p>${escapeHtml(BY_HAND[step.id] ?? '')}</p>`;
@@ -131,7 +151,7 @@ function renderStep(step: SetupStep, index: number, input: SetupPageInput): stri
         body = renderMessage(input, step.id);
     }
     // OFFLINE chosen: the way back to ONLINE stays offered.
-    if (step.id === 'online' && step.state === 'done' && input.facts.offlineChosen && !input.facts.onlineActive) {
+    if (!reopened && step.id === 'online' && step.state === 'done' && input.facts.offlineChosen && !input.facts.onlineActive) {
         body += `
             <form method="post" action="/setup/offline">
                 <input type="hidden" name="offline" value="off">
@@ -139,12 +159,17 @@ function renderStep(step: SetupStep, index: number, input: SetupPageInput): stri
                 <button type="submit" class="secondary">Connect to MAUI-API after all</button>
             </form>`;
     }
+    // A done step can be opened again: going back to change what was set (a wrong mame folder...).
+    const change = step.state === 'done' && !reopened
+        ? `<a class="setup-change" href="/setup?edit=${step.id}">Change</a>` : '';
+    const current = step.state === 'current' || reopened;
     return `
-        <li class="setup-step setup-${step.state}"${step.state === 'current' ? ' aria-current="step"' : ''}>
+        <li class="setup-step setup-${step.state}${reopened ? ' setup-reopened' : ''}"${current ? ' aria-current="step"' : ''}>
             <div class="setup-step-head">
                 <span class="setup-number" aria-hidden="true">${step.state === 'done' ? '&#10003;' : index + 1}</span>
                 <h3>${escapeHtml(SETUP_STEP_TITLES[step.id])}</h3>
-                <span class="setup-state">${STATE_LABELS[step.state]}</span>
+                <span class="setup-state">${reopened ? 'Changing' : STATE_LABELS[step.state]}</span>
+                ${change}
             </div>
             ${body ? `<div class="setup-step-body">${body}</div>` : ''}
         </li>`;
@@ -195,7 +220,9 @@ export function renderSetupPage(input: SetupPageInput): string {
             .setup-step .muted { color: var(--text-muted); }
             .setup-done .setup-number { background: var(--success); border-color: var(--success); color: var(--bg); }
             .setup-done .setup-state { color: var(--success); }
-            .setup-current { border-color: var(--accent); }
+            .setup-current, .setup-reopened { border-color: var(--accent); }
+            .setup-change { font-size: 0.85em; }
+            .setup-cancel { margin: var(--space-2) 0 0; font-size: 0.9em; }
             .setup-current .setup-number { border-color: var(--accent); color: var(--accent); }
             .setup-current .setup-state { color: var(--accent); }
             .setup-blocked h3, .setup-blocked .setup-number { color: var(--text-muted); }

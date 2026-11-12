@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: a podium of three steps -->
+<path d="M8 52 V36 H22 V24 H42 V40 H56 V52 Z" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linejoin="round"/>
+<path d="M32 9 L34.5 14.5 L40.5 15 L36 19 L37.3 25 L32 22 L26.7 25 L28 19 L23.5 15 L29.5 14.5 Z" fill="#E73246"/>
+</svg>

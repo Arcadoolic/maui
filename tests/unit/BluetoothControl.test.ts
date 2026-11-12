@@ -121,8 +121,15 @@ describe('parseDevice', () => {
     it('reads a connected gamepad with its battery', () => {
         const text = info('8BitDo Pro 2', {Paired: 'yes', Connected: 'yes', Icon: 'input-gaming', 'Battery Percentage': '0x50 (80)'});
         expect(parseDevice(PAD, text)).toEqual({
-            address: PAD, name: '8BitDo Pro 2', gamepad: true, paired: true, connected: true, battery: 80,
+            address: PAD, name: '8BitDo Pro 2', gamepad: true, paired: true, bonded: true, trusted: false, connected: true, battery: 80,
         });
+    });
+
+    it('tells a device paired without its keys, and takes paired as bonded on a BlueZ that does not tell', () => {
+        expect(parseDevice(PAD, info('8BitDo Pro 2', {Paired: 'yes', Bonded: 'no', Trusted: 'yes'}))).toMatchObject({
+            paired: true, bonded: false, trusted: true,
+        });
+        expect(parseDevice(PAD, info('8BitDo Pro 2', {Paired: 'yes', Bonded: 'yes'})).bonded).toBe(true);
     });
 
     it('gives no name to a device that only shows its address', () => {
@@ -205,22 +212,41 @@ describe('scanBluetooth', () => {
 });
 
 describe('pairBluetooth', () => {
-    it('searches until the device answers, trusts it, pairs it and connects it', async () => {
+    it('searches until the device answers, stops searching, trusts it, pairs it and connects it', async () => {
+        const kept = {Paired: 'yes', Bonded: 'yes', Trusted: 'yes'};
         const bluez = fake({onTyped: (command, devices) => {
             if (command === 'scan on') {
                 devices[PAD] = info('8BitDo Pro 2', {Icon: 'input-gaming'});
             } else if (command === `pair ${PAD}`) {
-                devices[PAD] = info('8BitDo Pro 2', {Paired: 'yes'});
+                devices[PAD] = info('8BitDo Pro 2', kept);
             } else if (command === `connect ${PAD}`) {
-                devices[PAD] = info('8BitDo Pro 2', {Paired: 'yes', Connected: 'yes'});
+                devices[PAD] = info('8BitDo Pro 2', {...kept, Connected: 'yes'});
             }
         }});
 
         const device = await pairBluetooth(PAD, bluez.tools);
 
-        expect(device).toMatchObject({paired: true, connected: true});
-        expect(bluez.typed).toEqual(['scan on', `trust ${PAD}`, `pair ${PAD}`, `connect ${PAD}`, 'scan off']);
+        expect(device).toMatchObject({paired: true, bonded: true, trusted: true, connected: true});
+        expect(bluez.typed).toEqual(['scan on', 'scan off', `trust ${PAD}`, `pair ${PAD}`, `connect ${PAD}`]);
         expect(bluez.closed).toBe(1);
+    });
+
+    it('trusts again a pad that lost its trust while pairing, and gives one paired without keys as such', async () => {
+        const bluez = fake({
+            devices: {[PAD]: info('8BitDo Pro 2')},
+            onTyped: (command, devices, typed) => {
+                if (command === `pair ${PAD}`) {
+                    devices[PAD] = info('8BitDo Pro 2', {Paired: 'yes', Bonded: 'no'});
+                } else if (command === `trust ${PAD}` && typed.includes(`pair ${PAD}`)) {
+                    devices[PAD] = info('8BitDo Pro 2', {Paired: 'yes', Bonded: 'no', Trusted: 'yes'});
+                }
+            },
+        });
+
+        const device = await pairBluetooth(PAD, bluez.tools);
+
+        expect(device).toMatchObject({paired: true, bonded: false, trusted: true});
+        expect(bluez.typed.filter(command => command === `trust ${PAD}`)).toHaveLength(2);
     });
 
     it('takes a pad that pairs without connecting as paired', async () => {

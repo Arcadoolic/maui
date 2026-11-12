@@ -317,6 +317,83 @@ function parseScoreEvents(body: unknown): ScoreEventLine[] | null {
     return events.every(event => event !== null) ? events as ScoreEventLine[] : null;
 }
 
+/** A player of the global podium (maui-api D70, D100), the cabinet's hiscores board. */
+export interface RankingLine {
+    rank: number;
+    playerId: string;
+    pseudo3: string;
+    // SHA-256 of the player's avatar (maui-api D53), null without one.
+    avatar: string | null;
+    points: number;
+    games: number;
+    crowns: number;
+    podiums: number;
+}
+
+function parseRanking(body: unknown): RankingLine[] | null {
+    if (!isObject(body) || !Array.isArray(body.ranking)) {
+        return null;
+    }
+    const lines = body.ranking.map((line) => {
+        if (!isObject(line) || !isObject(line.player) || typeof line.player.id !== 'string' || typeof line.player.pseudo_3 !== 'string') {
+            return null;
+        }
+        const numbers = [line.rank, line.points, line.games, line.crowns, line.podiums];
+        if (!numbers.every(value => typeof value === 'number')) {
+            return null;
+        }
+        return {
+            rank: line.rank as number, playerId: line.player.id, pseudo3: line.player.pseudo_3,
+            avatar: typeof line.player.avatar === 'string' ? line.player.avatar : null,
+            points: line.points as number, games: line.games as number, crowns: line.crowns as number, podiums: line.podiums as number,
+        };
+    });
+    return lines.every(line => line !== null) ? lines as RankingLine[] : null;
+}
+
+/** A champion of the day (maui-api D96, D101), the idle cabinet's champions screen. */
+export interface ChampionLine {
+    playerId: string;
+    pseudo3: string;
+    // SHA-256 of the player's avatar (maui-api D53), null without one.
+    avatar: string | null;
+    romname: string;
+    // The game's name as MAME gives it.
+    description: string;
+    // SHA-256 of the game's pictures (maui-api D99), null without one.
+    marquee: string | null;
+    flyer: string | null;
+    logo: string | null;
+    score: number;
+    // Players ranked on the game, the champion included.
+    players: number;
+    // Whole days the champion has been first.
+    days: number;
+}
+
+const nullableString = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+
+function parseChampions(body: unknown): ChampionLine[] | null {
+    if (!isObject(body) || !Array.isArray(body.champions)) {
+        return null;
+    }
+    const champions = body.champions.map((champion) => {
+        if (!isObject(champion) || !isObject(champion.player) || !isObject(champion.game)
+            || typeof champion.player.id !== 'string' || typeof champion.player.pseudo_3 !== 'string'
+            || typeof champion.game.romname !== 'string' || typeof champion.game.description !== 'string'
+            || typeof champion.score !== 'number' || typeof champion.players !== 'number' || typeof champion.days !== 'number') {
+            return null;
+        }
+        return {
+            playerId: champion.player.id, pseudo3: champion.player.pseudo_3, avatar: nullableString(champion.player.avatar),
+            romname: champion.game.romname, description: champion.game.description,
+            marquee: nullableString(champion.game.marquee), flyer: nullableString(champion.game.flyer), logo: nullableString(champion.game.logo),
+            score: champion.score, players: champion.players, days: champion.days,
+        };
+    });
+    return champions.every(champion => champion !== null) ? champions as ChampionLine[] : null;
+}
+
 function parsePin(body: unknown): string | null {
     return isObject(body) && typeof body.pin === 'string' && PIN.test(body.pin) ? body.pin : null;
 }
@@ -518,6 +595,16 @@ export class MauiApiClient {
     /** The latest score events of the fleet, newest first (maui-api D82). */
     public getScoreEvents(limit: number): Promise<ApiResult<ScoreEventLine[]>> {
         return this.call('GET', `/events?limit=${limit}`, 200, async response => parseScoreEvents(await readJson(response)));
+    }
+
+    /** The champions of the day, in the order drawn, `limit` at most 30 (maui-api D101). */
+    public getChampions(limit: number): Promise<ApiResult<ChampionLine[]>> {
+        return this.call('GET', `/champions?limit=${limit}`, 200, async response => parseChampions(await readJson(response)));
+    }
+
+    /** The first players of the global podium, best first, `limit` at most 50 (maui-api D100). */
+    public getRanking(limit: number): Promise<ApiResult<RankingLine[]>> {
+        return this.call('GET', `/ranking?limit=${limit}`, 200, async response => parseRanking(await readJson(response)));
     }
 
     /**

@@ -10,6 +10,17 @@ export interface BluetoothCardMessages {
     found?: BluetoothDevice[];
 }
 
+// What will make the device need pairing again, and what to do about it.
+function renderWarning(device: BluetoothDevice): string {
+    if (!device.bonded) {
+        return '<p class="warn">Not remembered: it will have to be paired again once switched off. Forget it and pair it again.</p>';
+    }
+    if (!device.trusted) {
+        return '<p class="warn">Not trusted: it may not reconnect on its own. Forget it and pair it again.</p>';
+    }
+    return '';
+}
+
 function renderPaired(paired: BluetoothDevice[]): string {
     if (!paired.length) {
         return '<p class="info">No device paired yet.</p>';
@@ -17,7 +28,7 @@ function renderPaired(paired: BluetoothDevice[]): string {
     const rows = paired.map(device => `
                     <tr>
                         <td>${escapeHtml(device.name || device.address)}</td>
-                        <td>${device.connected ? 'Connected' : 'Not connected'}${device.battery !== null ? ` - battery ${device.battery}%` : ''}</td>
+                        <td>${device.connected ? 'Connected' : 'Not connected'}${device.battery !== null ? ` - battery ${device.battery}%` : ''}${renderWarning(device)}</td>
                         <td>
                             <form method="post" action="/maui/bluetooth/remove" class="inline-form"
                                 onsubmit="return confirm('Forget this device? It will have to be paired again.')">

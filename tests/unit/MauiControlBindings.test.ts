@@ -1,9 +1,9 @@
 import {describe, it, expect} from 'vitest';
 import {
-    addInput, defaultMauiBindings, describeMauiInput, hotkeyInputs, inputsOfKey, isDefaultKey, keyOfInput, MAUI_KEY_VALUES,
+    addInput, defaultMauiBindings, describeMauiInput, findTriggerConflict, hotkeyInputs, inputsOfKey, isDefaultKey, keyOfInput, MAUI_KEY_VALUES,
     mauiInputId, parseMauiBindings, parseMauiInputId, removeInput, resetKey, serializeMauiBindings, type MauiInput,
 } from '@/class/MauiControlBindings';
-import {defaultHotkeys} from '@/class/Hotkeys';
+import {defaultActions} from '@/class/Hotkeys';
 
 const ids = (inputs: MauiInput[]) => inputs.map(mauiInputId);
 
@@ -126,32 +126,67 @@ describe('describeMauiInput', () => {
     });
 });
 
-describe('hotkeys in maui-controls.json', () => {
-    it('keeps the hotkeys MAUI always had for a file from before them', () => {
-        expect(parseMauiBindings(JSON.stringify({keyboard: {Enter: 'Enter'}})).hotkeys).toEqual(defaultHotkeys());
-        expect(defaultMauiBindings().hotkeys).toEqual(defaultHotkeys());
+describe('actions in maui-controls.json', () => {
+    it('keeps the actions MAUI always had for a file from before them', () => {
+        expect(parseMauiBindings(JSON.stringify({keyboard: {Enter: 'Enter'}})).actions).toEqual(defaultActions());
+        expect(defaultMauiBindings().actions).toEqual(defaultActions());
     });
 
-    it('keeps an empty list: no hotkey at all is a choice', () => {
-        expect(parseMauiBindings(JSON.stringify({hotkeys: []})).hotkeys).toEqual([]);
-    });
-
-    it('reads MAUI keys and single inputs, and drops what is not a hotkey', () => {
-        const hotkeys = parseMauiBindings(JSON.stringify({hotkeys: [
-            {action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0},
-            {action: 'quit', keys: ['maui|Nope'], holdMs: 0},
-            {action: 'quit', keys: ['bogus'], holdMs: 0},
-        ]})).hotkeys;
-        expect(hotkeys).toEqual([{action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0}]);
+    it('gives the keyboard defaults to the hotkeys of version 1 set through a MAUI key', () => {
+        const actions = parseMauiBindings(JSON.stringify({hotkeys: [{action: 'quit', keys: ['maui|Space'], holdMs: 3000}]})).actions;
+        expect(actions.quit).toEqual({inputs: ['key|Escape'], holdMs: 3000});
+        expect(parseMauiBindings(JSON.stringify({hotkeys: []})).actions).toEqual(defaultActions());
     });
 
     it('survives a save and a read', () => {
-        const bindings = {...defaultMauiBindings(), hotkeys: [{action: 'newPlayer' as const, keys: ['mouse|1'], holdMs: 500}]};
-        expect(parseMauiBindings(serializeMauiBindings(bindings)).hotkeys).toEqual(bindings.hotkeys);
+        const bindings = defaultMauiBindings();
+        bindings.actions.star = {inputs: ['mouse|1', 'key|KeyS'], holdMs: 500, with: 'button|9|standard'};
+        expect(parseMauiBindings(serializeMauiBindings(bindings)).actions).toEqual(bindings.actions);
+        expect(JSON.parse(serializeMauiBindings(bindings)).version).toBe(2);
     });
 
     it('lists the single inputs the front must hear', () => {
-        const bindings = {...defaultMauiBindings(), hotkeys: [{action: 'quit' as const, keys: ['button|9|standard', 'maui|Space'], holdMs: 0}]};
-        expect([...hotkeyInputs(bindings)]).toEqual(['button|9|standard']);
+        const bindings = defaultMauiBindings();
+        bindings.actions.quit = {inputs: ['button|9|standard'], holdMs: 0, with: 'button|8|standard'};
+        expect([...hotkeyInputs(bindings)].sort()).toEqual(['button|8|standard', 'button|9|standard', 'key|KeyB', 'key|KeyF', 'key|KeyO', 'key|KeyV']);
+    });
+});
+
+describe('findTriggerConflict', () => {
+    it('finds none in MAUI\'s defaults', () => {
+        expect(findTriggerConflict(defaultMauiBindings())).toBeNull();
+    });
+
+    it('lets two actions share a control when their triggers differ', () => {
+        const bindings = defaultMauiBindings();
+        bindings.actions.vote = {inputs: ['key|Enter'], holdMs: 2000};
+        expect(findTriggerConflict(bindings)).toBeNull();
+    });
+
+    it('refuses two actions pressed on the same control, a MAUI key\'s included', () => {
+        const bindings = defaultMauiBindings();
+        bindings.actions.vote = {inputs: ['key|Space'], holdMs: 0};
+        expect(findTriggerConflict(bindings, 'vote')).toEqual({action: 'vote', other: 'scores'});
+    });
+
+    it('refuses two holds of the same control, whatever their times', () => {
+        const bindings = defaultMauiBindings();
+        bindings.actions.star = {inputs: ['key|KeyP'], holdMs: 5000};
+        expect(findTriggerConflict(bindings, 'star')).toEqual({action: 'star', other: 'newPlayer'});
+    });
+
+    it('refuses the same two keys in either order', () => {
+        const bindings = defaultMauiBindings();
+        bindings.actions.ranking = {inputs: ['key|Space'], holdMs: 2000, with: 'key|KeyP'};
+        bindings.actions.shutdown = {inputs: ['key|KeyP'], holdMs: 1000, with: 'key|Space'};
+        expect(findTriggerConflict(bindings, 'shutdown')).toEqual({action: 'shutdown', other: 'ranking'});
+    });
+
+    it('refuses a second key among the controls, and the directions\' controls', () => {
+        const bindings = defaultMauiBindings();
+        bindings.actions.vote = {inputs: ['key|KeyV'], holdMs: 0, with: 'key|KeyV'};
+        expect(findTriggerConflict(bindings, 'vote')).toEqual({action: 'vote'});
+        bindings.actions.vote = {inputs: ['key|ArrowUp'], holdMs: 2000};
+        expect(findTriggerConflict(bindings, 'vote')).toEqual({action: 'vote', other: 'direction'});
     });
 });

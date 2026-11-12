@@ -1,7 +1,16 @@
 import {describe, it, expect} from 'vitest';
 import {
-    COMBO_WINDOW_MS, defaultHotkeys, HOLD_DELAY_MS, HotkeyEngine, parseHotkey, sameHotkey, type Hotkey, type KeyPress,
+    COMBO_WINDOW_MS, compileHotkeys, defaultActions, HOLD_DELAY_MS, HotkeyEngine, parseActions, type ActionSettings,
+    type Hotkey, type KeyPress,
 } from '@/class/Hotkeys';
+
+// The hotkeys MAUI had before its actions (Scores held quits, both held show the BO): the engine
+// still has to run any such set.
+const defaultHotkeys = (): Hotkey[] => [
+    {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 2000},
+    {action: 'ranking', keys: ['maui|Space', 'maui|KeyP'], holdMs: 2000},
+    {action: 'quit', keys: ['maui|Space'], holdMs: 3000},
+];
 
 // Timers driven by hand: advance(ms) runs what is due.
 function fakeTimers() {
@@ -93,7 +102,7 @@ describe('HotkeyEngine with the default hotkeys', () => {
         timers.advance(2000);
         hotkeyEngine.release(p);
         hotkeyEngine.release(space);
-        expect(log).toEqual(['hold quit', 'hold end', 'hold backOffice', 'hold end', 'action backOffice']);
+        expect(log).toEqual(['hold quit', 'hold end', 'hold ranking', 'hold end', 'action ranking']);
     });
 
     it('ignores the repeats of a keyboard key held down', () => {
@@ -114,10 +123,10 @@ describe('HotkeyEngine with the default hotkeys', () => {
 
 describe('HotkeyEngine with single inputs', () => {
     it('fires a one-key hotkey at once', () => {
-        const {hotkeyEngine, log} = engine([{action: 'backOffice', keys: [select.input], holdMs: 0}]);
+        const {hotkeyEngine, log} = engine([{action: 'ranking', keys: [select.input], holdMs: 0}]);
         hotkeyEngine.press(select);
         hotkeyEngine.release(select);
-        expect(log).toEqual(['action backOffice']);
+        expect(log).toEqual(['action ranking']);
     });
 
     it('fires a two-key hotkey pressed together, and neither key acts', () => {
@@ -154,29 +163,89 @@ describe('HotkeyEngine with single inputs', () => {
 
 const MAUI_ENTER = 'maui|Enter';
 
-describe('parseHotkey', () => {
-    const isKey = (key: string) => key.startsWith('maui|') || key.startsWith('button|');
-
-    it('reads a valid hotkey', () => {
-        expect(parseHotkey({action: 'quit', keys: ['maui|Space'], holdMs: 3000}, isKey))
-            .toEqual({action: 'quit', keys: ['maui|Space'], holdMs: 3000});
+describe('compileHotkeys', () => {
+    it('gives New player held and the other actions their keyboard keys by default', () => {
+        expect(compileHotkeys(defaultActions())).toEqual([
+            {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 2000},
+            {action: 'ranking', keys: ['key|KeyB'], holdMs: 0},
+            {action: 'quit', keys: ['key|Escape'], holdMs: 3000},
+            {action: 'shutdown', keys: ['key|KeyO'], holdMs: 3000},
+            {action: 'vote', keys: ['key|KeyV'], holdMs: 0},
+            {action: 'star', keys: ['key|KeyF'], holdMs: 0},
+        ]);
     });
 
-    it('refuses an unknown action, a bad key, twice the same key, three keys or a wrong hold', () => {
-        expect(parseHotkey({action: 'reboot', keys: ['maui|Space'], holdMs: 0}, isKey)).toBeNull();
-        expect(parseHotkey({action: 'quit', keys: ['nope'], holdMs: 0}, isKey)).toBeNull();
-        expect(parseHotkey({action: 'quit', keys: ['maui|Space', 'maui|Space'], holdMs: 0}, isKey)).toBeNull();
-        expect(parseHotkey({action: 'quit', keys: ['maui|Space', 'maui|KeyP', 'maui|Enter'], holdMs: 0}, isKey)).toBeNull();
-        expect(parseHotkey({action: 'quit', keys: ['maui|Space'], holdMs: -1}, isKey)).toBeNull();
-        expect(parseHotkey({action: 'quit', keys: ['maui|Space'], holdMs: 1.5}, isKey)).toBeNull();
-        expect(parseHotkey({action: 'quit', keys: ['maui|Space'], holdMs: 60_000}, isKey)).toBeNull();
-        expect(parseHotkey(null, isKey)).toBeNull();
+    it('makes a hotkey of a MAUI key held, and the key alone does nothing on its own', () => {
+        const actions: ActionSettings = {...defaultActions(), scores: {inputs: [], holdMs: 2000}};
+        const {hotkeyEngine, log, timers} = engine(compileHotkeys(actions));
+        hotkeyEngine.press(space);
+        timers.advance(HOLD_DELAY_MS + 2000);
+        hotkeyEngine.release(space);
+        // Home.vue's own job for Space is gated on isKeyPressOnly(): the hotkey shows the scores.
+        expect(log).toEqual(['hold scores', 'hold end', 'action scores']);
     });
 
-    it('tells the same hotkey whatever the order of its keys', () => {
-        expect(sameHotkey(
-            {action: 'quit', keys: ['maui|Space', 'maui|KeyP'], holdMs: 0},
-            {action: 'quit', keys: ['maui|KeyP', 'maui|Space'], holdMs: 0},
-        )).toBe(true);
+    it('makes a two-key hotkey of a MAUI key with a second key', () => {
+        const actions: ActionSettings = {...defaultActions(), confirm: {inputs: [], holdMs: 0, with: start.input}};
+        const {hotkeyEngine, log} = engine(compileHotkeys(actions));
+        hotkeyEngine.press(enter);
+        hotkeyEngine.press(start);
+        expect(log).toEqual(['action confirm']);
+    });
+
+    it('fires an action pressed on its own controls, one hotkey per control', () => {
+        const actions: ActionSettings = {...defaultActions(), vote: {inputs: [select.input, 'key|KeyV'], holdMs: 0}};
+        const hotkeys = compileHotkeys(actions).filter(hotkey => hotkey.action === 'vote');
+        expect(hotkeys).toEqual([
+            {action: 'vote', keys: [select.input], holdMs: 0},
+            {action: 'vote', keys: ['key|KeyV'], holdMs: 0},
+        ]);
+        const {hotkeyEngine, log} = engine(hotkeys);
+        hotkeyEngine.press(select);
+        expect(log).toEqual(['action vote']);
+    });
+});
+
+describe('parseActions', () => {
+    const isKey = (key: string) => key.startsWith('button|') || key.startsWith('key|');
+
+    it('reads version 2, and gives an action missing or unreadable its default', () => {
+        const actions = parseActions({actions: {
+            star: {inputs: ['button|5|standard', 'maui|Space', 'nope', 'button|5|standard'], holdMs: 1000, with: 'button|9|standard'},
+            vote: {inputs: ['button|4|standard'], holdMs: 0, with: 'maui|Enter'},
+            quit: {inputs: ['button|1|standard'], holdMs: -1},
+            newPlayer: {inputs: ['button|1|standard'], holdMs: 0},
+        }}, isKey);
+        // Another action's controls are never an action's: only single inputs are kept.
+        expect(actions.star).toEqual({inputs: ['button|5|standard'], holdMs: 1000, with: 'button|9|standard'});
+        expect(actions.vote).toEqual({inputs: ['button|4|standard'], holdMs: 0});
+        expect(actions.quit).toEqual(defaultActions().quit);
+        // A MAUI key's action has no controls of its own.
+        expect(actions.newPlayer).toEqual({inputs: [], holdMs: 0});
+        expect(actions.ranking).toEqual(defaultActions().ranking);
+    });
+
+    it('drops a second key that is one of the controls', () => {
+        expect(parseActions({actions: {vote: {inputs: ['button|4|standard'], holdMs: 0, with: 'button|4|standard'}}}, isKey).vote)
+            .toEqual({inputs: ['button|4|standard'], holdMs: 0});
+    });
+
+    it('keeps the hotkeys of version 1 made of single inputs only, the first of each action', () => {
+        const actions = parseActions({hotkeys: [
+            {action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0},
+            {action: 'quit', keys: ['button|9|standard', 'button|8|standard'], holdMs: 1000},
+            {action: 'quit', keys: ['button|3|standard'], holdMs: 0},
+            // Back office was an action of its own, replaced by the hiscores board.
+            {action: 'backOffice', keys: ['button|2|standard'], holdMs: 0},
+            {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 3000},
+            {action: 'reboot', keys: ['button|1|standard'], holdMs: 0},
+        ]}, isKey);
+        expect(actions.quit).toEqual({inputs: ['button|9|standard'], holdMs: 1000, with: 'button|8|standard'});
+        expect(actions.ranking).toEqual(defaultActions().ranking);
+        expect(actions.newPlayer).toEqual(defaultActions().newPlayer);
+    });
+
+    it('gives MAUI\'s defaults to a file without actions nor hotkeys', () => {
+        expect(parseActions({}, isKey)).toEqual(defaultActions());
     });
 });
