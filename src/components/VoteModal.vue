@@ -61,10 +61,15 @@ const CHOICES: {vote: Vote, starred: boolean}[] = [
     {vote: VOTE_UP, starred: true},
 ];
 
+// The game's vote when it is asked again from the list (the Vote action): selected first.
+const props = defineProps<{current?: {vote: number, starred: boolean}}>();
 const emit = defineEmits<{vote: [vote: Vote, starred: boolean], skip: []}>();
 
 // Neutral first: an accidental double press on the confirm key never removes a game.
-const selected = ref(CHOICES.findIndex(choice => choice.vote === VOTE_NEUTRAL));
+const currentIndex = props.current
+    ? CHOICES.findIndex(choice => choice.vote === props.current?.vote && choice.starred === props.current?.starred)
+    : -1;
+const selected = ref(currentIndex >= 0 ? currentIndex : CHOICES.findIndex(choice => choice.vote === VOTE_NEUTRAL));
 
 function vote(index: number) {
     emit('vote', CHOICES[index].vote, CHOICES[index].starred);
