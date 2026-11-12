@@ -517,6 +517,26 @@ describe('score events', () => {
     });
 });
 
+describe('ranking', () => {
+    it('reads the global podium with the avatars', async () => {
+        const {client, fetchImpl} = clientReturning(json(200, {ranking: [
+            {rank: 1, player: {id: 'p1', pseudo_3: 'NOB', avatar: 'abc'}, points: 120, games: 2, crowns: 1, podiums: 2},
+            {rank: 2, player: {id: 'p2', pseudo_3: 'ACE', avatar: null}, points: 90, games: 3, crowns: 0, podiums: 1},
+        ]}));
+
+        expect(await client.getRanking(25)).toEqual({kind: 'ok', value: [
+            {rank: 1, playerId: 'p1', pseudo3: 'NOB', avatar: 'abc', points: 120, games: 2, crowns: 1, podiums: 2},
+            {rank: 2, playerId: 'p2', pseudo3: 'ACE', avatar: null, points: 90, games: 3, crowns: 0, podiums: 1},
+        ]});
+        expect(requestOf(fetchImpl).url).toBe('https://api.example.org/api/v1/ranking?limit=25');
+    });
+
+    it('refuses an answer that is no ranking', async () => {
+        expect((await clientReturning(json(200, {ranking: [{rank: 1, player: {id: 'p1'}}]})).client.getRanking(5)).kind).not.toBe('ok');
+        expect((await clientReturning(json(200, {})).client.getRanking(5)).kind).not.toBe('ok');
+    });
+});
+
 describe('leaderboards', () => {
     const apiEntry = {
         rank: 1, player: {id: 'p1', pseudo_3: 'NOB', avatar: 'abc'}, score: 19200,

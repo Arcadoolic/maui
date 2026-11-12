@@ -1,5 +1,5 @@
 <template>
-    <div class="home" :class="{empty: noGames, asleep, launching}">
+    <div class="home" :class="{empty: noGames, asleep, launching, 'podium-out': podiumAway, 'podium-return': podiumStage === 'returning'}">
         <modal v-if="showLoader" :key="loaderTitle">
             <p>{{loaderTitle}}</p>
             <loader :duration="loaderDuration"></loader>
@@ -9,10 +9,14 @@
             <p>{{notice}}</p>
         </modal>
 
-        <modal v-if="backOfficeUrl">
-            <p>Back office</p>
-            <p>{{backOfficeUrl}}</p>
-        </modal>
+        <transition name="title">
+            <div class="gameTitle podiumTitle" v-if="podiumStage === 'board'">
+                <h1>Global podium</h1>
+            </div>
+        </transition>
+        <transition name="podium">
+            <ranking-board v-if="podiumStage === 'board'" @close="closePodium"></ranking-board>
+        </transition>
 
 
         <user-registration v-if="showAddUser" @quit="showAddUser = false"></user-registration>
@@ -70,7 +74,8 @@
         <LaunchStage v-if="launching && selectedGame" :game="selectedGame"></LaunchStage>
 
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
-                    :mouse="mouseNav" @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
+                    :mouse="mouseNav" :away="podiumAway" :returning="podiumStage === 'returning'"
+                    @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
 
         <transition name="slide">
             <Hiscores :game="selectedGame" :fresh="revealedScores" v-if="hiscoresVisible"></Hiscores>
@@ -123,7 +128,6 @@ import {
     PLAY_ENDED_GLOBAL, PLAY_STARTED_GLOBAL, SCORE_ATTRIBUTE_GLOBAL,
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
-import {BO_WAKE_GLOBAL, type BoWaker} from '@/class/BoWakeBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
@@ -134,6 +138,7 @@ import {isBoMameRunning, onBoMameChanged} from '@/class/BoMameSession';
 import {readRemovedFavorites, removeReturnedFavorites} from '@/class/FavoritesStore';
 import {ipcRenderer} from 'electron';
 import MessageBand from '@/components/MessageBand.vue';
+import RankingBoard from '@/components/RankingBoard.vue';
 import {IdleWatch} from '@/class/IdleWatch';
 import {canSwitchScreenOff, setScreenPower} from '@/class/ScreenPower';
 import {scoreEventMessages, updateNoticeMessage, type BandMessage} from '@/class/CabinetMessages';
@@ -161,8 +166,8 @@ const hasPlayerInfo = ref(false);
 const timeouts: {
     showGame?: number,
     showFlyer?: number,
-    hideBackOffice?: number,
     hideNotice?: number,
+    podium?: number,
     hold?: number,
     endLaunchStage?: number,
     holdRepeat?: number,
@@ -236,9 +241,18 @@ const noGames = computed(() => gamesLoaded.value && !games.value.length);
 // No game yet on a new cabinet: the setup guide's steps instead of a bare message (Lot VI.3).
 const setupProgress = useSetupProgress();
 
-// The BO's address on the local network, while it is shown (see showBackOffice()).
-const backOfficeUrl = ref('');
-const BACK_OFFICE_SHOWN_MS = 15000;
+// The global podium (RankingBoard.vue, MAUI-API's): the list of games leaves the screen
+// (`leaving`: the marquees to the left, the flyer to the right, the title up, the category wheel
+// turning as its categories go one after the other, the category's name down), the board takes
+// its place (`board`) until its cycle ends or a key is pressed, then everything comes back the
+// other way round (`returning`).
+type PodiumStage = 'off' | 'leaving' | 'board' | 'returning';
+const podiumStage = ref<PodiumStage>('off');
+const podiumAway = computed(() => podiumStage.value === 'leaving' || podiumStage.value === 'board');
+// The front's keys are the podium's while it is on.
+const showRanking = computed(() => podiumStage.value !== 'off');
+// The longest of the leaving (or coming back) transitions, the categories' included (style below).
+const PODIUM_MOVE_MS = 1300;
 // A line a hotkey has to say ("Shutting down…", or why it did nothing), and how long it stays.
 const notice = ref('');
 const NOTICE_SHOWN_MS = 8000;
@@ -317,7 +331,7 @@ function offerUpdate() {
  */
 const onUpdateAvailable = () => {
     if (updateOffer.value || updating.value || gameRunning || isBoMameRunning() || asleep.value || showAddUser.value
-        || whoPlayed.value || voteGame.value || backOfficeUrl.value) {
+        || whoPlayed.value || voteGame.value || showRanking.value) {
         return;
     }
     try {
@@ -589,7 +603,7 @@ function mouseAllowed(): boolean {
         stopRoll();
         return false;
     }
-    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !backOfficeUrl.value;
+    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !showRanking.value;
 }
 
 /** -1 (up), 1 (down) or 0 once `e` adds up to a step for `area`. */
@@ -719,7 +733,7 @@ function unlockFront() {
 function syncIdleBlock() {
     stopRoll();
     idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
-        || !!updateOffer.value || !!updating.value || !!backOfficeUrl.value || noGames.value);
+        || !!updateOffer.value || !!updating.value || !!showRanking.value || noGames.value);
 }
 
 function startGame() {
@@ -869,7 +883,7 @@ async function checkScoreReveal() {
 function revealScores() {
     const reveal = pendingReveal;
     if (!reveal || gameRunning || asleep.value || showAddUser.value || whoPlayed.value || voteGame.value
-        || updateOffer.value || updating.value || backOfficeUrl.value) {
+        || updateOffer.value || updating.value || showRanking.value) {
         return;
     }
     pendingReveal = null;
@@ -1138,31 +1152,36 @@ async function loadCategories() {
     });
 }
 
-/**
- * Loads the BO, which is not kept in memory on a cabinet nobody is setting up (boCore.ts), and
- * shows where to reach it.
- */
-async function showBackOffice() {
-    clearTimeout(timeouts.hideBackOffice);
-    showHiscores.value = false;
-    let url = boUrl.value;
-    try {
-        const wake = remote.getGlobal(BO_WAKE_GLOBAL) as BoWaker | undefined;
-        url = wake ? await wake() : boUrl.value;
-    } catch (err) {
-        Log.warn('[Home] Back office not woken: ' + (err instanceof Error ? err.message : String(err)));
+/** The global podium: the list of games leaves, then the board comes (see podiumStage). */
+function openPodium() {
+    if (podiumStage.value !== 'off') {
+        return;
     }
-    backOfficeUrl.value = url;
-    timeouts.hideBackOffice = window.setTimeout(() => {
-        backOfficeUrl.value = '';
-    }, BACK_OFFICE_SHOWN_MS);
+    showHiscores.value = false;
+    stopHold();
+    podiumStage.value = 'leaving';
+    timeouts.podium = window.setTimeout(() => {
+        podiumStage.value = 'board';
+    }, isLite() ? 0 : PODIUM_MOVE_MS);
+}
+
+/** The board's cycle ended, or a key was pressed: the list of games comes back. */
+function closePodium() {
+    if (podiumStage.value === 'off' || podiumStage.value === 'returning') {
+        return;
+    }
+    clearTimeout(timeouts.podium);
+    podiumStage.value = 'returning';
+    timeouts.podium = window.setTimeout(() => {
+        podiumStage.value = 'off';
+    }, isLite() ? 0 : PODIUM_MOVE_MS);
 }
 
 /** What a hotkey of the BO's Controls tab does once it goes off (Hotkeys.ts). */
 function runHotkey(action: HotkeyAction) {
     switch (action) {
-    case 'backOffice':
-        void showBackOffice();
+    case 'ranking':
+        openPodium();
         break;
     case 'quit':
         remote.app.quit();
@@ -1262,6 +1281,7 @@ onUnmounted(() => {
     stopLeaderboardsListener?.();
     stopHotkeysListener();
     stopBoMameListener();
+    clearTimeout(timeouts.podium);
     hotkeys.reset();
     ipcRenderer.off(SHOW_GAME_CHANNEL, onShowGame);
     ipcRenderer.off(FAVORITES_CHANGED_CHANNEL, onFavoritesChanged);
@@ -1283,7 +1303,8 @@ onUnmounted(() => {
 window.addEventListener('blur', stopHold);
 window.addEventListener('blur', () => hotkeys.reset());
 // A modal takes the keys over: the list stops where it is.
-watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value, (modal) => {
+watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value
+    || showRanking.value, (modal) => {
     if (modal) {
         stopHold();
         hotkeys.reset();
@@ -1293,7 +1314,7 @@ watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!upda
     revealScores();
 });
 watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
-    !!backOfficeUrl.value, noGames.value], syncIdleBlock);
+    !!showRanking.value, noGames.value], syncIdleBlock);
 
 /** A key's own job on the list of games, as a press. */
 function onListKeyDown(key: string) {
@@ -1349,6 +1370,11 @@ function registerKeyMapping() {
         if (idleWatch.activity()) {
             stopRoll();
             offerUpdate();
+            return;
+        }
+        // Any key sends the global podium away, and does nothing else.
+        if (showRanking.value) {
+            closePodium();
             return;
         }
         if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || updateOffer.value || updating.value) {
@@ -1767,6 +1793,43 @@ if (!getIsInit()) {
 
     .category-enter-from, .category-leave-to {
         margin-bottom: -100%;
+    }
+
+    /* The global podium (podiumStage): the marquees leave to the left, the flyer to the right, the
+       title up, then the category's name goes down while the wheel turns (Categories.vue). Coming
+       back, the other way round: the categories and their name first, then the rest. The podium's
+       own title takes the game's place. */
+    .home.podium-out :deep(.gamesContainer), .home.podium-out .flyer-container,
+    .home.podium-out .gameTitle:not(.podiumTitle) {
+        transition: transform 0.5s ease-in 0s;
+    }
+    .home.podium-out .categoryTitle {
+        transition: transform 0.5s ease-in 0.3s;
+    }
+    .home.podium-return :deep(.gamesContainer), .home.podium-return .flyer-container,
+    .home.podium-return .gameTitle {
+        transition: transform 0.5s ease-out 0.7s;
+    }
+    .home.podium-return .categoryTitle {
+        transition: transform 0.5s ease-out 0s;
+    }
+    .home.podium-out :deep(.gamesContainer) {
+        transform: translateX(-110%);
+    }
+    .home.podium-out .flyer-container {
+        transform: translateX(110%);
+    }
+    .home.podium-out .gameTitle:not(.podiumTitle) {
+        transform: translateY(-150%);
+    }
+    .home.podium-out .categoryTitle {
+        transform: translateY(150%);
+    }
+    .podium-enter-active, .podium-leave-active {
+        transition: opacity 0.3s ease;
+    }
+    .podium-enter-from, .podium-leave-to {
+        opacity: 0;
     }
 
     loader {

@@ -6797,7 +6797,7 @@ const MAUI_ACTIONS: readonly {key: string; label: string; icon: string; action?:
     {key: MAUI_KEYS.enter, label: 'Confirm', icon: 'confirm', action: 'confirm'},
     {key: MAUI_KEYS.space, label: 'Scores / back', icon: 'scores', action: 'scores'},
     {key: MAUI_KEYS.p, label: 'New player', icon: 'new_player', action: 'newPlayer'},
-    {key: 'backOffice', label: 'Back office', icon: 'menu', action: 'backOffice'},
+    {key: 'ranking', label: 'Global podium', icon: 'podium', action: 'ranking'},
     {key: 'quit', label: 'Quit MAUI', icon: 'exit', action: 'quit'},
     {key: 'shutdown', label: 'Shut down', icon: 'quit', action: 'shutdown'},
     {key: 'vote', label: 'Vote', icon: 'vote', action: 'vote'},

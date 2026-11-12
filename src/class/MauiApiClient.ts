@@ -317,6 +317,40 @@ function parseScoreEvents(body: unknown): ScoreEventLine[] | null {
     return events.every(event => event !== null) ? events as ScoreEventLine[] : null;
 }
 
+/** A player of the global podium (maui-api D70, D100), the cabinet's hiscores board. */
+export interface RankingLine {
+    rank: number;
+    playerId: string;
+    pseudo3: string;
+    // SHA-256 of the player's avatar (maui-api D53), null without one.
+    avatar: string | null;
+    points: number;
+    games: number;
+    crowns: number;
+    podiums: number;
+}
+
+function parseRanking(body: unknown): RankingLine[] | null {
+    if (!isObject(body) || !Array.isArray(body.ranking)) {
+        return null;
+    }
+    const lines = body.ranking.map((line) => {
+        if (!isObject(line) || !isObject(line.player) || typeof line.player.id !== 'string' || typeof line.player.pseudo_3 !== 'string') {
+            return null;
+        }
+        const numbers = [line.rank, line.points, line.games, line.crowns, line.podiums];
+        if (!numbers.every(value => typeof value === 'number')) {
+            return null;
+        }
+        return {
+            rank: line.rank as number, playerId: line.player.id, pseudo3: line.player.pseudo_3,
+            avatar: typeof line.player.avatar === 'string' ? line.player.avatar : null,
+            points: line.points as number, games: line.games as number, crowns: line.crowns as number, podiums: line.podiums as number,
+        };
+    });
+    return lines.every(line => line !== null) ? lines as RankingLine[] : null;
+}
+
 function parsePin(body: unknown): string | null {
     return isObject(body) && typeof body.pin === 'string' && PIN.test(body.pin) ? body.pin : null;
 }
@@ -518,6 +552,11 @@ export class MauiApiClient {
     /** The latest score events of the fleet, newest first (maui-api D82). */
     public getScoreEvents(limit: number): Promise<ApiResult<ScoreEventLine[]>> {
         return this.call('GET', `/events?limit=${limit}`, 200, async response => parseScoreEvents(await readJson(response)));
+    }
+
+    /** The first players of the global podium, best first, `limit` at most 50 (maui-api D100). */
+    public getRanking(limit: number): Promise<ApiResult<RankingLine[]>> {
+        return this.call('GET', `/ranking?limit=${limit}`, 200, async response => parseRanking(await readJson(response)));
     }
 
     /**
