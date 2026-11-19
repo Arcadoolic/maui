@@ -45,7 +45,7 @@
         "umzug": "^3.8.3",
         "velocity-animate": "^2.0.5",
         "vue": "^3.5.45",
-        "vue-router": "^5.4.0"
+        "vue-router": "^5.5.1"
     },
     "devDependencies": {
         "@arcadoolic/mhiex": "github:Arcadoolic/mhiex#2.3.0",
