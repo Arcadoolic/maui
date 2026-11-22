@@ -111,7 +111,8 @@ import {
     CarouselCategory, ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
 import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
-import {loadBeatThisGames, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {loadBeatThisGames, loadChampions, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {writePodiumFile} from '@/class/PodiumFile';
 import {freshScores as newScoreKeys} from '@/class/ScoreReveal';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
@@ -815,6 +816,10 @@ function startGame() {
     const stageShown = new Promise<void>(resolve => setTimeout(resolve, config.launchStageSeconds * 1000));
     void Promise.all([uiSounds.playThenSuspend('launch'), stageShown])
         .then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
+        // The podium plugin's corner (PodiumFile.ts): the marquee's 3 players.
+        .then(() => loadChampions(game).catch(() => []))
+        .then(champions => writePodiumFile(mameService.iniPath, game.romName,
+            champions.map(champion => ({name: champion.pseudo3, score: champion.score}))))
         .then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
             endLaunchStageBehindMame();
