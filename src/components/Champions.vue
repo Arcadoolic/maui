@@ -1,7 +1,7 @@
 <template>
-    <div class="champions">
+    <div class="champions" :class="{spring}">
         <TransitionGroup tag="div" name="champion" class="championsContainer" :class="{animated}" :css="animated" v-if="champions.length">
-            <div v-for="(champion, index) of champions" :key="champion.player" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%'}">
+            <div v-for="(champion, index) of champions" :key="champion.player" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%', '--reach': ((champions.length - index) * SPRING_STEP) + '%'}">
                 <img v-if="champion.avatar" :src="champion.avatar" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
                 <img v-else src="../assets/defaultPlayer.png" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
             </div>
@@ -17,7 +17,33 @@ import {emitter} from '@/emitter';
 import {loadChampions, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
 import {avatarColor} from '@/class/AvatarColor';
 
-const props = defineProps<{game: Game}>();
+const props = defineProps<{game: Game; selected?: boolean}>();
+
+// The selected marquee's podium comes to life: as soon as the game is picked, the avatars
+// move apart to the right as on an elastic pulled from its left end, then snap back at once and
+// bounce a little; the cup rocks on its foot. Once per selection.
+const SPRING_DELAY_MS = 0;
+const SPRING_MS = 1300;
+// How much further each avatar goes than the one on its left, in % of its width (its --reach).
+const SPRING_STEP = 35;
+const spring = ref(false);
+let springTimer: ReturnType<typeof setTimeout> | undefined;
+
+function armSpring() {
+    clearTimeout(springTimer);
+    spring.value = false;
+    if (!props.selected) {
+        return;
+    }
+    springTimer = setTimeout(() => {
+        spring.value = true;
+        springTimer = setTimeout(() => {
+            spring.value = false;
+        }, SPRING_MS);
+    }, SPRING_DELAY_MS);
+}
+
+watch(() => [props.selected, props.game], armSpring);
 
 // The best 3 players (LeaderboardSource.ts), drawn from the 3rd to the 1st.
 const champions = ref<BoardRow[]>([]);
@@ -53,6 +79,7 @@ async function onScoresChange() {
 watch(() => props.game, onGameChange);
 
 onMounted(async () => {
+    armSpring();
     await onGameChange();
 
     emitter.on('game-quit', onScoresChange);
@@ -70,6 +97,7 @@ onUnmounted(() => {
     emitter.off('hiscores-loaded', onGameChange);
     stopListening?.();
     clearTimeout(stopAnimating);
+    clearTimeout(springTimer);
 });
 </script>
 
@@ -127,6 +155,40 @@ onUnmounted(() => {
         }
     }
 
+    /* The selected marquee's spring (armSpring()): three circles on an elastic held on its left.
+       It is pulled to the right, the circles moving apart, each one as far again as the one on its
+       left (--reach, set on the element); then let go, they all snap back at once and bounce a
+       little. On the pictures, not the elements, which keep their own transform (astride the end). */
+    .spring .champion img {
+        animation: champion-spring 1.1s both;
+    }
+
+    @keyframes champion-spring {
+        0% {
+            transform: translateX(0);
+            animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+        }
+        25% {
+            transform: translateX(var(--reach));
+            animation-timing-function: cubic-bezier(0.6, 0, 1, 1);
+        }
+        42% {
+            transform: translateX(calc(var(--reach) * -0.14));
+            animation-timing-function: ease-in-out;
+        }
+        58% {
+            transform: translateX(calc(var(--reach) * 0.06));
+            animation-timing-function: ease-in-out;
+        }
+        75% {
+            transform: translateX(calc(var(--reach) * -0.02));
+            animation-timing-function: ease-in-out;
+        }
+        100% {
+            transform: translateX(0);
+        }
+    }
+
     .champion:nth-child(1) {
         z-index: 1;
     }
@@ -181,5 +243,35 @@ onUnmounted(() => {
         right: 10%;
         height: 104.5%;
         transform: translate(50%, -4%);
+        transform-origin: 50% 100%;
+    }
+
+    /* The cup's own spring (armSpring()): it rocks on its foot, left and right, then settles. */
+    .spring .default {
+        animation: cup-spring 1.1s cubic-bezier(0.3, 0, 0.3, 1) both;
+    }
+
+    @keyframes cup-spring {
+        0% {
+            transform: translate(50%, -4%) rotate(0);
+        }
+        20% {
+            transform: translate(50%, -4%) rotate(-18deg);
+        }
+        40% {
+            transform: translate(50%, -4%) rotate(13deg);
+        }
+        58% {
+            transform: translate(50%, -4%) rotate(-8deg);
+        }
+        74% {
+            transform: translate(50%, -4%) rotate(4deg);
+        }
+        88% {
+            transform: translate(50%, -4%) rotate(-1.5deg);
+        }
+        100% {
+            transform: translate(50%, -4%) rotate(0);
+        }
     }
 </style>

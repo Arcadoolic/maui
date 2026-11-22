@@ -56,7 +56,7 @@
 
         <transition name="games">
             <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"
-                   :launching="launching" :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
+                   :moveListGames="moveListGames" :launching="launching" :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
         </transition>
 
         <transition name="alpha-jump">
@@ -75,7 +75,7 @@
             </div>
         </transition>
 
-        <LaunchStage v-if="launching && selectedGame" :game="selectedGame"></LaunchStage>
+        <LaunchStage v-if="launching && selectedGame" :game="selectedGame" :moves="moveListGames.has(selectedGame.romName)"></LaunchStage>
 
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
                     :mouse="mouseNav" :away="podiumAway" :returning="podiumStage === 'returning'"
@@ -101,6 +101,7 @@ import Gamepads from '@/class/Gamepads.class';
 import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
 import LaunchStage from '@/components/LaunchStage.vue';
+import {loadMoveListGames} from '@/class/MoveListGames';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
 import {useSetupProgress} from '@/composables/useSetupProgress';
@@ -111,7 +112,8 @@ import {
     CarouselCategory, ALL_GAMES_CATEGORY, BEAT_THIS_CATEGORY, isDynamicCategory, isMergedCategory,
 } from '@/types/CarouselCategory';
 import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
-import {loadBeatThisGames, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {loadBeatThisGames, loadChampions, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
+import {writePodiumFile} from '@/class/PodiumFile';
 import {freshScores as newScoreKeys} from '@/class/ScoreReveal';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
@@ -133,6 +135,7 @@ import {
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
+import {DIAGNOSTIC_GLOBAL, type DiagnosticRequest} from '@/class/DiagnosticBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {useMediaChanges} from '@/composables/useMediaChanges';
@@ -213,6 +216,8 @@ const selectedLetter = computed(() => selectedGame.value ? getLetter(selectedGam
 const showGames = ref(true);
 const showTitle = ref(true);
 const showFlyer = ref(true);
+// The games the movelist plugin knows (MoveListGames.ts), read once the services are up.
+const moveListGames = ref<Set<string>>(new Set());
 const showLoader = ref(false);
 // The game picked is starting (startGame()): the other marquees leave, the picked one and its flyer
 // grow, and LaunchStage.vue tells the podium, until MAME takes the screen (endLaunchStageBehindMame()).
@@ -251,8 +256,8 @@ const setupProgress = useSetupProgress();
 
 // The stage the list of games leaves the screen for (`leaving`: the marquees to the left, the
 // flyer to the right, the title up, the category wheel turning as its categories go one after the
-// other, the category's name down): the global podium (RankingBoard.vue, MAUI-API's) until its
-// cycle ends or a key is pressed, or the champions of the day (ChampionsScreen.vue) while the
+// other, the category's name down): the global podium (RankingBoard.vue, MAUI-API's), its cycle
+// played again and again until a key is pressed or the cabinet turns idle, or the champions of the day (ChampionsScreen.vue) while the
 // cabinet is idle. Its title takes the game's (`board`), then everything comes back the other way
 // round (`returning`).
 type PodiumStage = 'off' | 'leaving' | 'board' | 'returning';
@@ -288,6 +293,12 @@ const screenOff = getConfiguration().frontSleepScreenOff && canSwitchScreenOff(r
 const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     idle.value = isIdle;
     if (isIdle) {
+        // The global podium stays until a key, but nobody pressed one for a while: the idle
+        // screen takes its place, at once (it opens on the same stage).
+        if (showRanking.value) {
+            clearTimeout(timeouts.podium);
+            podiumStage.value = 'off';
+        }
         void startIdleScreen();
     } else if (stageScreen.value === 'champions') {
         // The key that wakes the cabinet brings the list of games back.
@@ -784,7 +795,7 @@ function unlockFront() {
 function syncIdleBlock() {
     stopRoll();
     idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
-        || !!updateOffer.value || !!updating.value || !!showRanking.value || noGames.value);
+        || !!updateOffer.value || !!updating.value || noGames.value);
 }
 
 function startGame() {
@@ -808,6 +819,10 @@ function startGame() {
     const stageShown = new Promise<void>(resolve => setTimeout(resolve, config.launchStageSeconds * 1000));
     void Promise.all([uiSounds.playThenSuspend('launch'), stageShown])
         .then(() => notifyScoreCapture(game.romName, capture?.dir ?? null))
+        // The podium plugin's corner (PodiumFile.ts): the marquee's 3 players.
+        .then(() => loadChampions(game).catch(() => []))
+        .then(champions => writePodiumFile(mameService.iniPath, game.romName,
+            champions.map(champion => ({name: champion.pseudo3, score: champion.score}))))
         .then(() => mameService.startGame(game.romName, capture)).then(
         (gameProcess) => {
             endLaunchStageBehindMame();
@@ -1260,6 +1275,9 @@ function runHotkey(action: HotkeyAction) {
     case 'star':
         void toggleStar();
         break;
+    case 'diagnostic':
+        void sendDiagnostic();
+        break;
     }
 }
 
@@ -1270,6 +1288,27 @@ function showNotice(text: string, hideAfterMs?: number) {
         timeouts.hideNotice = window.setTimeout(() => {
             notice.value = '';
         }, hideAfterMs);
+    }
+}
+
+let diagnosticSending = false;
+
+/** The selected game's diagnostic, sent to MAUI-API by the main process (DiagnosticBridge.ts). */
+async function sendDiagnostic() {
+    const game = selectedGame.value;
+    if (!game || diagnosticSending) {
+        return;
+    }
+    diagnosticSending = true;
+    showNotice(`Sending a diagnostic of ${game.shortname || game.romName}…`);
+    try {
+        const request = remote.getGlobal(DIAGNOSTIC_GLOBAL) as DiagnosticRequest | undefined;
+        const result = request ? await request(game.romName) : {sent: false as const, reason: 'Diagnostics are not available.'};
+        showNotice(result.sent ? `Diagnostic sent (${result.id})` : result.reason, NOTICE_SHOWN_MS);
+    } catch (err) {
+        showNotice(err instanceof Error ? err.message : String(err), NOTICE_SHOWN_MS);
+    } finally {
+        diagnosticSending = false;
     }
 }
 
@@ -1473,6 +1512,8 @@ if (!getIsInit()) {
     gameService = getGameService();
 
     onMounted(async () => {
+        // The games whose moves the movelist plugin shows (MoveListGames.ts): their badge.
+        moveListGames.value = loadMoveListGames(getMameService().iniPath);
         await loadCategories();
         games.value = await loadCategoryGames(0);
         gamesLoaded.value = true;
@@ -1827,8 +1868,21 @@ if (!getIsInit()) {
         transition: opacity 0.3s ease-in;
     }
 
+    /* The flyer turns away around its top left corner, its foot going up to the right until it is
+       off the screen; the next one comes back the same way and settles with a little bounce. On
+       `rotate`, which adds to the container's `transform` (podium, launch), and around that corner
+       only while it turns; the curves of the shared transitions are set here for the flyer. */
+    .flyer-enter-active, .flyer-leave-active {
+        transform-origin: 0 0;
+    }
+    .flyer-container.flyer-leave-active {
+        transition: rotate 0.3s cubic-bezier(0.5, 0, 0.75, 0);
+    }
+    .flyer-container.flyer-enter-active {
+        transition: rotate 0.4s cubic-bezier(0.34, 1.4, 0.64, 1);
+    }
     .flyer-enter-from, .flyer-leave-to {
-        margin-right: -100%;
+        rotate: -90deg;
     }
 
     .games-enter-from, .games-leave-to {

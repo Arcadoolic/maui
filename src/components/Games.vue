@@ -21,7 +21,9 @@
                                 <img class="logoOverlay" :src="getLogo(game.romName)" loading="lazy" decoding="async" alt="">
                             </div>
                         </div>
-                        <Champions v-if='game.hi' :game='game'></Champions>
+                        <Champions v-if='game.hi' :game='game' :selected='selectedGameIndex === index'></Champions>
+                        <img v-if="selectedGameIndex === index && moveListGames.has(game.romName)" class="movesBadge"
+                             src="../assets/input-icons/movelist.svg" alt="" title="Special moves shown during the game">
                     </div>
                 </li>
             </ul>
@@ -48,7 +50,10 @@ const props = withDefaults(defineProps<{
     // The selected game is starting (Home.vue's startGame()): the others leave on the left, the
     // nearest last, and the selected one moves towards the middle and grows.
     launching?: boolean;
-}>(), {selectedGameIndex: 0, focused: true, mouse: false, launching: false});
+    // The games whose special moves the movelist plugin shows (MoveListGames.ts): a badge on the
+    // selected one's marquee.
+    moveListGames?: Set<string>;
+}>(), {selectedGameIndex: 0, focused: true, mouse: false, launching: false, moveListGames: () => new Set()});
 
 const emit = defineEmits<{pick: [index: number]}>();
 
@@ -324,5 +329,51 @@ function hasFlyerLogoFallback(romName: string): boolean {
         width: 100%;
         /* Its avatars go to the stage under the marquee while a game starts (LaunchStage.vue). */
         transition: opacity 0.2s ease-in;
+    }
+
+    /* The movelist plugin knows this game (MoveListGames.ts): a small gamepad astride the selected
+       marquee's lower left corner, as the podium is on its right end, popping in as it is picked. */
+    .movesBadge {
+        position: absolute;
+        left: 0;
+        bottom: 6%;
+        height: 38%;
+        aspect-ratio: 1 / 1;
+        opacity: 0.85;
+        filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+        transform: translate(-50%, 0);
+        /* Popping in, then floating gently (on `translate`, apart from the pop's `transform`). */
+        animation: moves-badge-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+            moves-badge-float 2.8s ease-in-out 0.5s infinite;
+        z-index: 4;
+    }
+
+    /* Lite mode: no endless animation (App.vue). */
+    :global(html.lite) .movesBadge {
+        animation: moves-badge-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+
+    @keyframes moves-badge-float {
+        0%, 100% {
+            translate: 0 0;
+            rotate: 0deg;
+        }
+        50% {
+            translate: 0 -12%;
+            rotate: -4deg;
+        }
+    }
+
+    @keyframes moves-badge-pop {
+        from {
+            transform: translate(-50%, 0) scale(0);
+        }
+        to {
+            transform: translate(-50%, 0) scale(1);
+        }
+    }
+
+    .gamesContainer.launching .movesBadge {
+        opacity: 0;
     }
 </style>

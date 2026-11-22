@@ -3,7 +3,8 @@ import {dirname, join} from 'path';
 import {CONF_PACK_FILENAME, confPackVersion, getMissingConfPackFiles} from '@/class/ConfPack';
 import {getFavoritesCachePath} from '@/class/FavoritesStore';
 import {ensureFirstDirectory, getMameLocations} from '@/class/MameLocations';
-import {importRepositoryPack, type PackGameStore, type PackImportTargets} from '@/class/PackImport';
+import {describePack, importRepositoryPack, type PackGameStore, type PackImportTargets} from '@/class/PackImport';
+import {missingPackPlugins} from '@/class/PackPlugins';
 import type {RepositoryAccess} from '@/class/RepositoryAuth';
 
 /**
@@ -14,7 +15,8 @@ import type {RepositoryAccess} from '@/class/RepositoryAuth';
  * reaches every cabinet as soon as it is published, with the mhiex extractor that needs it.
  *
  * Light on purpose: lives outside boServer.ts (the BO's chunk is only loaded on demand), and only
- * writes what a pack without games holds, folders/ in categorypath and hiscore.dat in the mame home.
+ * writes what a pack without games holds, folders/ in categorypath, hiscore.dat in the mame home
+ * and the MAME plugins MAUI runs in its maui-plugins/ (PackPlugins.ts).
  */
 
 /** Where the version installed last is kept, beside the favorites cache (the BO reads it too). */
@@ -103,9 +105,11 @@ export async function updateConfPack(deps: ConfPackUpdateDeps): Promise<ConfPack
         }
         const companion = await fetchCompanion(repository.url, repository.headers, fetchImpl);
         const version = confPackVersion(companion);
-        // hiscore.dat too: a mame home replaced by another one keeps conf-pack.json's version.
+        // hiscore.dat too: a mame home replaced by another one keeps conf-pack.json's version. And
+        // its plugins: a MAUI older than PackPlugins.ts installed the same version without them.
         const filesInPlace = !getMissingConfPackFiles(getMameLocations(deps.mameHome)).length
-            && existsSync(join(deps.mameHome, 'hiscore.dat'));
+            && existsSync(join(deps.mameHome, 'hiscore.dat'))
+            && !missingPackPlugins(deps.mameHome, describePack(companion)?.files.map(file => file.name) ?? []).length;
         if (version && version === readInstalledConfPackVersion(installedPath) && filesInPlace) {
             return {kind: 'up_to_date', version};
         }

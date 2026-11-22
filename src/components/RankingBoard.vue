@@ -31,7 +31,7 @@ import {BOARD_PLAYERS, boardTimeline, fetchRankingAvatar, rankingAvatarUrl} from
 
 // The global podium of MAUI-API (RankingBoard.ts), under its title where the game's was (Home.vue,
 // which also sends it away at the first key): the first players come in from the right, the next
-// ones scroll up, then the board says its cycle ended.
+// ones scroll up, and the cycle starts again, until a key (or the cabinet turning idle) sends it away.
 const emit = defineEmits<{close: []}>();
 
 const state = ref<'loading' | 'ready' | 'unavailable'>('loading');
@@ -61,7 +61,10 @@ function play() {
     for (const step of boardTimeline(lines.value.length)) {
         timers.push(window.setTimeout(() => {
             if (step.kind === 'end') {
-                close();
+                // Not closed: the players come in again from the right.
+                timers.length = 0;
+                shown.value = [];
+                play();
             } else if (step.kind === 'enter') {
                 shown.value = [...shown.value, lines.value[step.index]];
             } else {
