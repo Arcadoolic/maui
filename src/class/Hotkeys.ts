@@ -19,7 +19,7 @@ import {MAUI_KEYS, LONG_PRESS_MS} from './MauiControls';
  * act at once. Electron-free, so it stays unit-testable.
  */
 
-export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'ranking', 'quit', 'shutdown', 'vote', 'star'] as const;
+export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'ranking', 'quit', 'shutdown', 'vote', 'star', 'diagnostic'] as const;
 export type ActionId = typeof ACTION_IDS[number];
 // What a hotkey triggers: one of the actions.
 export type HotkeyAction = ActionId;
@@ -40,6 +40,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
     shutdown: 'Shut the cabinet down (dedicated cabinet only)',
     vote: 'Vote on the selected game',
     star: 'Add the selected game to "My favourites", or take it out',
+    diagnostic: 'Send a diagnostic of the selected game to MAUI-API, as the BO\'s "Report a missing score" does (ONLINE only)',
 };
 
 // What the front shows while an action is held (a loader filling up until it goes off).
@@ -52,6 +53,7 @@ export const HOTKEY_HOLD_TITLES: Record<ActionId, string> = {
     shutdown: 'Shut down ?',
     vote: 'Vote ?',
     star: 'My favourites ?',
+    diagnostic: 'Send a diagnostic ?',
 };
 
 export interface ActionSetting {
@@ -96,6 +98,8 @@ export function defaultActions(): ActionSettings {
         shutdown: {inputs: ['key|KeyO'], holdMs: LONG_PRESS_MS.shutdown},
         vote: {inputs: ['key|KeyV'], holdMs: 0},
         star: {inputs: ['key|KeyF'], holdMs: 0},
+        // No control by default: each cabinet gives it one in the BO.
+        diagnostic: {inputs: [], holdMs: 0},
     };
 }
 

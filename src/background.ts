@@ -6,7 +6,7 @@ import BrowserWindowConstructorOptions = Electron.BrowserWindowConstructorOption
 import {join} from 'path';
 import {writeFileSync} from 'fs';
 import {homedir} from 'os';
-import {getMameHomePath, isDefaultPasswordReplaced, startCore, type StartedCore} from '@/boCore';
+import {getMameHomePath, getRunningVersion, isDefaultPasswordReplaced, startCore, type StartedCore} from '@/boCore';
 import {BO_URL_GLOBAL, type BoUrlReader} from '@/class/BoWakeBridge';
 import {BO_SERVER_PORT} from '@/boServerPort';
 import type {OnlineSession} from '@/class/OnlineSession';
@@ -40,6 +40,11 @@ import {getAppIconPath} from '@/staticPath';
 import {totalmem} from 'os';
 import {canRestartKiosk, isKioskLayout, powerOff, restartKiosk} from '@/class/KioskRestart';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
+import {DIAGNOSTIC_GLOBAL, type DiagnosticRequest} from '@/class/DiagnosticBridge';
+import {buildGameDiagnostic, sendDiagnostic} from '@/class/GameDiagnostic';
+import {createOnlineClient} from '@/class/OnlineClient';
+import {readMameVersion, UNKNOWN_MAME_VERSION} from '@/class/MameVersion';
+import {getLogDirectory} from '@/class/MainLog';
 import {chooseRelaunch, relaunchOptions, type RelaunchMode} from '@/class/AppRelaunch';
 import {applyDisplayMode} from '@/class/DisplayMode';
 import {applyVideoOutput, currentScreenOutput, listScreenOutputs} from '@/class/VideoOutput';
@@ -110,6 +115,40 @@ const requestShutdown: ShutdownRequest = async () => (isKioskLayout(app.isPackag
     ? powerOff()
     : 'Shutting down is for a dedicated cabinet only: nothing was done.');
 (global as Record<string, unknown>)[SHUTDOWN_GLOBAL] = requestShutdown;
+
+// The front's Diagnostic action (Home.vue): the selected game's files and MAUI's logs sent to
+// MAUI-API, as the BO's "Report a missing score" does (GameDiagnostic.ts). ONLINE only: a cabinet
+// that is not sends its zip from the BO.
+const requestDiagnostic: DiagnosticRequest = async (romName) => {
+    try {
+        if (!/^[a-z0-9_]+$/.test(romName)) {
+            return {sent: false, reason: 'Unknown game.'};
+        }
+        const client = await createOnlineClient();
+        if (!client) {
+            return {sent: false, reason: 'This cabinet is not ONLINE: send the diagnostic from the BO\'s page of the game.'};
+        }
+        const config = readSettings();
+        const mameBinary = config.mamePath && config.mameBinaryName ? join(config.mamePath, config.mameBinaryName) : '';
+        const {bundle} = await buildGameDiagnostic({
+            mameHome: getMameHomePath(), romName, comment: 'Sent from the cabinet\'s front (Diagnostic action).',
+            logDir: getLogDirectory(),
+            versions: {
+                maui: getRunningVersion(),
+                mhiex: typeof MHIEX_VERSION === 'string' ? MHIEX_VERSION : 'unknown',
+                mame: () => mameBinary ? readMameVersion(mameBinary) : Promise.resolve(UNKNOWN_MAME_VERSION),
+            },
+        });
+        const sent = await sendDiagnostic(client, bundle, true);
+        console.log(`[diagnostic] ${romName} from the front: ${sent.kind === 'sent' ? `sent (${sent.id})` : sent.kind === 'failed' ? sent.reason : 'not ONLINE'}`);
+        return sent.kind === 'sent' ? {sent: true, id: sent.id}
+            : {sent: false, reason: sent.kind === 'failed' ? sent.reason : 'This cabinet is not ONLINE.'};
+    } catch (error) {
+        console.error('[diagnostic] ' + romName + ' from the front failed:', error);
+        return {sent: false, reason: error instanceof Error ? error.message : String(error)};
+    }
+};
+(global as Record<string, unknown>)[DIAGNOSTIC_GLOBAL] = requestDiagnostic;
 
 // Read by the idle band (Home.vue) through @electron/remote: the newer version on the BO's channel.
 const readAvailableUpdate: UpdateNoticeReader = () => fakeUpdate ?? core?.updates.available(readSettings().updateChannel) ?? null;
