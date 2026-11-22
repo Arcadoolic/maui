@@ -131,6 +131,36 @@ function getCategoryClasses(index: number) {
         transform: translate3d(0, 0, 0) scale(1.2);
     }
 
+    /* The selected category floats, gently up and down. On `translate`/`rotate`, which add to the
+       wheel's `transform` instead of replacing it: a move of the wheel still slides. Not while the
+       wheel turns away for the global podium, nor in Lite mode (no endless animation, App.vue). */
+    .categories .category.selected {
+        animation: category-float 3.2s ease-in-out infinite;
+    }
+    .categories.away .category.selected, .categories.returning .category.selected {
+        animation: none;
+    }
+    :global(html.lite) .categories .category.selected {
+        animation: none;
+    }
+
+    @keyframes category-float {
+        0%, 100% {
+            translate: 0 0;
+            rotate: 0deg;
+        }
+        25% {
+            rotate: -2deg;
+        }
+        50% {
+            translate: 0 -7%;
+            rotate: 0deg;
+        }
+        75% {
+            rotate: 2deg;
+        }
+    }
+
     .categories .category.previous {
         display: block;
         transform: translate3d(-50%, 100%, 0) scale(0.7);

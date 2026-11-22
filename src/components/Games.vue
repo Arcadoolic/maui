@@ -21,7 +21,7 @@
                                 <img class="logoOverlay" :src="getLogo(game.romName)" loading="lazy" decoding="async" alt="">
                             </div>
                         </div>
-                        <Champions v-if='game.hi' :game='game'></Champions>
+                        <Champions v-if='game.hi' :game='game' :selected='selectedGameIndex === index'></Champions>
                     </div>
                 </li>
             </ul>
