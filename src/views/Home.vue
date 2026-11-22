@@ -252,8 +252,8 @@ const setupProgress = useSetupProgress();
 
 // The stage the list of games leaves the screen for (`leaving`: the marquees to the left, the
 // flyer to the right, the title up, the category wheel turning as its categories go one after the
-// other, the category's name down): the global podium (RankingBoard.vue, MAUI-API's) until its
-// cycle ends or a key is pressed, or the champions of the day (ChampionsScreen.vue) while the
+// other, the category's name down): the global podium (RankingBoard.vue, MAUI-API's), its cycle
+// played again and again until a key is pressed or the cabinet turns idle, or the champions of the day (ChampionsScreen.vue) while the
 // cabinet is idle. Its title takes the game's (`board`), then everything comes back the other way
 // round (`returning`).
 type PodiumStage = 'off' | 'leaving' | 'board' | 'returning';
@@ -289,6 +289,12 @@ const screenOff = getConfiguration().frontSleepScreenOff && canSwitchScreenOff(r
 const idleWatch = new IdleWatch(idleDelayMs, (isIdle) => {
     idle.value = isIdle;
     if (isIdle) {
+        // The global podium stays until a key, but nobody pressed one for a while: the idle
+        // screen takes its place, at once (it opens on the same stage).
+        if (showRanking.value) {
+            clearTimeout(timeouts.podium);
+            podiumStage.value = 'off';
+        }
         void startIdleScreen();
     } else if (stageScreen.value === 'champions') {
         // The key that wakes the cabinet brings the list of games back.
@@ -785,7 +791,7 @@ function unlockFront() {
 function syncIdleBlock() {
     stopRoll();
     idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
-        || !!updateOffer.value || !!updating.value || !!showRanking.value || noGames.value);
+        || !!updateOffer.value || !!updating.value || noGames.value);
 }
 
 function startGame() {
