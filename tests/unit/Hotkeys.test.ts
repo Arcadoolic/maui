@@ -248,4 +248,12 @@ describe('parseActions', () => {
     it('gives MAUI\'s defaults to a file without actions nor hotkeys', () => {
         expect(parseActions({}, isKey)).toEqual(defaultActions());
     });
+
+    it('leaves the diagnostic without a control until the BO gives it one', () => {
+        expect(defaultActions().diagnostic).toEqual({inputs: [], holdMs: 0});
+        expect(compileHotkeys(defaultActions()).some(hotkey => hotkey.action === 'diagnostic')).toBe(false);
+        const actions: ActionSettings = {...defaultActions(), diagnostic: {inputs: ['key|KeyD'], holdMs: 2000}};
+        expect(compileHotkeys(actions).filter(hotkey => hotkey.action === 'diagnostic'))
+            .toEqual([{action: 'diagnostic', keys: ['key|KeyD'], holdMs: 2000}]);
+    });
 });

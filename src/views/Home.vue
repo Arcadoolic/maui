@@ -133,6 +133,7 @@ import {
     type PendingAttribution, type PlayEndNotifier, type PlayNotifier, type ScoreAttributor,
 } from '@/class/ScoreCaptureBridge';
 import {SHUTDOWN_GLOBAL, type ShutdownRequest} from '@/class/KioskPowerBridge';
+import {DIAGNOSTIC_GLOBAL, type DiagnosticRequest} from '@/class/DiagnosticBridge';
 import {SHOW_GAME_CHANNEL} from '@/class/FrontShowGameBridge';
 import {FAVORITES_CHANGED_CHANNEL} from '@/class/FrontFavoritesBridge';
 import {useMediaChanges} from '@/composables/useMediaChanges';
@@ -1266,6 +1267,9 @@ function runHotkey(action: HotkeyAction) {
     case 'star':
         void toggleStar();
         break;
+    case 'diagnostic':
+        void sendDiagnostic();
+        break;
     }
 }
 
@@ -1276,6 +1280,27 @@ function showNotice(text: string, hideAfterMs?: number) {
         timeouts.hideNotice = window.setTimeout(() => {
             notice.value = '';
         }, hideAfterMs);
+    }
+}
+
+let diagnosticSending = false;
+
+/** The selected game's diagnostic, sent to MAUI-API by the main process (DiagnosticBridge.ts). */
+async function sendDiagnostic() {
+    const game = selectedGame.value;
+    if (!game || diagnosticSending) {
+        return;
+    }
+    diagnosticSending = true;
+    showNotice(`Sending a diagnostic of ${game.shortname || game.romName}…`);
+    try {
+        const request = remote.getGlobal(DIAGNOSTIC_GLOBAL) as DiagnosticRequest | undefined;
+        const result = request ? await request(game.romName) : {sent: false as const, reason: 'Diagnostics are not available.'};
+        showNotice(result.sent ? `Diagnostic sent (${result.id})` : result.reason, NOTICE_SHOWN_MS);
+    } catch (err) {
+        showNotice(err instanceof Error ? err.message : String(err), NOTICE_SHOWN_MS);
+    } finally {
+        diagnosticSending = false;
     }
 }
 

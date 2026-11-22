@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: a magnifying glass over a game's file -->
+<rect x="12" y="8" width="30" height="38" rx="3" fill="none" stroke="#FFFFFF" stroke-width="5"/>
+<circle cx="38" cy="38" r="11" fill="#2a2a2a" stroke="#E73246" stroke-width="5"/>
+<path d="M46 46 L56 56" stroke="#E73246" stroke-width="7" stroke-linecap="round"/>
+</svg>
