@@ -6,6 +6,7 @@ import {crc32, createInflateRaw, inflateRawSync} from 'zlib';
 import type {StartingPackFileEntry, StartingPackGameEntry, StartingPackManifest} from '@/types/StartingPackManifest';
 import {getRequiredRoms} from '@/class/PackOwnership';
 import type {RomVerdict} from '@/class/MameVerifyRoms';
+import {PACK_PLUGINS_FOLDER, packPluginsDir, registerPackPlugins} from '@/class/PackPlugins';
 
 /**
  * Import of a pack of the repository. The pack's companion manifest says where each of its files
@@ -32,6 +33,8 @@ const IMPORTABLE_MAME_DIRECTORIES: ReadonlyArray<readonly [string, string]> = [
     ['folders', 'categorypath'],
     // Sample sets of the pack games (manifest sampleSet), one zip per set, narrowed with `only`.
     ['samples', 'samplepath'],
+    // MAME plugins MAUI runs (PackPlugins.ts): not a mame folder, the mame home's maui-plugins/.
+    [PACK_PLUGINS_FOLDER, ''],
 ];
 
 // Loose files at the root of the ZIP, installed in the mame home: mame runs from there, and its
@@ -856,7 +859,7 @@ export async function importRepositoryPack(options: PackImportOptions): Promise<
             if (!hasFolder(folder)) {
                 continue;
             }
-            const root = targets.directoryFor(iniKey);
+            const root = folder === PACK_PLUGINS_FOLDER ? packPluginsDir(targets.iniPath) : targets.directoryFor(iniKey);
             if (!root) {
                 summary.warnings.push(`${folder}/: "${iniKey}" not found in the mame configuration, skipped.`);
                 continue;
@@ -912,6 +915,12 @@ export async function importRepositoryPack(options: PackImportOptions): Promise<
             const filesWritten = written(directory.names, name => name);
             summary.directoriesImported.push({zipFolder: directory.folder, filesWritten});
             reporter.line(`  ${directory.folder}/: ${filesWritten} file(s) copied to ${directory.root}.`);
+            if (directory.folder === PACK_PLUGINS_FOLDER && filesWritten) {
+                const added = registerPackPlugins(targets.iniPath);
+                if (added) {
+                    reporter.line(`  ${added} plugin(s) switched on in plugin.ini.`);
+                }
+            }
         }
         for (const name of rootFiles) {
             if (written([name], () => name)) {

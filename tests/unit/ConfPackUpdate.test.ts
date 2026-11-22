@@ -8,8 +8,13 @@ import {readInstalledConfPackVersion, updateConfPack} from '@/class/ConfPackUpda
 import type {RepositoryAccess} from '@/class/RepositoryAuth';
 
 /** The configuration pack and the companion the repository writes for it (generate-repo-manifests.py). */
-function buildConfPack(hiscoreDat: string, mtime = 1790575353) {
+function buildConfPack(hiscoreDat: string, mtime = 1790575353, plugins = false) {
     const zip = new AdmZip();
+    if (plugins) {
+        zip.addFile('plugins/movelist/plugin.json', Buffer.from('{"plugin":{"name":"movelist","type":"plugin","start":"false"}}'));
+        zip.addFile('plugins/movelist/init.lua', Buffer.from('return {}\n'));
+        zip.addFile('plugins/movelist/games/sf2ce.json', Buffer.from('{}'));
+    }
     zip.addFile('folders/catver.ini', Buffer.from('[Category]\npacman=Maze / Collect\n'));
     zip.addFile('folders/genre.ini', Buffer.from('[Maze]\npacman\n'));
     zip.addFile('folders/Multiplayer.ini', Buffer.from('[2P alt]\npacman\n'));
@@ -102,6 +107,23 @@ describe('updateConfPack', () => {
         rmSync(join(home, 'hiscore.dat'));
         expect((await run(pack)).kind).toBe('installed');
         expect(existsSync(join(home, 'hiscore.dat'))).toBe(true);
+    });
+
+    it('installs the plugins of the pack and switches them on', async () => {
+        const result = await run(buildConfPack('kod:\n', 1790575353, true));
+        expect(result.kind).toBe('installed');
+        expect(existsSync(join(home, 'maui-plugins', 'movelist', 'games', 'sf2ce.json'))).toBe(true);
+        expect(readFileSync(join(home, 'plugin.ini'), 'utf8')).toMatch(/^movelist\s+1$/m);
+    });
+
+    it('installs the same version again when its plugins are not there', async () => {
+        // As a MAUI without the plugins left it: same version, files in place, no maui-plugins/.
+        const pack = buildConfPack('kod:\n', 1790575353, true);
+        await run(pack);
+        rmSync(join(home, 'maui-plugins'), {recursive: true});
+        expect((await run(pack)).kind).toBe('installed');
+        expect(existsSync(join(home, 'maui-plugins', 'movelist', 'init.lua'))).toBe(true);
+        expect((await run(pack)).kind).toBe('up_to_date');
     });
 
     it('does nothing before MAME is configured', async () => {

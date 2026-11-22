@@ -54,7 +54,8 @@ import {
     computeBiosSizes, computePackOwnership, groupSelectedGames, isPackFullyOwned, listPackGames, PackGameDetail,
     manifestEntrySizes, PackOwnership,
 } from '@/class/PackOwnership';
-import {humanSize, importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
+import {describePack, humanSize, importRepositoryPack, PackGameStore, PackImportTargets} from '@/class/PackImport';
+import {missingPackPlugins} from '@/class/PackPlugins';
 import {verifyRoms} from '@/class/MameVerifyRoms';
 import {currentScreenOutput, listScreenOutputs, parseVideoOutputSetting, type ScreenOutputInfo} from '@/class/VideoOutput';
 import {
@@ -1300,9 +1301,14 @@ function getPackImportTargets(config: Config): PackImportTargets {
 async function runConfPackImport(
     res: Response, config: Config, repository: Extract<RepositoryAccess, {ok: true}>, onlyWhenChanged = false,
 ): Promise<boolean> {
-    const version = confPackVersion(await fetchRepoManifest(repository.url, CONF_PACK_FILENAME, repository.headers));
+    const companion = await fetchRepoManifest(repository.url, CONF_PACK_FILENAME, repository.headers);
+    const version = confPackVersion(companion);
+    const pluginsInPlace = (): boolean => !missingPackPlugins(
+        getMameHomePath(), describePack(companion)?.files.map(file => file.name) ?? [],
+    ).length;
     const installed = (): boolean => !getMissingConfPackFiles(getMameInfo(config)).length;
-    if (onlyWhenChanged && version && version === readInstalledConfPackVersion() && installed()) {
+    // Its plugins too, but only to decide: a game pack import does not wait for the move list.
+    if (onlyWhenChanged && version && version === readInstalledConfPackVersion() && installed() && pluginsInPlace()) {
         return true;
     }
     const ok = await runRepositoryImport(

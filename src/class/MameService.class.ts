@@ -7,6 +7,7 @@ import {parseMameIni, parseFavorites} from '@/class/MameIniParser';
 import {execFileSync, ChildProcess, execFile} from 'child_process';
 import {captureLaunchArgs, getRendererPublicPath, prepareCaptureDir} from '@/class/CaptureDaemon';
 import {FAIR_PLAY_ARGS} from '@/class/FairPlay';
+import {packPluginsArgs} from '@/class/PackPlugins';
 import {gameVolumeArgs} from '@/class/Volume';
 import {gameSoundDevice, listAudioDevices, soundServerRunning, waitForPlaybackClosed} from '@/class/AudioOutput';
 import {applyGameSoundOutput, resetBrokenGameSoundMaps, speakerTagsFromListXml} from '@/class/MameSoundMap';
@@ -275,7 +276,7 @@ export default class MameService {
             // while it's being played (see CaptureDaemon.ts), and which reports on the game for its
             // scores (ScoreCapture.ts): `capture` prepared beforehand to say where.
             this.gameProcess = execFile(this.mameBinary, [
-                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS, ...soundArgs, ...this.readGameVolumeArgs(),
+                '-skip_gameinfo', romName, ...FAIR_PLAY_ARGS, ...packPluginsArgs(this.iniPath), ...soundArgs, ...this.readGameVolumeArgs(),
                 ...(capture ? captureLaunchArgs(capture.scriptPath) : []), ...this.mameHomeArgs,
             ], {
                 killSignal: 'SIGQUIT',
