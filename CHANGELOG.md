@@ -1,3 +1,15 @@
+## [2.22.0](https://github.com/Arcadoolic/maui/compare/2.21.0...2.22.0) (2026-11-22)
+
+### Features
+
+* **controls:** a Diagnostic action, the selected game's diagnostic sent to MAUI-API ([baa6edd](https://github.com/Arcadoolic/maui/commit/baa6eddc763fadb1c2f7298d4c8b509ff2c15785))
+* **front:** a gamepad on the games whose moves are shown during the game ([31e89b4](https://github.com/Arcadoolic/maui/commit/31e89b40048bf93dea1b573aae80767e476b89cb))
+* **front:** a livelier list of games ([e312d65](https://github.com/Arcadoolic/maui/commit/e312d65a8161d650a7db5e6fcade2b85647f400b))
+* **front:** the game's podium for the podium plugin ([f131235](https://github.com/Arcadoolic/maui/commit/f13123543ce9e446ddcd8fff506baed8b70c6de8))
+* **front:** the global podium stays until a key ([2c36243](https://github.com/Arcadoolic/maui/commit/2c3624347084f91acf6d19d45eee97de644a28ba))
+* **hiscores:** Magical Drop II and III scores (mhiex 2.4.0) ([5092b2e](https://github.com/Arcadoolic/maui/commit/5092b2e14eea051e799515596ddfaccf4de1d40a))
+* install and run the MAME plugins of the configuration pack ([5019651](https://github.com/Arcadoolic/maui/commit/5019651a24adbae04972d5dc534b218af78faed7))
+
 ## [2.21.0](https://github.com/Arcadoolic/maui/compare/2.20.1...2.21.0) (2026-11-12)
 
 ### Features
