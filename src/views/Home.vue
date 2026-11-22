@@ -1858,8 +1858,21 @@ if (!getIsInit()) {
         transition: opacity 0.3s ease-in;
     }
 
+    /* The flyer turns away around its top left corner, its foot going up to the right until it is
+       off the screen; the next one comes back the same way and settles with a little bounce. On
+       `rotate`, which adds to the container's `transform` (podium, launch), and around that corner
+       only while it turns; the curves of the shared transitions are set here for the flyer. */
+    .flyer-enter-active, .flyer-leave-active {
+        transform-origin: 0 0;
+    }
+    .flyer-container.flyer-leave-active {
+        transition: rotate 0.3s cubic-bezier(0.5, 0, 0.75, 0);
+    }
+    .flyer-container.flyer-enter-active {
+        transition: rotate 0.4s cubic-bezier(0.34, 1.4, 0.64, 1);
+    }
     .flyer-enter-from, .flyer-leave-to {
-        margin-right: -100%;
+        rotate: -90deg;
     }
 
     .games-enter-from, .games-leave-to {
