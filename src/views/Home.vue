@@ -56,7 +56,7 @@
 
         <transition name="games">
             <Games v-if="!noGames" :games="games" :selectedGameIndex="selectedGameIndex" v-show="showGames"
-                   :launching="launching" :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
+                   :moveListGames="moveListGames" :launching="launching" :mouse="mouseNav" @pick="onGamePick" @wheel="onGamesWheel"></Games>
         </transition>
 
         <transition name="alpha-jump">
@@ -75,7 +75,7 @@
             </div>
         </transition>
 
-        <LaunchStage v-if="launching && selectedGame" :game="selectedGame"></LaunchStage>
+        <LaunchStage v-if="launching && selectedGame" :game="selectedGame" :moves="moveListGames.has(selectedGame.romName)"></LaunchStage>
 
         <Categories v-if="hasCategories" :categories="categories" :selectedCategoryIndex="selectedCategoryIndex"
                     :mouse="mouseNav" :away="podiumAway" :returning="podiumStage === 'returning'"
@@ -101,6 +101,7 @@ import Gamepads from '@/class/Gamepads.class';
 import GameService, {GAMES_BY_TITLE} from '@/class/GameService.class';
 import Hiscores from '@/components/Hiscores.vue';
 import LaunchStage from '@/components/LaunchStage.vue';
+import {loadMoveListGames} from '@/class/MoveListGames';
 import {useControllable} from '@/composables/useControllable';
 import {useBoUrl} from '@/composables/useBoUrl';
 import {useSetupProgress} from '@/composables/useSetupProgress';
@@ -215,6 +216,8 @@ const selectedLetter = computed(() => selectedGame.value ? getLetter(selectedGam
 const showGames = ref(true);
 const showTitle = ref(true);
 const showFlyer = ref(true);
+// The games the movelist plugin knows (MoveListGames.ts), read once the services are up.
+const moveListGames = ref<Set<string>>(new Set());
 const showLoader = ref(false);
 // The game picked is starting (startGame()): the other marquees leave, the picked one and its flyer
 // grow, and LaunchStage.vue tells the podium, until MAME takes the screen (endLaunchStageBehindMame()).
@@ -1509,6 +1512,8 @@ if (!getIsInit()) {
     gameService = getGameService();
 
     onMounted(async () => {
+        // The games whose moves the movelist plugin shows (MoveListGames.ts): their badge.
+        moveListGames.value = loadMoveListGames(getMameService().iniPath);
         await loadCategories();
         games.value = await loadCategoryGames(0);
         gamesLoaded.value = true;

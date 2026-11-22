@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Drawn for MAUI in the Kenney Input Prompts style: a gamepad (the game's moves are shown during it) -->
+<path d="M16 18 H48 C56 18 61 25 62 36 C63 46 59 52 53 52 C48 52 46 46 42 43 H22 C18 46 16 52 11 52 C5 52 1 46 2 36 C3 25 8 18 16 18 Z" fill="#FFFFFF"/>
+<path d="M14 29 h6 v-6 h4 v6 h6 v4 h-6 v6 h-4 v-6 h-6 Z" fill="#1d1d2b"/>
+<circle cx="44" cy="28" r="3.5" fill="#E73246"/>
+<circle cx="51" cy="35" r="3.5" fill="#E73246"/>
+</svg>

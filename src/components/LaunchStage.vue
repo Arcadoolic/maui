@@ -13,6 +13,7 @@
                 <p v-else class="goal">A place on the podium is free</p>
             </template>
             <p v-else class="getReady">Get ready</p>
+            <p v-if="moves" class="moves"><img src="../assets/input-icons/movelist.svg" alt="">Special moves shown during the game</p>
         </template>
     </div>
 </template>
@@ -27,7 +28,8 @@ import Log from 'electron-log';
 // Shown while the game picked is starting (Home.vue's startGame()), until MAME takes the screen.
 // Who is about to play is not known yet (asked after the game), so the stage tells everyone what
 // the podium asks: the record, and the score to beat to get on it while it is full.
-const props = defineProps<{game: Game}>();
+// moves: the movelist plugin shows this game's special moves (MoveListGames.ts).
+const props = defineProps<{game: Game; moves?: boolean}>();
 
 // The best 3 players, best first (LeaderboardSource.ts).
 const champions = ref<BoardRow[]>([]);
@@ -174,5 +176,19 @@ onMounted(async () => {
         50% {
             opacity: 0;
         }
+    }
+
+    /* The movelist plugin shows this game's special moves (MoveListGames.ts). */
+    .moves {
+        font-size: 1.2vw;
+        color: #8fe3ff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5vw;
+    }
+
+    .moves img {
+        height: 1.8vw;
     }
 </style>
