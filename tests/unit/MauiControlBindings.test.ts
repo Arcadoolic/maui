@@ -133,8 +133,8 @@ describe('actions in maui-controls.json', () => {
     });
 
     it('gives the keyboard defaults to the hotkeys of version 1 set through a MAUI key', () => {
-        const actions = parseMauiBindings(JSON.stringify({hotkeys: [{action: 'quit', keys: ['maui|Space'], holdMs: 3000}]})).actions;
-        expect(actions.quit).toEqual({inputs: ['key|Escape'], holdMs: 3000});
+        const actions = parseMauiBindings(JSON.stringify({hotkeys: [{action: 'menu', keys: ['maui|Space'], holdMs: 3000}]})).actions;
+        expect(actions.menu).toEqual({inputs: ['key|Escape'], holdMs: 0});
         expect(parseMauiBindings(JSON.stringify({hotkeys: []})).actions).toEqual(defaultActions());
     });
 
@@ -147,8 +147,8 @@ describe('actions in maui-controls.json', () => {
 
     it('lists the single inputs the front must hear', () => {
         const bindings = defaultMauiBindings();
-        bindings.actions.quit = {inputs: ['button|9|standard'], holdMs: 0, with: 'button|8|standard'};
-        expect([...hotkeyInputs(bindings)].sort()).toEqual(['button|8|standard', 'button|9|standard', 'key|KeyB', 'key|KeyF', 'key|KeyO', 'key|KeyV']);
+        bindings.actions.menu = {inputs: ['button|9|standard'], holdMs: 0, with: 'button|8|standard'};
+        expect([...hotkeyInputs(bindings)].sort()).toEqual(['button|8|standard', 'button|9|standard', 'key|KeyB', 'key|KeyF', 'key|KeyV']);
     });
 });
 
@@ -178,8 +178,8 @@ describe('findTriggerConflict', () => {
     it('refuses the same two keys in either order', () => {
         const bindings = defaultMauiBindings();
         bindings.actions.ranking = {inputs: ['key|Space'], holdMs: 2000, with: 'key|KeyP'};
-        bindings.actions.shutdown = {inputs: ['key|KeyP'], holdMs: 1000, with: 'key|Space'};
-        expect(findTriggerConflict(bindings, 'shutdown')).toEqual({action: 'shutdown', other: 'ranking'});
+        bindings.actions.menu = {inputs: ['key|KeyP'], holdMs: 1000, with: 'key|Space'};
+        expect(findTriggerConflict(bindings, 'menu')).toEqual({action: 'menu', other: 'ranking'});
     });
 
     it('refuses a second key among the controls, and the directions\' controls', () => {

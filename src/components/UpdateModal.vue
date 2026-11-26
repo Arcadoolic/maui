@@ -31,15 +31,14 @@ import Modal from '@/components/Modal.vue';
 import ControlIcon from '@/components/ControlIcon.vue';
 import {getConfiguration} from '@/services';
 
-// Asked when the cabinet wakes up from idle, or once the start of MAUI found a version (Home.vue,
+// Asked once the start of MAUI found a version, or from the system menu (Home.vue,
 // FrontUpdate.ts): yes installs the version and restarts MAUI on it, no keeps this one. Laid out
 // like the vote (VoteModal.vue).
 
 defineProps<{version: string}>();
 const emit = defineEmits<{answer: [install: boolean], expire: []}>();
 
-// Nobody answered: `expire`, which Home.vue takes as a no after a wake (whoever woke the cabinet
-// walked away), and not at the start, when nobody may be in front of it.
+// Nobody answered: `expire`, which only closes the question - nobody may be in front of the cabinet.
 const AUTO_NO_MS = 20000;
 
 // Material "thumb_up" icon (the "no" one is the same path flipped), as in VoteModal.vue.
@@ -48,7 +47,7 @@ const THUMB_PATH = 'M1 21h4V9H1v12zm22-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0
 
 const ANSWERS = [false, true];
 
-// "No" first: the key that woke the cabinet, pressed twice, never starts an update.
+// "No" first: a key pressed twice never starts an update.
 const selected = ref(0);
 
 // Windowed mode, like the vote: pointing at a choice selects it, a click answers it.

@@ -83,9 +83,9 @@ export default class Config {
     // the other way round.
     public thumbsDownRemovesFavorite: boolean = true;
 
-    // Whether the front offers a newer version of MAUI when it wakes up from idle (Home.vue,
-    // FrontUpdate.ts): a player installs it with a thumbs up, without the BO. Off, only the BO's
-    // Update card installs one.
+    // Whether the front offers a newer version of MAUI, at its start and from the system menu
+    // (Home.vue, FrontUpdate.ts): a player installs it with a thumbs up, without the BO. Off, only
+    // the BO's Update card installs one.
     public frontUpdateEnabled: boolean = true;
 
     // Which versions are offered, on the front and in the idle band (ReleaseList.ts newestAbove()):
