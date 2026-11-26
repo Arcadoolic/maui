@@ -25,9 +25,6 @@ export const MAUI_KEYS = {
 export const LONG_PRESS_MS = {
     // Holding the new-player key this long opens the trigram entry screen, what Home.vue always did.
     newPlayer: 2000,
-    // Quitting MAUI (Escape) and shutting the cabinet down (O) never come from a key hit by mistake.
-    quit: 3000,
-    shutdown: 3000,
 } as const;
 
 /** Home.vue: holding up or down in the game list (see startHold()). */

@@ -377,12 +377,13 @@ app.on('ready', async () => {
         },
     });
     core = bo;
-    // The front's update of MAUI (FrontUpdate.ts): offered when it wakes up from idle (Home.vue),
+    // The front's update of MAUI (FrontUpdate.ts): offered at the start and by the system menu (Home.vue),
     // each step of the installation sent to the window.
     const frontUpdate = new FrontUpdate({
         settings: readSettings,
         capable: () => fakeUpdate !== undefined || isSelfUpdateCapable(),
         available: channel => fakeUpdate ?? bo.updates.available(channel),
+        refresh: async () => fakeUpdate !== undefined || bo.updates.check(),
         installAndRestart: async (version, progress) => {
             if (fakeUpdate) {
                 await simulateInstall(progress);
@@ -406,13 +407,10 @@ app.on('ready', async () => {
         },
     });
     (global as Record<string, unknown>)[FRONT_UPDATE_GLOBAL] = frontUpdate;
-    // A version to offer found by a check (the first one is 30 s after the start): the front offers
-    // it at once (Home.vue), each version once in a run, rather than at its next wake from idle.
-    let toldOffer: string | null = null;
-    bo.updates.onCheck(() => {
-        const version = frontUpdate.offer();
-        if (version && version !== toldOffer && win && !win.isDestroyed()) {
-            toldOffer = version;
+    // Offered once the first check is over, 30 s after the start, and never by the later ones.
+    bo.updates.onStartCheck(() => {
+        frontUpdate.startCheckDone();
+        if (win && !win.isDestroyed()) {
             win.webContents.send(UPDATE_AVAILABLE_CHANNEL);
         }
     });

@@ -30,7 +30,7 @@ describe('newestStableAbove', () => {
 });
 
 describe('UpdateWatch', () => {
-    it('tells after each check GitHub answered, not after a failed one', async () => {
+    it('tells once the first check of the run is over, not after the later ones', async () => {
         let fails = false;
         const watch = new UpdateWatch('2.14.0', async () => {
             if (fails) {
@@ -39,17 +39,18 @@ describe('UpdateWatch', () => {
             return [release('2.15.0')];
         });
         let told = 0;
-        watch.onCheck(() => {
+        watch.onStartCheck(() => {
             told++;
         });
 
-        await watch.check();
+        await watch.checkAtStart();
         expect(told).toBe(1);
         expect(watch.available()).toBe('2.15.0');
 
-        fails = true;
         await watch.check();
         expect(told).toBe(1);
+        fails = true;
+        await expect(watch.check()).resolves.toBe(false);
         expect(watch.available()).toBe('2.15.0');
     });
 
@@ -87,7 +88,7 @@ describe('UpdateWatch', () => {
         });
         await watch.check();
         fail = true;
-        await expect(watch.check()).resolves.toBeUndefined();
+        await expect(watch.check()).resolves.toBe(false);
         expect(watch.available()).toBe('2.15.0');
     });
 

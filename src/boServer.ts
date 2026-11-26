@@ -6710,7 +6710,7 @@ function renderMauiCard(config: Config, isAdvanced: boolean, info?: string): str
                 <fieldset class="settings-group">
                     <legend>Updates</legend>
                     ${renderSettingCheckbox('frontUpdateEnabled', config.frontUpdateEnabled, 'Offer newer versions on the cabinet',
-                        'When it wakes up from idle, the cabinet asks whether to install the newer version: a thumbs up downloads it and restarts MAUI on it. Unticked, only the Update card below installs one.')}
+                        'When MAUI starts, and from the system menu\'s check, the cabinet asks whether to install the newer version: a thumbs up downloads it and restarts MAUI on it. Unticked, only the Update card below installs one.')}
                     ${isAdvanced ? `
                         <label for="updateChannel">Versions offered <span class="checkbox-row-detail">On the cabinet and in its idle messages.</span></label>
                         <select id="updateChannel" name="updateChannel">
@@ -6808,8 +6808,7 @@ const MAUI_ACTIONS: readonly {key: string; label: string; icon: string; action?:
     {key: MAUI_KEYS.space, label: 'Scores / back', icon: 'scores', action: 'scores'},
     {key: MAUI_KEYS.p, label: 'New player', icon: 'new_player', action: 'newPlayer'},
     {key: 'ranking', label: 'Global podium', icon: 'podium', action: 'ranking'},
-    {key: 'quit', label: 'Quit MAUI', icon: 'exit', action: 'quit'},
-    {key: 'shutdown', label: 'Shut down', icon: 'quit', action: 'shutdown'},
+    {key: 'menu', label: 'System menu', icon: 'menu', action: 'menu'},
     {key: 'vote', label: 'Vote', icon: 'vote', action: 'vote'},
     {key: 'star', label: 'My favourites', icon: 'star', action: 'star'},
     {key: 'diagnostic', label: 'Diagnostic', icon: 'diagnostic', action: 'diagnostic'},
@@ -7019,7 +7018,7 @@ function renderMauiControlsCard(bindings: MauiBindings, state?: MauiControlsStat
                 <li>Directions, Confirm, Scores / back and New player: a key or a button does one
                 of them only, added to one it leaves the one it had. The other actions get their
                 own controls, which may be the same keys or buttons as long as the triggers differ:
-                Space pressed for Scores, Space held 3 s for Quit MAUI.</li>
+                Space pressed for Scores, Space held 3 s for the System menu.</li>
                 <li><strong>Trigger</strong> (all but the directions): pressed, held a while (a
                 loader shows after 1 s, then counts the time), or together with a second key, at
                 once or held. It counts on the list of games only: player creation and the vote
@@ -11047,7 +11046,7 @@ export function createBoApp(
         config.fullscreen = req.body.fullscreen === 'on';
         config.voteEnabled = req.body.voteEnabled === 'on';
         config.thumbsDownRemovesFavorite = req.body.thumbsDownRemovesFavorite === 'on';
-        // Read again by the main process each time the front wakes up (FrontUpdate.ts): no reload.
+        // Read again by the main process at each offer (FrontUpdate.ts): no reload.
         config.frontUpdateEnabled = req.body.frontUpdateEnabled === 'on';
         // Advanced configuration only, like the development builds it offers.
         if (req.session.boAdvanced === true) {

@@ -19,7 +19,7 @@ import {MAUI_KEYS, LONG_PRESS_MS} from './MauiControls';
  * act at once. Electron-free, so it stays unit-testable.
  */
 
-export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'ranking', 'quit', 'shutdown', 'vote', 'star', 'diagnostic'] as const;
+export const ACTION_IDS = ['confirm', 'scores', 'newPlayer', 'ranking', 'menu', 'vote', 'star', 'diagnostic'] as const;
 export type ActionId = typeof ACTION_IDS[number];
 // What a hotkey triggers: one of the actions.
 export type HotkeyAction = ActionId;
@@ -36,8 +36,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
     scores: 'Show / hide the game scores',
     newPlayer: 'Create a new player',
     ranking: 'Show the global podium of MAUI-API, as on the hiscores front (ONLINE only)',
-    quit: 'Quit MAUI',
-    shutdown: 'Shut the cabinet down (dedicated cabinet only)',
+    menu: 'Open the system menu: check for a MAUI update, restart or quit MAUI, shut a dedicated cabinet down',
     vote: 'Vote on the selected game',
     star: 'Add the selected game to "My favourites", or take it out',
     diagnostic: 'Send a diagnostic of the selected game to MAUI-API, as the BO\'s "Report a missing score" does (ONLINE only)',
@@ -49,8 +48,7 @@ export const HOTKEY_HOLD_TITLES: Record<ActionId, string> = {
     scores: 'Scores ?',
     newPlayer: 'Add new player ?',
     ranking: 'Global podium ?',
-    quit: 'Quit MAUI ?',
-    shutdown: 'Shut down ?',
+    menu: 'System menu ?',
     vote: 'Vote ?',
     star: 'My favourites ?',
     diagnostic: 'Send a diagnostic ?',
@@ -85,8 +83,7 @@ export const HOLD_DELAY_MS = 1000;
 
 /**
  * The BO's "back to MAUI's default": the MAUI keys' actions as they always were, the others on a
- * keyboard key of their own (held a while for those that end the session), until the BO gives them
- * their cabinet's buttons.
+ * keyboard key of their own, until the BO gives them their cabinet's buttons.
  */
 export function defaultActions(): ActionSettings {
     return {
@@ -94,8 +91,7 @@ export function defaultActions(): ActionSettings {
         scores: {inputs: [], holdMs: 0},
         newPlayer: {inputs: [], holdMs: LONG_PRESS_MS.newPlayer},
         ranking: {inputs: ['key|KeyB'], holdMs: 0},
-        quit: {inputs: ['key|Escape'], holdMs: LONG_PRESS_MS.quit},
-        shutdown: {inputs: ['key|KeyO'], holdMs: LONG_PRESS_MS.shutdown},
+        menu: {inputs: ['key|Escape'], holdMs: 0},
         vote: {inputs: ['key|KeyV'], holdMs: 0},
         star: {inputs: ['key|KeyF'], holdMs: 0},
         // No control by default: each cabinet gives it one in the BO.
@@ -154,6 +150,23 @@ export function parseActionSetting(action: ActionId, value: unknown, isKey: (key
     return setting;
 }
 
+// The actions the system menu replaced: their controls are the menu's on a cabinet set up before it.
+const REPLACED_BY_MENU: readonly unknown[] = ['shutdown', 'quit'];
+
+/**
+ * The menu's setting for a file without one: the former Shut down, else Quit, when the BO gave it
+ * one of the cabinet's controls (their keyboard defaults are not carried over).
+ */
+function menuFromReplaced(stored: Record<string, unknown>, isKey: (key: string) => boolean): ActionSetting | null {
+    for (const action of REPLACED_BY_MENU) {
+        const setting = parseActionSetting('menu', stored[action as string], isKey);
+        if (setting?.inputs.some(input => !input.startsWith('key|'))) {
+            return setting;
+        }
+    }
+    return null;
+}
+
 /**
  * The actions of maui-controls.json: `actions` (version 2), else the hotkeys list of version 1
  * (each action's first hotkey on single inputs), else MAUI's defaults. An action missing or
@@ -169,6 +182,9 @@ export function parseActions(file: Record<string, unknown>, isKey: (key: string)
                 actions[action] = setting;
             }
         }
+        if (stored.menu === undefined) {
+            actions.menu = menuFromReplaced(stored, isKey) ?? actions.menu;
+        }
         return actions;
     }
     if (!Array.isArray(file.hotkeys)) {
@@ -178,7 +194,8 @@ export function parseActions(file: Record<string, unknown>, isKey: (key: string)
     // (those set through a MAUI key are dropped: the BO sets them again on real controls).
     const seen = new Set<string>();
     for (const value of file.hotkeys as unknown[]) {
-        const {action, keys, holdMs} = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+        const {action: named, keys, holdMs} = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+        const action = REPLACED_BY_MENU.includes(named) ? 'menu' : named;
         const hold = parseHoldMs(holdMs);
         if (!ACTION_IDS.includes(action as ActionId) || KEYED_ACTIONS[action as ActionId] || seen.has(action as string)
             || hold === null || !Array.isArray(keys) || keys.length < 1 || keys.length > 2

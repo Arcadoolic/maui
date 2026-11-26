@@ -80,6 +80,7 @@ describe('FrontUpdate', () => {
             settings: () => ({frontUpdateEnabled: true, updateChannel: 'releases'}),
             capable: () => true,
             available: () => '2.18.0',
+            refresh: async () => true,
             installAndRestart: async (version, progress) => {
                 installed.push(version);
                 progress({step: 'extract', entries: 0, totalEntries: 0});
@@ -117,6 +118,30 @@ describe('FrontUpdate', () => {
         expect(update.offer()).toBeNull();
         available = '2.19.0';
         expect(update.offer()).toBe('2.19.0');
+    });
+
+    it('gives the offer of the start once, after the first check', () => {
+        const {update} = frontUpdate();
+        expect(update.takeStartOffer()).toBeNull();
+        update.startCheckDone();
+        expect(update.takeStartOffer()).toBe('2.18.0');
+        update.startCheckDone();
+        expect(update.takeStartOffer()).toBeNull();
+    });
+
+    it('offers a declined version again when asked to check, and installs it', async () => {
+        const {update} = frontUpdate();
+        update.decline('2.18.0');
+        expect(await update.check()).toEqual({status: 'offer', version: '2.18.0'});
+        expect(update.install('2.18.0')).toBe(true);
+    });
+
+    it('says why a check brings no offer', async () => {
+        expect(await frontUpdate({refresh: async () => false}).update.check()).toEqual({status: 'unreachable'});
+        expect(await frontUpdate({available: () => null}).update.check()).toEqual({status: 'up-to-date'});
+        expect(await frontUpdate({capable: () => false}).update.check()).toEqual({status: 'manual', version: '2.18.0'});
+        const switchedOff = frontUpdate({settings: () => ({frontUpdateEnabled: false, updateChannel: 'releases'})}).update;
+        expect(await switchedOff.check()).toEqual({status: 'bo-only', version: '2.18.0'});
     });
 
     it('installs only the version it offers, then tells the front it restarts', async () => {
@@ -188,9 +213,9 @@ describe('describeUpdateStep', () => {
 });
 
 describe('updateNoticeMessage on the front', () => {
-    it('tells to press a key when the front offers the version', () => {
+    it('points to the system menu when the front can install the version', () => {
         const text = parseMessage(updateNoticeMessage('2.18.0', true).text).map(segment => segment.text).join('');
-        expect(text).toBe('MAUI 2.18.0 is out: press to update');
+        expect(text).toBe('MAUI 2.18.0 is out: update from the menu');
         expect(text.length).toBeLessThanOrEqual(42);
     });
 });

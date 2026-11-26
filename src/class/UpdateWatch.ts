@@ -27,7 +27,7 @@ async function fetchReleases(): ReturnType<ReleasesFetcher> {
 export class UpdateWatch {
     private releases: WatchedRelease[] = [];
     private timers: ReturnType<typeof setTimeout>[] = [];
-    private readonly listeners: (() => void)[] = [];
+    private readonly startListeners: (() => void)[] = [];
 
     /**
      * `canInstall`: whether this machine can install a version from its files' names (a Windows
@@ -41,7 +41,7 @@ export class UpdateWatch {
 
     /** Not at once: the start of the application is not slowed down by it. */
     public start(): void {
-        const first = setTimeout(() => void this.check(), FIRST_CHECK_MS);
+        const first = setTimeout(() => void this.checkAtStart(), FIRST_CHECK_MS);
         const every = setInterval(() => void this.check(), CHECK_EVERY_MS);
         // Never what keeps the process alive.
         first.unref?.();
@@ -49,20 +49,26 @@ export class UpdateWatch {
         this.timers.push(first, every);
     }
 
-    /** Called after each check GitHub answered: the front's offer at the start (background.ts). */
-    public onCheck(listener: () => void): void {
-        this.listeners.push(listener);
+    /** Called once the first check of the run is over: the front's offer at the start (background.ts). */
+    public onStartCheck(listener: () => void): void {
+        this.startListeners.push(listener);
     }
 
-    /** A failure keeps what was known. Never throws. */
-    public async check(): Promise<void> {
+    /** The first check of the run, answered or not. */
+    public async checkAtStart(): Promise<void> {
+        await this.check();
+        this.startListeners.forEach(listener => listener());
+    }
+
+    /** Whether GitHub answered; a failure keeps what was known. Never throws. */
+    public async check(): Promise<boolean> {
         try {
             this.releases = await this.fetcher();
         } catch {
             // Out of reach for now: tried again at the next check.
-            return;
+            return false;
         }
-        this.listeners.forEach(listener => listener());
+        return true;
     }
 
     /**

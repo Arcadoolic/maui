@@ -4,12 +4,12 @@ import {
     type Hotkey, type KeyPress,
 } from '@/class/Hotkeys';
 
-// The hotkeys MAUI had before its actions (Scores held quits, both held show the BO): the engine
+// The hotkeys MAUI had before its actions (Scores held opens the menu, both held show the BO): the engine
 // still has to run any such set.
 const defaultHotkeys = (): Hotkey[] => [
     {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 2000},
     {action: 'ranking', keys: ['maui|Space', 'maui|KeyP'], holdMs: 2000},
-    {action: 'quit', keys: ['maui|Space'], holdMs: 3000},
+    {action: 'menu', keys: ['maui|Space'], holdMs: 3000},
 ];
 
 // Timers driven by hand: advance(ms) runs what is due.
@@ -72,7 +72,7 @@ describe('HotkeyEngine with the default hotkeys', () => {
         hotkeyEngine.press(space);
         timers.advance(HOLD_DELAY_MS + 500);
         hotkeyEngine.release(space);
-        expect(log).toEqual(['hold quit', 'hold end', 'down Space', 'up Space']);
+        expect(log).toEqual(['hold menu', 'hold end', 'down Space', 'up Space']);
     });
 
     it('shows no hold for a plain press of a key with a held hotkey', () => {
@@ -88,10 +88,10 @@ describe('HotkeyEngine with the default hotkeys', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press(space);
         timers.advance(HOLD_DELAY_MS + 3000 - 1);
-        expect(log).toEqual(['hold quit']);
+        expect(log).toEqual(['hold menu']);
         timers.advance(1);
         hotkeyEngine.release(space);
-        expect(log).toEqual(['hold quit', 'hold end', 'action quit']);
+        expect(log).toEqual(['hold menu', 'hold end', 'action menu']);
     });
 
     it('lets two keys together take over the held key of the first', () => {
@@ -102,7 +102,7 @@ describe('HotkeyEngine with the default hotkeys', () => {
         timers.advance(2000);
         hotkeyEngine.release(p);
         hotkeyEngine.release(space);
-        expect(log).toEqual(['hold quit', 'hold end', 'hold ranking', 'hold end', 'action ranking']);
+        expect(log).toEqual(['hold menu', 'hold end', 'hold ranking', 'hold end', 'action ranking']);
     });
 
     it('ignores the repeats of a keyboard key held down', () => {
@@ -117,7 +117,7 @@ describe('HotkeyEngine with the default hotkeys', () => {
         const {hotkeyEngine, log, timers} = engine(defaultHotkeys());
         hotkeyEngine.press({key: 'Space', input: 'button|3|standard'});
         timers.advance(HOLD_DELAY_MS + 3000);
-        expect(log).toContain('action quit');
+        expect(log).toContain('action menu');
     });
 });
 
@@ -130,17 +130,17 @@ describe('HotkeyEngine with single inputs', () => {
     });
 
     it('fires a two-key hotkey pressed together, and neither key acts', () => {
-        const {hotkeyEngine, log, timers} = engine([{action: 'quit', keys: [select.input, MAUI_ENTER], holdMs: 0}]);
+        const {hotkeyEngine, log, timers} = engine([{action: 'menu', keys: [select.input, MAUI_ENTER], holdMs: 0}]);
         hotkeyEngine.press(enter);
         timers.advance(100);
         hotkeyEngine.press(select);
         hotkeyEngine.release(select);
         hotkeyEngine.release(enter);
-        expect(log).toEqual(['action quit']);
+        expect(log).toEqual(['action menu']);
     });
 
     it('lets a key of a two-key hotkey act once the other one did not come', () => {
-        const {hotkeyEngine, log, timers} = engine([{action: 'quit', keys: [start.input, MAUI_ENTER], holdMs: 0}]);
+        const {hotkeyEngine, log, timers} = engine([{action: 'menu', keys: [start.input, MAUI_ENTER], holdMs: 0}]);
         hotkeyEngine.press(enter);
         timers.advance(COMBO_WINDOW_MS);
         hotkeyEngine.press(start);
@@ -157,7 +157,7 @@ describe('HotkeyEngine with single inputs', () => {
         hotkeyEngine.reset();
         timers.advance(5000);
         hotkeyEngine.release(space);
-        expect(log).toEqual(['hold quit', 'hold end']);
+        expect(log).toEqual(['hold menu', 'hold end']);
     });
 });
 
@@ -168,8 +168,7 @@ describe('compileHotkeys', () => {
         expect(compileHotkeys(defaultActions())).toEqual([
             {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 2000},
             {action: 'ranking', keys: ['key|KeyB'], holdMs: 0},
-            {action: 'quit', keys: ['key|Escape'], holdMs: 3000},
-            {action: 'shutdown', keys: ['key|KeyO'], holdMs: 3000},
+            {action: 'menu', keys: ['key|Escape'], holdMs: 0},
             {action: 'vote', keys: ['key|KeyV'], holdMs: 0},
             {action: 'star', keys: ['key|KeyF'], holdMs: 0},
         ]);
@@ -213,13 +212,13 @@ describe('parseActions', () => {
         const actions = parseActions({actions: {
             star: {inputs: ['button|5|standard', 'maui|Space', 'nope', 'button|5|standard'], holdMs: 1000, with: 'button|9|standard'},
             vote: {inputs: ['button|4|standard'], holdMs: 0, with: 'maui|Enter'},
-            quit: {inputs: ['button|1|standard'], holdMs: -1},
+            menu: {inputs: ['button|1|standard'], holdMs: -1},
             newPlayer: {inputs: ['button|1|standard'], holdMs: 0},
         }}, isKey);
         // Another action's controls are never an action's: only single inputs are kept.
         expect(actions.star).toEqual({inputs: ['button|5|standard'], holdMs: 1000, with: 'button|9|standard'});
         expect(actions.vote).toEqual({inputs: ['button|4|standard'], holdMs: 0});
-        expect(actions.quit).toEqual(defaultActions().quit);
+        expect(actions.menu).toEqual(defaultActions().menu);
         // A MAUI key's action has no controls of its own.
         expect(actions.newPlayer).toEqual({inputs: [], holdMs: 0});
         expect(actions.ranking).toEqual(defaultActions().ranking);
@@ -232,15 +231,15 @@ describe('parseActions', () => {
 
     it('keeps the hotkeys of version 1 made of single inputs only, the first of each action', () => {
         const actions = parseActions({hotkeys: [
-            {action: 'quit', keys: ['button|9|standard', 'maui|Space'], holdMs: 0},
-            {action: 'quit', keys: ['button|9|standard', 'button|8|standard'], holdMs: 1000},
-            {action: 'quit', keys: ['button|3|standard'], holdMs: 0},
+            {action: 'menu', keys: ['button|9|standard', 'maui|Space'], holdMs: 0},
+            {action: 'menu', keys: ['button|9|standard', 'button|8|standard'], holdMs: 1000},
+            {action: 'menu', keys: ['button|3|standard'], holdMs: 0},
             // Back office was an action of its own, replaced by the hiscores board.
             {action: 'backOffice', keys: ['button|2|standard'], holdMs: 0},
             {action: 'newPlayer', keys: ['maui|KeyP'], holdMs: 3000},
             {action: 'reboot', keys: ['button|1|standard'], holdMs: 0},
         ]}, isKey);
-        expect(actions.quit).toEqual({inputs: ['button|9|standard'], holdMs: 1000, with: 'button|8|standard'});
+        expect(actions.menu).toEqual({inputs: ['button|9|standard'], holdMs: 1000, with: 'button|8|standard'});
         expect(actions.ranking).toEqual(defaultActions().ranking);
         expect(actions.newPlayer).toEqual(defaultActions().newPlayer);
     });
@@ -255,5 +254,23 @@ describe('parseActions', () => {
         const actions: ActionSettings = {...defaultActions(), diagnostic: {inputs: ['key|KeyD'], holdMs: 2000}};
         expect(compileHotkeys(actions).filter(hotkey => hotkey.action === 'diagnostic'))
             .toEqual([{action: 'diagnostic', keys: ['key|KeyD'], holdMs: 2000}]);
+    });
+});
+
+describe('parseActions, a file from before the system menu', () => {
+    const isKey = () => true;
+
+    it('gives the menu the cabinet button of Shut down, else of Quit', () => {
+        const shutdown = {inputs: ['key|KeyO', 'button|8|standard'], holdMs: 3000};
+        const quit = {inputs: ['button|9|standard'], holdMs: 1000};
+        expect(parseActions({actions: {shutdown, quit}}, isKey).menu).toEqual(shutdown);
+        expect(parseActions({actions: {shutdown: {inputs: ['key|KeyO'], holdMs: 3000}, quit}}, isKey).menu).toEqual(quit);
+    });
+
+    it('keeps the default for keyboard defaults, and never overrides a menu already set', () => {
+        const keyboard = {shutdown: {inputs: ['key|KeyO'], holdMs: 3000}, quit: {inputs: ['key|Escape'], holdMs: 3000}};
+        expect(parseActions({actions: keyboard}, isKey).menu).toEqual(defaultActions().menu);
+        const menu = {inputs: [], holdMs: 0};
+        expect(parseActions({actions: {menu, quit: {inputs: ['button|9|standard'], holdMs: 0}}}, isKey).menu).toEqual(menu);
     });
 });

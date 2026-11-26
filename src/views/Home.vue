@@ -31,7 +31,9 @@
         <vote-modal v-if="voteGame" :current="voteReopened ? {vote: voteGame.vote, starred: voteGame.starred} : undefined"
                     @vote="onVote" @skip="voteGame = null"></vote-modal>
 
-        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer" @expire="onUpdateExpire"></update-modal>
+        <system-menu v-if="systemMenu" :entries="systemMenu" @choose="onSystemMenu" @close="systemMenu = null"></system-menu>
+
+        <update-modal v-if="updateOffer" :version="updateOffer" @answer="onUpdateAnswer" @expire="updateOffer = null"></update-modal>
 
         <transition name="title">
             <div class="gameTitle" v-if="selectedGame" v-show="showTitle">
@@ -158,6 +160,9 @@ import {
     FRONT_UPDATE_GLOBAL, UPDATE_AVAILABLE_CHANNEL, UPDATE_PROGRESS_CHANNEL, type FrontUpdateControl, type UpdateStep,
 } from '@/class/FrontUpdateBridge';
 import UpdateModal from '@/components/UpdateModal.vue';
+import SystemMenu from '@/components/SystemMenu.vue';
+import {describeUpdateCheck, systemMenuEntries, type SystemMenuEntry, type SystemMenuItem} from '@/class/SystemMenuEntries';
+import {isKioskLayout} from '@/class/KioskRestart';
 import UpdateProgress from '@/components/UpdateProgress.vue';
 import {createOnlineClient} from '@/class/OnlineClient';
 
@@ -231,7 +236,9 @@ const showAddUser = ref(false);
 // (the Vote action, voteReopened: its vote is shown, and neutral is saved too).
 const voteGame = ref<Game | null>(null);
 const voteReopened = ref(false);
-// The newer version of MAUI offered when the cabinet wakes up from idle (see offerUpdate()), then
+// The system menu's entries while it is open (the Menu action).
+const systemMenu = ref<SystemMenuItem[] | null>(null);
+// The newer version of MAUI offered at the start or by the system menu, then
 // its installation, followed step by step until MAUI restarts (FrontUpdate.ts).
 const updateOffer = ref<string | null>(null);
 const updating = ref<{version: string, step: UpdateStep} | null>(null);
@@ -346,33 +353,20 @@ function frontUpdate(): FrontUpdateControl | undefined {
     }
 }
 
-// The offer on the screen came at the start of MAUI (onUpdateAvailable()) rather than with the key
-// that woke the cabinet: nobody may be there to answer it.
-let updateOfferAtStart = false;
-
-/** On waking up from idle: the newer version of MAUI, when the BO lets the front install it. */
-function offerUpdate() {
-    updateOfferAtStart = false;
-    try {
-        updateOffer.value = frontUpdate()?.offer() ?? null;
-    } catch (err) {
-        Log.warn('[Home] Update offer not read: ' + (err instanceof Error ? err.message : String(err)));
-    }
+/** Whether a game, a question or sleep is in the way of an update offer. */
+function isBusyForUpdate(): boolean {
+    return !!(systemMenu.value || updateOffer.value || updating.value || gameRunning || isBoMameRunning() || asleep.value
+        || showAddUser.value || whoPlayed.value || voteGame.value || showRanking.value);
 }
 
 /**
- * A check found a version to offer (UPDATE_AVAILABLE_CHANNEL, mostly 30 s after the start): offered
- * at once, unless a game, a question or sleep is in the way, in which case the next wake does.
+ * The offer of the start of MAUI (UPDATE_AVAILABLE_CHANNEL, or asked on mount when the front is
+ * loaded after the first check). Dropped when something is in the way: the system menu still asks.
  */
-const onUpdateAvailable = () => {
-    if (updateOffer.value || updating.value || gameRunning || isBoMameRunning() || asleep.value || showAddUser.value
-        || whoPlayed.value || voteGame.value || showRanking.value) {
-        return;
-    }
+const offerStartUpdate = () => {
     try {
-        const version = frontUpdate()?.offer() ?? null;
-        if (version) {
-            updateOfferAtStart = true;
+        const version = frontUpdate()?.takeStartOffer() ?? null;
+        if (version && !isBusyForUpdate()) {
             updateOffer.value = version;
         }
     } catch (err) {
@@ -380,13 +374,36 @@ const onUpdateAvailable = () => {
     }
 };
 
-/** Nobody answered: a no after a wake, nothing at the start (asked again at the next wake). */
-function onUpdateExpire() {
-    if (updateOfferAtStart) {
-        updateOffer.value = null;
-        return;
+/** The system menu's "Check for MAUI update". */
+async function checkForUpdate() {
+    showNotice('Checking for updates…');
+    try {
+        const result = await frontUpdate()?.check();
+        if (result?.status === 'offer' && !isBusyForUpdate()) {
+            showNotice('');
+            updateOffer.value = result.version;
+            return;
+        }
+        showNotice(describeUpdateCheck(result), NOTICE_SHOWN_MS);
+    } catch (err) {
+        showNotice(err instanceof Error ? err.message : String(err), NOTICE_SHOWN_MS);
     }
-    onUpdateAnswer(false);
+}
+
+function onSystemMenu(entry: SystemMenuEntry) {
+    systemMenu.value = null;
+    switch (entry) {
+    case 'update':
+        void checkForUpdate();
+        break;
+    case 'quit':
+        // On a dedicated cabinet the session starts MAUI again.
+        remote.app.quit();
+        break;
+    case 'shutdown':
+        void shutDown();
+        break;
+    }
 }
 
 function onUpdateAnswer(install: boolean) {
@@ -457,7 +474,7 @@ async function loadIdleMessages() {
         // A newer release of MAUI opens the band, once, before the scores.
         const update = readAvailableUpdate();
         idleMessages.value = update
-            ? [updateNoticeMessage(update, frontUpdate()?.offer() === update), ...scores]
+            ? [updateNoticeMessage(update, frontUpdate()?.installable() === update), ...scores]
             : scores;
     } catch (err) {
         idleMessages.value = [];
@@ -665,7 +682,7 @@ function mouseAllowed(): boolean {
         stopRoll();
         return false;
     }
-    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !showRanking.value;
+    return !gameRunning && !showAddUser.value && !whoPlayed.value && !voteGame.value && !systemMenu.value && !showRanking.value;
 }
 
 /** -1 (up), 1 (down) or 0 once `e` adds up to a step for `area`. */
@@ -795,7 +812,7 @@ function unlockFront() {
 function syncIdleBlock() {
     stopRoll();
     idleWatch.block(gameRunning || isBoMameRunning() || showAddUser.value || !!whoPlayed.value || !!voteGame.value
-        || !!updateOffer.value || !!updating.value || noGames.value);
+        || !!systemMenu.value || !!updateOffer.value || !!updating.value || noGames.value);
 }
 
 function startGame() {
@@ -949,7 +966,7 @@ async function checkScoreReveal() {
 function revealScores() {
     const reveal = pendingReveal;
     if (!reveal || gameRunning || asleep.value || showAddUser.value || whoPlayed.value || voteGame.value
-        || updateOffer.value || updating.value || showRanking.value) {
+        || systemMenu.value || updateOffer.value || updating.value || showRanking.value) {
         return;
     }
     pendingReveal = null;
@@ -1132,7 +1149,7 @@ function onMessageShown(message: BandMessage) {
  * player would bring it there (it jumps straight to it in Lite mode).
  */
 async function showGame(romName: string, announced = false) {
-    if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value) {
+    if (getMameService().isGameStarted || showAddUser.value || whoPlayed.value || voteGame.value || systemMenu.value) {
         return;
     }
     stopHold();
@@ -1254,14 +1271,11 @@ function runHotkey(action: HotkeyAction) {
     case 'ranking':
         openPodium();
         break;
-    case 'quit':
-        remote.app.quit();
+    case 'menu':
+        systemMenu.value = systemMenuEntries(isKioskLayout(remote.app.isPackaged));
         break;
     case 'newPlayer':
         showAddUser.value = true;
-        break;
-    case 'shutdown':
-        void shutDown();
         break;
     case 'confirm':
         startGame();
@@ -1383,7 +1397,7 @@ onUnmounted(() => {
     ipcRenderer.off(UI_SOUNDS_CHANGED_CHANNEL, onUiSoundsChanged);
     ipcRenderer.off(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
     ipcRenderer.off(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
-    ipcRenderer.off(UPDATE_AVAILABLE_CHANNEL, onUpdateAvailable);
+    ipcRenderer.off(UPDATE_AVAILABLE_CHANNEL, offerStartUpdate);
     window.removeEventListener('blur', stopHold);
     stopHold();
     stopRoll();
@@ -1398,8 +1412,8 @@ onUnmounted(() => {
 window.addEventListener('blur', stopHold);
 window.addEventListener('blur', () => hotkeys.reset());
 // A modal takes the keys over: the list stops where it is.
-watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!updateOffer.value || !!updating.value
-    || showRanking.value, (modal) => {
+watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!systemMenu.value || !!updateOffer.value
+    || !!updating.value || showRanking.value, (modal) => {
     if (modal) {
         stopHold();
         hotkeys.reset();
@@ -1408,7 +1422,8 @@ watch(() => showAddUser.value || !!whoPlayed.value || !!voteGame.value || !!upda
     // New scores waiting for the questions after the game to be answered.
     revealScores();
 });
-watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!updateOffer.value, !!updating.value,
+watch(() => [showAddUser.value, !!whoPlayed.value, !!voteGame.value, !!systemMenu.value, !!updateOffer.value,
+    !!updating.value,
     !!showRanking.value, noGames.value], syncIdleBlock);
 
 /** A key's own job on the list of games, as a press. */
@@ -1460,11 +1475,9 @@ function onListKeyUp(key: string) {
 
 function registerKeyMapping() {
     onKeydown((e, isGamepad) => {
-        // The key that wakes an idle cabinet only takes its messages away, and may bring the
-        // offer of a newer version.
+        // The key that wakes an idle cabinet only takes its messages away.
         if (idleWatch.activity()) {
             stopRoll();
-            offerUpdate();
             return;
         }
         // Any key sends the global podium away, and does nothing else; none while the list comes back.
@@ -1472,7 +1485,8 @@ function registerKeyMapping() {
             closePodium();
             return;
         }
-        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || updateOffer.value || updating.value) {
+        if (gameRunning || showAddUser.value || whoPlayed.value || voteGame.value || systemMenu.value || updateOffer.value
+            || updating.value) {
             return;
         }
         hotkeys.press({key: controlKey(e, isGamepad), input: controlInput(e, isGamepad)});
@@ -1487,7 +1501,7 @@ function registerKeyMapping() {
         if (key === MAUI_KEYS.up || key === MAUI_KEYS.down) {
             stopHold();
         }
-        if (showAddUser.value || whoPlayed.value || voteGame.value) {
+        if (showAddUser.value || whoPlayed.value || voteGame.value || systemMenu.value) {
             return;
         }
         hotkeys.release({key, input: controlInput(e, isGamepad)});
@@ -1540,11 +1554,12 @@ if (!getIsInit()) {
         ipcRenderer.on(UI_SOUNDS_TEST_CHANNEL, onUiSoundsTest);
         uiSounds.setSettings(uiSoundSettings(getConfiguration()));
         ipcRenderer.on(UPDATE_PROGRESS_CHANNEL, onUpdateStep);
-        ipcRenderer.on(UPDATE_AVAILABLE_CHANNEL, onUpdateAvailable);
+        ipcRenderer.on(UPDATE_AVAILABLE_CHANNEL, offerStartUpdate);
 
         flyersPath.value = mameService.flyerPath;
         flyers.value = gameService.loadFlyers();
         flyer.value = generateFlyerPath();
+        offerStartUpdate();
     });
 }
 </script>
