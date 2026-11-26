@@ -84,7 +84,7 @@
                     @pick="onCategoryPick" @wheel="onCategoriesWheel"></Categories>
 
         <transition name="slide">
-            <Hiscores :game="selectedGame" :fresh="revealedScores" v-if="hiscoresVisible"></Hiscores>
+            <Hiscores :game="selectedGame" :fresh="revealedScores" :fresh-table="revealedTable" v-if="hiscoresVisible"></Hiscores>
         </transition>
 
         <message-band v-if="idle && !asleep && idleScreen === 'messages' && idleMessages.length" :messages="idleMessages" @show="onMessageShown"></message-band>
@@ -117,6 +117,7 @@ import {buildCarousel, mergeTtlCategories} from '@/class/CarouselCategories';
 import {loadBeatThisGames, loadChampions, loadHiscores, onLeaderboardsChanged} from '@/class/LeaderboardSource';
 import {writePodiumFile} from '@/class/PodiumFile';
 import {freshScores as newScoreKeys} from '@/class/ScoreReveal';
+import {DEFAULT_TABLE, otherTables} from '@/class/ModeTables';
 import {join} from 'path';
 import {pathToFileURL} from 'url';
 import {emitter} from '@/emitter';
@@ -197,10 +198,11 @@ const timeouts: {
 // game ended) its changes are still looked for: ONLINE ones come back from MAUI-API a little later.
 const REVEAL_SHOWN_MS = 6000;
 const REVEAL_WATCH_MS = 2 * 60_000;
-let revealWatch: {game: Game; before: string[]; until: number} | null = null;
-let pendingReveal: {romName: string; keys: string[]} | null = null;
+let revealWatch: {game: Game; before: Map<string, string[]>; until: number} | null = null;
+let pendingReveal: {romName: string; keys: string[]; table: string} | null = null;
 // The rows Hiscores.vue draws as new (Hiscores.vue's `fresh`).
 const revealedScores = ref<string[]>([]);
+const revealedTable = ref<string | null>(null);
 
 // How long a game or category change waits for the leaving elements to slide out: nothing slides
 // in Lite mode.
@@ -921,7 +923,10 @@ async function watchScoreReveal(game: Game) {
         return;
     }
     try {
-        const before = (await loadHiscores(game)).map(row => row.key);
+        const before = new Map<string, string[]>();
+        for (const table of [DEFAULT_TABLE, ...otherTables(game.romName)]) {
+            before.set(table, (await loadHiscores(game, table)).map(row => row.key));
+        }
         revealWatch = {game, before, until: Infinity};
     } catch (err) {
         Log.warn('[Home] Leaderboard not read before the game: ' + (err instanceof Error ? err.message : String(err)));
@@ -944,14 +949,21 @@ async function checkScoreReveal() {
         return;
     }
     try {
-        const rows = await loadHiscores(watch.game);
-        const keys = newScoreKeys(watch.before, rows);
-        if (!keys.length) {
+        // One table revealed per change: a game is played in one mode.
+        for (const [table, before] of watch.before) {
+            const rows = await loadHiscores(watch.game, table);
+            const keys = newScoreKeys(before, rows);
+            if (!keys.length) {
+                continue;
+            }
+            // Shown once: a later change is compared to what is on the board now.
+            watch.before.set(table, rows.map(row => row.key));
+            const kept = pendingReveal?.table === table ? pendingReveal.keys : [];
+            pendingReveal = {romName: watch.game.romName, table, keys: [...kept, ...keys]};
+        }
+        if (!pendingReveal) {
             return;
         }
-        // Shown once: a later change is compared to what is on the board now.
-        watch.before = rows.map(row => row.key);
-        pendingReveal = {romName: watch.game.romName, keys: [...(pendingReveal?.keys ?? []), ...keys]};
         revealScores();
     } catch (err) {
         Log.warn('[Home] Leaderboard not read after the game: ' + (err instanceof Error ? err.message : String(err)));
@@ -975,6 +987,7 @@ function revealScores() {
     }
     const wasShown = showHiscores.value && !timeouts.hideReveal;
     revealedScores.value = reveal.keys;
+    revealedTable.value = reveal.table;
     showHiscores.value = true;
     clearTimeout(timeouts.hideReveal);
     timeouts.hideReveal = window.setTimeout(() => {

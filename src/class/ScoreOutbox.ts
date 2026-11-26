@@ -50,6 +50,8 @@ export function backoffMs(attempts: number): number {
 
 export interface QueueContext {
     romname: string;
+    // A mode table other than `default` (ModeTables.ts).
+    table?: string;
     achievedAt: string;
     startupId: string | null;
     newId?: () => string;
@@ -76,6 +78,7 @@ export async function queueScores(
     for (const [playerId, row] of best) {
         queued.push({
             id: (context.newId ?? randomUUID)(), playerId, romname: context.romname, score: row.score,
+            ...(context.table ? {table: context.table} : {}),
             rankOnCabinet: row.rank, achievedAt: context.achievedAt, startupId: context.startupId,
             ...(context.integrity ? {integrity: context.integrity} : {}),
         });

@@ -22,6 +22,19 @@ export interface LeaderboardSyncDeps {
     avatars: AvatarCache;
     // The games of this cabinet.
     romnames(): Promise<string[]>;
+    // The mode tables of a game besides `default` (ModeTables.ts), asked apart.
+    otherTables?(romname: string): string[];
+}
+
+interface Batch {
+    romnames: string[];
+    // null: the `default` table.
+    table: string | null;
+}
+
+/** A batch asking for that game alone. */
+function isOf(batch: Batch, romname: string | undefined): boolean {
+    return batch.romnames.length === 1 && batch.romnames[0] === romname;
 }
 
 export interface LeaderboardRefresh {
@@ -51,20 +64,35 @@ export class LeaderboardSync {
     public async refresh(client: MauiApiClient, first?: string): Promise<LeaderboardRefresh> {
         const result: LeaderboardRefresh = {updated: 0, avatars: 0};
         const romnames = [...new Set(await this.deps.romnames())].sort();
-        const batches: string[][] = first && romnames.includes(first) ? [[first]] : [];
-        for (let start = 0; start < romnames.length; start += LEADERBOARD_BATCH_SIZE) {
-            batches.push(romnames.slice(start, start + LEADERBOARD_BATCH_SIZE));
+        const modes = new Map<string | null, string[]>([[null, romnames]]);
+        for (const romname of romnames) {
+            for (const table of this.deps.otherTables?.(romname) ?? []) {
+                modes.set(table, [...modes.get(table) ?? [], romname]);
+            }
+        }
+        // The game just played on its own first, in each of its tables, then everything by batches.
+        const batches: Batch[] = [];
+        for (const [table, games] of modes) {
+            if (first && games.includes(first)) {
+                batches.push({romnames: [first], table});
+            }
+        }
+        for (const [table, games] of modes) {
+            for (let start = 0; start < games.length; start += LEADERBOARD_BATCH_SIZE) {
+                batches.push({romnames: games.slice(start, start + LEADERBOARD_BATCH_SIZE), table});
+            }
         }
         let untold = false;
         try {
-            for (const batch of batches) {
+            for (const [index, batch] of batches.entries()) {
                 const changed = await this.refreshBatch(client, batch, result);
                 if (typeof changed !== 'boolean') {
                     result.failure = changed;
                     break;
                 }
                 untold ||= changed;
-                if (untold && batch.length === 1 && batch[0] === first) {
+                const next = batches[index + 1];
+                if (untold && isOf(batch, first) && !(next && isOf(next, first))) {
                     this.tell();
                     untold = false;
                 }
@@ -87,9 +115,11 @@ export class LeaderboardSync {
     }
 
     /** One batch into the cache: whether something changed, or the API's failure. */
-    private async refreshBatch(client: MauiApiClient, batch: string[], result: LeaderboardRefresh): Promise<boolean | ApiFailure> {
-        const key = batch.join(',');
-        const answer = await client.getLeaderboards(batch, this.etags.get(key) ?? null);
+    private async refreshBatch(client: MauiApiClient, batch: Batch, result: LeaderboardRefresh): Promise<boolean | ApiFailure> {
+        const key = `${batch.table ?? ''}:${batch.romnames.join(',')}`;
+        const answer = batch.table === null
+            ? await client.getLeaderboards(batch.romnames, this.etags.get(key) ?? null)
+            : await client.getLeaderboards(batch.romnames, this.etags.get(key) ?? null, batch.table);
         if (answer.kind !== 'ok') {
             return answer;
         }

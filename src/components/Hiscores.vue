@@ -1,22 +1,28 @@
 <template>
     <div class="hiscores">
-        <p v-if="loading">Loading hiscores...</p>
-        <p v-else-if="!scores.length" class="no-hiscores">No Hiscores Yet !</p>
-        <template v-else>
-            <div class="hiscore" :class="{first: index === 0, fresh: fresh?.includes(score.key)}" v-for="(score, index) of scores" :key="score.key">
-                <div class="icon">
-                    <img :src="score.avatar" v-if="score.avatar" alt="">
-                    <img v-else src="../assets/defaultPlayer.png" alt="">
-                </div>
-                <div class="info">
-                    <span class="place">{{index + 1}}</span>
-                    <div class="score_name">
-                        <p class="name">{{score.pseudo3}}</p>
-                        <p class="score">{{score.score}}</p>
+        <!-- The rows go down, then the next mode's come back up. -->
+        <Transition name="mode-swap" mode="out-in" :css="swapping">
+            <div class="board" :key="shownMode?.id ?? 'default'">
+                <p class="mode" v-if="shownMode">{{shownMode.label}}</p>
+                <p v-if="loading">Loading hiscores...</p>
+                <p v-else-if="!scores.length" class="no-hiscores">No Hiscores Yet !</p>
+                <template v-else>
+                    <div class="hiscore" :class="{first: index === 0, fresh: fresh?.includes(score.key)}" v-for="(score, index) of scores" :key="score.key">
+                        <div class="icon">
+                            <img :src="score.avatar" v-if="score.avatar" alt="">
+                            <img v-else src="../assets/defaultPlayer.png" alt="">
+                        </div>
+                        <div class="info">
+                            <span class="place">{{index + 1}}</span>
+                            <div class="score_name">
+                                <p class="name">{{score.pseudo3}}</p>
+                                <p class="score">{{score.score}}</p>
+                            </div>
+                        </div>
                     </div>
-                </div>
+                </template>
             </div>
-        </template>
+        </Transition>
     </div>
 </template>
 
@@ -25,23 +31,49 @@ import {ref, watch, onMounted, onUnmounted} from 'vue';
 import Game from '@/model/Game.model';
 import {emitter} from '@/emitter';
 import {loadHiscores, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
+import {useModeTable} from '@/class/ModeRotation';
+import type {ModeTable} from '@/class/ModeTables';
 
 // `fresh`: the rows a game just played added (Home.vue's score reveal), drawn arriving.
-const props = defineProps<{game: Game; fresh?: string[]}>();
+// `freshTable`: the table those rows are in, kept on screen while they are shown.
+const props = defineProps<{game: Game; fresh?: string[]; freshTable?: string | null}>();
+const mode = useModeTable(() => props.game.romName, () => props.fresh?.length ? props.freshTable ?? null : null);
 
 // 9 rows (LeaderboardSource.ts): the best one is drawn on its own above the box (.first), the rest
 // fill the 3-column grid below it. Local scores in LOCAL mode, MAUI-API's in ONLINE mode.
 const scores = ref<BoardRow[]>([]);
+// The mode of those rows: set with them, so that the swap starts once they are read.
+const shownMode = ref<ModeTable | null>(null);
+// Only between the modes of a game: another game's board simply replaces this one.
+const swapping = ref(false);
 const loading = ref(true);
 let stopListening: (() => void) | null = null;
 
+async function reload() {
+    const game = props.game;
+    const next = mode.value;
+    const rows = await loadHiscores(game, next?.id);
+    // The list or the mode may have moved on while the rows were read.
+    if (game === props.game && next?.id === mode.value?.id) {
+        scores.value = rows;
+        shownMode.value = next;
+    }
+}
+
 async function onGameChange() {
+    swapping.value = false;
     loading.value = true;
-    scores.value = await loadHiscores(props.game);
+    await reload();
     loading.value = false;
 }
 
 watch(() => props.game, onGameChange);
+// The next mode's rows replace the previous ones without the loading message.
+watch(() => mode.value?.id, () => {
+    // Not while another game's board is being read.
+    swapping.value = !loading.value;
+    return reload();
+});
 
 onMounted(async () => {
     await onGameChange();
@@ -74,7 +106,42 @@ onUnmounted(() => {
         0 5px 20px rgba(255, 81, 0, 0.5),
         0 6px 5px rgba(242, 0, 10, 0.7),
         0 8px 5px rgba(0, 0, 0, 1);
+    }
+
+    /* The whole box, so that it moves as one and .first keeps its place on the top edge. */
+    .board {
+        position: absolute;
+        inset: 0;
         padding-top: 8vh;
+    }
+
+    /* Down out of the screen (the box sits on its bottom edge), then the next one back up: far
+       enough for .first, which sticks out above the box. */
+    .mode-swap-leave-active {
+        transition: transform 0.35s ease-in, opacity 0.35s ease-in;
+    }
+
+    .mode-swap-enter-active {
+        transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.15), opacity 0.3s ease-out;
+    }
+
+    .mode-swap-leave-to,
+    .mode-swap-enter-from {
+        transform: translateY(130%);
+        opacity: 0;
+    }
+
+    /* The mode shown, for a game ranking several. */
+    .mode {
+        position: absolute;
+        bottom: 1vh;
+        left: 0;
+        right: 0;
+        margin: 0;
+        text-align: center;
+        font-size: 2vh;
+        text-transform: uppercase;
+        z-index: 1;
     }
 
     /* Nobody has a score on this game yet: one message in the middle of the box (absolute, so the

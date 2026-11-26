@@ -1,3 +1,4 @@
+import {DEFAULT_TABLE, localTableName} from '@/class/ModeTables';
 import {existsSync} from 'fs';
 import {join} from 'path';
 import {format} from 'url';
@@ -89,14 +90,14 @@ export function playerAvatar(pseudo3: string): string | null {
     return avatarResolver()(pseudo3, null);
 }
 
-async function onlineRows(game: Game, limit: number): Promise<BoardRow[]> {
+async function onlineRows(game: Game, limit: number, table: string): Promise<BoardRow[]> {
     const sequelize = Game.sequelize;
     if (!sequelize) {
         return [];
     }
     const [rows] = await sequelize.query(
         'SELECT entries FROM online_leaderboard WHERE romname = ? AND table_name = ?',
-        {replacements: [game.romName, 'default']},
+        {replacements: [game.romName, table]},
     ) as [{entries: string}[], unknown];
     return toBoardRows(rows[0]?.entries ?? null, limit, avatarResolver());
 }
@@ -113,23 +114,24 @@ function localRows(hiscores: Hiscore[]): BoardRow[] {
 }
 
 /** The hiscores table: 9 rows, best first. */
-export async function loadHiscores(game: Game): Promise<BoardRow[]> {
+export async function loadHiscores(game: Game, table = DEFAULT_TABLE): Promise<BoardRow[]> {
     if (isOnlineActive()) {
-        return onlineRows(game, 9);
+        return onlineRows(game, 9, table);
     }
     return localRows(await game.$get('hiscores', {
         // required: a deleted player's scores stay in the database but are not shown
-        include: [{model: User, required: true}], limit: 9, order: [['score', 'DESC']], group: ['score', 'user.id_user'],
+        include: [{model: User, required: true}], where: {extraName: localTableName(table)}, limit: 9, order: [['score', 'DESC']], group: ['score', 'user.id_user'],
     }) as Hiscore[] || []);
 }
 
 /** The podium: the best 3 players, best first. */
-export async function loadChampions(game: Game): Promise<BoardRow[]> {
+export async function loadChampions(game: Game, table = DEFAULT_TABLE): Promise<BoardRow[]> {
     if (isOnlineActive()) {
-        return onlineRows(game, 3);
+        return onlineRows(game, 3, table);
     }
     return localRows(await game.$get('hiscores', {
         include: [{model: User, required: true}],
+        where: {extraName: localTableName(table)},
         attributes: {include: [[Sequelize.fn('MAX', Sequelize.col('score')), 'max_score']]},
         limit: 3,
         order: [['score', 'DESC']],

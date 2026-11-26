@@ -38,7 +38,8 @@ export async function getStoredScores(idGame?: number): Promise<Map<number, Stor
     });
     const byGame = new Map<number, StoredScore[]>();
     for (const hiscore of hiscores) {
-        if (!hiscore.user) {
+        // The diagnostic compares the `default` table; a mode table's rows are extras there.
+        if (!hiscore.user || hiscore.extraName) {
             continue;
         }
         const scores = byGame.get(hiscore.id_game) || [];
