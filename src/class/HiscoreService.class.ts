@@ -7,6 +7,10 @@ import {latestBestMessages, type BandMessage} from '@/class/CabinetMessages';
 import Log from 'electron-log';
 import {scorePseudo3} from '@/class/HiscoreSupport';
 import {isOnlineActive} from '@/class/RepositoryAuth';
+import {DEFAULT_TABLE, localTableName, otherTables} from '@/class/ModeTables';
+
+// The rows of the `default` table: `extraName` is empty, the column's default.
+const DEFAULT_ROWS = {extraName: ''};
 
 export default class HiscoreService {
     protected hiExtractor!: MameHiExtractor;
@@ -39,6 +43,7 @@ export default class HiscoreService {
      */
     public async loadLatestBests(limit: number): Promise<BandMessage[]> {
         const rows = await Hiscore.findAll({
+            where: DEFAULT_ROWS,
             include: [{model: User, required: true, where: {active: true}}, {model: Game, required: true}],
             order: [['creationDate', 'DESC'], ['score', 'DESC']],
             // Several rows per player and game (a table keeps more than one score of a player).
@@ -59,7 +64,7 @@ export default class HiscoreService {
      */
     public async loadCabinetBest(game: Game): Promise<number> {
         const best = await Hiscore.findOne({
-            where: {id_game: game.id_game},
+            where: {id_game: game.id_game, ...DEFAULT_ROWS},
             include: [{model: User, required: true, where: {active: true}}],
             order: [['score', 'DESC']],
         });
@@ -92,17 +97,22 @@ export default class HiscoreService {
                 }
                 const hiscore = hiscoreExtractor.extract(false).scores;
                 const scoreToSave: any[] = [];
-                for (const score of hiscore.default) {
-                    const user = this.userService.getScorer(scorePseudo3(score.name), onlineEnabled);
-                    if (!user) {
-                        continue;
+                const tables = [DEFAULT_TABLE, ...otherTables(game.romName)];
+                for (const table of tables) {
+                    const rows = table === DEFAULT_TABLE ? hiscore.default : hiscore.extras?.[table] ?? [];
+                    for (const score of rows) {
+                        const user = this.userService.getScorer(scorePseudo3(score.name), onlineEnabled);
+                        if (!user) {
+                            continue;
+                        }
+                        scoreToSave.push({
+                            id_game: game.id_game,
+                            id_user: user.id_user,
+                            rank: score.rank,
+                            score: score.score,
+                            extraName: localTableName(table),
+                        });
                     }
-                    scoreToSave.push({
-                        id_game: game.id_game,
-                        id_user: user.id_user,
-                        rank: score.rank,
-                        score: score.score,
-                    });
                 }
                 try {
                     Log.debug('[HiscoreService] Scores to save for game ' + game.id_game + '.');

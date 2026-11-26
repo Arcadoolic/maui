@@ -7,6 +7,7 @@ import {queueScores, type PublishablePlayer, type ScoreStore} from '@/class/Scor
 import {ScoreDeclarations} from '@/class/ScoreDeclaration';
 import type {PendingAttribution} from '@/class/ScoreCaptureBridge';
 import type {TableRow} from '@/class/ScoreDiff';
+import {DEFAULT_TABLE, otherTables} from '@/class/ModeTables';
 import {buildGameReport, type GameIntegrityReport, type RomCheck} from '@/class/GameIntegrity';
 
 // The games played on this cabinet, in ONLINE mode (maui-api Lot 2.3): one PlaySession per game,
@@ -39,11 +40,15 @@ interface GameReporting {
     rom: RomCheck;
 }
 
-/** The default table of a game, [] before its first file exists, null when it cannot be read. */
-async function readTable(extractor: MameHiExtractor, romname: string): Promise<TableRow[] | null> {
+/** A table of a game (`default` or a mode table), [] before its first file exists, null when it cannot be read. */
+async function readTable(extractor: MameHiExtractor, romname: string, table = DEFAULT_TABLE): Promise<TableRow[] | null> {
     try {
         const read = await extractor.get(romname);
-        return read ? read.extract(false).scores.default : null;
+        if (!read) {
+            return null;
+        }
+        const scores = read.extract(false).scores;
+        return table === DEFAULT_TABLE ? scores.default : scores.extras?.[table] ?? null;
     } catch (error) {
         return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
     }
@@ -65,6 +70,8 @@ function watchHiscoreFile(mameHome: string, romname: string, onChange: () => voi
 
 export class ScoreCapture {
     private readonly sessions = new Map<string, PlaySession>();
+    // The games with several modes: one more session per mode table besides `default`.
+    private readonly modeSessions = new Map<string, PlaySession[]>();
     // How to read the table of each game being played, for a last look when it ends.
     private readonly readers = new Map<string, () => Promise<TableRow[] | null>>();
     private readonly reporting = new Map<string, GameReporting>();
@@ -110,7 +117,18 @@ export class ScoreCapture {
             this.sessions.delete(romname);
             this.readers.delete(romname);
             this.deps.log?.(`[scores] ${romname} not captured: ${error instanceof Error ? error.message : String(error)}`);
+            return;
         }
+        // Named rows only: the nameless ones are asked about for `default` alone.
+        const modes = otherTables(romname).map(table => new PlaySession({
+            read: () => readTable(extractor, romname, table),
+            watch: files.hi ? onChange => watchHiscoreFile(mameHome, romname, onChange) : undefined,
+            report: rows => this.queueMode(romname, table, rows),
+            log: this.deps.log,
+        }));
+        this.modeSessions.set(romname, modes);
+        await Promise.all(modes.map(mode => mode.start().catch(error =>
+            this.deps.log?.(`[scores] ${romname}: ${error instanceof Error ? error.message : String(error)}`))));
     }
 
     /**
@@ -121,6 +139,9 @@ export class ScoreCapture {
         const session = this.sessions.get(romname);
         this.sessions.delete(romname);
         await session?.end();
+        const modes = this.modeSessions.get(romname) ?? [];
+        this.modeSessions.delete(romname);
+        await Promise.all(modes.map(mode => mode.end()));
         const read = this.readers.get(romname);
         this.readers.delete(romname);
         this.reporting.delete(romname);
@@ -170,6 +191,15 @@ export class ScoreCapture {
         const context = {achievedAt: new Date().toISOString(), startupId: this.deps.startupId(), ...(integrity ? {integrity} : {})};
         this.declarations.hold(romname, rows, context);
         const queued = await queueScores(this.deps.store, await this.deps.players(), rows, {romname, ...context});
+        this.sent(romname, queued.length);
+    }
+
+    private async queueMode(romname: string, table: string, rows: TableRow[]): Promise<void> {
+        const integrity = this.report(romname);
+        const queued = await queueScores(this.deps.store, await this.deps.players(), rows.filter(row => row.name !== ''), {
+            romname, table, achievedAt: new Date().toISOString(), startupId: this.deps.startupId(),
+            ...(integrity ? {integrity} : {}),
+        });
         this.sent(romname, queued.length);
     }
 

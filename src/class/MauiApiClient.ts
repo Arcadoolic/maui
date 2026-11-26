@@ -624,9 +624,12 @@ export class MauiApiClient {
     }
 
     /** At most 100 games (maui-api D52); `etag` from the last answer for the same games. */
-    public async getLeaderboards(romnames: string[], etag: string | null = null): Promise<ApiResult<Conditional<Leaderboard[]>>> {
+    public async getLeaderboards(
+        romnames: string[], etag: string | null = null, table: string | null = null,
+    ): Promise<ApiResult<Conditional<Leaderboard[]>>> {
         const response = await this.send(
-            'GET', `/leaderboards?romnames=${romnames.map(encodeURIComponent).join(',')}`,
+            'GET', `/leaderboards?romnames=${romnames.map(encodeURIComponent).join(',')}`
+                + `${table ? `&table=${encodeURIComponent(table)}` : ''}`,
             etag ? {'If-None-Match': etag} : {},
         );
         if (!(response instanceof Response)) {

@@ -1,3 +1,4 @@
+import {otherTables} from '@/class/ModeTables';
 import {createServer, type IncomingMessage, type Server, type ServerResponse} from 'http';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'fs';
 import {join} from 'path';
@@ -225,6 +226,7 @@ export function startCore(
             },
         },
         romnames: async () => (await Game.findAll({where: {hi: true}, attributes: ['romName']})).map(game => game.romName),
+        otherTables,
     });
     const media = new MediaSync({
         romnames: async () => (await Game.findAll({attributes: ['romName']})).map(game => game.romName),

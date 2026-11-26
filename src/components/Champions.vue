@@ -1,12 +1,18 @@
 <template>
     <div class="champions" :class="{spring}">
-        <TransitionGroup tag="div" name="champion" class="championsContainer" :class="{animated}" :css="animated" v-if="champions.length">
-            <div v-for="(champion, index) of champions" :key="champion.player" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%', '--reach': ((champions.length - index) * SPRING_STEP) + '%'}">
-                <img v-if="champion.avatar" :src="champion.avatar" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
-                <img v-else src="../assets/defaultPlayer.png" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
+        <!-- From one mode to the next, the podium turns over like a card. -->
+        <Transition name="mode-swap" mode="out-in" :css="swapping">
+            <div class="board" :key="shownMode?.id ?? 'default'">
+                <TransitionGroup tag="div" name="champion" class="championsContainer" :class="{animated}" :css="animated" v-if="champions.length">
+                    <div v-for="(champion, index) of champions" :key="champion.player" class="champion" :class="'place-' + (champions.length - index)" :style="{right: (index * 10 + edgeOffset) + '%', '--reach': ((champions.length - index) * SPRING_STEP) + '%'}">
+                        <img v-if="champion.avatar" :src="champion.avatar" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
+                        <img v-else src="../assets/defaultPlayer.png" alt="" :style="{backgroundColor: avatarColor(champion.pseudo3)}">
+                    </div>
+                </TransitionGroup>
+                <img v-else class="default" src="../assets/hiscores.svg" alt="">
+                <span class="mode" v-if="shownMode">{{shownMode.label}}</span>
             </div>
-        </TransitionGroup>
-        <img v-else class="default" src="../assets/hiscores.svg" alt="">
+        </Transition>
     </div>
 </template>
 
@@ -16,8 +22,11 @@ import Game from '@/model/Game.model';
 import {emitter} from '@/emitter';
 import {loadChampions, onLeaderboardsChanged, type BoardRow} from '@/class/LeaderboardSource';
 import {avatarColor} from '@/class/AvatarColor';
+import {useModeTable} from '@/class/ModeRotation';
+import type {ModeTable} from '@/class/ModeTables';
 
 const props = defineProps<{game: Game; selected?: boolean}>();
+const mode = useModeTable(() => props.game.romName);
 
 // The selected marquee's podium comes to life: as soon as the game is picked, the avatars
 // move apart to the right as on an elastic pulled from its left end, then snap back at once and
@@ -47,6 +56,10 @@ watch(() => [props.selected, props.game], armSpring);
 
 // The best 3 players (LeaderboardSource.ts), drawn from the 3rd to the 1st.
 const champions = ref<BoardRow[]>([]);
+// The mode of that podium: set with it, so that the swap starts once it is read.
+const shownMode = ref<ModeTable | null>(null);
+// Only between the modes of a game.
+const swapping = ref(false);
 const loading = ref(true);
 // Every avatar is drawn astride (centred on its `right`), a step of 10% from the next. One player:
 // its centre on the marquee's end; two or three: the 2nd's centre there, the best one a step to
@@ -61,9 +74,21 @@ const ANIMATION_MS = 1000;
 const animated = ref(false);
 let stopAnimating: ReturnType<typeof setTimeout> | undefined;
 
+async function reload() {
+    const game = props.game;
+    const next = mode.value;
+    const rows = await loadChampions(game, next?.id);
+    // The list or the mode may have moved on while the rows were read.
+    if (game === props.game && next?.id === mode.value?.id) {
+        champions.value = rows.reverse();
+        shownMode.value = next;
+    }
+}
+
 async function onGameChange() {
+    swapping.value = false;
     loading.value = true;
-    champions.value = (await loadChampions(props.game)).reverse();
+    await reload();
     loading.value = false;
 }
 
@@ -77,6 +102,10 @@ async function onScoresChange() {
 }
 
 watch(() => props.game, onGameChange);
+watch(() => mode.value?.id, () => {
+    swapping.value = !loading.value;
+    return reload();
+});
 
 onMounted(async () => {
     armSpring();
@@ -102,6 +131,49 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+    .board {
+        position: relative;
+        height: 100%;
+        width: 100%;
+    }
+
+    .mode-swap-leave-active {
+        transition: transform 0.2s ease-in;
+    }
+
+    .mode-swap-enter-active {
+        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.3, 1.4);
+    }
+
+    .mode-swap-enter-from,
+    .mode-swap-leave-to {
+        transform: scaleY(0);
+    }
+
+    /* The mode of the podium shown, for a game ranking several: written upwards along
+       the left of the marquee, outside it (the list leaves that margin to the selected one). The
+       container starts 10% right of the marquee's left end (Games.vue's .champions). Sized
+       against the marquee's height (cqh), the longest name having to fit in it. */
+    .mode {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: calc(110% + 3cqh);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        white-space: nowrap;
+        font-family: 'Arcade_I', sans-serif;
+        font-size: 11cqh;
+        line-height: 1.3;
+        text-transform: uppercase;
+        color: #fff513;
+        /* No background: a shadow keeps it readable over the flyer behind the list. */
+        text-shadow: 0 0 4px #000, 0 2px 3px #000;
+    }
+
     /* Sized by Games.vue (the marquee's box): what the avatars' border is measured against. */
     .champions {
         container-type: size;
